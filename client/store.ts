@@ -1,0 +1,579 @@
+/**
+ * Zustand store for the in-browser game session.
+ *
+ * Phase 0.5 keeps the shape minimal: connection status, last applied
+ * `seq`, recipient seat, the four hands (own hand has real tile values;
+ * opponents are arrays of `null` for redacted tiles), discard piles,
+ * legal actions, and a match-end banner state.
+ *
+ * The store is a thin projection layer — it applies `GameEvent`s to
+ * derive state. In Phase 1 it will defer to the shared `step()` reducer
+ * from `~/game/rules/`; for now the slice does its own minimal apply
+ * logic so a vertical slice can run before the rules engine exists.
+ */
+import { create } from "zustand";
+import type {
+  GameEvent,
+  LegalAction,
+  Meld,
+  Seat,
+  SnapshotState,
+  Tile,
+} from "~/game/protocol/messages";
+
+export type ConnStatus =
+  | "idle"
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "closed"
+  /** No WebSocket is involved — the view was produced by the
+   * replay reducer folding a stored `ReplayLog`. The renderer
+   * uses this to suppress the live-connection HUD line. */
+  | "replay";
+
+export interface MatchView {
+  matchId: string | null;
+  mySeat: Seat | null;
+  /** Hand-by-seat: `Tile[]` for own seat, `(Tile|null)[]` for opponents. */
+  hands: Array<Array<Tile | null>>;
+  /** Open / declared melds per seat, in declaration order. */
+  melds: Meld[][];
+  discards: Tile[][];
+  wallRemaining: number;
+  /** Omniscient live wall in draw order at the start of the
+   * current hand (70 tiles after the initial 4×13 deal). `null`
+   * in live play — the wire snapshot never carries this field,
+   * and the live event apply path never sets it. Populated only
+   * by the replay reducer (via `replayViewToMatchView`) so the
+   * `showWalls` overlay can reveal tile faces in replays. */
+  liveWall: Tile[] | null;
+  /** Omniscient dead-wall snapshot (14 tiles in Tenhou yama-index
+   * order) at the start of the current hand. `null` in live play
+   * (never broadcast); populated only by the replay reducer.
+   * Drives the `showWalls` overlay's dead-wall reveal
+   * (rinshan / dora / ura / kan-dora positions). */
+  deadWall: Tile[] | null;
+  /**
+   * Number of live-wall tiles actually drawn since the current
+   * hand started. Drives the wall-shrinkage visualization in the
+   * renderer; reset to 0 on every `hand_start`, incremented on
+   * every `draw` event.
+   */
+  drawsTaken: number;
+  /**
+   * Number of live-wall tiles drawn since the current hand
+   * started, excluding rinshan replacement draws. Populated by
+   * the replay reducer; in live play matches `drawsTaken`
+   * because the live broadcast path doesn't increment it for
+   * rinshan draws (no annotation pass runs on live events).
+   */
+  liveDrawsTaken: number;
+  /**
+   * Live-wall draw schedule for the current hand:
+   * `liveDrawSchedule[i]` is the seat that will draw
+   * `liveWall[i]`. `null` in live play (the future is unknown).
+   * Drives the `showWalls` overlay's green highlight on tiles
+   * the focused seat will draw.
+   */
+  liveDrawSchedule: Seat[] | null;
+  /**
+   * The two dice rolled at the start of the current hand. `null`
+   * when unknown (older replays / synthetic logs).
+   */
+  dice: [number, number] | null;
+  doraIndicators: Tile[];
+  legalActions: LegalAction[];
+  lastSeq: number;
+  conn: ConnStatus;
+  /** Optimistic discard markers; tile shown gray until server confirms. */
+  pendingDiscard: { seat: Seat; tile: Tile } | null;
+  /** Per-seat display names. Populated from the `match_start`
+   * event (live) or `ReplayLog.seats` (replay). `null` until the
+   * match starts; falls back to the seat wind in the renderer
+   * when missing. */
+  seatNames: [string, string, string, string] | null;
+  /** Per-seat current wait tiles, populated by the replay loader
+   * (`annotateWaits` pass). Length 4; an empty inner array means
+   * the seat is not in a tenpai shape at this step. `null` in
+   * live play — only the replay path runs the precompute. Drives
+   * the renderer's red wait-tile tint when `showWaits` is on. */
+  currentWaits: Tile[][] | null;
+  /** Per-seat current scores (1000-point chips × multiplier). */
+  scores: [number, number, number, number];
+  /** Current dealer seat. */
+  dealer: Seat;
+  /** Round wind (E / S / W / N). */
+  roundWind: "E" | "S" | "W" | "N";
+  /** 1-indexed hand within the round wind. */
+  roundNumber: number;
+  /** Honba (repeat-hand) counter. */
+  honba: number;
+  /** Riichi sticks currently on the table. */
+  riichiSticks: number;
+  /** Per-seat: has this seat declared riichi this hand. */
+  riichiDeclared: [boolean, boolean, boolean, boolean];
+  /** Per-seat: index into `discards[seat]` of the riichi declaration
+   * tile (null when not in riichi). Used to render the tilted tile. */
+  riichiTileIdx: [number | null, number | null, number | null, number | null];
+  /**
+   * Most recently completed hand result panel payload. Cleared at
+   * the next `hand_start`. Mirrors the wire `HandEndEvent` shape
+   * with one optional addition (the trailing `WinEvent` payload, so
+   * the result panel can show yaku / han / fu without the renderer
+   * needing to merge two events itself).
+   */
+  lastHandResult: null | {
+    reason: "exhaustive_draw" | "ron" | "tsumo" | "abort";
+    abortKind?: "kyuushuu" | "suufon_renda" | "suucha_riichi" | "sanchahou";
+    delta?: number[];
+    tenpai?: boolean[];
+    nagashi?: boolean[];
+    scores?: number[];
+    honba?: number;
+    riichiSticks?: number;
+    /** Per-seat wait tiles at hand end (length 4). `null` for
+     * seats not in tenpai; absent when the source doesn't record
+     * waits. Drives the renderer's `showWaits` overlay. */
+    waits?: (Tile[] | null)[];
+    win?: {
+      seat: Seat;
+      loser?: Seat | null;
+      winTile?: Tile;
+      han?: number;
+      fu?: number;
+      ten?: number;
+      yakumanCount?: number;
+      yaku?: Record<string, string>;
+      hand?: Tile[];
+      melds?: Meld[];
+      doraIndicators?: Tile[];
+      uraDoraIndicators?: Tile[];
+    };
+  };
+  matchEnded: null | {
+    finalScores: Array<{ seat: Seat; score: number; place: number }>;
+  };
+}
+
+interface MatchStore extends MatchView {
+  setConn: (status: ConnStatus) => void;
+  setMatch: (matchId: string, mySeat: Seat) => void;
+  applyEvent: (event: GameEvent, seq: number) => void;
+  hydrateSnapshot: (state: SnapshotState, seq: number) => void;
+  setLegalActions: (actions: LegalAction[]) => void;
+  setPendingDiscard: (p: { seat: Seat; tile: Tile } | null) => void;
+  reset: () => void;
+}
+
+const emptyHands: Array<Array<Tile | null>> = [[], [], [], []];
+const emptyDiscards: Tile[][] = [[], [], [], []];
+const emptyMelds: Meld[][] = [[], [], [], []];
+
+const initialState: MatchView = {
+  matchId: null,
+  mySeat: null,
+  hands: emptyHands,
+  melds: emptyMelds,
+  discards: emptyDiscards,
+  wallRemaining: 70,
+  liveWall: null,
+  deadWall: null,
+  drawsTaken: 0,
+  liveDrawsTaken: 0,
+  liveDrawSchedule: null,
+  dice: null,
+  doraIndicators: [],
+  legalActions: [],
+  lastSeq: -1,
+  conn: "idle",
+  pendingDiscard: null,
+  scores: [25000, 25000, 25000, 25000],
+  dealer: 0,
+  roundWind: "E",
+  roundNumber: 1,
+  honba: 0,
+  riichiSticks: 0,
+  seatNames: null,
+  riichiDeclared: [false, false, false, false],
+  riichiTileIdx: [null, null, null, null],
+  lastHandResult: null,
+  matchEnded: null,
+  currentWaits: null,
+};
+
+export const useMatchStore = create<MatchStore>((set) => ({
+  ...initialState,
+
+  setConn: (conn) => {
+    set({ conn });
+  },
+
+  setMatch: (matchId, mySeat) => {
+    set({
+      ...initialState,
+      matchId,
+      mySeat,
+      hands: [[], [], [], []],
+      melds: [[], [], [], []],
+      discards: [[], [], [], []],
+    });
+  },
+
+  setLegalActions: (legalActions) => {
+    set({ legalActions });
+  },
+
+  setPendingDiscard: (pendingDiscard) => {
+    set({ pendingDiscard });
+  },
+
+  hydrateSnapshot: (snap, seq) => {
+    set((state) => ({
+      ...state,
+      mySeat: snap.mySeat,
+      hands: snap.hands.map((h) => [...h]),
+      melds: snap.melds.map((m) => m.map((x) => ({ ...x }))),
+      discards: snap.discards.map((d) => [...d]),
+      wallRemaining: snap.wallRemaining,
+      dice: snap.dice ? [snap.dice[0], snap.dice[1]] : null,
+      // Prefer the server's exact count when present; older
+      // snapshots without `drawsTaken` get a wall-size derivation
+      // that's exact for normal play (rinshan draws come off the
+      // dead wall and don't affect `wallRemaining`).
+      drawsTaken: snap.drawsTaken ?? Math.max(0, 70 - snap.wallRemaining),
+      // Live snapshots never carry a draw schedule (it's a
+      // replay-only post-process artifact); reset to safe
+      // defaults so the renderer falls through to plain wall
+      // rendering.
+      liveDrawsTaken: snap.drawsTaken ?? Math.max(0, 70 - snap.wallRemaining),
+      liveDrawSchedule: null,
+      doraIndicators: [...snap.doraIndicators],
+      dealer: snap.dealer,
+      roundWind: snap.roundWind,
+      roundNumber: snap.roundNumber,
+      honba: snap.honba,
+      riichiSticks: snap.riichiSticks,
+      riichiDeclared: [...snap.riichiDeclared] as [
+        boolean,
+        boolean,
+        boolean,
+        boolean,
+      ],
+      riichiTileIdx: (snap.riichiTileIdx
+        ? [...snap.riichiTileIdx]
+        : [null, null, null, null]) as [
+        number | null,
+        number | null,
+        number | null,
+        number | null,
+      ],
+      scores: [...snap.scores] as [number, number, number, number],
+      lastSeq: seq,
+      // A snapshot is the authoritative current view; clear any
+      // optimistic / panel state that may not survive the resync.
+      pendingDiscard: null,
+      lastHandResult: null,
+      matchEnded: null,
+    }));
+  },
+
+  applyEvent: (event, seq) => {
+    set((state) => {
+      const next: MatchView = {
+        ...state,
+        lastSeq: seq,
+      };
+
+      switch (event.type) {
+        case "match_start": {
+          const namesArr = new Array<string>(4).fill("");
+          for (const s of event.seats) {
+            namesArr[s.seat] = s.displayName;
+          }
+          return {
+            ...next,
+            seatNames: [namesArr[0], namesArr[1], namesArr[2], namesArr[3]] as [
+              string,
+              string,
+              string,
+              string,
+            ],
+          };
+        }
+        case "hand_start": {
+          const hands: Array<Array<Tile | null>> = [[], [], [], []];
+          if (state.mySeat !== null && event.hand) {
+            hands[state.mySeat] = [...event.hand];
+          }
+          // Opponents start with 13 redacted tiles.
+          for (let s = 0; s < 4; s++) {
+            if (s !== state.mySeat) {
+              hands[s] = new Array<Tile | null>(13).fill(null);
+            }
+          }
+          return {
+            ...next,
+            hands,
+            melds: [[], [], [], []],
+            discards: [[], [], [], []],
+            doraIndicators: [...event.doraIndicators],
+            wallRemaining: 70,
+            drawsTaken: 0,
+            liveDrawsTaken: 0,
+            liveDrawSchedule: event.liveDrawSchedule
+              ? [...event.liveDrawSchedule]
+              : null,
+            dice: event.dice ? [event.dice[0], event.dice[1]] : null,
+            dealer: event.dealer,
+            roundWind: event.roundWind ?? state.roundWind,
+            roundNumber: event.roundNumber ?? state.roundNumber,
+            honba: event.honba ?? 0,
+            riichiSticks: event.riichiSticks ?? 0,
+            scores: (event.scores ?? state.scores) as [
+              number,
+              number,
+              number,
+              number,
+            ],
+            riichiDeclared: [false, false, false, false],
+            riichiTileIdx: [null, null, null, null],
+            lastHandResult: null,
+            matchEnded: null,
+          };
+        }
+        case "draw": {
+          const hands = state.hands.map((h) => [...h]);
+          if (event.tile) {
+            hands[event.seat].push(event.tile);
+          } else {
+            hands[event.seat].push(null);
+          }
+          return {
+            ...next,
+            hands,
+            wallRemaining: event.wallRemaining,
+            drawsTaken: state.drawsTaken + 1,
+            liveDrawsTaken: event.fromDeadWall
+              ? state.liveDrawsTaken
+              : state.liveDrawsTaken + 1,
+          };
+        }
+        case "discard": {
+          const hands = state.hands.map((h) => [...h]);
+          const idx =
+            event.seat === state.mySeat
+              ? hands[event.seat].lastIndexOf(event.tile)
+              : hands[event.seat].findIndex((t) => t === null);
+          if (idx >= 0) {
+            hands[event.seat].splice(idx, 1);
+          }
+          const discards = state.discards.map((d) => [...d]);
+          discards[event.seat].push(event.tile);
+          // Riichi declaration: record the index where this tile
+          // landed in the seat's pile and flip the seat's flag. The
+          // server folds the rotation into the same `discard` event
+          // via the optional `riichi: true` payload.
+          const riichiDeclared = event.riichi
+            ? ((): [boolean, boolean, boolean, boolean] => {
+                const arr = [...state.riichiDeclared] as [
+                  boolean,
+                  boolean,
+                  boolean,
+                  boolean,
+                ];
+                arr[event.seat] = true;
+                return arr;
+              })()
+            : state.riichiDeclared;
+          const riichiTileIdx = event.riichi
+            ? ((): [
+                number | null,
+                number | null,
+                number | null,
+                number | null,
+              ] => {
+                const arr = [...state.riichiTileIdx] as [
+                  number | null,
+                  number | null,
+                  number | null,
+                  number | null,
+                ];
+                arr[event.seat] = discards[event.seat].length - 1;
+                return arr;
+              })()
+            : state.riichiTileIdx;
+          // Clear optimistic marker on our own confirmed discard.
+          const pendingDiscard =
+            state.pendingDiscard &&
+            state.pendingDiscard.seat === event.seat &&
+            state.pendingDiscard.tile === event.tile
+              ? null
+              : state.pendingDiscard;
+          return {
+            ...next,
+            hands,
+            discards,
+            riichiDeclared,
+            riichiTileIdx,
+            pendingDiscard,
+          };
+        }
+        case "win": {
+          // Stash the win payload so the eventual `hand_end` can
+          // attach it to `lastHandResult`. Using a transient field
+          // on the next state would be awkward; instead we hold it
+          // inside the (possibly null) `lastHandResult.win` slot.
+          // If a `hand_end` arrived first (rare/unexpected ordering),
+          // fold the win into the existing payload.
+          const existing = state.lastHandResult;
+          const win = {
+            seat: event.seat,
+            loser: event.loser ?? null,
+            winTile: event.winTile,
+            han: event.han,
+            fu: event.fu,
+            ten: event.ten,
+            yakumanCount: event.yakumanCount,
+            yaku: event.yaku,
+            hand: event.hand ? [...event.hand] : undefined,
+            melds: event.melds ? event.melds.map((m) => ({ ...m })) : undefined,
+            doraIndicators: event.doraIndicators
+              ? [...event.doraIndicators]
+              : undefined,
+            uraDoraIndicators: event.uraDoraIndicators
+              ? [...event.uraDoraIndicators]
+              : undefined,
+          };
+          return {
+            ...next,
+            lastHandResult: existing
+              ? { ...existing, win }
+              : { reason: "tsumo", win },
+          };
+        }
+        case "hand_end": {
+          const existingWin = state.lastHandResult?.win;
+          return {
+            ...next,
+            scores: (event.scores ?? state.scores) as [
+              number,
+              number,
+              number,
+              number,
+            ],
+            riichiSticks: event.riichiSticks ?? state.riichiSticks,
+            lastHandResult: {
+              reason: event.reason,
+              ...(event.abortKind ? { abortKind: event.abortKind } : {}),
+              ...(event.delta ? { delta: [...event.delta] } : {}),
+              ...(event.tenpai ? { tenpai: [...event.tenpai] } : {}),
+              ...(event.nagashi ? { nagashi: [...event.nagashi] } : {}),
+              ...(event.scores ? { scores: [...event.scores] } : {}),
+              ...(event.honba !== undefined ? { honba: event.honba } : {}),
+              ...(event.riichiSticks !== undefined
+                ? { riichiSticks: event.riichiSticks }
+                : {}),
+              ...(existingWin ? { win: existingWin } : {}),
+            },
+          };
+        }
+        case "new_dora": {
+          return {
+            ...next,
+            doraIndicators: [...state.doraIndicators, event.indicator],
+          };
+        }
+        case "call": {
+          // Apply the meld to the caller's hand + remove the claimed
+          // tile from the discarder's pile. Slice-grade: just enough
+          // to keep `hands`/`discards` consistent so the next draws/
+          // discards don't trip the renderer.
+          const hands = state.hands.map((h) => [...h]);
+          const discards = state.discards.map((d) => [...d]);
+          const caller = event.seat;
+          const meld = event.meld;
+          // Remove the claimed tile from the discarder's pile (chi/
+          // pon/daiminkan/shouminkan — never ankan).
+          if (meld.from !== null && meld.claimedTile !== null) {
+            const pile = discards[meld.from];
+            const idx = pile.lastIndexOf(meld.claimedTile);
+            if (idx >= 0) {
+              pile.splice(idx, 1);
+            }
+          }
+          // Remove the caller's contributed tiles from their hand.
+          // For our own seat we know the exact tile strings; for
+          // opponents we still hold redacted `null` placeholders, so
+          // drop one `null` per contributed tile.
+          // NB: remove a SINGLE copy of the claimed tile (pon/kan of
+          // identical tiles like "1m,1m,1m" would otherwise filter
+          // every match and incorrectly drop the caller's own copies).
+          const contributed = (() => {
+            const rest = [...meld.tiles];
+            if (meld.claimedTile !== null) {
+              const i = rest.indexOf(meld.claimedTile);
+              if (i >= 0) {
+                rest.splice(i, 1);
+              }
+            }
+            return rest;
+          })();
+          for (const t of contributed) {
+            const hand = hands[caller];
+            if (caller === state.mySeat) {
+              const i = hand.lastIndexOf(t);
+              if (i >= 0) {
+                hand.splice(i, 1);
+              }
+            } else {
+              const i = hand.findIndex((x) => x === null);
+              if (i >= 0) {
+                hand.splice(i, 1);
+              }
+            }
+          }
+          // Append the meld so it can be rendered next to the hand.
+          // For shouminkan we'd want to upgrade the existing pon
+          // in-place; the engine ships a fresh `shouminkan`-typed
+          // meld with the same tiles, so for the slice we just
+          // replace the matching pon if found, otherwise append.
+          const melds = state.melds.map((m) => [...m]);
+          if (meld.type === "shouminkan") {
+            const ponIdx = melds[caller].findIndex(
+              (m) =>
+                m.type === "pon" &&
+                m.claimedTile !== null &&
+                meld.claimedTile !== null &&
+                m.claimedTile[1] === meld.claimedTile[1] &&
+                (m.claimedTile[0] === "0" ? "5" : m.claimedTile[0]) ===
+                  (meld.claimedTile[0] === "0" ? "5" : meld.claimedTile[0])
+            );
+            if (ponIdx >= 0) {
+              melds[caller][ponIdx] = meld;
+            } else {
+              melds[caller].push(meld);
+            }
+          } else {
+            melds[caller].push(meld);
+          }
+          return { ...next, hands, melds, discards };
+        }
+        case "match_end": {
+          return {
+            ...next,
+            matchEnded: { finalScores: event.finalScores },
+          };
+        }
+        default: {
+          // Exhaustiveness — Phase 1 will tighten as new event types land.
+          return next;
+        }
+      }
+    });
+  },
+
+  reset: () => {
+    set({ ...initialState });
+  },
+}));
