@@ -235,6 +235,28 @@ export class TableRenderer {
   private showHands = false;
   private showWalls = false;
   private showNames = true;
+  /** When false, the post-hand win-info panel and the match-end
+   * standings panel are skipped during `render()`. Used by the
+   * "hide hand result" eye button next to the panel so reviewers
+   * can peek at the board state underneath the overlay. */
+  private showHandResult = true;
+  /** Callback invoked at the end of every `render()` with the
+   * canvas-pixel rect of the currently-visible result panel
+   * (win-info inner zone or match-end standings panel), or
+   * `null` when no panel is showing. The React layer uses this
+   * to anchor the "hide hand result" eye button to the right
+   * edge of the panel. */
+  private resultPanelBoundsListener:
+    | ((rect: { x: number; y: number; w: number; h: number } | null) => void)
+    | null = null;
+  /** Last reported bounds, used for change-detection so we only
+   * fire the listener when the rect actually moves. */
+  private lastResultPanelBounds: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null = null;
   /** Per-frame wait-tile set computed at the top of `render()` when
    * `showWaits` is on. Used by {@link tintIfWait} to colour every
    * matching tile (discards, walls, hands, melds) red. Normalized
@@ -414,6 +436,24 @@ export class TableRenderer {
     this.showNames = flag;
   }
 
+  /** Hide / show the post-hand win-info panel and the match-end
+   * standings panel. Defaults to true. */
+  setShowHandResult(flag: boolean): void {
+    this.showHandResult = flag;
+  }
+
+  /** Subscribe to result-panel-bounds updates. The callback fires
+   * after every `render()` with the canvas-pixel rect of the
+   * currently-visible result panel, or `null` when nothing is
+   * showing. Pass `null` to clear. */
+  setResultPanelBoundsListener(
+    cb:
+      | ((rect: { x: number; y: number; w: number; h: number } | null) => void)
+      | null
+  ): void {
+    this.resultPanelBoundsListener = cb;
+  }
+
   destroy(): void {
     if (this.resizeRafHandle !== null) {
       cancelAnimationFrame(this.resizeRafHandle);
@@ -464,9 +504,19 @@ export class TableRenderer {
     // as `null`, so the set stays empty and `tintIfWait` is a
     // cheap no-op. When `showWaits` is off we also leave the set
     // empty regardless of the precompute.
-    if (this.showWaits && view.currentWaits) {
+    //
+    // Only the focused player's (`view.mySeat`) waits drive the
+    // tint — the overlay is per-seat and follows the seat selector
+    // in the replay viewer.
+    if (
+      this.showWaits &&
+      view.currentWaits &&
+      view.mySeat !== null &&
+      view.mySeat !== undefined
+    ) {
       const next = new Set<string>();
-      for (const seatWaits of view.currentWaits) {
+      const seatWaits = view.currentWaits[view.mySeat];
+      if (seatWaits) {
         for (const t of seatWaits) {
           next.add(t);
         }
@@ -541,15 +591,20 @@ export class TableRenderer {
 
     // Per-seat score chips + dealer marker.
     this.renderScores(view, layout.center);
+    // Per-seat display names next to each discard pond.
+    this.renderPlayerNames(view, layout);
     // Round / honba / sticks / wall-remaining centre block.
     this.renderRoundInfo(view, layout.center);
     // Wall stacks + dora indicators around the centre.
     this.renderWalls(view, layout);
 
     // HUD — only meaningful on live matches; suppressed for replays
-    // (no WS, no seq, no meaningful conn status).
+    // (no WS, no seq, no meaningful conn status). Wall count is
+    // inferred from `liveDrawsTaken` (draws off the live wall,
+    // excluding rinshan) rather than the server's authoritative
+    // `wallRemaining` field.
     const conn = view.conn;
-    const wall = view.wallRemaining;
+    const wall = Math.max(0, 70 - view.liveDrawsTaken);
     const seq = view.lastSeq;
     if (conn === "replay") {
       this.hudText.text = "";
@@ -562,12 +617,52 @@ export class TableRenderer {
     this.renderActionButtons(view, cx);
 
     // Hand-result panel — shown after a hand ends and stays up
-    // until the next `hand_start` clears `lastHandResult`.
-    if (view.lastHandResult && !view.matchEnded) {
-      this.renderHandResult(view, cx, cy);
+    // until the next `hand_start` clears `lastHandResult`. Both
+    // panels honour the `showHandResult` toggle so the eye
+    // button next to them can hide the overlay on press.
+    let designRect: { x: number; y: number; w: number; h: number } | null =
+      null;
+    if (this.showHandResult) {
+      if (view.lastHandResult && !view.matchEnded) {
+        designRect = this.renderHandResult(view, cx, cy, layout);
+      }
+      if (view.matchEnded) {
+        designRect = this.renderMatchEnd(view, cx, cy);
+      }
     }
-    if (view.matchEnded) {
-      this.renderMatchEnd(view, cx, cy);
+
+    // Publish the result-panel bounds (in canvas pixels) so the
+    // React layer can anchor the "hide hand result" eye button to
+    // its right edge. The fit transform applied to `this.root`
+    // earlier in this method is mirrored here. We dedupe against
+    // the last-reported value to avoid spamming React with
+    // identical updates on every render.
+    let nextBounds: { x: number; y: number; w: number; h: number } | null =
+      null;
+    if (designRect) {
+      const sx = this.root.scale.x;
+      const sy = this.root.scale.y;
+      nextBounds = {
+        x: designRect.x * sx + this.root.position.x,
+        y: designRect.y * sy + this.root.position.y,
+        w: designRect.w * sx,
+        h: designRect.h * sy,
+      };
+    }
+    const prev = this.lastResultPanelBounds;
+    const changed =
+      (prev === null) !== (nextBounds === null) ||
+      (prev !== null &&
+        nextBounds !== null &&
+        (prev.x !== nextBounds.x ||
+          prev.y !== nextBounds.y ||
+          prev.w !== nextBounds.w ||
+          prev.h !== nextBounds.h));
+    if (changed) {
+      this.lastResultPanelBounds = nextBounds;
+      if (this.resultPanelBoundsListener) {
+        this.resultPanelBoundsListener(nextBounds);
+      }
     }
   }
 
@@ -617,32 +712,19 @@ export class TableRenderer {
       });
       txt.anchor.set(0.5, 0.5);
       chip.addChild(bg, txt);
-      // Seat display name above the score (toggle: showNames).
-      if (this.showNames && view.seatNames) {
-        const name = view.seatNames[seat];
-        if (name) {
-          const nameTxt = new Text({
-            text: name,
-            style: new TextStyle({
-              fontFamily: "Inter, system-ui, sans-serif",
-              fontSize: Math.max(10, Math.round(chipH * 0.5)),
-              fontWeight: "600",
-              fill: 0xfde68a,
-            }),
-          });
-          nameTxt.anchor.set(0.5, 1.0);
-          // Position just above the chip (in chip-local coords,
-          // before the chip rotation rotates it into place).
-          nameTxt.position.set(0, -chipH / 2 - 4);
-          chip.addChild(nameTxt);
-        }
-      }
+      // Seat display names are rendered separately by
+      // `renderPlayerNames` next to each discard pond.
       // Wait tiles below the chip (toggle: showWaits). Sourced
       // from `lastHandResult.waits[seat]` — only present between
       // `hand_end` and the next `hand_start`. Rendered in
       // chip-local coords so the per-seat rotation orients the
-      // text to face the seated player.
-      if (this.showWaits && view.lastHandResult?.waits) {
+      // text to face the seated player. Restricted to the focused
+      // player so the overlay matches the per-seat tint.
+      if (
+        this.showWaits &&
+        view.lastHandResult?.waits &&
+        view.mySeat === seat
+      ) {
         const seatWaits = view.lastHandResult.waits[seat];
         if (seatWaits && seatWaits.length > 0) {
           const waitTxt = new Text({
@@ -673,11 +755,9 @@ export class TableRenderer {
     const cx = center.x + center.w / 2;
     const cy = center.y + center.h / 2;
     const label = `${view.roundWind}${view.roundNumber}`;
-    const honbaText = view.honba > 0 ? `  本${view.honba}` : "";
-    const stickText = view.riichiSticks > 0 ? `  供${view.riichiSticks}` : "";
     const fontSize = Math.max(14, Math.round(center.h * 0.13));
     const heading = new Text({
-      text: `${label}${honbaText}${stickText}`,
+      text: label,
       style: new TextStyle({
         fontFamily: "Inter, system-ui, sans-serif",
         fontSize,
@@ -686,22 +766,131 @@ export class TableRenderer {
       }),
     });
     heading.anchor.set(0.5, 0.5);
-    heading.position.set(cx, cy - fontSize * 0.6);
+    // Three small status lines below the heading: honba counters,
+    // riichi sticks, and wall remaining. Stacked vertically.
+    const lineSize = Math.max(10, Math.round(center.h * 0.085));
+    const lineGap = Math.round(lineSize * 0.25);
+    // Wall count is inferred from `liveDrawsTaken` (draws off
+    // the live wall, excluding rinshan replacement draws) rather
+    // than reading the server's authoritative `wallRemaining`
+    // field — the live wall starts at 70 tiles after the deal.
+    const wallRemaining = Math.max(0, 70 - view.liveDrawsTaken);
+    const lineSpecs: Array<{ text: string; color: number }> = [
+      { text: `本 ${view.honba}`, color: 0xfde68a },
+      { text: `供 ${view.riichiSticks}`, color: 0xfca5a5 },
+      { text: `山 ${wallRemaining}`, color: 0xd1d5db },
+    ];
+    // Vertically centre the whole block (heading + 3 lines + gaps)
+    // on the centre rect.
+    const linesBlockH =
+      lineSpecs.length * lineSize + (lineSpecs.length - 1) * lineGap;
+    const headingGap = Math.round(lineSize * 0.6);
+    const totalH = fontSize + headingGap + linesBlockH;
+    const topY = cy - totalH / 2;
+    heading.position.set(cx, topY + fontSize / 2);
     this.root.addChild(heading);
-    // Wall-remaining indicator below the round label.
-    const wallSize = Math.max(11, Math.round(center.h * 0.1));
-    const wallText = new Text({
-      text: `山 ${view.wallRemaining}`,
-      style: new TextStyle({
-        fontFamily: "Inter, system-ui, sans-serif",
-        fontSize: wallSize,
-        fontWeight: "600",
-        fill: 0xd1d5db,
-      }),
-    });
-    wallText.anchor.set(0.5, 0.5);
-    wallText.position.set(cx, cy + wallSize * 0.7);
-    this.root.addChild(wallText);
+    let lineY = topY + fontSize + headingGap + lineSize / 2;
+    for (const spec of lineSpecs) {
+      const t = new Text({
+        text: spec.text,
+        style: new TextStyle({
+          fontFamily: "Inter, system-ui, sans-serif",
+          fontSize: lineSize,
+          fontWeight: "600",
+          fill: spec.color,
+        }),
+      });
+      t.anchor.set(0.5, 0.5);
+      t.position.set(cx, lineY);
+      this.root.addChild(t);
+      lineY += lineSize + lineGap;
+    }
+  }
+
+  /**
+   * Render each seat's display name in a darkened frame next to
+   * their discard pond, on the right side from that seat's
+   * viewing perspective. The label rotation matches the seat so
+   * the text reads upright to the seated player.
+   */
+  private renderPlayerNames(view: MatchView, layout: TableLayout): void {
+    if (!this.root || !this.showNames || !view.seatNames) {
+      return;
+    }
+    const fontSize = 14;
+    const padX = 8;
+    const padY = 4;
+    const gap = 26;
+    // Shift each label toward the table centre along the seat's
+    // player-up axis (screen-up for seat 0, etc.).
+    const centerShift = 15;
+    for (let seat = 0; seat < 4; seat++) {
+      const name = view.seatNames[seat];
+      if (!name) {
+        continue;
+      }
+      const rect = layout.discards[seat];
+      const container = new Container();
+      const txt = new Text({
+        text: name,
+        style: new TextStyle({
+          fontFamily: "Inter, system-ui, sans-serif",
+          fontSize,
+          fontWeight: "600",
+          fill: 0xffffff,
+        }),
+      });
+      txt.anchor.set(0.5, 0.5);
+      const w = Math.ceil(txt.width) + padX * 2;
+      const h = Math.ceil(txt.height) + padY * 2;
+      const bg = new Graphics()
+        .roundRect(-w / 2, -h / 2, w, h, 4)
+        .fill({ color: 0x000000, alpha: 0.65 })
+        .stroke({ color: 0xffffff, width: 1, alpha: 0.25 });
+      container.addChild(bg, txt);
+      // Place the label adjacent to the discard rect on the
+      // player's right-hand side. Discard local +x points to the
+      // player's right; the seat's screen-side mapping is:
+      //   seat 0 (bottom, no rotation) → right edge of rect
+      //   seat 1 (right, -90°)         → top edge of rect
+      //   seat 2 (top, 180°)           → left edge of rect
+      //   seat 3 (left, +90°)          → bottom edge of rect
+      switch (seat) {
+        case 0: {
+          container.rotation = 0;
+          container.position.set(
+            rect.x + rect.w + gap + w / 2,
+            rect.y + rect.h / 2 - centerShift
+          );
+          break;
+        }
+        case 1: {
+          container.rotation = -Math.PI / 2;
+          container.position.set(
+            rect.x + rect.w / 2 - centerShift,
+            rect.y - gap - w / 2
+          );
+          break;
+        }
+        case 2: {
+          container.rotation = Math.PI;
+          container.position.set(
+            rect.x - gap - w / 2,
+            rect.y + rect.h / 2 + centerShift
+          );
+          break;
+        }
+        case 3: {
+          container.rotation = Math.PI / 2;
+          container.position.set(
+            rect.x + rect.w / 2 + centerShift,
+            rect.y + rect.h + gap + w / 2
+          );
+          break;
+        }
+      }
+      this.root.addChild(container);
+    }
   }
 
   /**
@@ -835,6 +1024,15 @@ export class TableRenderer {
     const INITIAL_DEAL_TILES = 52;
     const liveDrawsConsumed = view.liveDrawsTaken ?? view.drawsTaken;
     const drawsTaken = liveDrawsConsumed + INITIAL_DEAL_TILES;
+    // Number of kans declared this hand = total draws minus
+    // live-wall draws (the difference is the rinshan replacement
+    // draws). Each kan removes one rinshan tile from the dead
+    // wall and shifts one tile from the rinshan end of the live
+    // wall into the dead wall to preserve its 14-tile count.
+    const kanCount = Math.max(
+      0,
+      Math.min(4, view.drawsTaken - liveDrawsConsumed)
+    );
 
     for (let seat = 0; seat < 4; seat++) {
       const band = layout.wall[seat];
@@ -901,6 +1099,32 @@ export class TableRenderer {
             const tileDrawIdx = role.drawStackIdx * 2 + (row === 1 ? 0 : 1);
             if (tileDrawIdx < drawsTaken) {
               continue;
+            }
+          }
+          // Skip dead-wall positions consumed by rinshan draws.
+          // Each kan removes one rinshan tile from the break-side
+          // end of the dead wall, top tile first:
+          //   kan 1 → idxFromBreak=0, row 1 (upper of break stack)
+          //   kan 2 → idxFromBreak=0, row 0
+          //   kan 3 → idxFromBreak=1, row 1
+          //   kan 4 → idxFromBreak=1, row 0
+          if (role.kind === "dead" && role.idxFromBreak <= 1 && kanCount > 0) {
+            const rinshanOrder = role.idxFromBreak * 2 + (row === 1 ? 0 : 1);
+            if (rinshanOrder < kanCount) {
+              continue;
+            }
+          }
+          // Mark the last `kanCount` live-wall tiles as "pulled
+          // into the dead wall" — drawn greyed-out but still in
+          // place so the dead wall visually keeps its 14 tiles.
+          // Live tiles drain in `tileDrawIdx` order; the haitei
+          // (last drawable) sits at tileDrawIdx 121, so the
+          // pulled tiles occupy indices 122 - kanCount .. 121.
+          let livePulledToDead = false;
+          if (role.kind === "live" && kanCount > 0) {
+            const tileDrawIdx = role.drawStackIdx * 2 + (row === 1 ? 0 : 1);
+            if (tileDrawIdx >= 122 - kanCount) {
+              livePulledToDead = true;
             }
           }
           // Dora / kan-dora face-up reveals on the dead wall's
@@ -1108,10 +1332,12 @@ export class TableRenderer {
             // already tinted
           } else if (highlightFutureDraw) {
             sprite.tint = 0x88ff88;
-          } else if (greyOutDeadWall) {
+          } else if (greyOutDeadWall || livePulledToDead) {
             // Slight grey wash on dead-wall reveals so the
             // dora-indicators (revealed naturally during play)
             // remain the visually prominent dead-wall tiles.
+            // Also applied to live-wall tiles that have been
+            // pulled into the dead wall by kans.
             sprite.tint = 0xb0b0b0;
           }
           const child = new Container();
@@ -1149,13 +1375,18 @@ export class TableRenderer {
     }
   }
 
-  private renderHandResult(view: MatchView, cx: number, cy: number): void {
+  private renderHandResult(
+    view: MatchView,
+    cx: number,
+    cy: number,
+    layout: TableLayout
+  ): { x: number; y: number; w: number; h: number } | null {
     if (!this.root) {
-      return;
+      return null;
     }
     const r = view.lastHandResult;
     if (!r) {
-      return;
+      return null;
     }
     // For wins, the upstream stream emits `win` then `hand_end`
     // as two consecutive events. Both produce a `lastHandResult`,
@@ -1163,63 +1394,540 @@ export class TableRenderer {
     // the replay. Suppress the intermediate state: a win's panel
     // only renders once `hand_end` has filled in the deltas.
     if (r.win && !r.delta) {
+      return null;
+    }
+
+    // Inner rect bounded by the 4 hand bands. The result overlay
+    // (backdrop + center panel + score boxes) is constrained to
+    // this rectangle so the hand strips remain visible.
+    const inner: Rect = {
+      x: layout.hands[3].x + layout.hands[3].w,
+      y: layout.hands[2].y + layout.hands[2].h,
+      w: layout.hands[1].x - (layout.hands[3].x + layout.hands[3].w),
+      h: layout.hands[0].y - (layout.hands[2].y + layout.hands[2].h),
+    };
+
+    // Wrap the entire result overlay in a single high-zIndex
+    // container so it draws above the walls and hand strips
+    // (which set their own zIndex on the root's sortable children).
+    const overlay = new Container();
+    overlay.zIndex = 1000;
+    this.root.sortableChildren = true;
+    this.root.addChild(overlay);
+
+    // Semi-transparent backdrop so the result panel stands out
+    // over the table — restricted to the inner area between the
+    // four hand bands.
+    const backdrop = new Graphics()
+      .rect(inner.x, inner.y, inner.w, inner.h)
+      .fill({ color: 0x000000, alpha: 0.6 });
+    overlay.addChild(backdrop);
+
+    // Center info: title, yaku list, han/fu total, and points
+    // line (for wins); reason text otherwise.
+    this.renderResultCenterInfo(r, cx, cy, overlay);
+
+    // Honba / riichi sticks pill, tucked into the top-left of the
+    // result overlay.
+    this.renderResultStickInfo(r, inner, overlay);
+
+    // Four player boxes positioned at the seats, showing each
+    // player's pre-delta score and the signed delta from this
+    // hand.
+    this.renderResultScoreBoxes(view, r, inner, overlay);
+
+    return { x: inner.x, y: inner.y, w: inner.w, h: inner.h };
+  }
+
+  /**
+   * Center stack of info for the result overlay. For wins this is
+   *   - yaku list (one row per yaku: name on the left, "N han" on
+   *     the right)
+   *   - "N han M fu" or yakuman line (large)
+   *   - points line: tsumo split / "X all" / "Npts" (large)
+   * For exhaustive draws / aborts: a single label line.
+   */
+  private renderResultCenterInfo(
+    r: NonNullable<MatchView["lastHandResult"]>,
+    cx: number,
+    cy: number,
+    parent: Container
+  ): void {
+    if (!this.root) {
+      return;
+    }
+    const container = new Container();
+
+    // Build the lines we want to render. Each entry is either a
+    // single label (centered) or a yaku name + value pair.
+    type Row =
+      | { kind: "yaku"; name: string; value: string }
+      | { kind: "title"; text: string; size: number }
+      | { kind: "label"; text: string; size: number; color?: number };
+
+    const rows: Row[] = [];
+
+    if (r.win) {
+      // Title line: "Tsumo" / "Ron"
+      if (r.reason === "tsumo") {
+        rows.push({ kind: "title", text: "Tsumo", size: 36 });
+      } else if (r.reason === "ron") {
+        rows.push({ kind: "title", text: "Ron", size: 36 });
+      }
+      // Yaku rows. Skip yaku whose displayed value is 0 han
+      // (server may still emit them — typically dora when no dora
+      // tiles are held — and they shouldn't take up a line).
+      const yakuKeys = r.win.yaku ? Object.keys(r.win.yaku) : [];
+      for (const name of yakuKeys) {
+        const value = r.win.yaku?.[name] ?? "";
+        // value is typically of the form "1 han" / "2 han"; treat
+        // anything whose leading integer is 0 as zero-han.
+        const leading = parseInt(value, 10);
+        if (Number.isFinite(leading) && leading === 0) {
+          continue;
+        }
+        rows.push({ kind: "yaku", name, value });
+      }
+      // Han/fu summary or yakuman line.
+      const han = r.win.han ?? 0;
+      const fu = r.win.fu ?? 0;
+      const ym = r.win.yakumanCount ?? 0;
+      if (ym > 0) {
+        rows.push({
+          kind: "label",
+          text: ym > 1 ? `${ym}× Yakuman` : "Yakuman",
+          size: 32,
+        });
+      } else {
+        // From 5 han up the fu no longer affects the basic-points
+        // calculation (mangan / haneman / ...), so suppress it.
+        const text = han >= 5 ? `${han} han` : `${han} han ${fu} fu`;
+        rows.push({ kind: "label", text, size: 32 });
+      }
+      // Points line. We take the value straight from the log
+      // (`r.win.ten`) rather than re-computing from han/fu — the
+      // server is the source of truth for scoring, which keeps the
+      // display ruleset-agnostic.
+      if (typeof r.win.ten === "number") {
+        rows.push({
+          kind: "label",
+          text: `${r.win.ten}pts`,
+          size: 28,
+          color: 0xfde68a,
+        });
+      }
+    } else if (r.reason === "exhaustive_draw") {
+      rows.push({ kind: "title", text: "Exhaustive draw", size: 32 });
+    } else if (r.reason === "abort") {
+      rows.push({
+        kind: "title",
+        text: `Abort: ${r.abortKind ?? "unknown"}`,
+        size: 28,
+      });
+    }
+
+    // Measure / layout. Yaku rows share a fixed two-column width
+    // (name left-aligned, value right-aligned). Other rows are
+    // centered.
+    const yakuFont = 22;
+    const colGap = 36;
+    const lineSpacing = 6;
+    const yakuRowH = yakuFont + 4;
+    const labelGapBefore = 14;
+
+    // Pre-build all text nodes so we can measure widest column.
+    type Built =
+      | {
+          kind: "yaku";
+          name: Text;
+          value: Text;
+          h: number;
+        }
+      | { kind: "single"; text: Text; h: number };
+    const built: Built[] = [];
+    let maxYakuName = 0;
+    let maxYakuValue = 0;
+    let maxSingle = 0;
+    for (const row of rows) {
+      if (row.kind === "yaku") {
+        const name = new Text({
+          text: row.name,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: yakuFont,
+            fontWeight: "500",
+            fill: 0xffffff,
+          }),
+        });
+        const value = new Text({
+          text: row.value,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: yakuFont,
+            fontWeight: "600",
+            fill: 0xffffff,
+          }),
+        });
+        maxYakuName = Math.max(maxYakuName, name.width);
+        maxYakuValue = Math.max(maxYakuValue, value.width);
+        built.push({ kind: "yaku", name, value, h: yakuRowH });
+      } else {
+        const t = new Text({
+          text: row.text,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: row.size,
+            fontWeight: row.kind === "title" ? "700" : "600",
+            fill: (row.kind === "label" ? row.color : undefined) ?? 0xffffff,
+          }),
+        });
+        maxSingle = Math.max(maxSingle, t.width);
+        built.push({ kind: "single", text: t, h: row.size + 8 });
+      }
+    }
+
+    const yakuColW = maxYakuName + colGap + maxYakuValue;
+    const contentW = Math.max(yakuColW, maxSingle);
+    // Total height = sum of row heights + spacing.
+    let totalH = 0;
+    let prevKind: "yaku" | "single" | null = null;
+    for (const b of built) {
+      if (prevKind !== null) {
+        totalH +=
+          b.kind !== prevKind || b.kind === "single"
+            ? labelGapBefore
+            : lineSpacing;
+      }
+      totalH += b.h;
+      prevKind = b.kind;
+    }
+
+    const padX = 36;
+    const padY = 24;
+    const panelW = contentW + padX * 2;
+    const panelH = totalH + padY * 2;
+    const bg = new Graphics()
+      .roundRect(0, 0, panelW, panelH, 16)
+      .fill({ color: 0x000000, alpha: 0.85 })
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.25 });
+    container.addChild(bg);
+
+    let y = padY;
+    prevKind = null;
+    for (const b of built) {
+      if (prevKind !== null) {
+        y +=
+          b.kind !== prevKind || b.kind === "single"
+            ? labelGapBefore
+            : lineSpacing;
+      }
+      if (b.kind === "yaku") {
+        const colLeft = (panelW - yakuColW) / 2;
+        b.name.position.set(colLeft, y);
+        b.value.position.set(colLeft + yakuColW - b.value.width, y);
+        container.addChild(b.name, b.value);
+      } else {
+        b.text.position.set((panelW - b.text.width) / 2, y);
+        container.addChild(b.text);
+      }
+      y += b.h;
+      prevKind = b.kind;
+    }
+    container.position.set(cx - panelW / 2, cy - panelH / 2);
+    parent.addChild(container);
+  }
+
+  /**
+   * Small honba / riichi-sticks pill in the upper-left of the
+   * result overlay.
+   */
+  private renderResultStickInfo(
+    r: NonNullable<MatchView["lastHandResult"]>,
+    inner: Rect,
+    parent: Container
+  ): void {
+    if (!this.root) {
+      return;
+    }
+    const honba = r.honba ?? 0;
+    const sticks = r.riichiSticks ?? 0;
+    if (honba === 0 && sticks === 0) {
       return;
     }
     const lines: string[] = [];
-    if (r.reason === "tsumo" && r.win) {
-      lines.push(`Tsumo — Seat ${r.win.seat}`);
-    } else if (r.reason === "ron" && r.win) {
-      lines.push(`Ron — Seat ${r.win.seat} from Seat ${r.win.loser ?? "?"}`);
-    } else if (r.reason === "exhaustive_draw") {
-      lines.push("Exhaustive draw");
-    } else if (r.reason === "abort") {
-      lines.push(`Abort: ${r.abortKind ?? "unknown"}`);
+    if (honba > 0) {
+      lines.push(`${honba} honba`);
     }
-    if (r.win) {
-      const yakuKeys = r.win.yaku ? Object.keys(r.win.yaku) : [];
-      if (yakuKeys.length > 0) {
-        lines.push(yakuKeys.join(" · "));
-      }
-      const han = r.win.han ?? 0;
-      const fu = r.win.fu ?? 0;
-      const ten = r.win.ten ?? 0;
-      const ym = r.win.yakumanCount ?? 0;
-      if (ym > 0) {
-        lines.push(`${ym > 1 ? `${ym}× ` : ""}Yakuman — ${ten}`);
-      } else {
-        lines.push(`${han}han ${fu}fu — ${ten}`);
-      }
+    if (sticks > 0) {
+      lines.push(`${sticks} riichi stick${sticks === 1 ? "" : "s"}`);
     }
-    if (r.delta) {
-      lines.push(
-        `Δ ${r.delta.map((d, i) => `S${i}:${d > 0 ? "+" : ""}${d}`).join("  ")}`
-      );
-    }
-    if (r.tenpai) {
-      lines.push(
-        `Tenpai: ${
-          r.tenpai
-            .map((t, i) => (t ? `S${i}` : null))
-            .filter(Boolean)
-            .join(" ") || "none"
-        }`
-      );
-    }
-    this.drawCenterPanel(lines, cx, cy, "Continue");
+    const fontSize = 18;
+    const container = new Container();
+    const texts = lines.map(
+      (l) =>
+        new Text({
+          text: l,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize,
+            fontWeight: "500",
+            fill: 0xffffff,
+          }),
+        })
+    );
+    const padX = 12;
+    const padY = 8;
+    const lineGap = 4;
+    const w = Math.max(...texts.map((t) => t.width)) + padX * 2;
+    const h = texts.length * fontSize + (texts.length - 1) * lineGap + padY * 2;
+    const bg = new Graphics()
+      .roundRect(0, 0, w, h, 8)
+      .fill({ color: 0x000000, alpha: 0.7 })
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.2 });
+    container.addChild(bg);
+    texts.forEach((t, i) => {
+      t.position.set(padX, padY + i * (fontSize + lineGap));
+      container.addChild(t);
+    });
+    container.position.set(inner.x + 12, inner.y + 12);
+    parent.addChild(container);
   }
 
-  private renderMatchEnd(view: MatchView, cx: number, cy: number): void {
-    if (!this.root || !view.matchEnded) {
+  /**
+   * Per-seat score boxes positioned around the table, showing the
+   * pre-delta score and a signed delta. Shown for any result that
+   * carries `delta`.
+   */
+  private renderResultScoreBoxes(
+    view: MatchView,
+    r: NonNullable<MatchView["lastHandResult"]>,
+    inner: Rect,
+    parent: Container
+  ): void {
+    if (!this.root || !r.delta) {
       return;
     }
-    const lines: string[] = ["Match ended"];
+    // Anchor boxes flush against the four inner edges (the inner
+    // edge of each hand band), centered along that edge.
+    const margin = 16;
+    const cxInner = inner.x + inner.w / 2;
+    const cyInner = inner.y + inner.h / 2;
+    const positions: Array<{
+      x: number;
+      y: number;
+      anchor: "n" | "e" | "s" | "w";
+    }> = [
+      // seat 0 (bottom): flush against inner bottom edge
+      { x: cxInner, y: inner.y + inner.h - margin, anchor: "s" },
+      // seat 1 (right): flush against inner right edge
+      { x: inner.x + inner.w - margin, y: cyInner, anchor: "e" },
+      // seat 2 (top): flush against inner top edge
+      { x: cxInner, y: inner.y + margin, anchor: "n" },
+      // seat 3 (left): flush against inner left edge
+      { x: inner.x + margin, y: cyInner, anchor: "w" },
+    ];
+    for (let seat = 0; seat < 4; seat++) {
+      const pos = positions[seat];
+      const name = view.seatNames?.[seat] || `Player ${seat + 1}`;
+      const isDealer = view.dealer === seat;
+      const delta = r.delta[seat] ?? 0;
+      const before = (view.scores[seat] ?? 0) - delta;
+      this.drawScoreBox(name, isDealer, before, delta, pos, parent);
+    }
+  }
+
+  private drawScoreBox(
+    name: string,
+    isDealer: boolean,
+    before: number,
+    delta: number,
+    pos: { x: number; y: number; anchor: "n" | "e" | "s" | "w" },
+    parent: Container
+  ): void {
+    if (!this.root) {
+      return;
+    }
+    const container = new Container();
+    const nameText = new Text({
+      text: isDealer ? `${name} (dealer)` : name,
+      style: new TextStyle({
+        fontFamily: "Inter, system-ui, sans-serif",
+        fontSize: 20,
+        fontWeight: "700",
+        fill: 0xffffff,
+      }),
+    });
+    const scoreText = new Text({
+      text: `${before}`,
+      style: new TextStyle({
+        fontFamily: "Inter, system-ui, sans-serif",
+        fontSize: 22,
+        fontWeight: "600",
+        fill: 0xffffff,
+      }),
+    });
+    const showDelta = delta !== 0;
+    const deltaColor = delta > 0 ? 0x4ade80 : 0xf87171;
+    const deltaText = showDelta
+      ? new Text({
+          text: delta > 0 ? `+${delta}` : `${delta}`,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 22,
+            fontWeight: "700",
+            fill: deltaColor,
+          }),
+        })
+      : null;
+    const padX = 18;
+    const padY = 14;
+    const innerGap = 10;
+    const rowContentW = deltaText
+      ? scoreText.width + innerGap + deltaText.width
+      : scoreText.width;
+    const rowContentH = Math.max(scoreText.height, deltaText?.height ?? 0);
+    const innerW = Math.max(nameText.width, rowContentW) + padX * 2;
+    const innerH = nameText.height + 8 + rowContentH + padY * 2;
+    const bg = new Graphics()
+      .roundRect(0, 0, innerW, innerH, 10)
+      .fill({ color: 0x000000, alpha: 0.85 })
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
+    container.addChild(bg);
+    nameText.position.set((innerW - nameText.width) / 2, padY);
+    container.addChild(nameText);
+    const rowY = padY + nameText.height + 8;
+    const rowX = (innerW - rowContentW) / 2;
+    scoreText.position.set(rowX, rowY);
+    container.addChild(scoreText);
+    if (deltaText) {
+      deltaText.position.set(rowX + scoreText.width + innerGap, rowY);
+      container.addChild(deltaText);
+    }
+
+    // Anchor placement: pos.{x,y} is the side-midpoint; shift the
+    // box inward so it sits flush against that side.
+    let x = pos.x - innerW / 2;
+    let y = pos.y - innerH / 2;
+    if (pos.anchor === "s") {
+      y = pos.y - innerH;
+    } else if (pos.anchor === "n") {
+      y = pos.y;
+    } else if (pos.anchor === "w") {
+      x = pos.x;
+    } else if (pos.anchor === "e") {
+      x = pos.x - innerW;
+    }
+    container.position.set(x, y);
+    parent.addChild(container);
+  }
+
+  private renderMatchEnd(
+    view: MatchView,
+    cx: number,
+    cy: number
+  ): { x: number; y: number; w: number; h: number } | null {
+    if (!this.root || !view.matchEnded) {
+      return null;
+    }
     const ordered = [...view.matchEnded.finalScores].sort(
       (a, b) => a.place - b.place
     );
-    for (const f of ordered) {
-      lines.push(`${f.place}. Seat ${f.seat} — ${f.score}`);
-    }
-    this.drawCenterPanel(lines, cx, cy);
+    const seatNames = view.seatNames;
+    const rows = ordered.map((f) => ({
+      place: f.place,
+      name: seatNames?.[f.seat] ?? `Seat ${f.seat}`,
+      score: f.score,
+    }));
+
+    const padX = 28;
+    const padY = 20;
+    const titleSize = 22;
+    const rowSize = 16;
+    const titleGap = 18; // space between title and divider
+    const dividerGap = 14; // space between divider and first row
+    const rowHeight = 24;
+
+    const titleStyle = new TextStyle({
+      fontFamily: "Inter, system-ui, sans-serif",
+      fontSize: titleSize,
+      fontWeight: "700",
+      fill: 0xffffff,
+    });
+    const rowStyle = new TextStyle({
+      fontFamily: "Inter, system-ui, sans-serif",
+      fontSize: rowSize,
+      fontWeight: "600",
+      fill: 0xffffff,
+    });
+
+    const titleText = new Text({ text: "Match ended", style: titleStyle });
+
+    // Build per-row text triples so we can right-align scores at a
+    // common x within the panel.
+    const rowTexts = rows.map((r) => ({
+      place: new Text({ text: `${r.place}.`, style: rowStyle }),
+      name: new Text({ text: r.name, style: rowStyle }),
+      score: new Text({ text: `${r.score}`, style: rowStyle }),
+    }));
+
+    const placeColW = Math.max(...rowTexts.map((r) => r.place.width));
+    const nameColW = Math.max(...rowTexts.map((r) => r.name.width));
+    const scoreColW = Math.max(...rowTexts.map((r) => r.score.width));
+    const placeGap = 8; // space between place number and name
+    const scoreGap = 28; // space between name column and scores
+    const contentW = placeColW + placeGap + nameColW + scoreGap + scoreColW;
+
+    const innerW = Math.max(280, titleText.width, contentW);
+    const w = innerW + padX * 2;
+    const h =
+      padY +
+      titleText.height +
+      titleGap +
+      1 + // divider
+      dividerGap +
+      rowTexts.length * rowHeight +
+      padY;
+
+    const panel = new Container();
+    const bg = new Graphics()
+      .roundRect(0, 0, w, h, 12)
+      .fill({ color: 0x000000, alpha: 0.85 });
+    panel.addChild(bg);
+
+    // Title — centred horizontally.
+    titleText.position.set((w - titleText.width) / 2, padY);
+    panel.addChild(titleText);
+
+    // Divider line below the title.
+    const dividerY = padY + titleText.height + titleGap;
+    const divider = new Graphics()
+      .moveTo(padX, dividerY)
+      .lineTo(w - padX, dividerY)
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.35 });
+    panel.addChild(divider);
+
+    // Standings rows.
+    const rowsX = (w - contentW) / 2;
+    const rowsStartY = dividerY + dividerGap;
+    rowTexts.forEach((r, i) => {
+      const y = rowsStartY + i * rowHeight;
+      r.place.position.set(rowsX, y);
+      r.name.position.set(rowsX + placeColW + placeGap, y);
+      r.score.position.set(
+        rowsX +
+          placeColW +
+          placeGap +
+          nameColW +
+          scoreGap +
+          (scoreColW - r.score.width),
+        y
+      );
+      panel.addChild(r.place, r.name, r.score);
+    });
+
+    panel.position.set(cx - w / 2, cy - h / 2);
+    this.root.addChild(panel);
+    return { x: cx - w / 2, y: cy - h / 2, w, h };
   }
 
   private drawCenterPanel(
@@ -1952,6 +2660,13 @@ export class TableRenderer {
     // bottom/top butt flush.
     const meldGap = seat === 1 || seat === 3 ? -16 : 0;
     const strip = new Container();
+    // Where adjacent melds overlap, the newer meld must render
+    // on top of the older one (matching the discard-pond
+    // convention that the most recent tile sits on top of its
+    // neighbour). Enable z-sorting on the strip so we can stamp
+    // each meld with a zIndex that mirrors its declaration order
+    // regardless of the addChild sequence below.
+    strip.sortableChildren = true;
     // Lay melds out so the FIRST call sits at the outer end of the
     // strip (player's-right end of the band) and subsequent calls
     // stack inward toward the hand. We render in reverse order
@@ -1960,12 +2675,32 @@ export class TableRenderer {
     // call.
     let cursor = 0;
     const meldWidths: number[] = [];
+    let loopIter = 0;
     for (let i = melds.length - 1; i >= 0; i--) {
       const { node, width } = this.drawMeld(melds[i], seat);
       node.position.set(cursor, 0);
+      // Z-order between adjacent overlapping melds must match the
+      // within-meld convention used in `drawMeld` (tile lower on
+      // screen sits on top):
+      //   Seat 1 (right, container rot -π/2): local +x → screen -y,
+      //     so the meld at the LOWEST cursor is lowest on screen
+      //     and should be on top → zIndex = -loopIter.
+      //   Seat 3 (left,  container rot +π/2): local +x → screen +y,
+      //     so the meld at the HIGHEST cursor is lowest on screen
+      //     and should be on top → zIndex = +loopIter.
+      //   Seats 0/2 don't overlap (meldGap = 0); any stable order
+      //   works, fall back to declaration order.
+      if (seat === 1) {
+        node.zIndex = -loopIter;
+      } else if (seat === 3) {
+        node.zIndex = loopIter;
+      } else {
+        node.zIndex = i;
+      }
       strip.addChild(node);
       meldWidths.push(width);
       cursor += width + meldGap;
+      loopIter++;
     }
     // Strip content width = sum of meld widths + (n-1) gaps. The
     // last meld in the loop adds a trailing meldGap that we don't
@@ -2397,7 +3132,21 @@ export class TableRenderer {
       2: "topSmall",
       3: "leftSmall",
     };
-    const sheet = sheetOverride ?? seatSheets[seat];
+    // For face-down tiles (ankan outer slots), seats 2 and 3 fall
+    // back to the seat-0 / seat-1 sheets — matching the wall's
+    // back-tile sheet map. `topSmall` / `leftSmall` don't carry a
+    // back-tile cell at (row 3, col 0); the back artwork is the
+    // same regardless of seat orientation since it's rotationally
+    // symmetric.
+    const faceDownSeatSheets: Record<number, SheetKey> = {
+      0: "bottomSmall",
+      1: "rightSmall",
+      2: "bottomSmall",
+      3: "rightSmall",
+    };
+    const sheet =
+      sheetOverride ??
+      (tile === null ? faceDownSeatSheets[seat] : seatSheets[seat]);
     const tex = this.getTileTexture(sheet, tile);
     const c = new Container();
     const sprite = new Sprite(tex);

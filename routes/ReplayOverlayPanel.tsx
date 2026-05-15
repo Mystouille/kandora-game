@@ -6,8 +6,9 @@ import { useState } from "react";
  * `TableRenderer`:
  *
  *  - `showWaits` — highlight in red every tile (in any pond, hand
- *    or visible wall position) that any player is currently waiting
- *    on, based on the in-flight closed hands.
+ *    or visible wall position) that the currently focused player is
+ *    waiting on, based on their in-flight closed hand. Follows the
+ *    focused-seat selector so flipping seats updates the overlay.
  *  - `showHands` — reveal opponent hands ("omniscient" mode).
  *    Defaults OFF so the viewer opens "as it was played"; flipping
  *    it on is the Phase 4.5 step 4 toggle (see plan).
@@ -41,7 +42,7 @@ interface ToggleSpec {
 }
 
 const TOGGLES: ToggleSpec[] = [
-  { key: "showWaits", label: "Show waits" },
+  { key: "showWaits", label: "Show player waits" },
   { key: "showHands", label: "Show hands" },
   { key: "showWalls", label: "Show walls" },
   { key: "showNames", label: "Show names" },

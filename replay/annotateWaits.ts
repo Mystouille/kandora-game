@@ -47,13 +47,57 @@ function seatWaitsFromView(view: ReplayView): Tile[][] {
  * entries — entries where the state doesn't change waits (e.g.
  * `new_dora`, `match_start`) still get a snapshot; this keeps the
  * indexing trivial for the route component.
+ *
+ * Authoritative wait info from the platform replay log takes
+ * precedence over the shanten-based fallback. Majsoul attaches
+ * `tingpais` to every discard event (see `replayAdapter.ts`); when
+ * present we lock that seat's waits to the platform-reported list
+ * until the seat's hand changes again (draw / chi / pon / kan).
+ * Tenhou and Riichi City don't expose per-discard waits, so those
+ * seats keep using the local shanten compute throughout.
  */
 export function annotateWaits(events: GameEvent[]): Tile[][][] {
   const out: Tile[][][] = new Array(events.length);
   let view = initialView();
+  // Per-seat authoritative override. `null` means "no authoritative
+  // reading available — use shanten-based compute". Cleared on
+  // hand_start and on any event that mutates the seat's hand.
+  let authoritative: (Tile[] | null)[] = [null, null, null, null];
   for (let i = 0; i < events.length; i++) {
-    view = applyReplayEvent(view, events[i]);
-    out[i] = seatWaitsFromView(view);
+    const ev = events[i];
+    view = applyReplayEvent(view, ev);
+
+    switch (ev.type) {
+      case "hand_start": {
+        authoritative = [null, null, null, null];
+        break;
+      }
+      case "draw": {
+        // Drawing changes the seat's hand → invalidate prior override.
+        authoritative[ev.seat] = null;
+        break;
+      }
+      case "call": {
+        // The caller's hand shape just changed.
+        authoritative[ev.seat] = null;
+        break;
+      }
+      case "discard": {
+        if (ev.waits !== undefined) {
+          authoritative[ev.seat] = [...ev.waits];
+        }
+        break;
+      }
+      default: {
+        break;
+      }
+    }
+
+    const computed = seatWaitsFromView(view);
+    out[i] = computed.map((w, seat) => {
+      const auth = authoritative[seat];
+      return auth !== null ? [...auth] : w;
+    });
   }
   return out;
 }

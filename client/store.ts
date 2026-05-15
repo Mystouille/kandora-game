@@ -419,6 +419,26 @@ export const useMatchStore = create<MatchStore>((set) => ({
                 return arr;
               })()
             : state.riichiTileIdx;
+          // Riichi declaration also deposits a 1000-point stick on
+          // the table: optimistically deduct the seat's score and
+          // bump the stick counter so the UI reflects it the moment
+          // the declaration tile lands, without waiting for the
+          // server's authoritative score event.
+          const scores = event.riichi
+            ? ((): [number, number, number, number] => {
+                const arr = [...state.scores] as [
+                  number,
+                  number,
+                  number,
+                  number,
+                ];
+                arr[event.seat] = arr[event.seat] - 1000;
+                return arr;
+              })()
+            : state.scores;
+          const riichiSticks = event.riichi
+            ? state.riichiSticks + 1
+            : state.riichiSticks;
           // Clear optimistic marker on our own confirmed discard.
           const pendingDiscard =
             state.pendingDiscard &&
@@ -432,6 +452,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
             discards,
             riichiDeclared,
             riichiTileIdx,
+            scores,
+            riichiSticks,
             pendingDiscard,
             freshlyDrawnSeat: null,
           };

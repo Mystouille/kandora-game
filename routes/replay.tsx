@@ -481,6 +481,21 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
   // readers can hide a long note that's covering the board
   // without losing it permanently.
   const [savedTextVisible, setSavedTextVisible] = useState<boolean>(true);
+  // Same pattern, but for the hand-result / match-end Pixi panel.
+  // The eye button next to the panel flips this on mouse-down so
+  // viewers can momentarily peek at the board underneath without
+  // losing the result overlay permanently.
+  const [handResultVisible, setHandResultVisible] = useState<boolean>(true);
+  // Canvas-pixel bounds of the result panel reported by
+  // `TableRenderer.setResultPanelBoundsListener`. Drives the
+  // absolute position of the "hide hand result" eye button so it
+  // sits flush against the panel's right edge.
+  const [resultPanelBounds, setResultPanelBounds] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
   // Global mouseup/touchend listener: while the user presses the
   // eye button the annotation is hidden, but the moment they
   // release the mouse *anywhere* on the page we show it again.
@@ -501,6 +516,21 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       window.removeEventListener("touchcancel", restore);
     };
   }, [savedTextVisible]);
+  // Mirror restore listener for the hand-result eye button.
+  useEffect(() => {
+    if (handResultVisible) {
+      return;
+    }
+    const restore = () => setHandResultVisible(true);
+    window.addEventListener("mouseup", restore);
+    window.addEventListener("touchend", restore);
+    window.addEventListener("touchcancel", restore);
+    return () => {
+      window.removeEventListener("mouseup", restore);
+      window.removeEventListener("touchend", restore);
+      window.removeEventListener("touchcancel", restore);
+    };
+  }, [handResultVisible]);
   // Clear the local-first-seat marker the moment all local edits
   // are gone *and* the server has no edits either \u2014 the author
   // is free to re-target the review at a different seat.
@@ -970,6 +1000,9 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
             r.render(args);
           }
         });
+        renderer.setResultPanelBoundsListener((rect) => {
+          setResultPanelBounds(rect);
+        });
         void renderer.mount(container).then(() => {
           if (cancelled) {
             renderer.destroy();
@@ -1032,6 +1065,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       rendererRef.current.setShowHands(overlays.showHands);
       rendererRef.current.setShowWalls(overlays.showWalls);
       rendererRef.current.setShowNames(overlays.showNames);
+      rendererRef.current.setShowHandResult(handResultVisible);
       const args = replayViewToMatchView(currentView, {
         index,
         mySeat: focusSeat,
@@ -1059,6 +1093,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
     overlays.showHands,
     overlays.showWalls,
     overlays.showNames,
+    handResultVisible,
   ]);
 
   const clamp = (n: number): number =>
@@ -1594,6 +1629,46 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
                 {savedTextVisible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
               </button>
             </>
+          )}
+        {/* Hand-result eye button: press-and-hold to temporarily
+            hide the win-info panel (after a hand ends) or the
+            match-end standings panel so the board state behind
+            them is visible. Mirrors the annotation eye's
+            press-to-hide / release-to-show pattern via the
+            `handResultVisible` global mouseup listener. The
+            position is anchored to the panel's right edge in
+            canvas pixels (reported by the renderer) so it
+            tracks both the centred match-end panel and the
+            full-width win-info zone. */}
+        {(currentView.lastHandResult || currentView.matchEnded) &&
+          resultPanelBounds && (
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setHandResultVisible(false);
+              }}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                setHandResultVisible(false);
+              }}
+              className="absolute z-40 flex h-10 w-10 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
+              style={{
+                left: resultPanelBounds.x + resultPanelBounds.w + 8,
+                top: resultPanelBounds.y + resultPanelBounds.h / 2 - 20,
+                backgroundColor: "rgba(0, 0, 0, 0.8)",
+                color: "#a7f3d0",
+                border: "1px solid rgba(16, 185, 129, 0.5)",
+              }}
+              aria-label={
+                handResultVisible ? "Hide hand result" : "Show hand result"
+              }
+              title={
+                handResultVisible ? "Hide hand result" : "Show hand result"
+              }
+            >
+              {handResultVisible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+            </button>
           )}
         {/* Seat-mismatch hint: when the current event has a saved
             drawing but the owner is looking at a different seat,

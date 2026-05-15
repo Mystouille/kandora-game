@@ -145,6 +145,12 @@ const DiscardEvent = z.object({
   tsumogiri: z.boolean(),
   /** True when this discard was the riichi declaration tile. */
   riichi: z.boolean().optional(),
+  /** Authoritative post-discard waits for the discarder, sourced from
+   * the platform replay log (Majsoul `RecordDiscardTile.tingpais`).
+   * Absent when the platform does not expose per-discard wait info
+   * (Tenhou, Riichi City) — callers fall back to a shanten compute.
+   * Empty array means the platform reported "not tenpai". */
+  waits: z.array(TileSchema).optional(),
 });
 
 const MeldSchema = z.object({
