@@ -1035,20 +1035,44 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       wheelLastRef.current = now;
       wheelAccumRef.current += e.deltaY;
       const threshold = 30;
-      while (wheelAccumRef.current >= threshold) {
-        wheelAccumRef.current -= threshold;
-        setIndex((i) => Math.max(bounds.min, Math.min(i + 1, bounds.max)));
-      }
-      while (wheelAccumRef.current <= -threshold) {
-        wheelAccumRef.current += threshold;
-        setIndex((i) => Math.max(bounds.min, Math.min(i - 1, bounds.max)));
+      // Snap to the next/previous `discard` event per tick: draws,
+      // melds and dora reveals come in clusters between two
+      // discards, so stepping one raw event at a time made the
+      // wheel feel like it "skipped" 3+ events per notch without
+      // actually moving the picture. Jumping discard-to-discard
+      // gives one visible turn change per tick. We cap at *one*
+      // step per wheel event regardless of the accumulated delta
+      // so a fat trackpad notch doesn't blow past several turns
+      // at once.
+      const findNextDiscard = (i: number): number => {
+        for (let j = i + 1; j <= bounds.max; j++) {
+          if (log.events[j]?.type === "discard") {
+            return j;
+          }
+        }
+        return bounds.max;
+      };
+      const findPrevDiscard = (i: number): number => {
+        for (let j = i - 1; j >= bounds.min; j--) {
+          if (log.events[j]?.type === "discard") {
+            return j;
+          }
+        }
+        return bounds.min;
+      };
+      if (wheelAccumRef.current >= threshold) {
+        wheelAccumRef.current = 0;
+        setIndex((i) => findNextDiscard(i));
+      } else if (wheelAccumRef.current <= -threshold) {
+        wheelAccumRef.current = 0;
+        setIndex((i) => findPrevDiscard(i));
       }
     };
     container.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       container.removeEventListener("wheel", onWheel);
     };
-  }, [bounds.min, bounds.max]);
+  }, [bounds.min, bounds.max, log]);
 
   // Click scrubbing on the canvas container: left-click → advance
   // one event, right-click → rewind one event. `contextmenu` is
