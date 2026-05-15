@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, redirect, useSearchParams } from "react-router";
-import { requireGameEnabled } from "~/game/feature-gate";
 import { adapter } from "~/game/portal-adapter";
 import type { TableRenderer } from "~/game/client/pixi/TableRenderer";
 import {
@@ -158,10 +157,12 @@ function serializeReview(doc: {
  * `TableRenderer` with prev / next / first / last / round picker
  * controls.
  *
- * Gated by `requireGameEnabled()`.
+ * Not gated by `requireGameEnabled()` — replays are a viewer over
+ * already-recorded games (Majsoul / Tenhou / Riichi City logs) and
+ * don't touch the live game-server. They remain reachable in
+ * environments where the in-app game subsystem is disabled.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
-  requireGameEnabled();
   const gameId = params.gameId ?? "";
   if (!gameId) {
     throw new Response("Missing replay id.", { status: 404 });
