@@ -78,53 +78,61 @@ export function ReplayOverlayPanel({
       className="pointer-events-none absolute left-0 top-0 bottom-0 z-20 flex items-center"
       aria-hidden={false}
     >
-      {/* Sliding panel — present in DOM regardless of open so the
-       * transition runs both ways. Pointer events only enable when
-       * open; collapsed state lets clicks fall through to the
+      {/* Panel + chevron travel together as a single translated
+       * unit. When closed, the wrapper is shifted left by the
+       * panel's width so the chevron sits flush against the
+       * viewport's left edge; opening slides them both back to
+       * x = 0. Pointer events on the panel itself are gated on
+       * `open` so collapsed-state clicks fall through to the
        * canvas. */}
       <div
-        className={`pointer-events-auto h-auto max-h-[80%] bg-white text-emerald-950 shadow-2xl border-r border-t border-b border-emerald-900/30 transition-transform duration-150 ease-out ${
-          open ? "translate-x-0" : "-translate-x-full"
+        className={`flex items-stretch transition-transform duration-150 ease-out ${
+          open ? "translate-x-0" : "-translate-x-48"
         }`}
-        role="group"
-        aria-label="Replay overlay options"
       >
-        <ul className="flex flex-col py-2 min-w-[12rem]">
-          {TOGGLES.map((t) => {
-            const active = overlays[t.key];
-            return (
-              <li key={t.key}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggle(t.key);
-                  }}
-                  aria-pressed={active}
-                  className={`w-full text-left px-4 py-2 text-sm transition-colors ${
-                    active
-                      ? "bg-emerald-700 text-white font-semibold"
-                      : "hover:bg-emerald-50 text-emerald-950"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <div
+          className={`${
+            open ? "pointer-events-auto" : "pointer-events-none"
+          } w-48 max-h-[80vh] bg-white text-emerald-950 shadow-2xl border-r border-t border-b border-emerald-900/30`}
+          role="group"
+          aria-label="Replay overlay options"
+        >
+          <ul className="flex flex-col py-2">
+            {TOGGLES.map((t) => {
+              const active = overlays[t.key];
+              return (
+                <li key={t.key}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggle(t.key);
+                    }}
+                    aria-pressed={active}
+                    className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                      active
+                        ? "bg-emerald-700 text-white font-semibold"
+                        : "hover:bg-emerald-50 text-emerald-950"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen((v) => !v);
+          }}
+          aria-expanded={open}
+          aria-label={open ? "Close overlay panel" : "Open overlay panel"}
+          className="pointer-events-auto h-32 w-10 bg-emerald-800 hover:bg-emerald-700 text-white text-3xl font-mono rounded-r border-y border-r border-emerald-900/40 flex items-center justify-center shadow-lg"
+        >
+          {open ? "‹" : "›"}
+        </button>
       </div>
-      {/* Edge tab — always clickable. */}
-      <button
-        type="button"
-        onClick={() => {
-          setOpen((v) => !v);
-        }}
-        aria-expanded={open}
-        aria-label={open ? "Close overlay panel" : "Open overlay panel"}
-        className="pointer-events-auto h-24 w-5 bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-mono rounded-r border-y border-r border-emerald-900/40 flex items-center justify-center shadow-lg"
-      >
-        {open ? "‹" : "›"}
-      </button>
     </div>
   );
 }

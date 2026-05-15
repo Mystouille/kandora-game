@@ -454,9 +454,10 @@ export function replayViewToMatchView(
     currentWaits?: Tile[][] | null;
   }
 ): MatchView {
-  return {
+  const focus: Seat = opts.mySeat ?? 0;
+  const base: MatchView = {
     matchId: opts.matchId ?? null,
-    mySeat: opts.mySeat ?? 0,
+    mySeat: 0,
     hands: view.hands,
     melds: view.melds,
     discards: view.discards,
@@ -484,5 +485,76 @@ export function replayViewToMatchView(
     lastHandResult: view.lastHandResult,
     matchEnded: view.matchEnded,
     currentWaits: opts.currentWaits ?? null,
+  };
+  if (focus === 0) {
+    return base;
+  }
+  return rotateMatchView(base, focus);
+}
+
+/**
+ * Rotate a `MatchView` so the seat at `focus` is rendered at the
+ * bottom (relative seat 0). All per-seat arrays are reindexed and
+ * every absolute-seat field (dealer, draw schedule, win/loser) is
+ * remapped to the new relative-seat space. The renderer is agnostic
+ * to absolute seats — it just paints seat index 0 at the bottom and
+ * 1/2/3 CCW around the table — so this transformation is sufficient
+ * to rotate the entire viewport (hands, discards, walls, melds,
+ * riichi sticks, scores, dealer marker, break-point dice landing).
+ */
+function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
+  const rot = (s: Seat): Seat => ((s - focus + 4) % 4) as Seat;
+  const perm4 = <T>(arr: readonly T[]): [T, T, T, T] => [
+    arr[(0 + focus) % 4],
+    arr[(1 + focus) % 4],
+    arr[(2 + focus) % 4],
+    arr[(3 + focus) % 4],
+  ];
+  const result = mv.lastHandResult;
+  const rotatedResult = result
+    ? {
+        ...result,
+        delta: result.delta ? perm4(result.delta) : result.delta,
+        tenpai: result.tenpai ? perm4(result.tenpai) : result.tenpai,
+        nagashi: result.nagashi ? perm4(result.nagashi) : result.nagashi,
+        scores: result.scores ? perm4(result.scores) : result.scores,
+        waits: result.waits ? perm4(result.waits) : result.waits,
+        win: result.win
+          ? {
+              ...result.win,
+              seat: rot(result.win.seat),
+              loser:
+                result.win.loser != null
+                  ? rot(result.win.loser)
+                  : result.win.loser,
+            }
+          : result.win,
+      }
+    : result;
+  return {
+    ...mv,
+    mySeat: 0,
+    hands: perm4(mv.hands),
+    melds: perm4(mv.melds),
+    discards: perm4(mv.discards),
+    liveDrawSchedule: mv.liveDrawSchedule
+      ? mv.liveDrawSchedule.map((s) => rot(s))
+      : mv.liveDrawSchedule,
+    scores: perm4(mv.scores),
+    seatNames: mv.seatNames ? perm4(mv.seatNames) : mv.seatNames,
+    dealer: rot(mv.dealer),
+    riichiDeclared: perm4(mv.riichiDeclared),
+    riichiTileIdx: perm4(mv.riichiTileIdx),
+    currentWaits: mv.currentWaits ? perm4(mv.currentWaits) : mv.currentWaits,
+    lastHandResult: rotatedResult,
+    matchEnded: mv.matchEnded
+      ? {
+          ...mv.matchEnded,
+          finalScores: mv.matchEnded.finalScores.map((fs) => ({
+            ...fs,
+            seat: rot(fs.seat),
+          })),
+        }
+      : mv.matchEnded,
   };
 }

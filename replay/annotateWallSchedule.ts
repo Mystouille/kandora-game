@@ -11,11 +11,10 @@ import type { GameEvent, Seat } from "~/game/protocol/messages";
  * tile the focused seat will eventually draw (based on the
  * recorded history of the kyoku, not a forecast).
  *
- * Detection mirrors the rule used in `synthesizeLiveWalls`: a draw
- * is rinshan iff its preceding non-discard event in the same kyoku
- * is a kan-type `call` (ankan / daiminkan / shouminkan). Discards
- * reset the flag — the next turn's draw is always from the live
- * wall.
+ * Detection rule: a draw is rinshan iff its preceding non-discard
+ * event in the same kyoku is a kan-type `call` (ankan / daiminkan
+ * / shouminkan). Discards reset the flag — the next turn's draw is
+ * always from the live wall.
  *
  * The function returns a NEW array with shallow-cloned `draw` and
  * `hand_start` events; other events are referenced unchanged.

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, redirect, useSearchParams } from "react-router";
 import { requireGameEnabled } from "~/game/feature-gate";
 import { adapter } from "~/game/portal-adapter";
 import { TableRenderer } from "~/game/client/pixi/TableRenderer";
@@ -11,11 +11,10 @@ import {
   roundBoundaries,
 } from "~/game/replay/player";
 import type { ReplayView } from "~/game/replay/player";
-import type { GameEvent } from "~/game/protocol/messages";
+import type { GameEvent, Seat } from "~/game/protocol/messages";
 import { ReplayLogModel, type DbReplayLog } from "~/db/models/ReplayLog";
 import { inferReplaySource } from "~/game/replay/inferSource";
 import { fetchOrphanReplayLog } from "~/game/replay/fetchOrphanReplayLog.server";
-import { synthesizeLiveWalls } from "~/game/replay/synthesizeLiveWalls";
 import { annotateWallSchedule } from "~/game/replay/annotateWallSchedule";
 import { annotateWaits } from "~/game/replay/annotateWaits";
 import type { ReplayLog, ReplaySource } from "~/game/replay/types";
@@ -54,12 +53,64 @@ import {
  *
  * Gated by `requireGameEnabled()`.
  */
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
   requireGameEnabled();
   const gameId = params.gameId ?? "";
   if (!gameId) {
     throw new Response("Missing replay id.", { status: 404 });
   }
+
+  // Normalize platform-native viewer-link suffixes so that pasting
+  // a raw majsoul / Riichi City URL fragment "just works":
+  //
+  //   - Majsoul appends `_a<accountId>` to its share URLs to mark
+  //     which player generated the link. We strip the suffix from
+  //     the id and — if the cached replay knows that accountId —
+  //     surface the matching seat through the `?seat=` deeplink
+  //     param so the viewer opens with that player at the bottom.
+  //     Majsoul stashes the per-seat `accountId` (as a string) on
+  //     the `match_start` event's `seats[].userId`.
+  //   - Riichi City appends `@<n>` (0–3) to a log id to mark which
+  //     seat that share link is from. We strip the suffix from the
+  //     id and surface the seat through the `?seat=` deeplink
+  //     param so the viewer opens with that player at the bottom.
+  //
+  // Either fixup issues a 302 to the canonical URL so the cleaned
+  // form lands in the address bar and downstream caching keys
+  // collapse onto a single canonical id.
+  // React Router's `redirect()` prepends the configured
+  // `basename` (e.g. `/kandora/` in REMOTE dev) to whatever path
+  // we hand it, so we must hand it a basename-RELATIVE path —
+  // never the raw `url.pathname`, which already includes the
+  // basename and would otherwise produce `/kandora/kandora/...`.
+  const url = new URL(request.url);
+  const majsoulSuffix = /_a\d+$/.exec(gameId);
+  if (majsoulSuffix) {
+    // Majsoul appends `_a<obfuscated-sharer-id>` to its share
+    // URLs. The number is the URL-sharer's account id passed
+    // through Majsoul's private web-client encoding (it's NOT the
+    // raw `account_id`, NOT a friend-id `searchAccountByPattern`
+    // can decode, and in general not one of the seats in the
+    // replay anyway — the sharer can be a spectator). So we
+    // just strip it for a clean canonical URL and leave the
+    // viewer to default to seat 0; the user can pick a seat from
+    // the dropdown or pass `?seat=N` explicitly.
+    const cleanId = gameId.slice(0, majsoulSuffix.index);
+    const qs = url.searchParams.toString();
+    throw redirect(`/replays/${cleanId}${qs ? `?${qs}` : ""}`);
+  }
+  const rcSuffix = /@([0-3])$/.exec(gameId);
+  if (rcSuffix) {
+    const seat = rcSuffix[1];
+    const cleanId = gameId.slice(0, rcSuffix.index);
+    const search = new URLSearchParams(url.searchParams);
+    if (!search.has("seat")) {
+      search.set("seat", seat);
+    }
+    const qs = search.toString();
+    throw redirect(`/replays/${cleanId}${qs ? `?${qs}` : ""}`);
+  }
+
   const source = inferReplaySource(gameId);
   await adapter.ensureDbConnected();
   const query: Record<string, string> = { sourceGameId: gameId };
@@ -80,15 +131,7 @@ export async function loader({ params }: Route.LoaderArgs) {
       startedAt: doc.startedAt,
       endedAt: doc.endedAt,
       seats: doc.seats as ReplayLog["seats"],
-      // Pre-pass: derive each hand's `liveWall` from the event
-      // sequence when the source didn't provide one (every
-      // external-platform adapter falls into this bucket). The
-      // `showWalls` overlay reads `view.liveWall` so this is what
-      // actually populates the face-up tiles on Tenhou / MJSoul /
-      // RiichiCity replays.
-      events: annotateWallSchedule(
-        synthesizeLiveWalls(doc.events as GameEvent[])
-      ),
+      events: annotateWallSchedule(doc.events as GameEvent[]),
       schemaVersion: doc.schemaVersion,
     };
     // Pre-compute per-event wait snapshots server-side so the
@@ -117,7 +160,7 @@ export async function loader({ params }: Route.LoaderArgs) {
   }
   const annotatedLog = {
     ...fetched,
-    events: annotateWallSchedule(synthesizeLiveWalls(fetched.events)),
+    events: annotateWallSchedule(fetched.events),
   };
   return {
     log: annotatedLog,
@@ -138,13 +181,93 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
 
   const bounds = useMemo(() => replayBounds(log), [log]);
   const rounds = useMemo(() => roundBoundaries(log), [log]);
-  // Open one event past the first hand_start when available so the
-  // viewer doesn't greet the user with an empty table.
-  const initialIndex = rounds[0] ?? bounds.min;
-  const [index, setIndex] = useState<number>(initialIndex);
+
+  // URL deeplink state. Three optional search params, all
+  // independently set so a partial URL still makes sense:
+  //   ?seat=N      focused player (0–3)
+  //   ?round=N     1-based round ordinal (matches the round
+  //                picker). When `event` is absent we jump to
+  //                that round's `hand_start`.
+  //   ?event=N     absolute event index. When present it is
+  //                authoritative for the playhead and `round`
+  //                is purely informational.
+  // We keep the URL in sync via `setSearchParams({ replace })`
+  // so scrubbing doesn't pollute browser history.
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const clampSeat = (n: number): Seat => {
+    if (n === 1 || n === 2 || n === 3) {
+      return n;
+    }
+    return 0;
+  };
+  const clampToBounds = (n: number): number => {
+    return Math.max(bounds.min, Math.min(n, bounds.max));
+  };
+
+  // Resolve the initial playhead + seat from the URL exactly
+  // once at mount; subsequent navigation flows through
+  // component state.
+  const initial = useMemo(() => {
+    const seatRaw = Number(searchParams.get("seat"));
+    const seat: Seat = Number.isFinite(seatRaw) ? clampSeat(seatRaw) : 0;
+
+    const eventRaw = searchParams.get("event");
+    if (eventRaw !== null && eventRaw !== "") {
+      const n = Number(eventRaw);
+      if (Number.isFinite(n)) {
+        return { seat, index: clampToBounds(Math.trunc(n)) };
+      }
+    }
+    const roundRaw = searchParams.get("round");
+    if (roundRaw !== null && roundRaw !== "") {
+      const n = Number(roundRaw);
+      if (Number.isFinite(n)) {
+        const ord = Math.trunc(n) - 1;
+        const r = rounds[ord];
+        if (r !== undefined) {
+          return { seat, index: clampToBounds(r) };
+        }
+      }
+    }
+    // Open one event past the first hand_start when available
+    // so the viewer doesn't greet the user with an empty table.
+    return { seat, index: rounds[0] ?? bounds.min };
+    // Snapshot-only: deliberately ignore later searchParams /
+    // bounds / rounds changes here — the playhead is driven by
+    // component state from this point on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const [index, setIndex] = useState<number>(initial.index);
   const [overlays, setOverlays] = useState<ReplayOverlayState>(
     defaultReplayOverlayState
   );
+  const [focusSeat, setFocusSeat] = useState<Seat>(initial.seat);
+  const [copied, setCopied] = useState<boolean>(false);
+
+  // Write `seat`, `round`, `event` back to the URL on every
+  // state change. `round` is derived (largest hand_start ≤
+  // index, 1-based) so it always matches the picker label.
+  useEffect(() => {
+    let roundOrdinal = 0;
+    for (let i = 0; i < rounds.length; i++) {
+      if (rounds[i] <= index) {
+        roundOrdinal = i + 1;
+      }
+    }
+    const next = new URLSearchParams(searchParams);
+    next.set("seat", String(focusSeat));
+    if (roundOrdinal > 0) {
+      next.set("round", String(roundOrdinal));
+    } else {
+      next.delete("round");
+    }
+    next.set("event", String(index));
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [focusSeat, index, rounds, searchParams, setSearchParams]);
 
   // Incremental fold: we keep prefix views in a ref so a "next"
   // click is O(1) instead of O(index). Whole-fold path on seek.
@@ -200,6 +323,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       });
       const initialArgs = replayViewToMatchView(currentView, {
         index,
+        mySeat: focusSeat,
         matchId: log.sourceGameId,
         seatNames: [
           log.seats[0]?.displayName ?? "",
@@ -234,6 +358,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       rendererRef.current.setShowNames(overlays.showNames);
       const args = replayViewToMatchView(currentView, {
         index,
+        mySeat: focusSeat,
         matchId: log.sourceGameId,
         seatNames: [
           log.seats[0]?.displayName ?? "",
@@ -252,6 +377,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
     log.sourceGameId,
     log.seats,
     waitsByIndex,
+    focusSeat,
     overlays.showLayoutDebug,
     overlays.showWaits,
     overlays.showHands,
@@ -357,7 +483,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex flex-col bg-emerald-950"
+      className="fixed inset-0 z-[9999] bg-black"
       style={{
         paddingTop: "env(safe-area-inset-top)",
         paddingBottom: "env(safe-area-inset-bottom)",
@@ -365,111 +491,214 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
         paddingRight: "env(safe-area-inset-right)",
       }}
     >
-      <div className="flex items-center justify-between px-4 py-2 text-sm text-emerald-100/80 bg-emerald-950/95 border-b border-emerald-800">
-        <span className="font-mono text-xs">
-          replay · {log.source} · {log.sourceGameId} · {currentRound}
-        </span>
-        <Link
-          to="/lobby"
-          className="px-3 py-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors"
-        >
-          Close
-        </Link>
-      </div>
       <div
         ref={containerRef}
-        className="relative flex-1 w-full bg-emerald-900 overflow-hidden"
+        className="relative w-full h-full bg-black overflow-hidden"
         style={{ touchAction: "none" }}
       >
-        <ReplayOverlayPanel overlays={overlays} onChange={setOverlays} />
-      </div>
-      <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-emerald-950/95 border-t border-emerald-800 text-emerald-100 text-sm">
+        {/* Top-left: replay metadata label. */}
+        <div className="pointer-events-none absolute top-2 left-2 z-30 font-mono text-xs text-emerald-100/80 px-2 py-1 rounded bg-black/40">
+          replay · {log.source} · {log.sourceGameId} · {currentRound}
+        </div>
+        {/* Bottom-right: tile-art attribution. */}
+        <div className="absolute bottom-2 right-2 z-30 font-mono text-[10px] text-emerald-100/70 px-2 py-1 rounded bg-black/40">
+          Tile design copyright of{" "}
+          <a
+            href="https://tenhou.net/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-emerald-200"
+          >
+            Tenhou.net
+          </a>
+          , C-Egg
+        </div>
+        {/* Top-right: share + close icons. */}
         <button
           type="button"
           onClick={() => {
-            goto(bounds.min);
+            // Copy the current canonical deeplink to the clipboard
+            // (defaults to the current URL — `seat`/`round`/`event`
+            // are kept in sync by the effect above). Falls back to
+            // a temporary textarea on browsers without the async
+            // clipboard API (e.g. http-only contexts).
+            const url =
+              typeof window !== "undefined" ? window.location.href : "";
+            const done = (): void => {
+              setCopied(true);
+              window.setTimeout(() => {
+                setCopied(false);
+              }, 1500);
+            };
+            if (navigator.clipboard?.writeText) {
+              void navigator.clipboard.writeText(url).then(done, done);
+            } else {
+              const ta = document.createElement("textarea");
+              ta.value = url;
+              ta.setAttribute("readonly", "");
+              ta.style.position = "absolute";
+              ta.style.left = "-9999px";
+              document.body.appendChild(ta);
+              ta.select();
+              try {
+                document.execCommand("copy");
+              } catch {
+                /* best-effort */
+              }
+              document.body.removeChild(ta);
+              done();
+            }
           }}
-          disabled={index <= bounds.min}
-          className="px-2 py-1 rounded bg-emerald-800 disabled:opacity-40 hover:bg-emerald-700"
-          aria-label="First event"
+          aria-label="Copy share link"
+          title={copied ? "Copied!" : "Copy share link"}
+          className="absolute top-2 right-[5.25rem] z-30 h-8 min-w-[4rem] px-3 flex items-center justify-center gap-1 rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-xs transition-colors"
         >
-          ⏮
+          {copied ? "Copied" : "Share"}
         </button>
-        <button
-          type="button"
-          onClick={() => {
-            goto(index - 1);
-          }}
-          disabled={index <= bounds.min}
-          className="px-2 py-1 rounded bg-emerald-800 disabled:opacity-40 hover:bg-emerald-700"
-          aria-label="Previous event"
+        <Link
+          to="/lobby"
+          aria-label="Close replay"
+          className="absolute top-2 right-2 z-30 h-8 min-w-[4rem] px-3 inline-flex items-center justify-center gap-1 rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-xs no-underline transition-colors"
+          style={{ backgroundColor: "rgba(0, 0, 0, 0.7)" }}
         >
-          ◀
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            goto(index + 1);
-          }}
-          disabled={index >= bounds.max}
-          className="px-2 py-1 rounded bg-emerald-800 disabled:opacity-40 hover:bg-emerald-700"
-          aria-label="Next event"
-        >
-          ▶
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            goto(bounds.max);
-          }}
-          disabled={index >= bounds.max}
-          className="px-2 py-1 rounded bg-emerald-800 disabled:opacity-40 hover:bg-emerald-700"
-          aria-label="Last event"
-        >
-          ⏭
-        </button>
-        <span className="font-mono text-xs ml-2">
-          event {index + 1} / {log.events.length}
-        </span>
-        {rounds.length > 0 && (
-          <label className="ml-4 flex items-center gap-2 text-xs">
-            round
+          ✕
+        </Link>
+        {/* Right-side: seat / round selectors + nav buttons. */}
+        <div className="absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-2 text-emerald-100 text-sm">
+          {/* Row 1: seat selection, then round selection. */}
+          <div className="flex items-center gap-2">
             <select
-              value={(() => {
-                // Pick the latest hand_start whose index is ≤ current.
-                let pick = -1;
-                for (const r of rounds) {
-                  if (r <= index) {
-                    pick = r;
-                  }
-                }
-                return pick === -1 ? "" : String(pick);
-              })()}
+              aria-label="Focus seat"
+              value={String(focusSeat)}
               onChange={(e) => {
-                const v = e.target.value;
-                if (v === "") {
-                  return;
-                }
-                goto(Number(v));
+                setFocusSeat(Number(e.target.value) as Seat);
               }}
-              className="bg-emerald-900 border border-emerald-700 rounded px-1 py-0.5 text-xs"
+              className="bg-black/60 border border-emerald-700 rounded px-2 py-1 text-xs text-emerald-100"
             >
-              {rounds.map((r, i) => {
-                // Peek the event's wind/round for a label.
-                const ev = log.events[r];
-                if (ev.type !== "hand_start") {
-                  return null;
-                }
-                const label = `${ev.roundWind ?? "?"}${ev.roundNumber ?? i + 1}`;
+              {([0, 1, 2, 3] as const).map((s) => {
+                const name = log.seats[s]?.displayName ?? `Seat ${s}`;
                 return (
-                  <option key={r} value={String(r)}>
-                    {label}
+                  <option key={s} value={String(s)}>
+                    {name}
                   </option>
                 );
               })}
             </select>
-          </label>
-        )}
+            {rounds.length > 0 && (
+              <select
+                aria-label="Round"
+                value={(() => {
+                  let pick = -1;
+                  for (const r of rounds) {
+                    if (r <= index) {
+                      pick = r;
+                    }
+                  }
+                  return pick === -1 ? "" : String(pick);
+                })()}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "") {
+                    return;
+                  }
+                  goto(Number(v));
+                }}
+                className="bg-black/60 border border-emerald-700 rounded px-2 py-1 text-xs text-emerald-100"
+              >
+                {rounds.map((r, i) => {
+                  const ev = log.events[r];
+                  if (ev.type !== "hand_start") {
+                    return null;
+                  }
+                  const label = `${ev.roundWind ?? "?"}${ev.roundNumber ?? i + 1}`;
+                  return (
+                    <option key={r} value={String(r)}>
+                      {label}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+          </div>
+          {/* Row 2: prev round, prev event, next event, next round. */}
+          {(() => {
+            // Find the current round's index in `rounds` (largest
+            // boundary <= index). Prev/next round step through that
+            // list; first/last are reachable by the bookends.
+            let currentRoundIdx = -1;
+            for (let i = 0; i < rounds.length; i++) {
+              if (rounds[i] <= index) {
+                currentRoundIdx = i;
+              }
+            }
+            const prevRound =
+              currentRoundIdx > 0 ? rounds[currentRoundIdx - 1] : null;
+            const nextRound =
+              currentRoundIdx >= 0 && currentRoundIdx < rounds.length - 1
+                ? rounds[currentRoundIdx + 1]
+                : null;
+            return (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (prevRound !== null) {
+                      goto(prevRound);
+                    }
+                  }}
+                  disabled={prevRound === null}
+                  className="px-2 py-1 rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
+                  aria-label="Previous round"
+                  title="Previous round"
+                >
+                  ⏮
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    goto(index - 1);
+                  }}
+                  disabled={index <= bounds.min}
+                  className="px-2 py-1 rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
+                  aria-label="Previous event"
+                  title="Previous event"
+                >
+                  ◀
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    goto(index + 1);
+                  }}
+                  disabled={index >= bounds.max}
+                  className="px-2 py-1 rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
+                  aria-label="Next event"
+                  title="Next event"
+                >
+                  ▶
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (nextRound !== null) {
+                      goto(nextRound);
+                    }
+                  }}
+                  disabled={nextRound === null}
+                  className="px-2 py-1 rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
+                  aria-label="Next round"
+                  title="Next round"
+                >
+                  ⏭
+                </button>
+              </div>
+            );
+          })()}
+          <span className="font-mono text-[10px] text-emerald-100/70 text-center">
+            {index + 1} / {log.events.length}
+          </span>
+        </div>
+        <ReplayOverlayPanel overlays={overlays} onChange={setOverlays} />
       </div>
     </div>
   );

@@ -98,7 +98,17 @@ const DESIGN_H = 800;
  * width. */
 const TSUMO_GAP = 8;
 
-const BG_COLOR: ColorSource = 0x0d4d2c;
+const BG_COLOR: ColorSource = 0x2a2a2a;
+const FELT_COLOR: ColorSource = 0x0d4d2c;
+
+/** Axis-aligned bounding box of a non-empty list of `Rect`s. */
+function boundingBox(rects: readonly Rect[]): Rect {
+  const x0 = Math.min(...rects.map((r) => r.x));
+  const y0 = Math.min(...rects.map((r) => r.y));
+  const x1 = Math.max(...rects.map((r) => r.x + r.w));
+  const y1 = Math.max(...rects.map((r) => r.y + r.h));
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
 
 const hudStyle = new TextStyle({
   fontFamily: "Inter, system-ui, sans-serif",
@@ -466,6 +476,18 @@ export class TableRenderer {
     );
     const root = this.root;
     root.removeChildren();
+
+    // Felt: paint the central tile-bearing region (bounding box of
+    // the four wall bands plus the four player hands) in classic
+    // mahjong green so the play area still reads as "felt", while
+    // the canvas background around the player-info chips stays
+    // neutral dark gray.
+    const feltBox = boundingBox([...layout.wall, ...layout.hands]);
+    root.addChild(
+      new Graphics().rect(feltBox.x, feltBox.y, feltBox.w, feltBox.h).fill({
+        color: FELT_COLOR,
+      })
+    );
 
     // Legacy render passes anchor on DESIGN_W/2, DESIGN_H/2. The
     // layout's centre may not coincide with that point, so passes
@@ -930,6 +952,12 @@ export class TableRenderer {
           // Long axis (toward player-left, increasing k) goes:
           //   seat 0: -x   seat 1: -y   seat 2: +x   seat 3: +y
           //
+          // Visual nudge: when the dead wall ends up on the right
+          // wall (seat 1) it visually reads as sitting too high
+          // because the rinshan-side stacks pile near the top of
+          // the band. Drop those tiles 20 px so the dead-wall
+          // section sits closer to mid-screen.
+          const deadRightShiftY = seat === 1 && role.kind === "dead" ? 30 : 0;
           // Two layouts are supported here:
           //
           //   (1) Default Tenhou-style perspective (showWalls off):
@@ -972,7 +1000,13 @@ export class TableRenderer {
               y = band.y + outerOffset;
             } else if (seat === 1) {
               x = band.x + outerOffset;
-              y = band.y + band.h - tileLongDim - longOffset + sideLift;
+              y =
+                band.y +
+                band.h -
+                tileLongDim -
+                longOffset +
+                sideLift +
+                deadRightShiftY;
             } else if (seat === 2) {
               x = band.x + band.w - tileLongDim - longOffset;
               y = band.y + bandCross - tileCrossDim - outerOffset;
@@ -998,7 +1032,8 @@ export class TableRenderer {
               band.h -
               tileLongDim -
               longOffset -
-              (row === 1 ? ROW_OFFSET_Y : 0);
+              (row === 1 ? ROW_OFFSET_Y : 0) +
+              deadRightShiftY;
           } else if (seat === 2) {
             // +k goes player-RIGHT = -x (west) across the top
             // wall. k=0 anchors at the band's right edge so the
