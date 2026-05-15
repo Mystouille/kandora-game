@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
 import type { Stroke } from "~/game/replay/reviewDrawing";
+import {
+  DESIGN_W as TABLE_DESIGN_W,
+  DESIGN_H as TABLE_DESIGN_H,
+} from "~/game/client/pixi/tableLayout";
 
 interface ReplayDrawingOverlayProps {
   /** Strokes to render. Coordinates are in normalized [0..1] space. */
@@ -14,6 +18,17 @@ interface ReplayDrawingOverlayProps {
   color?: string;
   /** Stroke width in CSS pixels. Defaults to 3. */
   width?: number;
+  /**
+   * Aspect ratio (width / height) the drawable area should be
+   * letterboxed to within the parent container. Defaults to the
+   * Pixi table's design aspect (`tableLayout.DESIGN_W /
+   * DESIGN_H`, ≈ 1.08 — close to a square) so the strokes stay
+   * locked to the table when the window resizes. Stored stroke
+   * coordinates are normalized against this letterboxed area,
+   * not the raw container, so the artwork follows the table
+   * through any resize.
+   */
+  aspectRatio?: number;
   onStrokesChange: (next: Stroke[]) => void;
 }
 
@@ -38,8 +53,10 @@ export function ReplayDrawingOverlay({
   drawing,
   color = "#ff3b3b",
   width = 3,
+  aspectRatio = TABLE_DESIGN_W / TABLE_DESIGN_H,
   onStrokesChange,
 }: ReplayDrawingOverlayProps) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const draftStrokeRef = useRef<Stroke | null>(null);
   // Latest committed strokes, accessible from the pointer-handler
@@ -135,20 +152,59 @@ export function ReplayDrawingOverlay({
     }
   };
 
-  // Repaint whenever the strokes change or the canvas resizes.
-  useEffect(() => {
-    paintAll();
+  /**
+   * Resize the canvas's CSS box to the largest rectangle of the
+   * configured `aspectRatio` that fits inside the wrapper, and
+   * center it. Strokes are normalized to this box, so locking it
+   * to the table's design aspect keeps the drawing aligned with
+   * the table through every window/container resize.
+   */
+  const fitCanvasToWrapper = (): void => {
     const canvas = canvasRef.current;
-    if (!canvas) {
+    const wrapper = wrapperRef.current;
+    if (!canvas || !wrapper) {
       return;
     }
-    const ro = new ResizeObserver(() => paintAll());
-    ro.observe(canvas);
+    const rect = wrapper.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+    const containerAspect = rect.width / rect.height;
+    let cssW: number;
+    let cssH: number;
+    if (containerAspect > aspectRatio) {
+      // Container is wider than the target — letterbox on the sides.
+      cssH = rect.height;
+      cssW = cssH * aspectRatio;
+    } else {
+      // Container is taller — letterbox on top/bottom.
+      cssW = rect.width;
+      cssH = cssW / aspectRatio;
+    }
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+    canvas.style.left = `${(rect.width - cssW) / 2}px`;
+    canvas.style.top = `${(rect.height - cssH) / 2}px`;
+  };
+
+  // Repaint whenever the strokes change or the canvas resizes.
+  useEffect(() => {
+    fitCanvasToWrapper();
+    paintAll();
+    const wrapper = wrapperRef.current;
+    if (!wrapper) {
+      return;
+    }
+    const ro = new ResizeObserver(() => {
+      fitCanvasToWrapper();
+      paintAll();
+    });
+    ro.observe(wrapper);
     return () => {
       ro.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strokes, color, width]);
+  }, [strokes, color, width, aspectRatio]);
 
   // Pointer handlers — only active when `drawing` is true.
   useEffect(() => {
@@ -250,21 +306,33 @@ export function ReplayDrawingOverlay({
   }, [drawing, onStrokesChange, color, width]);
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={wrapperRef}
       className="absolute inset-0"
       style={{
         // Sits above the Pixi canvas and HUD (z-30) but below the
         // cartridge buttons (z-50) so the user can always reach
-        // the toolbar to cancel / save.
+        // the toolbar to cancel / save. The wrapper is full-bleed
+        // so we can measure its size for the letterbox math, but
+        // it never captures pointer events itself — only the
+        // letterboxed canvas does, and only while drawing.
         zIndex: 45,
-        display: "block",
-        width: "100%",
-        height: "100%",
-        pointerEvents: drawing ? "auto" : "none",
-        touchAction: "none",
-        cursor: drawing ? "crosshair" : "default",
+        pointerEvents: "none",
       }}
-    />
+    >
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: "absolute",
+          display: "block",
+          // Concrete CSS dimensions and offsets are written by
+          // `fitCanvasToWrapper` so the canvas covers exactly the
+          // letterboxed table area inside the wrapper.
+          pointerEvents: drawing ? "auto" : "none",
+          touchAction: "none",
+          cursor: drawing ? "crosshair" : "default",
+        }}
+      />
+    </div>
   );
 }
