@@ -1,16 +1,7 @@
 import { useState } from "react";
-import {
-  Button,
-  ConfigProvider,
-  Input,
-  Modal,
-  Tooltip,
-  message,
-  theme,
-} from "antd";
+import { Button, ConfigProvider, Tooltip, message, theme } from "antd";
 import {
   ClearOutlined,
-  CloudUploadOutlined,
   DeleteOutlined,
   EditOutlined,
   FontSizeOutlined,
@@ -37,12 +28,6 @@ export interface ReviewDraft {
 interface ReplayReviewCartridgeProps {
   /** Whether the current user can edit this review (owner check). */
   canEdit: boolean;
-  /**
-   * `true` once the parent has lazily created the review document
-   * (so the share URL is meaningful). When `false` the share button
-   * is disabled.
-   */
-  hasReview: boolean;
   /** Saved edit for the current event (from the server). */
   savedText: string;
   savedHasDrawing: boolean;
@@ -63,36 +48,23 @@ interface ReplayReviewCartridgeProps {
   onErase: () => Promise<void> | void;
   /**
    * Number of edits awaiting publish (i.e. local-only changes
-   * that have not yet been pushed to the server).
+   * that have not yet been pushed to the server). Used to
+   * gate the Discard button.
    */
   pendingCount: number;
-  /** Spinner state for the Publish button. */
+  /**
+   * `true` while the parent is pushing edits to the server. Used
+   * to disable the Discard button mid-publish.
+   */
   publishing: boolean;
-  /**
-   * Push all pending edits to the server. Returns `true` on full
-   * success so the cartridge can display the right toast.
-   */
-  /**
-   * Publish staged edits. Returns the share URL for the
-   * resulting review on success, or `null` on failure. Returning
-   * the URL directly (rather than relying on the parent's
-   * `review` state having re-rendered) is what allows the modal
-   * to transition from "publishing…" straight to "share link" on
-   * the very first confirmation — previously the cartridge had
-   * to call `buildShareUrl()` after `await`, which captured a
-   * stale closure and forced the user to confirm twice.
-   */
-  onPublish: () => Promise<string | null>;
   /** Drop all pending edits without pushing them. */
   onDiscardAll: () => void;
-  /** Open the "are you done?" export modal. Returns the share URL. */
-  buildShareUrl: () => string;
   /**
    * `true` when the review is locked to a seat that differs from
    * the currently focused seat. Adding new annotations is
    * forbidden in this state (text + freehand buttons are
-   * disabled) but Clear and Publish remain available so the
-   * author can still wrap up the review.
+   * disabled) but Clear remains available so the author can
+   * still wrap up the review.
    */
   seatMismatch: boolean;
   /**
@@ -115,7 +87,6 @@ interface ReplayReviewCartridgeProps {
  */
 export function ReplayReviewCartridge({
   canEdit,
-  hasReview,
   savedText,
   savedHasDrawing,
   savedStrokes,
@@ -126,26 +97,13 @@ export function ReplayReviewCartridge({
   onErase,
   pendingCount,
   publishing,
-  onPublish,
   onDiscardAll,
-  buildShareUrl,
   seatMismatch,
   reviewSeatName,
 }: ReplayReviewCartridgeProps) {
   const { t } = useLocale();
   const tr = t.review.cartridge;
-  const [exportOpen, setExportOpen] = useState(false);
-  const [shareUrl, setShareUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  // Latches `true` from the moment the user confirms the modal
-  // until either the share URL is materialized (success) or the
-  // publish fails. Without this latch the modal flickers through
-  // a "no pending changes" frame between the parent clearing
-  // `pendingCount` (mid-publish) and the cartridge running
-  // `setShareUrl(buildShareUrl())` (post-publish). That flicker
-  // also briefly exposes a re-clickable OK button, which would
-  // let a fast user double-submit the same review.
-  const [awaitingPublish, setAwaitingPublish] = useState(false);
 
   if (!canEdit) {
     return null;
@@ -213,65 +171,6 @@ export function ReplayReviewCartridge({
       onDraftChange({ mode: null, text: "", strokes: [] });
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const openExport = () => {
-    // If everything is already on the server we can show the link
-    // immediately; otherwise the modal opens in "needs publish"
-    // mode and the link appears after the user confirms.
-    if (pendingCount === 0 && hasReview) {
-      setShareUrl(buildShareUrl());
-    } else {
-      setShareUrl("");
-    }
-    setExportOpen(true);
-  };
-  const closeExport = () => {
-    if (awaitingPublish) {
-      return;
-    }
-    setExportOpen(false);
-    setShareUrl("");
-  };
-  const copyShare = () => {
-    if (!shareUrl) {
-      return;
-    }
-    if (navigator.clipboard?.writeText) {
-      void navigator.clipboard
-        .writeText(shareUrl)
-        .then(() => message.success(tr.linkCopied))
-        .catch(() => message.error(tr.copyFailed));
-    } else {
-      message.info(shareUrl);
-    }
-  };
-  const publishFromModal = async () => {
-    if (awaitingPublish) {
-      // Defensive: the modal's OK button is already disabled
-      // while `awaitingPublish` is true, but if anything ever
-      // bypasses that (keyboard `Enter` on a stale render, a
-      // double-click microtask race, etc.) we hard-stop here so
-      // the same review can never be published twice.
-      return;
-    }
-    setAwaitingPublish(true);
-    try {
-      const url = await onPublish();
-      if (!url) {
-        message.error(tr.publishFailed);
-        return;
-      }
-      message.success(tr.publishedToast);
-      // `onPublish` resolved with the share URL built from the
-      // freshly-resolved `shortId`, so we can commit it directly
-      // without waiting for the parent to re-render. This is what
-      // makes the modal flip straight from "publishing…" to the
-      // share link on the first confirmation.
-      setShareUrl(url);
-    } finally {
-      setAwaitingPublish(false);
     }
   };
 
@@ -343,19 +242,6 @@ export function ReplayReviewCartridge({
               />
             </Tooltip>
             <div className="w-px h-7 bg-emerald-700/60 mx-1" />
-            <Button
-              type={pendingCount > 0 ? "primary" : "text"}
-              size="middle"
-              icon={<CloudUploadOutlined />}
-              onClick={openExport}
-              loading={publishing}
-              disabled={submitting || (pendingCount === 0 && !hasReview)}
-              aria-label={tr.publishTooltip}
-            >
-              {pendingCount > 0
-                ? `${tr.publish} (${pendingCount})`
-                : tr.publish}
-            </Button>
             <Tooltip title={tr.discardAllTooltip} zIndex={10001}>
               <Button
                 type="text"
@@ -448,52 +334,6 @@ export function ReplayReviewCartridge({
           </ConfigProvider>
         )}
       </div>
-
-      <Modal
-        open={exportOpen}
-        onCancel={closeExport}
-        onOk={shareUrl ? copyShare : publishFromModal}
-        okText={shareUrl ? tr.copyLink : tr.publish}
-        cancelText={tr.close}
-        confirmLoading={publishing || awaitingPublish}
-        // Lock the modal while a publish is in flight: no
-        // backdrop dismiss, no close button, no keyboard escape.
-        // Combined with the `awaitingPublish` guard inside
-        // `publishFromModal` this prevents the user from
-        // double-submitting the same review.
-        maskClosable={!awaitingPublish}
-        closable={!awaitingPublish}
-        keyboard={!awaitingPublish}
-        okButtonProps={{
-          disabled:
-            awaitingPublish || (!shareUrl && pendingCount === 0 && !hasReview),
-        }}
-        cancelButtonProps={{ disabled: awaitingPublish }}
-        // Replay page wrapper uses `z-[9999]`; antd's default modal
-        // z-index of 1000 would otherwise put the modal *behind* the
-        // page's black background.
-        zIndex={10000}
-        title={tr.exportTitle}
-      >
-        {awaitingPublish && !shareUrl ? (
-          // Show a steady "publishing\u2026" body so the modal can't
-          // visually fall back to the "no pending changes" state
-          // when the parent clears `pendingCount` mid-flight.
-          <p>{tr.publishTooltip}</p>
-        ) : shareUrl ? (
-          <>
-            <p>{tr.exportBody}</p>
-            <Input.TextArea
-              value={shareUrl}
-              autoSize={{ minRows: 2, maxRows: 4 }}
-              readOnly
-              onFocus={(e) => e.currentTarget.select()}
-            />
-          </>
-        ) : (
-          <p>{pendingCount > 0 ? tr.publishTooltip : tr.noPendingChanges}</p>
-        )}
-      </Modal>
     </>
   );
 }

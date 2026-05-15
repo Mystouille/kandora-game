@@ -1331,10 +1331,11 @@ export class TableRenderer {
         stride = ts.h - layout.tileSideOverlap;
         endTileLong = ts.h;
       }
-      handWidth = (hand.length - 1) * stride + endTileLong;
+      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
+      handWidth = (hand.length - 1) * stride + endTileLong + handGap;
     } else {
       const t = seat === 0 ? layout.tileSelf : layout.tileHorizontal;
-      const handGap = hand.length === 14 ? TSUMO_GAP : 0;
+      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
     }
 
@@ -1377,6 +1378,7 @@ export class TableRenderer {
       const stride = sideHandRevealed
         ? SIDE_TILE_H - DISCARD_ROW_OVERLAP_HORIZ
         : ts.h - layout.tileSideOverlap;
+      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
       const zSign = seat === 1 ? -1 : 1;
       // Face-down sheet by default; with `showHands` and a real
       // tile string we swap to the seat's face-up discard sheet
@@ -1387,7 +1389,8 @@ export class TableRenderer {
       const localRot = seat === 1 ? Math.PI / 2 : -Math.PI / 2;
       hand.forEach((tile, i) => {
         const wrap = new Container();
-        wrap.position.set(i * stride, 0);
+        const extraGap = handGap > 0 && i === hand.length - 1 ? handGap : 0;
+        wrap.position.set(i * stride + extraGap, 0);
         wrap.zIndex = zSign * i;
         const reveal = this.showHands && tile !== null;
         const tex = this.getTileTexture(
@@ -1433,7 +1436,7 @@ export class TableRenderer {
       const t = seat === 0 ? layout.tileSelf : layout.tileHorizontal;
       const spriteW = seat === 0 ? BIG_TILE_W : t.w;
       const spriteH = seat === 0 ? BIG_TILE_H : t.h;
-      const handGap = hand.length === 14 ? TSUMO_GAP : 0;
+      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
       hand.forEach((tile, i) => {
         let tileSprite: Container;
@@ -2457,18 +2460,22 @@ function tileSortKey(tile: string): number {
 
 /**
  * Display-only sort. Preserves nulls (opponent tiles) by leaving the
- * input untouched when any element is `null`. When the hand has 14
- * tiles (post-draw, pre-discard), the last tile is treated as the
- * just-drawn tile and held out on the right; the leading 13 are sorted.
+ * input untouched when any element is `null`. When the hand is in a
+ * post-draw state (length ≡ 2 mod 3 — i.e. 14 with no calls, 11 after
+ * one call, 8 after two, 5 after three, 2 after four), the last tile
+ * is treated as the just-drawn tile and held out on the right; the
+ * leading tiles are sorted. Kans don't perturb the count because each
+ * kan still removes the same +3 net from the closed hand and the
+ * rinshan replacement reads as the next draw.
  */
 function sortHand(hand: Array<string | null>): Array<string | null> {
   if (hand.some((t) => t === null)) {
     return hand;
   }
   const tiles = hand as string[];
-  if (tiles.length === 14) {
-    const closed = tiles.slice(0, 13);
-    const drawn = tiles[13];
+  if (tiles.length >= 2 && tiles.length % 3 === 2) {
+    const closed = tiles.slice(0, tiles.length - 1);
+    const drawn = tiles[tiles.length - 1];
     closed.sort((a, b) => tileSortKey(a) - tileSortKey(b));
     return [...closed, drawn];
   }

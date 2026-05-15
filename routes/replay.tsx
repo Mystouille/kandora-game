@@ -43,7 +43,7 @@ import { useLocale } from "~/contexts/LocaleContext";
 import { FixedTileSetProvider } from "~/contexts/TileSetContext";
 import { TileSetName } from "~/components/mahjong/handLayout";
 import { ArticleContent } from "~/components/ArticleContent";
-import { Tooltip } from "antd";
+import { Tooltip, message } from "antd";
 import {
   QuestionOutlined,
   EyeOutlined,
@@ -289,7 +289,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       { status: 404 }
     );
   }
-  const fetched = await fetchOrphanReplayLog(source, gameId);
+  const fetched = await fetchOrphanReplayLog(source, gameId).catch((error) => {
+    console.error(
+      `[replay loader] connector fetch failed for ${source}/${gameId}`,
+      error
+    );
+    return null;
+  });
   if (!fetched) {
     throw new Response(
       "Replay not yet available; it will appear after the next hydration cycle.",
@@ -540,6 +546,41 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
     }
     return review.edits.find((e) => e.eventIndex === index) ?? null;
   }, [review, index, localEdits]);
+  // Sorted list of event indices that carry an effective comment
+  // (text or drawing) after applying local overrides over the
+  // server-side review. Drives the "previous/next comment"
+  // navigation buttons; empty when no comment exists yet, in which
+  // case the buttons hide entirely.
+  const commentIndices = useMemo<number[]>(() => {
+    const map = new Map<number, { text: string; drawingBase64: string | null }>(
+      []
+    );
+    if (review) {
+      for (const e of review.edits) {
+        map.set(e.eventIndex, {
+          text: e.text,
+          drawingBase64: e.drawingBase64,
+        });
+      }
+    }
+    for (const key of Object.keys(localEdits)) {
+      const idx = Number(key);
+      const patch = localEdits[idx];
+      if (patch === null) {
+        map.delete(idx);
+      } else {
+        map.set(idx, patch);
+      }
+    }
+    const out: number[] = [];
+    for (const [idx, edit] of map) {
+      if (edit.text.length > 0 || edit.drawingBase64) {
+        out.push(idx);
+      }
+    }
+    out.sort((a, b) => a - b);
+    return out;
+  }, [review, localEdits]);
   // Decode the saved drawing once per (review,index) pair.
   const savedDrawing = useMemo<Drawing | null>(() => {
     if (!currentEdit?.drawingBase64) {
@@ -1166,14 +1207,53 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
           </a>
           , C-Egg
         </div>
-        {/* Top-right: share + close icons. */}
+        {/* Top-right: share / publish + close icons.
+            When the editor has unpublished local edits the same
+            slot turns into a "Publish" button that pushes them
+            to the server before copying the share link. */}
         <button
           type="button"
           onClick={() => {
-            // Build a fresh deeplink from the current state. We no
-            // longer keep the browser URL in sync with every step
-            // (see the seed-only `useSearchParams` read above), so
-            // we compute `seat` / `round` / `event` on click.
+            const copyToClipboard = (url: string, done: () => void): void => {
+              if (navigator.clipboard?.writeText) {
+                void navigator.clipboard.writeText(url).then(done, done);
+              } else {
+                const ta = document.createElement("textarea");
+                ta.value = url;
+                ta.setAttribute("readonly", "");
+                ta.style.position = "absolute";
+                ta.style.left = "-9999px";
+                document.body.appendChild(ta);
+                ta.select();
+                try {
+                  document.execCommand("copy");
+                } catch {
+                  /* best-effort */
+                }
+                document.body.removeChild(ta);
+                done();
+              }
+            };
+            const flashCopied = (): void => {
+              setCopied(true);
+              window.setTimeout(() => {
+                setCopied(false);
+              }, 1500);
+            };
+            // Publish path: stage exists. Push edits, then copy
+            // the freshly-built share URL.
+            if (canEditReview && pendingCount > 0) {
+              void publish().then((url) => {
+                if (!url) {
+                  message.error(t.review.cartridge.publishFailed);
+                  return;
+                }
+                message.success(t.review.cartridge.publishedToast);
+                copyToClipboard(url, flashCopied);
+              });
+              return;
+            }
+            // Share path: build a fresh deeplink from current state.
             let roundOrdinal = 0;
             for (let i = 0; i < rounds.length; i++) {
               if (rounds[i] <= index) {
@@ -1191,40 +1271,28 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
                 ? `${window.location.origin}${window.location.pathname}`
                 : "";
             const url = `${base}?${params.toString()}`;
-            const done = (): void => {
-              setCopied(true);
-              window.setTimeout(() => {
-                setCopied(false);
-              }, 1500);
-            };
-            if (navigator.clipboard?.writeText) {
-              void navigator.clipboard.writeText(url).then(done, done);
-            } else {
-              const ta = document.createElement("textarea");
-              ta.value = url;
-              ta.setAttribute("readonly", "");
-              ta.style.position = "absolute";
-              ta.style.left = "-9999px";
-              document.body.appendChild(ta);
-              ta.select();
-              try {
-                document.execCommand("copy");
-              } catch {
-                /* best-effort */
-              }
-              document.body.removeChild(ta);
-              done();
-            }
+            copyToClipboard(url, flashCopied);
           }}
-          aria-label={t.review.cartridge.copyShareLink}
-          title={
-            copied
-              ? t.review.cartridge.shareCopied
+          disabled={publishing}
+          aria-label={
+            canEditReview && pendingCount > 0
+              ? t.review.cartridge.publishTooltip
               : t.review.cartridge.copyShareLink
           }
-          className="absolute top-2 right-[7rem] z-30 h-11 min-w-[5.5rem] px-4 flex items-center justify-center gap-1 rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-base font-medium transition-colors"
+          title={
+            canEditReview && pendingCount > 0
+              ? t.review.cartridge.publishTooltip
+              : copied
+                ? t.review.cartridge.shareCopied
+                : t.review.cartridge.copyShareLink
+          }
+          className="absolute top-2 right-[7rem] z-30 h-11 min-w-[5.5rem] px-4 flex items-center justify-center gap-1 rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-base font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {copied ? t.review.cartridge.shareCopied : t.review.cartridge.share}
+          {canEditReview && pendingCount > 0
+            ? `${t.review.cartridge.publish} (${pendingCount})`
+            : copied
+              ? t.review.cartridge.shareCopied
+              : t.review.cartridge.share}
         </button>
         <Link
           to="/review"
@@ -1371,6 +1439,58 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
               </div>
             );
           })()}
+          {/* Row 3 (review-only): jump to previous / next event
+              that has an annotation. Hidden when no annotation
+              exists yet so non-review viewers don't see dead
+              buttons. The reviewer's first edit will surface them
+              the moment it lands in `localEdits`. */}
+          {commentIndices.length > 0 &&
+            (() => {
+              // Strictly-previous / strictly-next comment index
+              // relative to the current playhead. `null` at the
+              // ends so the buttons disable cleanly.
+              let prevComment: number | null = null;
+              let nextComment: number | null = null;
+              for (const c of commentIndices) {
+                if (c < index) {
+                  prevComment = c;
+                } else if (c > index && nextComment === null) {
+                  nextComment = c;
+                }
+              }
+              return (
+                <div className="flex items-center gap-1 justify-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (prevComment !== null) {
+                        goto(prevComment);
+                      }
+                    }}
+                    disabled={prevComment === null}
+                    className="px-3 py-2 text-lg rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
+                    aria-label="Previous comment"
+                    title="Previous comment"
+                  >
+                    ◀💬
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (nextComment !== null) {
+                        goto(nextComment);
+                      }
+                    }}
+                    disabled={nextComment === null}
+                    className="px-3 py-2 text-lg rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
+                    aria-label="Next comment"
+                    title="Next comment"
+                  >
+                    💬▶
+                  </button>
+                </div>
+              );
+            })()}
           <span className="font-mono text-sm text-emerald-100/80 text-center">
             {index + 1} / {log.events.length}
           </span>
@@ -1488,7 +1608,6 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
           )}
         <ReplayReviewCartridge
           canEdit={canEditReview}
-          hasReview={review !== null}
           savedText={currentEdit?.text ?? ""}
           savedHasDrawing={Boolean(currentEdit?.drawingBase64)}
           savedStrokes={savedDrawing?.strokes ?? []}
@@ -1500,15 +1619,13 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
           onSubmitDrawing={(strokes) => {
             const drawing: Drawing = { strokes };
             const bytes = encodeDrawing(drawing);
-            const drawingBase64 = bytesToBase64(bytes);
-            commitEditLocally({ drawingBase64 });
+            commitEditLocally({ drawingBase64: bytesToBase64(bytes) });
           }}
           onErase={() => {
             commitEditLocally({ delete: true });
           }}
           pendingCount={pendingCount}
           publishing={publishing}
-          onPublish={publish}
           onDiscardAll={discardAll}
           seatMismatch={seatMismatch}
           reviewSeatName={
@@ -1517,7 +1634,6 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
                 `Seat ${effectiveReviewSeat}`)
               : ""
           }
-          buildShareUrl={() => buildShareUrlFor(review?.shortId ?? null)}
         />
       </div>
     </div>

@@ -60,16 +60,7 @@ export async function fetchOrphanReplayLog(
   source: ReplaySource,
   gameId: string
 ): Promise<ReplayLog | null> {
-  let log: ReplayLog | null;
-  try {
-    log = await fetchFromPlatform(source, gameId);
-  } catch (error) {
-    console.error(
-      `fetchOrphanReplayLog: connector threw for ${source}/${gameId}`,
-      error
-    );
-    return null;
-  }
+  const log = await fetchFromPlatform(source, gameId);
 
   if (!log) {
     return null;
