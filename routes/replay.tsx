@@ -1099,18 +1099,24 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       wheelLastRef.current = now;
       wheelAccumRef.current += e.deltaY;
       const threshold = 30;
-      // Snap to the next/previous `discard` event per tick: draws,
-      // melds and dora reveals come in clusters between two
-      // discards, so stepping one raw event at a time made the
-      // wheel feel like it "skipped" 3+ events per notch without
-      // actually moving the picture. Jumping discard-to-discard
-      // gives one visible turn change per tick. We cap at *one*
-      // step per wheel event regardless of the accumulated delta
-      // so a fat trackpad notch doesn't blow past several turns
-      // at once.
+      // Snap to the next/previous `discard` or `hand_end` event
+      // per tick: draws, melds and dora reveals come in clusters
+      // between two discards, so stepping one raw event at a
+      // time made the wheel feel like it "skipped" 3+ events per
+      // notch without actually moving the picture. Jumping
+      // discard-to-discard gives one visible turn change per
+      // tick, and stopping on `hand_end` makes the result panel
+      // a natural rest point at the end of each round. We cap at
+      // *one* step per wheel event regardless of the accumulated
+      // delta so a fat trackpad notch doesn't blow past several
+      // turns at once.
+      const isStop = (i: number): boolean => {
+        const t = log.events[i]?.type;
+        return t === "discard" || t === "hand_end";
+      };
       const findNextDiscard = (i: number): number => {
         for (let j = i + 1; j <= bounds.max; j++) {
-          if (log.events[j]?.type === "discard") {
+          if (isStop(j)) {
             return j;
           }
         }
@@ -1118,7 +1124,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       };
       const findPrevDiscard = (i: number): number => {
         for (let j = i - 1; j >= bounds.min; j--) {
-          if (log.events[j]?.type === "discard") {
+          if (isStop(j)) {
             return j;
           }
         }

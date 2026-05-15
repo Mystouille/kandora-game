@@ -113,6 +113,19 @@ export interface ReplayView {
   matchEnded: null | {
     finalScores: Array<{ seat: Seat; score: number; place: number }>;
   };
+  /**
+   * Seat that has a freshly drawn tile sitting at the end of its
+   * closed hand (not yet discarded). `null` outside of a draw→
+   * discard window. Used by the renderer to decide whether to
+   * display the last tile separated from the rest of the hand
+   * (the "tsumo gap"). Hand-length alone is ambiguous — after
+   * a chi/pon the closed hand is also length 11 mod 3=2 even
+   * though no tile was drawn — so we track this explicitly.
+   *
+   * Set on every `draw` (including rinshan replacement draws).
+   * Cleared on `discard`, `call`, `hand_start`, and `match_end`.
+   */
+  freshlyDrawnSeat: Seat | null;
 }
 
 export function initialView(): ReplayView {
@@ -138,6 +151,7 @@ export function initialView(): ReplayView {
     riichiTileIdx: [null, null, null, null],
     lastHandResult: null,
     matchEnded: null,
+    freshlyDrawnSeat: null,
   };
 }
 
@@ -195,6 +209,7 @@ export function applyReplayEvent(
         riichiTileIdx: [null, null, null, null],
         lastHandResult: null,
         matchEnded: null,
+        freshlyDrawnSeat: null,
       };
     }
     case "draw": {
@@ -210,6 +225,7 @@ export function applyReplayEvent(
         liveDrawsTaken: event.fromDeadWall
           ? view.liveDrawsTaken
           : view.liveDrawsTaken + 1,
+        freshlyDrawnSeat: event.seat,
       };
     }
     case "discard": {
@@ -251,7 +267,14 @@ export function applyReplayEvent(
             return arr;
           })()
         : view.riichiTileIdx;
-      return { ...view, hands, discards, riichiDeclared, riichiTileIdx };
+      return {
+        ...view,
+        hands,
+        discards,
+        riichiDeclared,
+        riichiTileIdx,
+        freshlyDrawnSeat: null,
+      };
     }
     case "call": {
       const hands = view.hands.map((h) => [...h]);
@@ -292,25 +315,48 @@ export function applyReplayEvent(
       }
       const melds = view.melds.map((m) => [...m]);
       if (meld.type === "shouminkan") {
-        // Upgrade in place if the matching pon exists.
-        const ponIdx = melds[caller].findIndex(
-          (m) =>
-            m.type === "pon" &&
-            m.claimedTile !== null &&
-            meld.claimedTile !== null &&
-            m.claimedTile[1] === meld.claimedTile[1] &&
-            (m.claimedTile[0] === "0" ? "5" : m.claimedTile[0]) ===
-              (meld.claimedTile[0] === "0" ? "5" : meld.claimedTile[0])
-        );
+        // Upgrade in place if the matching pon exists. Use any tile
+        // from the kan to identify the suit/number (all 4 tiles are
+        // the same value, modulo red-5). We can't rely on
+        // `meld.claimedTile` — some platform adapters (notably
+        // Majsoul, which delivers shouminkan via
+        // `RecordAnGangAddGang`) emit it as `null`. Comparing against
+        // the pon's tiles is robust to that.
+        const kanTile = meld.tiles[0];
+        const norm = (t: Tile): string => `${t[0] === "0" ? "5" : t[0]}${t[1]}`;
+        const kanKey = kanTile ? norm(kanTile) : null;
+        const ponIdx = kanKey
+          ? melds[caller].findIndex(
+              (m) => m.type === "pon" && m.tiles.some((x) => norm(x) === kanKey)
+            )
+          : -1;
         if (ponIdx >= 0) {
-          melds[caller][ponIdx] = meld;
+          // Carry over the original pon's `claimedTile` / `from` so
+          // the renderer can position the tilted tile in the same
+          // slot as the original call (the kan tile is stacked on
+          // top of that slot). Some adapters (notably Majsoul's
+          // `RecordAnGangAddGang`) ship the shouminkan with
+          // `claimedTile: null` / `from: null`; without this merge
+          // `drawMeld` falls back to the right-most slot and the
+          // kan tile renders detached from the original call.
+          const original = melds[caller][ponIdx];
+          melds[caller][ponIdx] = {
+            ...meld,
+            claimedTile: meld.claimedTile ?? original.claimedTile,
+            from: meld.from ?? original.from,
+          };
         } else {
           melds[caller].push(meld);
         }
       } else {
         melds[caller].push(meld);
       }
-      return { ...view, hands, melds, discards };
+      // A call never produces a freshly drawn tile in the closed
+      // hand — the claimed tile lives in the meld. The caller
+      // must still discard, but visually the closed hand has no
+      // "drawn" tile to separate. (If the call is a kan, the
+      // upcoming rinshan `draw` event will set this back.)
+      return { ...view, hands, melds, discards, freshlyDrawnSeat: null };
     }
     case "new_dora": {
       return {
@@ -342,7 +388,14 @@ export function applyReplayEvent(
         ...view,
         lastHandResult: existing
           ? { ...existing, win }
-          : { reason: "tsumo", win },
+          : {
+              // The `win` event may arrive before its matching
+              // `hand_end` (Majsoul/Tenhou/Riichi-City all emit
+              // both). Derive the reason from `loser`: a ron win
+              // names the discarder, a tsumo win has none.
+              reason: win.loser !== null ? "ron" : "tsumo",
+              win,
+            },
       };
     }
     case "hand_end": {
@@ -485,6 +538,7 @@ export function replayViewToMatchView(
     lastHandResult: view.lastHandResult,
     matchEnded: view.matchEnded,
     currentWaits: opts.currentWaits ?? null,
+    freshlyDrawnSeat: view.freshlyDrawnSeat,
   };
   if (focus === 0) {
     return base;
@@ -535,7 +589,16 @@ function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     ...mv,
     mySeat: 0,
     hands: perm4(mv.hands),
-    melds: perm4(mv.melds),
+    melds: perm4(mv.melds).map((row) =>
+      // Each meld's `from` is the absolute seat that supplied the
+      // claimed tile; remap it into the rotated frame so the
+      // renderer (which works in relative seats) can position the
+      // tilted tile at the correct slot.
+      row.map((m) => ({
+        ...m,
+        from: m.from != null ? rot(m.from) : m.from,
+      }))
+    ) as [Meld[], Meld[], Meld[], Meld[]],
     discards: perm4(mv.discards),
     liveDrawSchedule: mv.liveDrawSchedule
       ? mv.liveDrawSchedule.map((s) => rot(s))
@@ -547,6 +610,8 @@ function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     riichiTileIdx: perm4(mv.riichiTileIdx),
     currentWaits: mv.currentWaits ? perm4(mv.currentWaits) : mv.currentWaits,
     lastHandResult: rotatedResult,
+    freshlyDrawnSeat:
+      mv.freshlyDrawnSeat != null ? rot(mv.freshlyDrawnSeat) : null,
     matchEnded: mv.matchEnded
       ? {
           ...mv.matchEnded,

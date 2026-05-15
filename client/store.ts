@@ -154,6 +154,18 @@ export interface MatchView {
   matchEnded: null | {
     finalScores: Array<{ seat: Seat; score: number; place: number }>;
   };
+  /**
+   * Seat that has a freshly drawn tile sitting at the end of its
+   * closed hand (not yet discarded). `null` outside of a draw→
+   * discard window. Used by the renderer to decide whether to
+   * display the last tile separated from the rest of the hand
+   * (the "tsumo gap"). Hand-length alone is ambiguous — after a
+   * chi/pon the closed hand is also length 11 (== 2 mod 3) even
+   * though no tile was drawn — so we track this explicitly.
+   * Set on every `draw`; cleared on `discard`, `call`,
+   * `hand_start`, and snapshot resync.
+   */
+  freshlyDrawnSeat: Seat | null;
 }
 
 interface MatchStore extends MatchView {
@@ -200,6 +212,7 @@ const initialState: MatchView = {
   lastHandResult: null,
   matchEnded: null,
   currentWaits: null,
+  freshlyDrawnSeat: null,
 };
 
 export const useMatchStore = create<MatchStore>((set) => ({
@@ -275,6 +288,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       pendingDiscard: null,
       lastHandResult: null,
       matchEnded: null,
+      freshlyDrawnSeat: null,
     }));
   },
 
@@ -340,6 +354,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             riichiTileIdx: [null, null, null, null],
             lastHandResult: null,
             matchEnded: null,
+            freshlyDrawnSeat: null,
           };
         }
         case "draw": {
@@ -357,6 +372,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             liveDrawsTaken: event.fromDeadWall
               ? state.liveDrawsTaken
               : state.liveDrawsTaken + 1,
+            freshlyDrawnSeat: event.seat,
           };
         }
         case "discard": {
@@ -417,6 +433,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             riichiDeclared,
             riichiTileIdx,
             pendingDiscard,
+            freshlyDrawnSeat: null,
           };
         }
         case "win": {
@@ -449,7 +466,15 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ...next,
             lastHandResult: existing
               ? { ...existing, win }
-              : { reason: "tsumo", win },
+              : {
+                  // Derive the win reason from `loser`: a ron win
+                  // names the discarder, a tsumo win has none. The
+                  // `hand_end` event will overwrite this with the
+                  // authoritative reason, but until then we must
+                  // not mislabel a ron as a tsumo.
+                  reason: win.loser !== null ? "ron" : "tsumo",
+                  win,
+                },
           };
         }
         case "hand_end": {
@@ -540,24 +565,50 @@ export const useMatchStore = create<MatchStore>((set) => ({
           // replace the matching pon if found, otherwise append.
           const melds = state.melds.map((m) => [...m]);
           if (meld.type === "shouminkan") {
-            const ponIdx = melds[caller].findIndex(
-              (m) =>
-                m.type === "pon" &&
-                m.claimedTile !== null &&
-                meld.claimedTile !== null &&
-                m.claimedTile[1] === meld.claimedTile[1] &&
-                (m.claimedTile[0] === "0" ? "5" : m.claimedTile[0]) ===
-                  (meld.claimedTile[0] === "0" ? "5" : meld.claimedTile[0])
-            );
+            // Match on `meld.tiles` rather than `claimedTile`: some
+            // platform adapters (e.g. Majsoul's
+            // `RecordAnGangAddGang`) emit shouminkan with
+            // `claimedTile: null`, in which case the old
+            // claimedTile-equality check silently failed and the
+            // viewer rendered the original pon alongside a separate
+            // kan instead of upgrading the pon.
+            const kanTile = meld.tiles[0];
+            const norm = (t: Tile): string =>
+              `${t[0] === "0" ? "5" : t[0]}${t[1]}`;
+            const kanKey = kanTile ? norm(kanTile) : null;
+            const ponIdx = kanKey
+              ? melds[caller].findIndex(
+                  (m) =>
+                    m.type === "pon" && m.tiles.some((x) => norm(x) === kanKey)
+                )
+              : -1;
             if (ponIdx >= 0) {
-              melds[caller][ponIdx] = meld;
+              // Carry over the original pon's `claimedTile` / `from`
+              // so the renderer can position the tilted called tile
+              // in the same slot as the original pon (the kan tile
+              // stacks on top of that slot). Some adapters (notably
+              // Majsoul) ship shouminkan with `claimedTile: null` /
+              // `from: null` which would otherwise force the
+              // renderer's default right-most slot fallback.
+              const original = melds[caller][ponIdx];
+              melds[caller][ponIdx] = {
+                ...meld,
+                claimedTile: meld.claimedTile ?? original.claimedTile,
+                from: meld.from ?? original.from,
+              };
             } else {
               melds[caller].push(meld);
             }
           } else {
             melds[caller].push(meld);
           }
-          return { ...next, hands, melds, discards };
+          return {
+            ...next,
+            hands,
+            melds,
+            discards,
+            freshlyDrawnSeat: null,
+          };
         }
         case "match_end": {
           return {

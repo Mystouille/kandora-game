@@ -1157,6 +1157,14 @@ export class TableRenderer {
     if (!r) {
       return;
     }
+    // For wins, the upstream stream emits `win` then `hand_end`
+    // as two consecutive events. Both produce a `lastHandResult`,
+    // which would surface the panel twice while stepping through
+    // the replay. Suppress the intermediate state: a win's panel
+    // only renders once `hand_end` has filled in the deltas.
+    if (r.win && !r.delta) {
+      return;
+    }
     const lines: string[] = [];
     if (r.reason === "tsumo" && r.win) {
       lines.push(`Tsumo — Seat ${r.win.seat}`);
@@ -1322,7 +1330,14 @@ export class TableRenderer {
     // separated on the right of the sorted 13-tile hand. After the
     // discard event lands, the next render sees a 13-tile hand and
     // re-sorts the whole row.
-    const hand = sortHand(rawHand);
+    //
+    // Hand length alone is ambiguous (e.g. after a chi/pon the closed
+    // hand is also length 11 == 2 mod 3 even though no tile was drawn),
+    // so the reducer tags the seat that holds a freshly drawn tile in
+    // `view.freshlyDrawnSeat`. Drives both the sort split and the
+    // tsumo-gap rendering below.
+    const isFreshlyDrawn = view.freshlyDrawnSeat === seat;
+    const hand = sortHand(rawHand, isFreshlyDrawn);
     const handContainer = new Container();
     // Side hands (seats 1 / 3, never the focused user) use a
     // dedicated tile size (`layout.tileSide`) and stack the tiles
@@ -1365,11 +1380,11 @@ export class TableRenderer {
         stride = ts.h - layout.tileSideOverlap;
         endTileLong = ts.h;
       }
-      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
+      const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = (hand.length - 1) * stride + endTileLong + handGap;
     } else {
       const t = seat === 0 ? layout.tileSelf : layout.tileHorizontal;
-      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
+      const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
     }
 
@@ -1412,7 +1427,7 @@ export class TableRenderer {
       const stride = sideHandRevealed
         ? SIDE_TILE_H - DISCARD_ROW_OVERLAP_HORIZ
         : ts.h - layout.tileSideOverlap;
-      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
+      const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       const zSign = seat === 1 ? -1 : 1;
       // Face-down sheet by default; with `showHands` and a real
       // tile string we swap to the seat's face-up discard sheet
@@ -1470,7 +1485,7 @@ export class TableRenderer {
       const t = seat === 0 ? layout.tileSelf : layout.tileHorizontal;
       const spriteW = seat === 0 ? BIG_TILE_W : t.w;
       const spriteH = seat === 0 ? BIG_TILE_H : t.h;
-      const handGap = hand.length >= 2 && hand.length % 3 === 2 ? TSUMO_GAP : 0;
+      const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
       hand.forEach((tile, i) => {
         let tileSprite: Container;
@@ -2182,10 +2197,9 @@ export class TableRenderer {
     if (stackTile !== null) {
       const stack = this.drawMeldTile(stackTile, seat, tiltedSheet);
       stack.rotation = -Math.PI / 2;
-      stack.zIndex = tileZ(slots.length);
-      // Stack on top of the called tile: same x as called, y shifted
-      // up by one rotated-tile height (tilted.w). No vertical gap.
-      stack.position.set(calledX, mt.h - tilted.w);
+      // Render the stacked kan tile UNDER the called tile
+      stack.zIndex = tileZ(slots.length) - 1;
+      stack.position.set(calledX, mt.h - tilted.w + DISCARD_ROW_OVERLAP_HORIZ);
       c.addChild(stack);
     }
     // Total footprint width = xCursor (sum of strides) + the last
@@ -2494,20 +2508,24 @@ function tileSortKey(tile: string): number {
 
 /**
  * Display-only sort. Preserves nulls (opponent tiles) by leaving the
- * input untouched when any element is `null`. When the hand is in a
- * post-draw state (length ≡ 2 mod 3 — i.e. 14 with no calls, 11 after
- * one call, 8 after two, 5 after three, 2 after four), the last tile
- * is treated as the just-drawn tile and held out on the right; the
- * leading tiles are sorted. Kans don't perturb the count because each
- * kan still removes the same +3 net from the closed hand and the
- * rinshan replacement reads as the next draw.
+ * input untouched when any element is `null`. When `isFreshlyDrawn`
+ * is true the last tile is treated as the just-drawn tile and held
+ * out on the right; the leading tiles are sorted. The caller is
+ * expected to derive `isFreshlyDrawn` from `view.freshlyDrawnSeat`
+ * (set by the reducer on `draw`, cleared on `discard` / `call` /
+ * `hand_start`). Hand length alone can't distinguish a freshly
+ * drawn hand from a post-call "must-discard" hand — both can be
+ * length (== 2 mod 3).
  */
-function sortHand(hand: Array<string | null>): Array<string | null> {
+function sortHand(
+  hand: Array<string | null>,
+  isFreshlyDrawn: boolean
+): Array<string | null> {
   if (hand.some((t) => t === null)) {
     return hand;
   }
   const tiles = hand as string[];
-  if (tiles.length >= 2 && tiles.length % 3 === 2) {
+  if (isFreshlyDrawn && tiles.length >= 2) {
     const closed = tiles.slice(0, tiles.length - 1);
     const drawn = tiles[tiles.length - 1];
     closed.sort((a, b) => tileSortKey(a) - tileSortKey(b));
