@@ -101,6 +101,10 @@ const TSUMO_GAP = 8;
 const BG_COLOR: ColorSource = 0x2a2a2a;
 const FELT_COLOR: ColorSource = 0x0d4d2c;
 
+/** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
+ *  East, South, West, North. */
+const WIND_KANJI = ["東", "南", "西", "北"] as const;
+
 /** Axis-aligned bounding box of a non-empty list of `Rect`s. */
 function boundingBox(rects: readonly Rect[]): Rect {
   const x0 = Math.min(...rects.map((r) => r.x));
@@ -696,11 +700,10 @@ export class TableRenderer {
     ];
     for (let seat = 0; seat < 4; seat++) {
       const spec = specs[seat];
-      const isDealer = view.dealer === seat;
       const chip = new Container();
       const bg = new Graphics()
         .roundRect(-chipW / 2, -chipH / 2, chipW, chipH, 6)
-        .fill({ color: isDealer ? 0xb88a2e : 0x000000, alpha: 0.7 });
+        .fill({ color: 0x000000, alpha: 0.7 });
       const txt = new Text({
         text: `${view.scores[seat]}`,
         style: new TextStyle({
@@ -711,7 +714,24 @@ export class TableRenderer {
         }),
       });
       txt.anchor.set(0.5, 0.5);
-      chip.addChild(bg, txt);
+      // Seat wind kanji, anchored to the left edge of the chip.
+      // East is highlighted in red (the dealer wind in riichi
+      // convention); the other three winds use the same white as
+      // the score text.
+      const wind = WIND_KANJI[(seat - view.dealer + 4) % 4];
+      const isEast = wind === "東";
+      const windTxt = new Text({
+        text: wind,
+        style: new TextStyle({
+          fontFamily: "Noto Sans JP, Inter, system-ui, sans-serif",
+          fontSize: Math.max(12, Math.round(chipH * 0.6)),
+          fontWeight: "700",
+          fill: isEast ? 0xff6b6b : 0xffffff,
+        }),
+      });
+      windTxt.anchor.set(0, 0.5);
+      windTxt.position.set(-chipW / 2 + Math.round(chipH * 0.35), 0);
+      chip.addChild(bg, windTxt, txt);
       // Seat display names are rendered separately by
       // `renderPlayerNames` next to each discard pond.
       // Wait tiles below the chip (toggle: showWaits). Sourced

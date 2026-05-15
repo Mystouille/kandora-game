@@ -267,12 +267,27 @@ export function applyReplayEvent(
             return arr;
           })()
         : view.riichiTileIdx;
+      // When a player declares riichi, visually bump the stick
+      // counter and deduct 1000 from the declarer's score. The
+      // authoritative `scores` / `riichiSticks` are re-set at the
+      // next hand boundary; this just keeps the table state
+      // visually consistent mid-hand.
+      let riichiSticks = view.riichiSticks;
+      let scores = view.scores;
+      if (event.riichi) {
+        riichiSticks = view.riichiSticks + 1;
+        const next = [...view.scores] as [number, number, number, number];
+        next[event.seat] = next[event.seat] - 1000;
+        scores = next;
+      }
       return {
         ...view,
         hands,
         discards,
         riichiDeclared,
         riichiTileIdx,
+        riichiSticks,
+        scores,
         freshlyDrawnSeat: null,
       };
     }
