@@ -163,8 +163,9 @@ export function computeTableLayout(
     h: HAND_BOTTOM_H,
   };
   const handTop: Rect = {
-    // Shorten the top band by 40 design px on its screen-left end.
-    x: (DESIGN_W - HAND_TOP_W) / 2 + 40,
+    // Shorten the top band by 40 design px on its screen-left end,
+    // then shift the whole band 3 tile widths to the screen-left.
+    x: (DESIGN_W - HAND_TOP_W) / 2 + 40 - 3 * TILE_VERTICAL.w,
     y: 0,
     // Shorten the top band by 40 design px on its screen-right end.
     w: HAND_TOP_W - 40 - 40,
