@@ -95,5 +95,14 @@ export async function fetchOrphanReplayLog(
     );
   }
 
-  return log;
+  // Flatten to plain JSON before returning. Connector adapters
+  // (Majsoul especially) build their `events` / `seats` arrays out
+  // of protobufjs message instances and prototype-flavoured
+  // arrays. Mongo's `.lean()` path strips those for cache-hits,
+  // but the cache-miss path used to hand the raw parsed object to
+  // the loader — which then choked React Router's `turbo-stream`
+  // serializer and produced a half-rendered (dark canvas) replay
+  // on first visit. A JSON roundtrip costs ~1ms on a 600-event
+  // log and guarantees both code paths serialize identically.
+  return JSON.parse(JSON.stringify(log)) as ReplayLog;
 }

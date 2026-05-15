@@ -306,9 +306,6 @@ export class TableRenderer {
     // hook when wired.
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => {
-        if (!this.onRenderRequest) {
-          return;
-        }
         // Coalesce bursts of resize events (drag-resize fires
         // continuously) into one render per animation frame.
         if (this.resizeRafHandle !== null) {
@@ -316,6 +313,21 @@ export class TableRenderer {
         }
         this.resizeRafHandle = requestAnimationFrame(() => {
           this.resizeRafHandle = null;
+          // Pixi's built-in `resizeTo` only re-reads the target
+          // element's dims on `window` resize events; it does NOT
+          // observe the element itself. When the canvas container
+          // mounts at 0×0 (e.g. React-Router client navigation from
+          // /review → /replays/:id: the route's div is appended
+          // and its layout is committed in the same frame as our
+          // `useEffect`, so `app.init({ resizeTo: container })`
+          // snapshots a zero-size box) Pixi never recovers on its
+          // own and we get the "dark canvas until reload" symptom.
+          // Calling `app.resize()` here forces Pixi to re-measure
+          // the container against its `resizeTo` target so the
+          // subsequent `render()` reads correct `app.screen` dims.
+          if (this.app) {
+            this.app.resize();
+          }
           if (this.onRenderRequest) {
             this.onRenderRequest();
           }
@@ -412,7 +424,18 @@ export class TableRenderer {
       this.resizeObserver = null;
     }
     if (this.app) {
-      this.app.destroy(true, { children: true, texture: true });
+      // IMPORTANT: do NOT pass `texture: true` here. Pixi's
+      // `Assets` cache hands back the same `Texture` instances on
+      // every `Assets.load(...)` call, so destroying the base
+      // textures on unmount poisons the cache: the very next
+      // renderer that mounts (e.g. after a React strict-mode
+      // double-invoke, or after the user navigates from /review →
+      // /replays/:id) reuses already-destroyed `Texture`s and
+      // paints invisible / black sprites — the "dark canvas on
+      // first paint" symptom we kept chasing. `children: true`
+      // still unmounts the display tree; textures stay alive in
+      // the global asset cache where they belong.
+      this.app.destroy(true, { children: true });
       this.app = null;
     }
     this.root = null;
@@ -424,6 +447,17 @@ export class TableRenderer {
     if (!this.app || !this.root || !this.hudText) {
       return;
     }
+    // Defensive: sync the canvas size to the `resizeTo` container.
+    // Pixi v8's built-in `resizeTo` only auto-syncs on `window`
+    // resize events, so if the container was zero-sized when
+    // `app.init` ran (and that's exactly what happens on the first
+    // render of a client-side navigation to /replays/:id, where
+    // the route's div is committed in the same frame as our
+    // mount effect) `app.screen` stays 0×0 until something
+    // explicitly calls `resize()`. Doing it at the top of every
+    // `render` keeps the scale math below honest for free; the
+    // call is a no-op when dimensions are already current.
+    this.app.resize();
     // Refresh the per-frame wait set from the server-precomputed
     // `view.currentWaits` (annotated by `~/game/replay/annotateWaits`
     // during the replay loader). Live play leaves `currentWaits`

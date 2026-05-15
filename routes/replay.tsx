@@ -955,24 +955,27 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
           return;
         }
         const renderer = new TableRenderer();
+        // Wire the resize hook BEFORE mount so the
+        // ResizeObserver / Pixi auto-resize installed inside
+        // `mount()` can dispatch its first events into a live
+        // callback. Previously this was set after `mount()`
+        // resolved, which meant any layout shift happening while
+        // tile textures were loading was dropped on the floor —
+        // contributing to the first-paint dark-canvas race on
+        // client-side navigation.
+        renderer.setOnRenderRequest(() => {
+          const r = rendererRef.current;
+          const args = latestRenderRef.current;
+          if (r && args) {
+            r.render(args);
+          }
+        });
         void renderer.mount(container).then(() => {
           if (cancelled) {
             renderer.destroy();
             return;
           }
           rendererRef.current = renderer;
-          // Wire the renderer's resize hook to a re-render. The
-          // renderer's ResizeObserver calls this whenever the canvas
-          // container changes size (window resize, devtools open, etc.);
-          // we read the latest view from `latestRenderRef` so the
-          // callback never closes over stale state.
-          renderer.setOnRenderRequest(() => {
-            const r = rendererRef.current;
-            const args = latestRenderRef.current;
-            if (r && args) {
-              r.render(args);
-            }
-          });
           const initialArgs = replayViewToMatchView(currentView, {
             index,
             mySeat: focusSeat,
@@ -987,6 +990,25 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
           });
           latestRenderRef.current = initialArgs;
           renderer.render(initialArgs);
+          // First-paint kicker: on client-side navigation the
+          // canvas container can still have a zero-size box at
+          // the moment Pixi's `Application` materializes (the
+          // surrounding flex/grid hasn't fully laid out yet),
+          // which leaves the first `render` drawing into an
+          // empty viewport — the user sees a dark canvas until
+          // they reload. Schedule one more render on the next
+          // animation frame so we redraw against the post-layout
+          // screen dims; cheap and idempotent.
+          requestAnimationFrame(() => {
+            if (cancelled) {
+              return;
+            }
+            const r = rendererRef.current;
+            const args = latestRenderRef.current;
+            if (r && args) {
+              r.render(args);
+            }
+          });
         });
       }
     );
