@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, redirect, useSearchParams } from "react-router";
 import { requireGameEnabled } from "~/game/feature-gate";
 import { adapter } from "~/game/portal-adapter";
-import { TableRenderer } from "~/game/client/pixi/TableRenderer";
+import type { TableRenderer } from "~/game/client/pixi/TableRenderer";
 import {
   applyReplayEvent,
   initialView,
@@ -302,40 +302,50 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       return;
     }
     let cancelled = false;
-    const renderer = new TableRenderer();
-    void renderer.mount(container).then(() => {
-      if (cancelled) {
-        renderer.destroy();
-        return;
-      }
-      rendererRef.current = renderer;
-      // Wire the renderer's resize hook to a re-render. The
-      // renderer's ResizeObserver calls this whenever the canvas
-      // container changes size (window resize, devtools open, etc.);
-      // we read the latest view from `latestRenderRef` so the
-      // callback never closes over stale state.
-      renderer.setOnRenderRequest(() => {
-        const r = rendererRef.current;
-        const args = latestRenderRef.current;
-        if (r && args) {
-          r.render(args);
+    // Pixi.js touches `navigator` at module-eval time, so it must
+    // only load in the browser. Dynamic-import keeps it out of the
+    // SSR bundle.
+    void import("~/game/client/pixi/TableRenderer").then(
+      ({ TableRenderer }) => {
+        if (cancelled) {
+          return;
         }
-      });
-      const initialArgs = replayViewToMatchView(currentView, {
-        index,
-        mySeat: focusSeat,
-        matchId: log.sourceGameId,
-        seatNames: [
-          log.seats[0]?.displayName ?? "",
-          log.seats[1]?.displayName ?? "",
-          log.seats[2]?.displayName ?? "",
-          log.seats[3]?.displayName ?? "",
-        ],
-        currentWaits: waitsByIndex[index] ?? null,
-      });
-      latestRenderRef.current = initialArgs;
-      renderer.render(initialArgs);
-    });
+        const renderer = new TableRenderer();
+        void renderer.mount(container).then(() => {
+          if (cancelled) {
+            renderer.destroy();
+            return;
+          }
+          rendererRef.current = renderer;
+          // Wire the renderer's resize hook to a re-render. The
+          // renderer's ResizeObserver calls this whenever the canvas
+          // container changes size (window resize, devtools open, etc.);
+          // we read the latest view from `latestRenderRef` so the
+          // callback never closes over stale state.
+          renderer.setOnRenderRequest(() => {
+            const r = rendererRef.current;
+            const args = latestRenderRef.current;
+            if (r && args) {
+              r.render(args);
+            }
+          });
+          const initialArgs = replayViewToMatchView(currentView, {
+            index,
+            mySeat: focusSeat,
+            matchId: log.sourceGameId,
+            seatNames: [
+              log.seats[0]?.displayName ?? "",
+              log.seats[1]?.displayName ?? "",
+              log.seats[2]?.displayName ?? "",
+              log.seats[3]?.displayName ?? "",
+            ],
+            currentWaits: waitsByIndex[index] ?? null,
+          });
+          latestRenderRef.current = initialArgs;
+          renderer.render(initialArgs);
+        });
+      }
+    );
     return () => {
       cancelled = true;
       if (rendererRef.current) {

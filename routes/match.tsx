@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
-import { TableRenderer } from "~/game/client/pixi/TableRenderer";
+import type { TableRenderer } from "~/game/client/pixi/TableRenderer";
 import { useMatchStore } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
 import { takeMatchDebug } from "~/game/client/debugSeed";
@@ -110,46 +110,56 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
     // Reset store for this match; seat 0 = the user (slice convention).
     useMatchStore.getState().setMatch(matchId, 0);
 
-    const renderer = new TableRenderer();
-    void renderer.mount(container).then(() => {
-      if (cancelled) {
-        renderer.destroy();
-        return;
-      }
-      rendererRef.current = renderer;
-      renderer.setOnTileClick(({ tile }) => {
-        // Optimistic discard for own seat; the server confirmation
-        // (a `discard` event) will clear `pendingDiscard`.
-        const state = useMatchStore.getState();
-        if (state.mySeat === null) {
+    // Pixi.js touches `navigator` at module-eval time, so it must
+    // only load in the browser. Dynamic-import keeps it out of the
+    // SSR bundle.
+    void import("~/game/client/pixi/TableRenderer").then(
+      ({ TableRenderer }) => {
+        if (cancelled) {
           return;
         }
-        state.setPendingDiscard({ seat: state.mySeat, tile });
-        // Find the matching legal action and forward it.
-        const legal = state.legalActions.find(
-          (a) => a.type === "discard" && a.tile === tile
-        );
-        if (legal && wsRef.current) {
-          wsRef.current.act(legal.id);
-        }
-      });
-      renderer.setOnActionClick(({ action }) => {
-        // Generic dispatch for call / pass / ron / etc. buttons. The
-        // server validated these into `legalActions`, so we just echo
-        // the id back.
-        if (wsRef.current) {
-          wsRef.current.act(action.id);
-        }
-      });
-      renderer.setOnRenderRequest(() => {
-        // Renderer internal-state changes (e.g. riichi mode toggle)
-        // need an explicit re-render — store state hasn't changed,
-        // so the subscribe-driven loop won't fire.
-        renderer.render(useMatchStore.getState());
-      });
-      // Initial draw with whatever the store currently holds.
-      renderer.render(useMatchStore.getState());
-    });
+        const renderer = new TableRenderer();
+        void renderer.mount(container).then(() => {
+          if (cancelled) {
+            renderer.destroy();
+            return;
+          }
+          rendererRef.current = renderer;
+          renderer.setOnTileClick(({ tile }) => {
+            // Optimistic discard for own seat; the server confirmation
+            // (a `discard` event) will clear `pendingDiscard`.
+            const state = useMatchStore.getState();
+            if (state.mySeat === null) {
+              return;
+            }
+            state.setPendingDiscard({ seat: state.mySeat, tile });
+            // Find the matching legal action and forward it.
+            const legal = state.legalActions.find(
+              (a) => a.type === "discard" && a.tile === tile
+            );
+            if (legal && wsRef.current) {
+              wsRef.current.act(legal.id);
+            }
+          });
+          renderer.setOnActionClick(({ action }) => {
+            // Generic dispatch for call / pass / ron / etc. buttons. The
+            // server validated these into `legalActions`, so we just echo
+            // the id back.
+            if (wsRef.current) {
+              wsRef.current.act(action.id);
+            }
+          });
+          renderer.setOnRenderRequest(() => {
+            // Renderer internal-state changes (e.g. riichi mode toggle)
+            // need an explicit re-render — store state hasn't changed,
+            // so the subscribe-driven loop won't fire.
+            renderer.render(useMatchStore.getState());
+          });
+          // Initial draw with whatever the store currently holds.
+          renderer.render(useMatchStore.getState());
+        });
+      }
+    );
 
     // Fetch a session token + ws URL from the portal, then connect.
     void (async () => {
