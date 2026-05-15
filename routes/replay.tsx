@@ -191,9 +191,13 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
   //   ?event=N     absolute event index. When present it is
   //                authoritative for the playhead and `round`
   //                is purely informational.
-  // We keep the URL in sync via `setSearchParams({ replace })`
-  // so scrubbing doesn't pollute browser history.
-  const [searchParams, setSearchParams] = useSearchParams();
+  // We read these once at mount to seed the initial playhead /
+  // focus seat and then stop touching the URL. Syncing on every
+  // step was creating a history entry per click which inflated
+  // `history.length` and confused the browser back button. The
+  // Share button below rebuilds a fresh deeplink on demand from
+  // the current state, so users can still copy a precise URL.
+  const [searchParams] = useSearchParams();
 
   const clampSeat = (n: number): Seat => {
     if (n === 1 || n === 2 || n === 3) {
@@ -245,29 +249,6 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
   );
   const [focusSeat, setFocusSeat] = useState<Seat>(initial.seat);
   const [copied, setCopied] = useState<boolean>(false);
-
-  // Write `seat`, `round`, `event` back to the URL on every
-  // state change. `round` is derived (largest hand_start ≤
-  // index, 1-based) so it always matches the picker label.
-  useEffect(() => {
-    let roundOrdinal = 0;
-    for (let i = 0; i < rounds.length; i++) {
-      if (rounds[i] <= index) {
-        roundOrdinal = i + 1;
-      }
-    }
-    const next = new URLSearchParams(searchParams);
-    next.set("seat", String(focusSeat));
-    if (roundOrdinal > 0) {
-      next.set("round", String(roundOrdinal));
-    } else {
-      next.delete("round");
-    }
-    next.set("event", String(index));
-    if (next.toString() !== searchParams.toString()) {
-      setSearchParams(next, { replace: true });
-    }
-  }, [focusSeat, index, rounds, searchParams, setSearchParams]);
 
   // Incremental fold: we keep prefix views in a ref so a "next"
   // click is O(1) instead of O(index). Whole-fold path on seek.
@@ -527,13 +508,27 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
         <button
           type="button"
           onClick={() => {
-            // Copy the current canonical deeplink to the clipboard
-            // (defaults to the current URL — `seat`/`round`/`event`
-            // are kept in sync by the effect above). Falls back to
-            // a temporary textarea on browsers without the async
-            // clipboard API (e.g. http-only contexts).
-            const url =
-              typeof window !== "undefined" ? window.location.href : "";
+            // Build a fresh deeplink from the current state. We no
+            // longer keep the browser URL in sync with every step
+            // (see the seed-only `useSearchParams` read above), so
+            // we compute `seat` / `round` / `event` on click.
+            let roundOrdinal = 0;
+            for (let i = 0; i < rounds.length; i++) {
+              if (rounds[i] <= index) {
+                roundOrdinal = i + 1;
+              }
+            }
+            const params = new URLSearchParams();
+            params.set("seat", String(focusSeat));
+            if (roundOrdinal > 0) {
+              params.set("round", String(roundOrdinal));
+            }
+            params.set("event", String(index));
+            const base =
+              typeof window !== "undefined"
+                ? `${window.location.origin}${window.location.pathname}`
+                : "";
+            const url = `${base}?${params.toString()}`;
             const done = (): void => {
               setCopied(true);
               window.setTimeout(() => {
@@ -566,7 +561,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
           {copied ? "Copied" : "Share"}
         </button>
         <Link
-          to="/lobby"
+          to="/review"
           aria-label="Close replay"
           className="absolute top-2 right-2 z-30 h-8 min-w-[4rem] px-3 inline-flex items-center justify-center gap-1 rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-xs no-underline transition-colors"
           style={{ backgroundColor: "rgba(0, 0, 0, 0.7)" }}
