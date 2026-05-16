@@ -17,8 +17,8 @@ describe("buildAllTiles", () => {
     }
   });
 
-  it("substitutes one red five per suit when redFives is on", () => {
-    const tiles = buildAllTiles({ redFives: true });
+  it("substitutes red fives per suit according to the per-suit counts", () => {
+    const tiles = buildAllTiles({ redFives: { m: 1, p: 1, s: 1 } });
     expect(tiles).toHaveLength(136);
     expect(tiles.filter((t) => t === "0m")).toHaveLength(1);
     expect(tiles.filter((t) => t === "0p")).toHaveLength(1);
@@ -27,6 +27,17 @@ describe("buildAllTiles", () => {
     expect(tiles.filter((t) => t === "5m")).toHaveLength(3);
     expect(tiles.filter((t) => t === "5p")).toHaveLength(3);
     expect(tiles.filter((t) => t === "5s")).toHaveLength(3);
+  });
+
+  it("supports asymmetric per-suit red-five counts", () => {
+    const tiles = buildAllTiles({ redFives: { p: 2 } });
+    expect(tiles).toHaveLength(136);
+    expect(tiles.filter((t) => t === "0m")).toHaveLength(0);
+    expect(tiles.filter((t) => t === "0p")).toHaveLength(2);
+    expect(tiles.filter((t) => t === "0s")).toHaveLength(0);
+    expect(tiles.filter((t) => t === "5m")).toHaveLength(4);
+    expect(tiles.filter((t) => t === "5p")).toHaveLength(2);
+    expect(tiles.filter((t) => t === "5s")).toHaveLength(4);
   });
 });
 

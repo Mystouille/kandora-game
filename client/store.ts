@@ -181,6 +181,13 @@ export interface MatchView {
   riichiSticks: number;
   /** Per-seat: has this seat declared riichi this hand. */
   riichiDeclared: [boolean, boolean, boolean, boolean];
+  /** Per-seat: is this seat currently in furiten (any flavor —
+   * self-discard, riichi-permanent, or temporary missed ron).
+   * Mirrors the engine's `isFuritenForRon` predicate and is
+   * driven by `furiten` wire events. Drives the "Furiten"
+   * indicator on each seat's leftmost tile. Reset on
+   * `hand_start`. */
+  furiten: [boolean, boolean, boolean, boolean];
   /** Per-seat: index into `discards[seat]` of the riichi declaration
    * tile (null when not in riichi). Used to render the tilted tile. */
   riichiTileIdx: [number | null, number | null, number | null, number | null];
@@ -220,6 +227,12 @@ export interface MatchView {
     };
   };
   matchEnded: null | {
+    reason:
+      | "round_limit"
+      | "busted"
+      | "agari_yame"
+      | "tenpai_yame"
+      | "mangan_end";
     finalScores: Array<{ seat: Seat; score: number; place: number }>;
   };
   /**
@@ -314,6 +327,7 @@ const initialState: MatchView = {
   freshlyDrawnSeat: null,
   freshlyDiscardedSeat: null,
   readyCheck: null,
+  furiten: [false, false, false, false],
 };
 
 export const useMatchStore = create<MatchStore>((set) => ({
@@ -403,6 +417,14 @@ export const useMatchStore = create<MatchStore>((set) => ({
       matchEnded: null,
       freshlyDrawnSeat: null,
       freshlyDiscardedSeat: null,
+      // Furiten state: the snapshot carries the recipient's own
+      // status truthfully and `false` for the other three seats
+      // (opponent furiten is private). For back-compat with
+      // pre-furiten snapshots, fall back to all-false and rely on
+      // subsequent `furiten` events to repopulate the indicator.
+      furiten: (snap.furiten
+        ? [...snap.furiten]
+        : [false, false, false, false]) as [boolean, boolean, boolean, boolean],
     }));
   },
 
@@ -469,6 +491,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             matchEnded: null,
             freshlyDrawnSeat: null,
             freshlyDiscardedSeat: null,
+            furiten: [false, false, false, false],
           };
         }
         case "draw": {
@@ -752,8 +775,21 @@ export const useMatchStore = create<MatchStore>((set) => ({
         case "match_end": {
           return {
             ...next,
-            matchEnded: { finalScores: event.finalScores },
+            matchEnded: {
+              reason: event.reason,
+              finalScores: event.finalScores,
+            },
           };
+        }
+        case "furiten": {
+          const furiten = [...state.furiten] as [
+            boolean,
+            boolean,
+            boolean,
+            boolean,
+          ];
+          furiten[event.seat] = event.active;
+          return { ...next, furiten };
         }
         default: {
           // Exhaustiveness — Phase 1 will tighten as new event types land.

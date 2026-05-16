@@ -74,6 +74,12 @@ export interface ReplayView {
   honba: number;
   riichiSticks: number;
   riichiDeclared: [boolean, boolean, boolean, boolean];
+  /** Per-seat: is this seat currently in furiten (any flavor).
+   * Mirrors the engine's `isFuritenForRon` predicate and is
+   * driven by `furiten` archived events. Drives the "Furiten"
+   * indicator on each seat's leftmost tile. Reset on
+   * `hand_start`. */
+  furiten: [boolean, boolean, boolean, boolean];
   /** Per-seat: index into `discards[seat]` of the riichi declaration
    * tile (null when the seat hasn't declared). Used to render the
    * tilted tile. */
@@ -111,6 +117,12 @@ export interface ReplayView {
     };
   };
   matchEnded: null | {
+    reason:
+      | "round_limit"
+      | "busted"
+      | "agari_yame"
+      | "tenpai_yame"
+      | "mangan_end";
     finalScores: Array<{ seat: Seat; score: number; place: number }>;
   };
   /**
@@ -164,6 +176,7 @@ export function initialView(): ReplayView {
     matchEnded: null,
     freshlyDrawnSeat: null,
     freshlyDiscardedSeat: null,
+    furiten: [false, false, false, false],
   };
 }
 
@@ -223,6 +236,7 @@ export function applyReplayEvent(
         matchEnded: null,
         freshlyDrawnSeat: null,
         freshlyDiscardedSeat: null,
+        furiten: [false, false, false, false],
       };
     }
     case "draw": {
@@ -466,7 +480,18 @@ export function applyReplayEvent(
       };
     }
     case "match_end": {
-      return { ...view, matchEnded: { finalScores: event.finalScores } };
+      return {
+        ...view,
+        matchEnded: {
+          reason: event.reason,
+          finalScores: event.finalScores,
+        },
+      };
+    }
+    case "furiten": {
+      const furiten = [...view.furiten] as [boolean, boolean, boolean, boolean];
+      furiten[event.seat] = event.active;
+      return { ...view, furiten };
     }
     default: {
       return view;
@@ -580,6 +605,7 @@ export function replayViewToMatchView(
     currentWaits: opts.currentWaits ?? null,
     freshlyDrawnSeat: view.freshlyDrawnSeat,
     freshlyDiscardedSeat: view.freshlyDiscardedSeat,
+    furiten: view.furiten,
   };
   if (focus === 0) {
     return base;
@@ -649,6 +675,7 @@ function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     dealer: rot(mv.dealer),
     riichiDeclared: perm4(mv.riichiDeclared),
     riichiTileIdx: perm4(mv.riichiTileIdx),
+    furiten: perm4(mv.furiten),
     currentWaits: mv.currentWaits ? perm4(mv.currentWaits) : mv.currentWaits,
     lastHandResult: rotatedResult,
     freshlyDrawnSeat:

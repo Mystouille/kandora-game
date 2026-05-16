@@ -201,6 +201,7 @@ describe("replayReducer", () => {
       { type: "match_start", seats: [], ruleSet: "tenhou-default" },
       {
         type: "match_end",
+        reason: "round_limit",
         finalScores: [
           { seat: 0, score: 40000, place: 1 },
           { seat: 1, score: 30000, place: 2 },

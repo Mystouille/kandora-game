@@ -1,0 +1,30 @@
+{
+  "id": "tenhou-tonpuusen",
+  "displayName": "Tenhou — Tonpuusen",
+  "description": "Tenhou-default with East round only (4 hands). Otherwise identical to tenhou-hanchan.",
+  "roundWindCount": 1,
+  "roundLimit": 4,
+  "startingScore": 25000,
+  "nbRedFiveManzu": 1,
+  "nbRedFivePinzu": 1,
+  "nbRedFiveSouzu": 1,
+  "kuitan": true,
+  "doubleRiichi": true,
+  "renhou": false,
+  "ippatsu": true,
+  "uraDora": true,
+  "kanDora": true,
+  "instantlyRevealDoraForMinkan": true,
+  "instantlyRevealDoraForAnkan": true,
+  "nagashiMangan": true,
+  "aborts": {
+    "kyuushuu": true,
+    "suufonRenda": true,
+    "suuchaRiichi": true,
+    "sanchahou": true
+  },
+  "bustedScore": 0,
+  "agariYame": false,
+  "tenpaiYame": false,
+  "manganEnds": false
+}

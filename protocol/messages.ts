@@ -233,8 +233,28 @@ const NewDoraEvent = z.object({
   indicator: TileSchema,
 });
 
+/**
+ * Per-seat furiten transition. Emitted by the game-server whenever
+ * the engine's `isFuritenForRon(state, seat)` predicate flips
+ * value (set or unset) for any seat. Drives the UI's "Furiten"
+ * indicator without forcing the client to recompute waits /
+ * scoreHand probes itself.
+ */
+const FuritenEvent = z.object({
+  type: z.literal("furiten"),
+  seat: SeatSchema,
+  active: z.boolean(),
+});
+
 const MatchEndEvent = z.object({
   type: z.literal("match_end"),
+  reason: z.enum([
+    "round_limit",
+    "busted",
+    "agari_yame",
+    "tenpai_yame",
+    "mangan_end",
+  ]),
   finalScores: z.array(
     z.object({
       seat: SeatSchema,
@@ -254,6 +274,7 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   HandEndEvent,
   NewDoraEvent,
   MatchEndEvent,
+  FuritenEvent,
 ]);
 export type GameEvent = z.infer<typeof GameEventSchema>;
 
@@ -339,6 +360,12 @@ export const SnapshotStateSchema = z.object({
     .tuple([z.number().int().min(1).max(6), z.number().int().min(1).max(6)])
     .nullable()
     .optional(),
+  /** Per-seat furiten state at snapshot time. Only the recipient's
+   * own slot is truthful; opponent slots are always `false`
+   * because furiten is private (it leaks that an opponent passed
+   * on a ron-wait). Optional for back-compat with snapshots
+   * captured before this field existed. */
+  furiten: z.array(z.boolean()).length(4).optional(),
 });
 export type SnapshotState = z.infer<typeof SnapshotStateSchema>;
 

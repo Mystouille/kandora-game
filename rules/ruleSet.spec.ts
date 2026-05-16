@@ -103,6 +103,8 @@ describe("ruleSet — hanchan E→S progression", () => {
         delta: [8000, 0, 0, -8000],
         tenpai: null,
         abortKind: null,
+        winHan: 1,
+        winYakuman: false,
       },
     };
     const r = step(state, { type: "start_next_hand" });

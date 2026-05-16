@@ -23,8 +23,12 @@ import { createPRNG } from "./prng";
 import { SUITS, type Seat, type Tile } from "./types";
 
 export interface WallOptions {
-  /** Substitute one of each suit's "5" copies with a red five. */
-  redFives?: boolean;
+  /**
+   * Number of red-five substitutions per numbered suit (0–4).
+   * Each entry replaces that many of the four "5X" copies with a
+   * red five (`0X`). Omitted entries default to 0.
+   */
+  redFives?: { m?: number; p?: number; s?: number };
 }
 
 export interface DealtMatch {
@@ -40,11 +44,14 @@ export interface DealtMatch {
 
 export function buildAllTiles(opts: WallOptions = {}): Tile[] {
   const tiles: Tile[] = [];
+  const redCounts = opts.redFives ?? {};
   for (const suit of SUITS) {
+    const redCount = Math.max(0, Math.min(4, redCounts[suit] ?? 0));
     for (let n = 1; n <= 9; n++) {
       for (let copy = 0; copy < 4; copy++) {
-        // Replace one copy of "5" per suit with a red five when enabled.
-        const isRedSlot = opts.redFives && n === 5 && copy === 0;
+        // Replace the first `redCount` copies of "5" in this suit
+        // with a red five (`0X`).
+        const isRedSlot = n === 5 && copy < redCount;
         tiles.push(`${isRedSlot ? 0 : n}${suit}`);
       }
     }

@@ -75,6 +75,17 @@ export interface HandResult {
    * tsumo/ron/abort or when no seat qualifies.
    */
   nagashi?: [boolean, boolean, boolean, boolean] | null;
+  /**
+   * Han count of the winning hand (max across winners on multi-ron).
+   * `0` for yakuman wins — check `winYakuman` for that case.
+   * `null` for any non-win result (exhaustive draw / abort).
+   */
+  winHan: number | null;
+  /**
+   * True iff the winning hand scored as a yakuman (any multiple).
+   * `false` for non-yakuman wins; `null` for any non-win result.
+   */
+  winYakuman: boolean | null;
 }
 
 export interface MatchOptions {
@@ -144,6 +155,17 @@ export interface MatchState {
    */
   furitenLocked: [boolean, boolean, boolean, boolean];
   /**
+   * Per-seat temporary furiten flag — set when a non-riichi seat
+   * passes a ron opportunity, and cleared at that seat's next
+   * discard. Riichi seats use `furitenLocked` instead (permanent
+   * for the rest of the hand). Cleared at hand start.
+   *
+   * Enforced alongside `furitenLocked` and the on-demand self-
+   * discard check by `isFuritenForRon` (step.ts) and `pushRon`
+   * (calls.ts).
+   */
+  furitenTemp: [boolean, boolean, boolean, boolean];
+  /**
    * Pao (sekinin barai) responsibility for daisangen. Indexed by
    * the eventual winning seat: `paoDaisangen[winner] = payer` means
    * `payer` fed the completing third-dragon meld and is therefore
@@ -177,6 +199,20 @@ export interface MatchState {
    */
   uraDoraIndicators: Tile[];
   /**
+   * Kan-dora indicators captured at kan time but not yet revealed,
+   * because `ruleSet.instantlyRevealDoraForMinkan` or
+   * `instantlyRevealDoraForAnkan` is `false` for the kan that
+   * produced them. Drained on the declarer's next discard (which
+   * pushes them into `doraIndicators` and emits a `new_dora`
+   * event per entry). Always empty when both instant-reveal flags
+   * are on. Tiles are captured at kan time so the dora identity
+   * is fixed even if further kans shift the dead wall before the
+   * pending reveals are drained.
+   */
+  pendingKanDora: Tile[];
+  /** Ura-dora indicators paired with `pendingKanDora`, drained together. */
+  pendingKanUraDora: Tile[];
+  /**
    * Outcome of the most recently finished hand. Set when phase
    * transitions to `hand_ended`; cleared on the next hand start.
    */
@@ -191,7 +227,11 @@ export function createInitialState(
   const startingScore = ruleSet.startingScore;
   const roundLimit = ruleSet.roundLimit;
   const wallOpts: WallOptions = {
-    redFives: ruleSet.redFivesPerSuit > 0,
+    redFives: {
+      m: ruleSet.nbRedFiveManzu,
+      p: ruleSet.nbRedFivePinzu,
+      s: ruleSet.nbRedFiveSouzu,
+    },
     ...(opts.wall ?? {}),
   };
   const dealt: DealtMatch = dealMatch(seed, wallOpts);
@@ -225,8 +265,11 @@ export function createInitialState(
     melds: [[], [], [], []],
     pendingShouminkan: null,
     uraDoraIndicators: [dealt.deadWall[5]],
+    pendingKanDora: [],
+    pendingKanUraDora: [],
     lastHandResult: null,
     furitenLocked: [false, false, false, false],
+    furitenTemp: [false, false, false, false],
     paoDaisangen: [null, null, null, null],
     paoDaisuushii: [null, null, null, null],
   };

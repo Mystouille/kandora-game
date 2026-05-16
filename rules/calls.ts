@@ -14,6 +14,7 @@
  */
 
 import type { MatchState } from "./state";
+import { isAkaDisabled } from "./ruleSet";
 import { scoreHand } from "./score";
 import { isWinningShape } from "./shanten";
 import { seatWind } from "./step";
@@ -194,9 +195,11 @@ function pushRon(
   out: CallOption[]
 ): void {
   // Furiten check (mirrors `isFuritenForRon` in step.ts):
-  //   - permanent / missed-ron lock blocks all rons.
+  //   - permanent (riichi) missed-ron lock blocks all rons.
+  //   - temporary missed-ron lock blocks all rons until the seat's
+  //     next discard.
   //   - any wait tile sitting in own discards blocks all rons.
-  if (state.furitenLocked[seat]) {
+  if (state.furitenLocked[seat] || state.furitenTemp[seat]) {
     return;
   }
   // Fast shape gate: if `claimed` doesn't even complete the hand,
@@ -235,7 +238,7 @@ function pushRon(
         ippatsu: state.ippatsuEligible[seat],
         melds: state.melds[seat],
         noKuitan: !state.ruleSet.kuitan,
-        noAka: state.ruleSet.redFivesPerSuit === 0,
+        noAka: isAkaDisabled(state.ruleSet),
       });
       if (
         probeScore.isAgari &&
@@ -261,7 +264,7 @@ function pushRon(
     ippatsu: state.ippatsuEligible[seat],
     melds: state.melds[seat],
     noKuitan: !state.ruleSet.kuitan,
-    noAka: state.ruleSet.redFivesPerSuit === 0,
+    noAka: isAkaDisabled(state.ruleSet),
   });
   if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {
     out.push({ kind: "ron" });

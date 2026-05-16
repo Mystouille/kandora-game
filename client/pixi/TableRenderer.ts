@@ -2548,6 +2548,35 @@ export class TableRenderer {
     if (seat === 0) {
       handContainer.zIndex = 10;
     }
+
+    // Furiten indicator: red "Furiten" label with black contour
+    // overlaid on the top-right of the leftmost tile of the
+    // focused player's hand. Driven by the engine-derived
+    // `view.furiten[seat]` flag (set / unset via `furiten`
+    // wire events). Restricted to seat 0 (the focused hand at the
+    // bottom) so opponents' furiten state — which is private in
+    // live play — isn't surfaced visually even when the array
+    // happens to carry it.
+    if (seat === 0 && view.furiten[seat]) {
+      const label = new Text({
+        text: "Furiten",
+        style: new TextStyle({
+          fontFamily: "Inter, system-ui, sans-serif",
+          fontSize: 18,
+          fontWeight: "700",
+          fill: 0xff3030,
+          stroke: { color: 0x000000, width: 3 },
+        }),
+      });
+      // Anchor at the text's top-right; place that anchor at the
+      // top-right corner of tile 0 (with a 2 px inset so the
+      // glyphs sit comfortably inside the tile face). The label
+      // grows down and to the left from this pivot.
+      label.anchor.set(1, 0);
+      label.position.set(BIG_TILE_W - 2, 2);
+      handContainer.addChild(label);
+    }
+
     this.root.addChild(handContainer);
 
     // Open / declared melds for this seat. Anchored to the outer

@@ -7,11 +7,11 @@
  *     furiten for the rest of the hand. Implemented via the
  *     `furitenLocked` state field, set whenever the engine
  *     consumes `lastDiscard` (next draw or chi/pon/kan).
- *
- * Non-riichi temporary furiten (between missed ron and next own
- * discard) is not enforced as a permanent lock; the on-demand
- * self-discard check still catches the most common variant
- * once the ronnable tile sits in the player's own discards.
+ *   - **Temporary missed-ron furiten**: a non-riichi seat that
+ *     passes a winning discard is locked into furiten until
+ *     their own next discard. Implemented via `furitenTemp`,
+ *     set in `lockMissedRonFuriten` and cleared in the discard
+ *     handler.
  */
 
 import { describe, expect, it } from "vitest";
@@ -61,6 +61,7 @@ function craft(opts: {
     scores: [25000, 25000, 25000, 25000],
     lastHandResult: null,
     furitenLocked: [false, false, false, false],
+    furitenTemp: [false, false, false, false],
   };
 }
 
@@ -150,7 +151,10 @@ describe("furiten — riichi missed-ron lock", () => {
       riichiDeclared: [false, false, false, false],
     });
     const { state: next } = step(state, { type: "draw", seat: 2 });
+    // furitenLocked is reserved for riichi (permanent) seats.
     expect(next.furitenLocked).toEqual([false, false, false, false]);
+    // ...but seat 1 IS now temp-locked until their own next discard.
+    expect(next.furitenTemp[1]).toBe(true);
   });
 
   it("furitenLocked blocks future ron even on a fresh tile", () => {
@@ -204,5 +208,192 @@ describe("furiten — call paths preserve the lock", () => {
       tiles: ["9p", "9p"],
     });
     expect(next.furitenLocked[1]).toBe(true);
+  });
+});
+
+describe("furiten — temporary (non-riichi missed ron)", () => {
+  it("blocks ron on a fresh tile while temp-locked", () => {
+    // Seat 1 is not in riichi but had a wait on 7z (passed by
+    // seat 0 last go-around). They are temp-locked. Now seat 2
+    // discards 7z (a fresh copy not in seat 1's discards). The
+    // ron must still be rejected.
+    const concealed = tiles("11m22p33s44m55p66s");
+    const state: MatchState = {
+      ...craft({
+        hands: [
+          tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+          [...concealed, "7z"],
+          tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+          tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        ],
+        turn: 1,
+        phase: "awaiting_draw",
+        dealer: 0,
+        lastDiscard: { seat: 2, tile: "7z" },
+      }),
+      furitenTemp: [false, true, false, false],
+    };
+    const { state: next, events } = step(state, { type: "ron", seat: 1 });
+    expect(next.phase).toBe("awaiting_draw");
+    expect(events).toEqual([]);
+  });
+
+  it("temp lock is set on missed ron and cleared on own next discard", () => {
+    // Seat 1 (not in riichi) is tenpai on 7z. Seat 0 discards 7z;
+    // seat 1 passes. Next draw fires → seat 1 is temp-locked.
+    const concealed = tiles("11m22p33s44m55p66s");
+    const tenpai = [...concealed, "7z"] as Tile[];
+    const afterPass = craft({
+      hands: [
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tenpai,
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+      ],
+      turn: 2,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 0, tile: "7z" },
+      riichiDeclared: [false, false, false, false],
+    });
+    const { state: drawn } = step(afterPass, { type: "draw", seat: 2 });
+    expect(drawn.furitenTemp[1]).toBe(true);
+
+    // Play forward until seat 1 has their own discard. Each seat
+    // discards the freshly drawn 1m (tsumogiri).
+    const after2Discard = step(drawn, {
+      type: "discard",
+      seat: 2,
+      tile: drawn.lastDrawn[2] as Tile,
+    }).state;
+    const after3Draw = step(after2Discard, { type: "draw", seat: 3 }).state;
+    const after3Discard = step(after3Draw, {
+      type: "discard",
+      seat: 3,
+      tile: after3Draw.lastDrawn[3] as Tile,
+    }).state;
+    const after0Draw = step(after3Discard, { type: "draw", seat: 0 }).state;
+    const after0Discard = step(after0Draw, {
+      type: "discard",
+      seat: 0,
+      tile: after0Draw.lastDrawn[0] as Tile,
+    }).state;
+    const seat1Drawn = step(after0Discard, { type: "draw", seat: 1 }).state;
+    // Temp lock is still active up to (and during) seat 1's draw.
+    expect(seat1Drawn.furitenTemp[1]).toBe(true);
+    // Discard the freshly drawn tile (tsumogiri). Temp lock clears.
+    const seat1Discarded = step(seat1Drawn, {
+      type: "discard",
+      seat: 1,
+      tile: seat1Drawn.lastDrawn[1] as Tile,
+    }).state;
+    expect(seat1Discarded.furitenTemp[1]).toBe(false);
+  });
+
+  it("riichi seats use the permanent lock instead of the temp lock", () => {
+    // Same scenario as the temp-lock test but with riichi declared
+    // for seat 1 → `furitenLocked[1]` should be set, NOT
+    // `furitenTemp[1]`.
+    const concealed = tiles("11m22p33s44m55p66s");
+    const state = craft({
+      hands: [
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        [...concealed, "7z"],
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+      ],
+      turn: 2,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 0, tile: "7z" },
+      riichiDeclared: [false, true, false, false],
+    });
+    const { state: next } = step(state, { type: "draw", seat: 2 });
+    expect(next.furitenLocked[1]).toBe(true);
+    expect(next.furitenTemp[1]).toBe(false);
+  });
+});
+
+describe("furiten — step emits `furitenChanges` on transitions", () => {
+  it("emits an `active: true` change when a seat enters temp furiten", () => {
+    // Seat 1 (not in riichi) is tenpai on 7z. Seat 0 discards 7z;
+    // seat 1 passes; seat 2's `draw` step triggers
+    // `lockMissedRonFuriten`, flipping seat 1's furiten status.
+    const concealed = tiles("11m22p33s44m55p66s");
+    const tenpai = [...concealed, "7z"] as Tile[];
+    const afterPass = craft({
+      hands: [
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tenpai,
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+      ],
+      turn: 2,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 0, tile: "7z" },
+    });
+    const res = step(afterPass, { type: "draw", seat: 2 });
+    expect(res.furitenChanges).toEqual([{ seat: 1, active: true }]);
+  });
+
+  it("emits `active: false` when a seat clears temp furiten on own discard", () => {
+    // Drive the same fixture forward until seat 1 discards their
+    // tsumogiri tile, which clears `furitenTemp[1]`. The clearing
+    // step must surface a `furiten: { seat: 1, active: false }` change.
+    const concealed = tiles("11m22p33s44m55p66s");
+    const tenpai = [...concealed, "7z"] as Tile[];
+    const afterPass = craft({
+      hands: [
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tenpai,
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+      ],
+      turn: 2,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 0, tile: "7z" },
+    });
+    const s1 = step(afterPass, { type: "draw", seat: 2 }).state;
+    const s2 = step(s1, {
+      type: "discard",
+      seat: 2,
+      tile: s1.lastDrawn[2] as Tile,
+    }).state;
+    const s3 = step(s2, { type: "draw", seat: 3 }).state;
+    const s4 = step(s3, {
+      type: "discard",
+      seat: 3,
+      tile: s3.lastDrawn[3] as Tile,
+    }).state;
+    const s5 = step(s4, { type: "draw", seat: 0 }).state;
+    const s6 = step(s5, {
+      type: "discard",
+      seat: 0,
+      tile: s5.lastDrawn[0] as Tile,
+    }).state;
+    const s7 = step(s6, { type: "draw", seat: 1 }).state;
+    // Seat 1 is still in temp furiten through their own draw.
+    expect(s7.furitenTemp[1]).toBe(true);
+    // Discarding clears it AND the step exposes the transition.
+    const clearRes = step(s7, {
+      type: "discard",
+      seat: 1,
+      tile: s7.lastDrawn[1] as Tile,
+    });
+    expect(clearRes.state.furitenTemp[1]).toBe(false);
+    expect(clearRes.furitenChanges).toEqual([{ seat: 1, active: false }]);
+  });
+
+  it("omits `furitenChanges` when no seat's status flips", () => {
+    // Fresh deal: nobody is tenpai → a plain draw produces no
+    // furiten transitions. `furitenChanges` is left absent rather
+    // than set to an empty array (keeps the typical hot-path
+    // event-array assertions clean).
+    const state = createInitialState(1);
+    const res = step(state, { type: "draw", seat: state.turn });
+    expect(res.events).toHaveLength(1);
+    expect(res.furitenChanges).toBeUndefined();
   });
 });

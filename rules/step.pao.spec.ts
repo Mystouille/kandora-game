@@ -62,6 +62,7 @@ function craft(opts: {
     scores: [25000, 25000, 25000, 25000],
     lastHandResult: null,
     furitenLocked: [false, false, false, false],
+    furitenTemp: [false, false, false, false],
     paoDaisangen: opts.paoDaisangen ?? [null, null, null, null],
     paoDaisuushii: opts.paoDaisuushii ?? [null, null, null, null],
   };

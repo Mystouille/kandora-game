@@ -19,6 +19,8 @@ import type { Action } from "./actions";
 import { dealMatch } from "./wall";
 import type { HandResult, MatchState, Meld } from "./state";
 import { distributePayments } from "./payments";
+import { isAkaDisabled } from "./ruleSet";
+import { shouldEndMatch, type MatchEndReason } from "./matchEnd";
 import { scoreHand, type ScoreResult } from "./score";
 import { isWinningShape, waits } from "./shanten";
 import { isAnkanLegalDuringRiichi } from "./riichiKan";
@@ -66,15 +68,115 @@ export type EngineEvent =
     }
   | {
       type: "match_end";
+      reason: MatchEndReason;
       finalScores: [number, number, number, number];
     };
+
+/**
+ * Per-seat furiten transition caused by a single `step()` call.
+ * The engine emits one entry per seat whose
+ * `isFuritenForRon(state, seat)` predicate flipped value
+ * between the input and output states. Drives the UI's
+ * "Furiten" indicator without forcing the renderer to recompute
+ * the (relatively expensive) wait/scoreHand probes itself.
+ *
+ * Kept as a sibling field on `StepResult` rather than a member of
+ * the `EngineEvent` union so existing event-array assertions in
+ * the test suite stay stable.
+ */
+export type FuritenChange = { seat: Seat; active: boolean };
 
 export interface StepResult {
   state: MatchState;
   events: EngineEvent[];
+  /**
+   * Per-seat furiten transitions caused by this step (empty/absent
+   * when no seat's furiten status changed). Absent on rejected
+   * actions (`events.length === 0`).
+   */
+  furitenChanges?: FuritenChange[];
 }
 
 const WINDS: readonly Wind[] = ["E", "S", "W", "N"];
+
+/**
+ * Capture the next kan-dora indicator and either reveal it now
+ * (push to `doraIndicators` + emit `new_dora`) or defer it
+ * (push to `pendingKanDora` for drainage at the declarer's next
+ * discard). Mutates `next` in place and appends to `events`.
+ *
+ * The decision is driven by the per-kind rule-set flag:
+ *   - minkan (daiminkan / shouminkan) → `instantlyRevealDoraForMinkan`
+ *   - ankan                            → `instantlyRevealDoraForAnkan`
+ *
+ * Slot index uses `doraIndicators.length + pendingKanDora.length`
+ * so consecutive deferred kans pick correct successive indicators
+ * (the dead wall has shifted once per kan; the indicator tile is
+ * captured at kan time so its identity is stable even if more
+ * shifts happen before drainage). Caps the total reveals per
+ * hand at 5 (matching the immediate-reveal path).
+ *
+ * No-op when `ruleSet.kanDora` is false.
+ */
+function captureKanDora(
+  next: MatchState,
+  kind: "minkan" | "ankan",
+  events: EngineEvent[]
+): void {
+  if (!next.ruleSet.kanDora) {
+    return;
+  }
+  const totalRevealed = next.doraIndicators.length + next.pendingKanDora.length;
+  if (totalRevealed >= 5) {
+    return;
+  }
+  const nextIdx = 3 + totalRevealed * 2;
+  const indicator = next.deadWall[nextIdx];
+  if (indicator === undefined) {
+    return;
+  }
+  const uraIndicator = next.deadWall[nextIdx + 1];
+  const instant =
+    kind === "minkan"
+      ? next.ruleSet.instantlyRevealDoraForMinkan
+      : next.ruleSet.instantlyRevealDoraForAnkan;
+  if (instant) {
+    next.doraIndicators.push(indicator);
+    if (uraIndicator !== undefined) {
+      next.uraDoraIndicators.push(uraIndicator);
+    }
+    events.push({ type: "new_dora", indicator });
+  } else {
+    next.pendingKanDora.push(indicator);
+    if (uraIndicator !== undefined) {
+      next.pendingKanUraDora.push(uraIndicator);
+    }
+  }
+}
+
+/**
+ * Drain any pending (deferred) kan-dora reveals onto the
+ * `doraIndicators` array, emitting a `new_dora` event per entry.
+ * Called at the end of any discard-style step (regular discard,
+ * riichi discard) so deferred reveals from preceding kans become
+ * visible to scoring on the very next ron / draw cycle.
+ *
+ * No-op when the queue is empty.
+ */
+function drainPendingKanDora(next: MatchState, events: EngineEvent[]): void {
+  if (next.pendingKanDora.length === 0) {
+    return;
+  }
+  for (const indicator of next.pendingKanDora) {
+    next.doraIndicators.push(indicator);
+    events.push({ type: "new_dora", indicator });
+  }
+  for (const uraIndicator of next.pendingKanUraDora) {
+    next.uraDoraIndicators.push(uraIndicator);
+  }
+  next.pendingKanDora = [];
+  next.pendingKanUraDora = [];
+}
 
 function clone(state: MatchState): MatchState {
   return {
@@ -121,6 +223,8 @@ function clone(state: MatchState): MatchState {
       ? { ...state.pendingShouminkan }
       : null,
     uraDoraIndicators: [...state.uraDoraIndicators],
+    pendingKanDora: [...state.pendingKanDora],
+    pendingKanUraDora: [...state.pendingKanUraDora],
     lastHandResult: state.lastHandResult,
     furitenLocked: [...state.furitenLocked] as [
       boolean,
@@ -128,6 +232,7 @@ function clone(state: MatchState): MatchState {
       boolean,
       boolean,
     ],
+    furitenTemp: [...state.furitenTemp] as [boolean, boolean, boolean, boolean],
     paoDaisangen: [...state.paoDaisangen],
     paoDaisuushii: [...state.paoDaisuushii],
   };
@@ -251,8 +356,8 @@ function detectPao(next: MatchState, caller: Seat, feeder: Seat): void {
  *
  * Returns `true` if ron should be rejected.
  */
-function isFuritenForRon(state: MatchState, seat: Seat): boolean {
-  if (state.furitenLocked[seat]) {
+export function isFuritenForRon(state: MatchState, seat: Seat): boolean {
+  if (state.furitenLocked[seat] || state.furitenTemp[seat]) {
     return true;
   }
   if (state.discards[seat].length === 0) {
@@ -287,7 +392,7 @@ function isFuritenForRon(state: MatchState, seat: Seat): boolean {
       ippatsu: state.ippatsuEligible[seat],
       melds: state.melds[seat],
       noKuitan: !state.ruleSet.kuitan,
-      noAka: state.ruleSet.redFivesPerSuit === 0,
+      noAka: isAkaDisabled(state.ruleSet),
     });
     if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {
       return true;
@@ -297,34 +402,31 @@ function isFuritenForRon(state: MatchState, seat: Seat): boolean {
 }
 
 /**
- * Update `furitenLocked` for any seat that had a wait on the
+ * Update furiten state for any seat that had a wait on the
  * just-expired discard but did not ron. Called whenever
  * `lastDiscard` is consumed without a winning ron — i.e. the next
  * draw fires, or a chi/pon/kan call is taken.
  *
  * For every non-discarder seat whose `scoreHand` on `discardTile`
- * yields a valid agari, set `furitenLocked[seat] = true`. This
- * captures both "riichi seat passed" and "open-hand seat passed"
- * cases under a single rule (most rulesets agree: missing a ron in
- * any state locks you in furiten until your next discard, but in
- * riichi the lock is permanent — and since riichi seats can only
- * tsumogiri, the lock effectively persists for the rest of the
- * hand anyway).
+ * yields a valid agari (han ≥ 1 or yakuman):
+ *   - if the seat is in riichi → set `furitenLocked[seat] = true`
+ *     (permanent: cleared only at hand start);
+ *   - otherwise → set `furitenTemp[seat] = true` (temporary:
+ *     cleared at that seat's next discard).
+ *
+ * Together these cover the three furiten flavors:
+ *   1. Self-discard furiten — checked on demand in
+ *      `isFuritenForRon` by probing own discards.
+ *   2. Temporary missed-ron furiten — `furitenTemp`, set here,
+ *      cleared in the discard handler.
+ *   3. Riichi (permanent) missed-ron furiten — `furitenLocked`,
+ *      set here, persists for the hand.
  */
 function lockMissedRonFuriten(
   next: MatchState,
   discardTile: Tile,
   discarder: Seat
 ): void {
-  // Only riichi seats trigger the permanent furiten lock — they're
-  // the only ones for whom "missed a ron" is durable across the
-  // rest of the hand. Non-riichi seats use temporary furiten which
-  // is enforced via the on-demand self-discard check at ron time
-  // (and which clears at their next discard); skipping them here
-  // is both correct and keeps `step()` cheap on the hot draw path.
-  if (!next.riichiDeclared.some(Boolean)) {
-    return;
-  }
   for (let s = 0; s < 4; s++) {
     if (s === discarder) {
       continue;
@@ -332,7 +434,11 @@ function lockMissedRonFuriten(
     if (next.furitenLocked[s]) {
       continue;
     }
-    if (!next.riichiDeclared[s]) {
+    const isRiichi = next.riichiDeclared[s];
+    // Non-riichi seats that already have a temp lock don't need to
+    // be re-evaluated — the lock stays set until their next discard
+    // either way.
+    if (!isRiichi && next.furitenTemp[s]) {
       continue;
     }
     const seat = s as Seat;
@@ -344,6 +450,15 @@ function lockMissedRonFuriten(
     if (!isWinningShape(next.hands[seat], next.melds[seat], discardTile)) {
       continue;
     }
+    // Hand-length invariant gate: `scoreHand` requires
+    // `hand.length === 13 - 3 * melds.length`. The engine
+    // normally maintains this, but transient mid-call states
+    // (e.g. fixture setups for pon detection) can violate it.
+    // Skip those seats rather than throw — they couldn't legally
+    // win on this tile anyway.
+    if (next.hands[seat].length !== 13 - 3 * next.melds[seat].length) {
+      continue;
+    }
     const score = scoreHand({
       hand: next.hands[seat],
       winTile: discardTile,
@@ -351,18 +466,21 @@ function lockMissedRonFuriten(
       roundWind: next.roundWind,
       seatWind: seatWindFor(seat, next.dealer),
       doraIndicators: next.doraIndicators,
-      uraDoraIndicators: next.ruleSet.uraDora
-        ? next.uraDoraIndicators
-        : undefined,
-      riichi: true,
+      uraDoraIndicators:
+        next.ruleSet.uraDora && isRiichi ? next.uraDoraIndicators : undefined,
+      riichi: isRiichi,
       doubleRiichi: next.doubleRiichi[seat],
       ippatsu: next.ippatsuEligible[seat],
       melds: next.melds[seat],
       noKuitan: !next.ruleSet.kuitan,
-      noAka: next.ruleSet.redFivesPerSuit === 0,
+      noAka: isAkaDisabled(next.ruleSet),
     });
     if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {
-      next.furitenLocked[seat] = true;
+      if (isRiichi) {
+        next.furitenLocked[seat] = true;
+      } else {
+        next.furitenTemp[seat] = true;
+      }
     }
   }
 }
@@ -386,6 +504,8 @@ function endAbort(
     delta,
     tenpai: null,
     abortKind: kind,
+    winHan: null,
+    winYakuman: null,
   };
   return [{ type: "hand_end", reason: "abort", delta, abortKind: kind }];
 }
@@ -534,6 +654,8 @@ function applyWin(
     delta,
     tenpai: null,
     abortKind: null,
+    winHan: score.han,
+    winYakuman: score.isYakuman,
   };
   next.lastHandResult = result;
   next.phase = "hand_ended";
@@ -604,6 +726,8 @@ function applyMultiRon(
     delta: combined,
     tenpai: null,
     abortKind: null,
+    winHan: scores.reduce((m, s) => Math.max(m, s.han), 0),
+    winYakuman: scores.some((s) => s.isYakuman),
   };
   next.lastHandResult = result;
   next.phase = "hand_ended";
@@ -690,7 +814,42 @@ function nagashiPaymentDelta(
   return delta;
 }
 
+/**
+ * Snapshot per-seat furiten status using the same predicate the
+ * engine uses to gate ron — so the indicator the client renders is
+ * always consistent with the engine's "can this seat ron?" answer.
+ */
+function computeFuritenAll(
+  state: MatchState
+): [boolean, boolean, boolean, boolean] {
+  return [
+    isFuritenForRon(state, 0),
+    isFuritenForRon(state, 1),
+    isFuritenForRon(state, 2),
+    isFuritenForRon(state, 3),
+  ];
+}
+
 export function step(state: MatchState, action: Action): StepResult {
+  const before = computeFuritenAll(state);
+  const result = stepInternal(state, action);
+  if (result.events.length === 0) {
+    return result;
+  }
+  const after = computeFuritenAll(result.state);
+  const changes: FuritenChange[] = [];
+  for (let s = 0; s < 4; s++) {
+    if (before[s] !== after[s]) {
+      changes.push({ seat: s as Seat, active: after[s] });
+    }
+  }
+  if (changes.length > 0) {
+    result.furitenChanges = changes;
+  }
+  return result;
+}
+
+function stepInternal(state: MatchState, action: Action): StepResult {
   if (state.phase === "match_ended") {
     return noop(state);
   }
@@ -773,6 +932,8 @@ export function step(state: MatchState, action: Action): StepResult {
         tenpai,
         abortKind: null,
         nagashi: anyNagashi ? nagashi : null,
+        winHan: null,
+        winYakuman: null,
       };
       return {
         state: next,
@@ -830,6 +991,12 @@ export function step(state: MatchState, action: Action): StepResult {
     next.discards[action.seat].push(action.tile);
     next.lastDrawn[action.seat] = null;
     next.lastDiscard = { seat: action.seat, tile: action.tile };
+    // Temporary furiten lock clears on the seat's own next discard.
+    // Riichi (permanent) lock stays — but riichi seats are
+    // tsumogiri-only so the lock is durable in practice either way.
+    if (next.furitenTemp[action.seat]) {
+      next.furitenTemp[action.seat] = false;
+    }
     // Ippatsu lapses on the declarer's next discard. (Calls would
     // clear everyone's ippatsu in 5c; for now this is the only
     // path that clears it without a win.)
@@ -844,6 +1011,12 @@ export function step(state: MatchState, action: Action): StepResult {
       tile: action.tile,
       tsumogiri,
     };
+    const events: EngineEvent[] = [discardEvent];
+    // Deferred kan-dora reveals (from earlier kans this hand under
+    // `instantlyRevealDoraFor{Minkan,Ankan} = false`) become visible
+    // alongside the discard event so any ron on this discard is
+    // scored with the new dora active.
+    drainPendingKanDora(next, events);
     // Suufon renda: aborts the hand if all four seats' very first
     // discards are the same wind tile (1z–4z) and no calls have
     // been made. Triggered by the 4th seat's first discard.
@@ -858,13 +1031,14 @@ export function step(state: MatchState, action: Action): StepResult {
         const allSame = isWind && next.discards.every((d) => d[0] === first);
         if (allSame) {
           const abortEvents = endAbort(next, "suufon_renda");
-          return { state: next, events: [discardEvent, ...abortEvents] };
+          events.push(...abortEvents);
+          return { state: next, events };
         }
       }
     }
     return {
       state: next,
-      events: [discardEvent],
+      events,
     };
   }
 
@@ -935,6 +1109,11 @@ export function step(state: MatchState, action: Action): StepResult {
       tsumogiri,
       riichi: true,
     };
+    const events: EngineEvent[] = [discardEvent];
+    // Deferred kan-dora reveals drain on this discard too (riichi
+    // declarations are themselves a discard — same scoring
+    // semantics for any ron on the riichi tile).
+    drainPendingKanDora(next, events);
     // Suucha riichi: hand aborts when all four seats are in riichi.
     // Standard rule defers the abort until after the 4th declarer's
     // discard passes safely (no ron); since the engine doesn't yet
@@ -945,11 +1124,12 @@ export function step(state: MatchState, action: Action): StepResult {
       next.riichiDeclared.every((r) => r)
     ) {
       const abortEvents = endAbort(next, "suucha_riichi");
-      return { state: next, events: [discardEvent, ...abortEvents] };
+      events.push(...abortEvents);
+      return { state: next, events };
     }
     return {
       state: next,
-      events: [discardEvent],
+      events,
     };
   }
 
@@ -993,7 +1173,7 @@ export function step(state: MatchState, action: Action): StepResult {
       blessingOfHeavenOrEarth: isFirstUninterruptedGoAround(state, action.seat),
       melds: state.melds[action.seat],
       noKuitan: !state.ruleSet.kuitan,
-      noAka: state.ruleSet.redFivesPerSuit === 0,
+      noAka: isAkaDisabled(state.ruleSet),
     });
     if (!score.isAgari) {
       return noop(state);
@@ -1085,7 +1265,7 @@ export function step(state: MatchState, action: Action): StepResult {
           isFirstUninterruptedGoAround(state, w),
         melds: state.melds[w],
         noKuitan: !state.ruleSet.kuitan,
-        noAka: state.ruleSet.redFivesPerSuit === 0,
+        noAka: isAkaDisabled(state.ruleSet),
         rinshanOrChankan: isChankan,
       });
       if (!score.isAgari) {
@@ -1357,19 +1537,9 @@ export function step(state: MatchState, action: Action): StepResult {
       // New dora indicator: the dead-wall layout shifts when rinshan
       // is removed, so the dora index advances by one in the original
       // layout. Cap at 4 additional reveals. Skipped entirely when
-      // `ruleSet.kanDora` is off.
-      if (next.ruleSet.kanDora && next.doraIndicators.length < 5) {
-        const nextIdx = 3 + next.doraIndicators.length * 2;
-        const indicator = next.deadWall[nextIdx];
-        if (indicator !== undefined) {
-          next.doraIndicators.push(indicator);
-          const uraIndicator = next.deadWall[nextIdx + 1];
-          if (uraIndicator !== undefined) {
-            next.uraDoraIndicators.push(uraIndicator);
-          }
-          events.push({ type: "new_dora", indicator });
-        }
-      }
+      // `ruleSet.kanDora` is off, and deferred to the declarer's next
+      // discard when `ruleSet.instantlyRevealDoraForMinkan` is off.
+      captureKanDora(next, "minkan", events);
       next.turn = action.seat;
       next.phase = "awaiting_discard";
       return { state: next, events };
@@ -1441,18 +1611,7 @@ export function step(state: MatchState, action: Action): StepResult {
         wallRemaining: next.liveWall.length,
       },
     ];
-    if (next.ruleSet.kanDora && next.doraIndicators.length < 5) {
-      const nextIdx = 3 + next.doraIndicators.length * 2;
-      const indicator = next.deadWall[nextIdx];
-      if (indicator !== undefined) {
-        next.doraIndicators.push(indicator);
-        const uraIndicator = next.deadWall[nextIdx + 1];
-        if (uraIndicator !== undefined) {
-          next.uraDoraIndicators.push(uraIndicator);
-        }
-        events.push({ type: "new_dora", indicator });
-      }
-    }
+    captureKanDora(next, "ankan", events);
     // Phase stays awaiting_discard — the seat now holds 14-3*melds
     // tiles and must discard (or declare another kan / tsumo).
     return { state: next, events };
@@ -1539,18 +1698,7 @@ export function step(state: MatchState, action: Action): StepResult {
         wallRemaining: next.liveWall.length,
       },
     ];
-    if (next.ruleSet.kanDora && next.doraIndicators.length < 5) {
-      const nextIdx = 3 + next.doraIndicators.length * 2;
-      const indicator = next.deadWall[nextIdx];
-      if (indicator !== undefined) {
-        next.doraIndicators.push(indicator);
-        const uraIndicator = next.deadWall[nextIdx + 1];
-        if (uraIndicator !== undefined) {
-          next.uraDoraIndicators.push(uraIndicator);
-        }
-        events.push({ type: "new_dora", indicator });
-      }
-    }
+    captureKanDora(next, "minkan", events);
     return { state: next, events };
   }
 
@@ -1577,6 +1725,24 @@ export function step(state: MatchState, action: Action): StepResult {
           ? result.tenpai !== null && result.tenpai[state.dealer]
           : // Abortive draws: dealer always keeps; honba advances.
             result.reason === "abort";
+    // Centralized end-of-match check. Covers tobi/agari-yame/
+    // tenpai-yame/mangan-end (rule-flag driven) plus the
+    // round-limit cutoff. See `matchEnd.ts` for the decision logic.
+    const endDecision = shouldEndMatch(state, result, dealerKeeps);
+    if (endDecision.ended) {
+      const ended = clone(state);
+      ended.phase = "match_ended";
+      return {
+        state: ended,
+        events: [
+          {
+            type: "match_end",
+            reason: endDecision.reason,
+            finalScores: [...state.scores] as [number, number, number, number],
+          },
+        ],
+      };
+    }
     if (dealerKeeps) {
       honba += 1;
     } else {
@@ -1584,30 +1750,12 @@ export function step(state: MatchState, action: Action): StepResult {
       dealer = ((state.dealer + 1) % 4) as Seat;
       roundNumber += 1;
       if (roundNumber > state.roundLimit) {
-        // Round-wind progression (e.g. hanchan E→S). When the
-        // configured number of round winds is exhausted the match
-        // ends; otherwise we roll over to the next wind, reset the
-        // hand counter, and dealer goes back to seat 0.
+        // Round-wind progression (e.g. hanchan E→S). When we get
+        // here the round-limit branch in `shouldEndMatch` has
+        // already declined to end the match, so we always have a
+        // next wind to roll into.
         const currentWindIdx = WINDS.indexOf(state.roundWind);
         const nextWindIdx = currentWindIdx + 1;
-        if (nextWindIdx >= state.ruleSet.roundWindCount) {
-          const ended = clone(state);
-          ended.phase = "match_ended";
-          return {
-            state: ended,
-            events: [
-              {
-                type: "match_end",
-                finalScores: [...state.scores] as [
-                  number,
-                  number,
-                  number,
-                  number,
-                ],
-              },
-            ],
-          };
-        }
         roundWind = WINDS[nextWindIdx];
         roundNumber = 1;
         dealer = 0;
@@ -1618,7 +1766,11 @@ export function step(state: MatchState, action: Action): StepResult {
     const handSeed =
       (state.seed ^ (roundNumber * 1000003) ^ (honba * 7919)) >>> 0;
     const dealt = dealMatch(handSeed, {
-      redFives: state.ruleSet.redFivesPerSuit > 0,
+      redFives: {
+        m: state.ruleSet.nbRedFiveManzu,
+        p: state.ruleSet.nbRedFivePinzu,
+        s: state.ruleSet.nbRedFiveSouzu,
+      },
     });
     const next = clone(state);
     next.hands = dealt.hands.map((h) => [...h]);
@@ -1627,6 +1779,8 @@ export function step(state: MatchState, action: Action): StepResult {
     next.deadWall = [...dealt.deadWall];
     next.doraIndicators = [...dealt.doraIndicators];
     next.uraDoraIndicators = [dealt.deadWall[5]];
+    next.pendingKanDora = [];
+    next.pendingKanUraDora = [];
     next.lastDrawn = [null, null, null, null];
     next.lastDiscard = null;
     next.dealer = dealer;
@@ -1641,6 +1795,7 @@ export function step(state: MatchState, action: Action): StepResult {
     next.phase = "awaiting_draw";
     next.lastHandResult = null;
     next.furitenLocked = [false, false, false, false];
+    next.furitenTemp = [false, false, false, false];
     next.paoDaisangen = [null, null, null, null];
     next.paoDaisuushii = [null, null, null, null];
     return {
