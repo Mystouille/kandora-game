@@ -37,6 +37,35 @@ export function takeMatchDebug(matchId: string): MatchDebug {
   }
 }
 
+/**
+ * Per-tab "start this match automatically with bots" flag. The
+ * lobby's "Start solo match" button sets it before navigating to
+ * `/game/:matchId`; the match route consumes it on the first
+ * `room_state` and fires `startMatch()` immediately so the human
+ * doesn't have to click an extra button.
+ */
+const AUTOSTART_KEY = (matchId: string): string =>
+  `kandora-game-autostart:${matchId}`;
+
+export function saveAutoStart(matchId: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.setItem(AUTOSTART_KEY(matchId), "1");
+}
+
+export function takeAutoStart(matchId: string): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const v = window.sessionStorage.getItem(AUTOSTART_KEY(matchId));
+  if (v) {
+    window.sessionStorage.removeItem(AUTOSTART_KEY(matchId));
+    return true;
+  }
+  return false;
+}
+
 const TILE_RE = /^([0-9][mps]|[1-7]z)$/;
 
 /**

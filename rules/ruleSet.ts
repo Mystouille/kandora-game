@@ -92,6 +92,15 @@ export interface RuleSet {
     sanchahou: boolean;
   };
   /**
+   * Atamahane (head-bump): when `true`, only the seat closest
+   * counter-clockwise from the discarder may ron on a given
+   * discard — competing downstream rons are dropped (no
+   * double / triple ron). When `false` (default), every legal
+   * ron candidate wins simultaneously (multi-ron) and triple
+   * ron is governed by `aborts.sanchahou`.
+   */
+  atamahane: boolean;
+  /**
    * Match ends immediately at hand-end if any seat's score is at or
    * below this threshold ("tobi" / bankruptcy). `null` disables the
    * check. Tenhou-default is `0` (any seat ≤ 0 → match ends).

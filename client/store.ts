@@ -16,6 +16,7 @@ import type {
   GameEvent,
   LegalAction,
   Meld,
+  RoomState,
   Seat,
   SnapshotState,
   Tile,
@@ -211,7 +212,17 @@ export interface MatchView {
      * seats not in tenpai; absent when the source doesn't record
      * waits. Drives the renderer's `showWaits` overlay. */
     waits?: (Tile[] | null)[];
-    win?: {
+    /** Per-seat concealed hands at exhaustive draw (length 4),
+     * populated only for tenpai seats; `null` otherwise. */
+    tenpaiHands?: (Tile[] | null)[];
+    /**
+     * One entry per winner. For tsumo or single ron this is a
+     * one-element array; for multi-ron the engine emits one
+     * `win` event per winner and we append to this array so the
+     * result panel can display every winning hand. Empty / absent
+     * for exhaustive draws and aborts.
+     */
+    wins?: Array<{
       seat: Seat;
       loser?: Seat | null;
       winTile?: Tile;
@@ -224,7 +235,7 @@ export interface MatchView {
       melds?: Meld[];
       doraIndicators?: Tile[];
       uraDoraIndicators?: Tile[];
-    };
+    }>;
   };
   matchEnded: null | {
     reason:
@@ -271,11 +282,21 @@ export interface MatchView {
     deadline: number;
     acked: [boolean, boolean, boolean, boolean];
   } | null;
+
+  /**
+   * Latest `room_state` frame from the server, or `null` until
+   * one arrives. Drives the pre-match waiting-room UI: when
+   * `status === "waiting"` the match route shows the lobby
+   * panel instead of the Pixi canvas; once it flips to
+   * `"playing"` the canvas takes over. Updated on every
+   * membership / connection / status change.
+   */
+  roomState: RoomState | null;
 }
 
 interface MatchStore extends MatchView {
   setConn: (status: ConnStatus) => void;
-  setMatch: (matchId: string, mySeat: Seat) => void;
+  setMatch: (matchId: string, mySeat?: Seat | null) => void;
   applyEvent: (event: GameEvent, seq: number) => void;
   hydrateSnapshot: (state: SnapshotState, seq: number) => void;
   setLegalActions: (actions: LegalAction[]) => void;
@@ -285,6 +306,7 @@ interface MatchStore extends MatchView {
   setReadyCheck: (
     rc: { deadline: number; acked: [boolean, boolean, boolean, boolean] } | null
   ) => void;
+  setRoomState: (rs: RoomState | null) => void;
   reset: () => void;
 }
 
@@ -328,6 +350,7 @@ const initialState: MatchView = {
   freshlyDiscardedSeat: null,
   readyCheck: null,
   furiten: [false, false, false, false],
+  roomState: null,
 };
 
 export const useMatchStore = create<MatchStore>((set) => ({
@@ -337,7 +360,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
     set({ conn });
   },
 
-  setMatch: (matchId, mySeat) => {
+  setMatch: (matchId, mySeat = null) => {
     set({
       ...initialState,
       matchId,
@@ -366,6 +389,18 @@ export const useMatchStore = create<MatchStore>((set) => ({
 
   setReadyCheck: (readyCheck) => {
     set({ readyCheck });
+  },
+
+  setRoomState: (roomState) => {
+    // Adopting the server's seat assignment as soon as a
+    // `room_state` arrives lets the renderer compose itself
+    // correctly even before the first `snapshot` (which is what
+    // would otherwise set `mySeat`).
+    set((state) => ({
+      ...state,
+      roomState,
+      mySeat: roomState?.mySeat ?? state.mySeat,
+    }));
   },
 
   hydrateSnapshot: (snap, seq) => {
@@ -599,11 +634,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
         }
         case "win": {
           // Stash the win payload so the eventual `hand_end` can
-          // attach it to `lastHandResult`. Using a transient field
-          // on the next state would be awkward; instead we hold it
-          // inside the (possibly null) `lastHandResult.win` slot.
-          // If a `hand_end` arrived first (rare/unexpected ordering),
-          // fold the win into the existing payload.
+          // attach it to `lastHandResult`. For multi-ron the
+          // engine emits one `win` event per winner before the
+          // shared `hand_end`; we append each into `wins`.
+          // If a `hand_end` arrived first (rare/unexpected
+          // ordering), fold the win into the existing payload.
           const existing = state.lastHandResult;
           const win = {
             seat: event.seat,
@@ -623,10 +658,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
               ? [...event.uraDoraIndicators]
               : undefined,
           };
+          const wins = existing?.wins ? [...existing.wins, win] : [win];
           return {
             ...next,
             lastHandResult: existing
-              ? { ...existing, win }
+              ? { ...existing, wins }
               : {
                   // Derive the win reason from `loser`: a ron win
                   // names the discarder, a tsumo win has none. The
@@ -634,12 +670,12 @@ export const useMatchStore = create<MatchStore>((set) => ({
                   // authoritative reason, but until then we must
                   // not mislabel a ron as a tsumo.
                   reason: win.loser !== null ? "ron" : "tsumo",
-                  win,
+                  wins,
                 },
           };
         }
         case "hand_end": {
-          const existingWin = state.lastHandResult?.win;
+          const existingWins = state.lastHandResult?.wins;
           return {
             ...next,
             scores: (event.scores ?? state.scores) as [
@@ -660,7 +696,14 @@ export const useMatchStore = create<MatchStore>((set) => ({
               ...(event.riichiSticks !== undefined
                 ? { riichiSticks: event.riichiSticks }
                 : {}),
-              ...(existingWin ? { win: existingWin } : {}),
+              ...(event.tenpaiHands
+                ? {
+                    tenpaiHands: event.tenpaiHands.map((h) =>
+                      h ? [...h] : null
+                    ),
+                  }
+                : {}),
+              ...(existingWins ? { wins: existingWins } : {}),
             },
           };
         }

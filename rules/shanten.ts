@@ -341,8 +341,14 @@ export function solveHonors(counts: readonly number[]): SuitBest {
  *   - try the pair coming from each suit (or no pair),
  *   - sum melds + partials,
  *   - apply the standard formula.
+ *
+ * `meldCount` is the number of melds already declared outside the
+ * counts (ankan / pon / chi / daiminkan / shouminkan). Each
+ * declared meld pre-consumes one of the four meld slots, so
+ * `counts` is then a partial-hand decomposition targeting
+ * `4 - meldCount` more melds + 1 pair. `meldCount` must be in 0..4.
  */
-export function standardShanten(counts: HandCounts): number {
+export function standardShanten(counts: HandCounts, meldCount = 0): number {
   const blocks = [
     solveSuit(counts.m),
     solveSuit(counts.p),
@@ -354,7 +360,7 @@ export function standardShanten(counts: HandCounts): number {
 
   // No pair anywhere.
   const noPair = blocks.map((b) => b.noPair);
-  best = Math.min(best, scoreCombo(noPair, false));
+  best = Math.min(best, scoreCombo(noPair, false, meldCount));
 
   // Pair from suit i.
   for (let i = 0; i < 4; i++) {
@@ -364,20 +370,26 @@ export function standardShanten(counts: HandCounts): number {
     const combo = blocks.map((b, j) =>
       j === i ? blocks[i].withPair! : b.noPair
     );
-    best = Math.min(best, scoreCombo(combo, true));
+    best = Math.min(best, scoreCombo(combo, true, meldCount));
   }
   return best;
 }
 
 function scoreCombo(
   blocks: { melds: number; partials: number }[],
-  hasPair: boolean
+  hasPair: boolean,
+  meldCount = 0
 ): number {
-  let melds = 0;
+  let melds = meldCount;
   let partials = 0;
   for (const b of blocks) {
     melds += b.melds;
     partials += b.partials;
+  }
+  // Cap total melds at 4 (extra concealed melds beyond the budget
+  // give nothing — only happens when the algorithm over-fits.)
+  if (melds > 4) {
+    melds = 4;
   }
   // Cap melds + partials at 4 (Pareto already enforces per-block, but
   // crossings can push the total over).
@@ -449,11 +461,24 @@ export function kokushiShanten(counts: HandCounts): number {
  * already-built `HandCounts`. The function does not enforce a
  * particular tile count; callers can compute "what would my shanten
  * be if I drew this tile?" by appending and re-querying.
+ *
+ * `meldCount` is the number of melds already declared outside the
+ * input counts (ankan, pon, chi, daiminkan, shouminkan). Pass it
+ * for partial hands so the algorithm targets `4 - meldCount` more
+ * melds + 1 pair instead of the default `4 + 1`. Chiitoitsu and
+ * kokushi require a fully concealed hand and are skipped when
+ * `meldCount > 0`.
  */
-export function shanten(input: readonly Tile[] | HandCounts): number {
+export function shanten(
+  input: readonly Tile[] | HandCounts,
+  meldCount = 0
+): number {
   const counts = Array.isArray(input)
     ? countsFromTiles(input as readonly Tile[])
     : (input as HandCounts);
+  if (meldCount > 0) {
+    return standardShanten(counts, meldCount);
+  }
   return Math.min(
     standardShanten(counts),
     chiitoitsuShanten(counts),
@@ -465,8 +490,15 @@ export function shanten(input: readonly Tile[] | HandCounts): number {
  * Tiles whose addition would strictly reduce shanten — i.e. the
  * "ukeire" / acceptance set for the hand. Includes red-five-aware
  * iteration: only the canonical 5 is tested per suit.
+ *
+ * `meldCount` adjusts the target as in `shanten()` — pass the
+ * number of melds already declared so partial-hand acceptance
+ * computes correctly.
  */
-export function acceptanceTiles(input: readonly Tile[] | HandCounts): Tile[] {
+export function acceptanceTiles(
+  input: readonly Tile[] | HandCounts,
+  meldCount = 0
+): Tile[] {
   const counts = Array.isArray(input)
     ? countsFromTiles(input as readonly Tile[])
     : ({
@@ -475,7 +507,7 @@ export function acceptanceTiles(input: readonly Tile[] | HandCounts): Tile[] {
         s: [...(input as HandCounts).s],
         z: [...(input as HandCounts).z],
       } as HandCounts);
-  const baseline = shanten(counts);
+  const baseline = shanten(counts, meldCount);
   const out: Tile[] = [];
   const suits: Array<"m" | "p" | "s"> = ["m", "p", "s"];
   for (const suit of suits) {
@@ -484,7 +516,7 @@ export function acceptanceTiles(input: readonly Tile[] | HandCounts): Tile[] {
         continue;
       }
       counts[suit][i]++;
-      if (shanten(counts) < baseline) {
+      if (shanten(counts, meldCount) < baseline) {
         out.push(`${i + 1}${suit}`);
       }
       counts[suit][i]--;
@@ -495,7 +527,7 @@ export function acceptanceTiles(input: readonly Tile[] | HandCounts): Tile[] {
       continue;
     }
     counts.z[i]++;
-    if (shanten(counts) < baseline) {
+    if (shanten(counts, meldCount) < baseline) {
       out.push(`${i + 1}z`);
     }
     counts.z[i]--;
@@ -503,9 +535,13 @@ export function acceptanceTiles(input: readonly Tile[] | HandCounts): Tile[] {
   return out;
 }
 
-/** True iff the hand is tenpai (shanten === 0 with 13-tile hand). */
-export function isTenpai(input: readonly Tile[] | HandCounts): boolean {
-  return shanten(input) === 0;
+/** True iff the hand is tenpai (shanten === 0). `meldCount`
+ * adjusts for declared melds; see `shanten()`. */
+export function isTenpai(
+  input: readonly Tile[] | HandCounts,
+  meldCount = 0
+): boolean {
+  return shanten(input, meldCount) === 0;
 }
 
 /**
@@ -519,15 +555,22 @@ export function isTenpai(input: readonly Tile[] | HandCounts): boolean {
  * but every wait copy is locked in the hand itself. A non-empty
  * result is the canonical "is tenpai for riichi / tenpai-payment
  * purposes" predicate.
+ *
+ * `meldCount` adjusts for declared melds (ankan / pon / chi /
+ * daiminkan / shouminkan); see `shanten()`. Pass it for partial
+ * hands so the algorithm targets `4 - meldCount` more melds.
  */
-export function waits(input: readonly Tile[] | HandCounts): Tile[] {
+export function waits(
+  input: readonly Tile[] | HandCounts,
+  meldCount = 0
+): Tile[] {
   const counts = Array.isArray(input)
     ? countsFromTiles(input as readonly Tile[])
     : (input as HandCounts);
-  if (shanten(counts) !== 0) {
+  if (shanten(counts, meldCount) !== 0) {
     return [];
   }
-  return acceptanceTiles(counts);
+  return acceptanceTiles(counts, meldCount);
 }
 
 // ---------------------------------------------------------------------------

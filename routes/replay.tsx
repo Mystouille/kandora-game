@@ -1099,6 +1099,11 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       rendererRef.current.setShowWalls(overlays.showWalls);
       rendererRef.current.setShowNames(overlays.showNames);
       rendererRef.current.setShowHandResult(handResultVisible);
+      rendererRef.current.setCenterLabels({
+        repeat: t.match.centerRepeat,
+        riichi: t.match.centerRiichi,
+        tiles: t.match.centerTiles,
+      });
       const args = replayViewToMatchView(currentView, {
         index,
         mySeat: focusSeat,
@@ -1127,6 +1132,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
     overlays.showWalls,
     overlays.showNames,
     handResultVisible,
+    t,
   ]);
 
   const clamp = (n: number): number =>

@@ -101,7 +101,12 @@ export interface ReplayView {
      * record waits. Drives the `showWaits` overlay in the
      * renderer. */
     waits?: (Tile[] | null)[];
-    win?: {
+    /** Per-seat concealed hands at exhaustive draw, populated
+     * only for tenpai seats; `null` otherwise. */
+    tenpaiHands?: (Tile[] | null)[];
+    /** One entry per winner (multi-ron emits one `win` per
+     * winner before the shared `hand_end`). */
+    wins?: Array<{
       seat: Seat;
       loser?: Seat | null;
       winTile?: Tile;
@@ -114,7 +119,7 @@ export interface ReplayView {
       melds?: Meld[];
       doraIndicators?: Tile[];
       uraDoraIndicators?: Tile[];
-    };
+    }>;
   };
   matchEnded: null | {
     reason:
@@ -417,6 +422,33 @@ export function applyReplayEvent(
     }
     case "win": {
       const existing = view.lastHandResult;
+      // Replay adapters don't all populate `hand` on the win
+      // event (Riichi City, for example, omits it). Replays
+      // always have full hand visibility, so fall back to the
+      // current projected hand and — for ron — append the
+      // winning tile so the panel and seat reveal both render
+      // the complete 14-tile winning structure.
+      const derivedHand: Tile[] | undefined = (() => {
+        if (event.hand) {
+          return [...event.hand];
+        }
+        const live = view.hands[event.seat] ?? [];
+        const revealed = live.filter((t): t is Tile => t !== null);
+        if (revealed.length === 0) {
+          return undefined;
+        }
+        if (
+          event.loser != null &&
+          event.winTile &&
+          !revealed.includes(event.winTile)
+        ) {
+          return [...revealed, event.winTile];
+        }
+        return revealed;
+      })();
+      const derivedMelds =
+        event.melds?.map((m) => ({ ...m })) ??
+        (view.melds[event.seat]?.map((m) => ({ ...m })) || undefined);
       const win = {
         seat: event.seat,
         loser: event.loser ?? null,
@@ -426,8 +458,8 @@ export function applyReplayEvent(
         ten: event.ten,
         yakumanCount: event.yakumanCount,
         yaku: event.yaku,
-        hand: event.hand ? [...event.hand] : undefined,
-        melds: event.melds ? event.melds.map((m) => ({ ...m })) : undefined,
+        hand: derivedHand,
+        melds: derivedMelds,
         doraIndicators: event.doraIndicators
           ? [...event.doraIndicators]
           : undefined,
@@ -438,20 +470,42 @@ export function applyReplayEvent(
       return {
         ...view,
         lastHandResult: existing
-          ? { ...existing, win }
+          ? {
+              ...existing,
+              wins: existing.wins ? [...existing.wins, win] : [win],
+            }
           : {
               // The `win` event may arrive before its matching
               // `hand_end` (Majsoul/Tenhou/Riichi-City all emit
               // both). Derive the reason from `loser`: a ron win
               // names the discarder, a tsumo win has none.
               reason: win.loser !== null ? "ron" : "tsumo",
-              win,
+              wins: [win],
             },
       };
     }
     case "hand_end": {
-      const existingWin = view.lastHandResult?.win;
+      const existingWins = view.lastHandResult?.wins;
       const eventWaits = event.waits;
+      // Replay adapters (Majsoul / Tenhou / Riichi City) don't
+      // populate `tenpaiHands` on `hand_end` the way the live
+      // server does, but replays always have full hand
+      // visibility — derive the field from the current projected
+      // hands at exhaustive draw so the result panel + seat
+      // reveal can show each tenpai player's wait.
+      const derivedTenpaiHands: (Tile[] | null)[] | undefined =
+        event.tenpaiHands
+          ? event.tenpaiHands.map((h) => (h ? [...h] : null))
+          : event.reason === "exhaustive_draw" && event.tenpai
+            ? event.tenpai.map((isTenpai, s) => {
+                if (!isTenpai) {
+                  return null;
+                }
+                const hand = view.hands[s] ?? [];
+                const revealed = hand.filter((t): t is Tile => t !== null);
+                return revealed.length > 0 ? revealed : null;
+              })
+            : undefined;
       return {
         ...view,
         scores: (event.scores ?? view.scores) as [
@@ -475,7 +529,8 @@ export function applyReplayEvent(
           ...(eventWaits
             ? { waits: eventWaits.map((w) => (w ? [...w] : null)) }
             : {}),
-          ...(existingWin ? { win: existingWin } : {}),
+          ...(derivedTenpaiHands ? { tenpaiHands: derivedTenpaiHands } : {}),
+          ...(existingWins ? { wins: existingWins } : {}),
         },
       };
     }
@@ -606,6 +661,8 @@ export function replayViewToMatchView(
     freshlyDrawnSeat: view.freshlyDrawnSeat,
     freshlyDiscardedSeat: view.freshlyDiscardedSeat,
     furiten: view.furiten,
+    // Replays never enter a live waiting room.
+    roomState: null,
   };
   if (focus === 0) {
     return base;
@@ -623,7 +680,7 @@ export function replayViewToMatchView(
  * to rotate the entire viewport (hands, discards, walls, melds,
  * riichi sticks, scores, dealer marker, break-point dice landing).
  */
-function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
+export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
   const rot = (s: Seat): Seat => ((s - focus + 4) % 4) as Seat;
   const perm4 = <T>(arr: readonly T[]): [T, T, T, T] => [
     arr[(0 + focus) % 4],
@@ -640,16 +697,16 @@ function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
         nagashi: result.nagashi ? perm4(result.nagashi) : result.nagashi,
         scores: result.scores ? perm4(result.scores) : result.scores,
         waits: result.waits ? perm4(result.waits) : result.waits,
-        win: result.win
-          ? {
-              ...result.win,
-              seat: rot(result.win.seat),
-              loser:
-                result.win.loser != null
-                  ? rot(result.win.loser)
-                  : result.win.loser,
-            }
-          : result.win,
+        tenpaiHands: result.tenpaiHands
+          ? perm4(result.tenpaiHands)
+          : result.tenpaiHands,
+        wins: result.wins
+          ? result.wins.map((w) => ({
+              ...w,
+              seat: rot(w.seat),
+              loser: w.loser != null ? rot(w.loser) : w.loser,
+            }))
+          : result.wins,
       }
     : result;
   return {
@@ -682,6 +739,9 @@ function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
       mv.freshlyDrawnSeat != null ? rot(mv.freshlyDrawnSeat) : null,
     freshlyDiscardedSeat:
       mv.freshlyDiscardedSeat != null ? rot(mv.freshlyDiscardedSeat) : null,
+    pendingDiscard: mv.pendingDiscard
+      ? { ...mv.pendingDiscard, seat: rot(mv.pendingDiscard.seat) }
+      : mv.pendingDiscard,
     matchEnded: mv.matchEnded
       ? {
           ...mv.matchEnded,

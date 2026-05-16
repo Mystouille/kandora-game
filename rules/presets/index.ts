@@ -115,6 +115,7 @@ function validatePreset(raw: unknown): RuleSetPreset {
     "instantlyRevealDoraForMinkan",
     "instantlyRevealDoraForAnkan",
     "nagashiMangan",
+    "atamahane",
   ] as const) {
     expectBoolean(obj, key, ctx);
   }

@@ -27,7 +27,19 @@ import { isAnkanLegalDuringRiichi } from "./riichiKan";
 import { type Seat, type Tile, type Wind } from "./types";
 
 export type EngineEvent =
-  | { type: "draw"; seat: Seat; tile: Tile; wallRemaining: number }
+  | {
+      type: "draw";
+      seat: Seat;
+      tile: Tile;
+      wallRemaining: number;
+      /** True when this draw is a rinshan replacement (the tile
+       * came off the dead wall rather than the live wall). The
+       * live wall count is unchanged for rinshan draws. Consumed
+       * by the server to populate the wire event's same-named
+       * field, which drives the client's dead-wall depletion
+       * rendering. */
+      fromDeadWall?: boolean;
+    }
   | {
       type: "discard";
       seat: Seat;
@@ -361,6 +373,17 @@ export function isFuritenForRon(state: MatchState, seat: Seat): boolean {
     return true;
   }
   if (state.discards[seat].length === 0) {
+    return false;
+  }
+  // Hand-length invariant gate: `scoreHand` requires
+  // `hand.length === 13 - 3 * melds.length`. The predicate is
+  // meaningful only for waiting-to-ron hands (no drawn tile in
+  // hand); the active seat mid-turn holds 14 tiles and would
+  // otherwise blow up the probe below. `computeFuritenAll`
+  // snapshots every seat on every step, so this guard is
+  // necessary — not optional. The seat's furiten status doesn't
+  // change just because they're holding their own draw.
+  if (state.hands[seat].length !== 13 - 3 * state.melds[seat].length) {
     return false;
   }
   const seen = new Set<string>();
@@ -866,7 +889,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       // counted tenpai (they had to clear the same `waits()`
       // check at declaration time).
       const isTenpai = (s: Seat): boolean =>
-        state.riichiDeclared[s] || waits(state.hands[s]).length > 0;
+        state.riichiDeclared[s] ||
+        waits(state.hands[s], state.melds[s].length).length > 0;
       const tenpai: [boolean, boolean, boolean, boolean] = [
         isTenpai(0),
         isTenpai(1),
@@ -1073,10 +1097,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // `waits(hand)` returns `[]` when no tile completes the hand
     // (including the kara-ten case where all four wait copies are
     // already in the seat's own hand), so the declaration is
-    // rejected in that case.
+    // rejected in that case. `meldCount` adjusts the target for
+    // any concealed kans already declared (ankan during prior
+    // turns / earlier this turn via rinshan).
     const after = [...state.hands[action.seat]];
     after.splice(idx, 1);
-    if (waits(after).length === 0) {
+    if (waits(after, state.melds[action.seat].length).length === 0) {
       return noop(state);
     }
     const next = clone(state);
@@ -1532,6 +1558,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           seat: action.seat,
           tile: rinshan,
           wallRemaining: next.liveWall.length,
+          fromDeadWall: true,
         },
       ];
       // New dora indicator: the dead-wall layout shifts when rinshan
@@ -1582,7 +1609,13 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         return noop(state);
       }
       fullHand.splice(drawIdx, 1);
-      if (!isAnkanLegalDuringRiichi(fullHand, action.tile)) {
+      if (
+        !isAnkanLegalDuringRiichi(
+          fullHand,
+          action.tile,
+          state.melds[action.seat].length
+        )
+      ) {
         return noop(state);
       }
     }
@@ -1609,6 +1642,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         seat: action.seat,
         tile: rinshan,
         wallRemaining: next.liveWall.length,
+        fromDeadWall: true,
       },
     ];
     captureKanDora(next, "ankan", events);
@@ -1696,6 +1730,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         seat: declarer,
         tile: rinshan,
         wallRemaining: next.liveWall.length,
+        fromDeadWall: true,
       },
     ];
     captureKanDora(next, "minkan", events);

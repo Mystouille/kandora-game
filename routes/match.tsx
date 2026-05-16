@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { EyeOutlined } from "@ant-design/icons";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
 import type { TableRenderer } from "~/game/client/pixi/TableRenderer";
 import { useMatchStore, type MatchView } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
-import { takeMatchDebug } from "~/game/client/debugSeed";
+import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
+import { rotateMatchView } from "~/game/replay/player";
+import type { RoomState } from "~/game/protocol/messages";
+import { useLocale } from "~/contexts/LocaleContext";
 import type { Route } from "./+types/match";
 
 /**
@@ -103,6 +106,7 @@ function ReadyCheckOverlay({
   readyCheck,
   mySeat,
   seatNames,
+  resultPanelBounds,
   onReady,
 }: {
   readyCheck: {
@@ -111,6 +115,7 @@ function ReadyCheckOverlay({
   } | null;
   mySeat: number | null;
   seatNames: [string, string, string, string] | null;
+  resultPanelBounds: { x: number; y: number; w: number; h: number } | null;
   onReady: () => void;
 }) {
   const [remainingMs, setRemainingMs] = useState<number>(() =>
@@ -165,6 +170,46 @@ function ReadyCheckOverlay({
   const seconds = Math.ceil(remainingMs / 1000);
   const humanAcked = readyCheck.acked[mySeat as 0 | 1 | 2 | 3];
 
+  // Compact variant: when the renderer is showing a hand-result
+  // panel (post-hand ready check), pin the OK button + countdown
+  // Compact variant: when the renderer is showing a hand-result
+  // panel (post-hand ready check), pin the OK button + countdown
+  // to the bottom-right corner of that panel. We stop event
+  // propagation so the parent container's press-to-hide handler
+  // doesn't swallow the click.
+  if (resultPanelBounds) {
+    return (
+      <div
+        className="pointer-events-auto absolute z-[100] flex items-center gap-3 rounded-lg border border-emerald-500/60 bg-black/85 px-4 py-2 shadow-2xl"
+        style={{
+          left: resultPanelBounds.x + resultPanelBounds.w - 8,
+          top: resultPanelBounds.y + resultPanelBounds.h - 8,
+          transform: "translate(-100%, -100%)",
+        }}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+        }}
+        onTouchStart={(e) => {
+          e.stopPropagation();
+        }}
+      >
+        <button
+          type="button"
+          disabled={humanAcked}
+          onClick={() => {
+            if (!humanAcked) {
+              onReady();
+            }
+          }}
+          className="rounded bg-emerald-500 px-4 py-1.5 text-base font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
+        >
+          {humanAcked ? "READY" : "OK"}
+        </button>
+        <div className="font-mono text-base text-emerald-200">{seconds}s</div>
+      </div>
+    );
+  }
+
   const seatLabel = (seat: 0 | 1 | 2 | 3) => (
     <span
       className={
@@ -216,11 +261,13 @@ function ReadyCheckOverlay({
 
 export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
   const { matchId } = loaderData;
+  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<TableRenderer | null>(null);
   const wsRef = useRef<GameWS | null>(null);
 
   const view = useMatchStore();
+  const { t } = useLocale();
 
   // Eye-button state: after the hand-result auto-advance clears
   // `view.lastHandResult`, we keep the most recent result around
@@ -246,6 +293,16 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
   const [pondCenter, setPondCenter] = useState<{ x: number; y: number } | null>(
     null
   );
+
+  // Canvas-pixel rect of the currently-visible result panel,
+  // published by the renderer. Used to anchor the post-hand
+  // ready-check OK button to the bottom-right of the win panel.
+  const [resultPanelBounds, setResultPanelBounds] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
 
   // Stash the active hand result the moment it arrives — keeps a
   // copy that survives the next `hand_start` clearing the store.
@@ -294,6 +351,26 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
 
   useMatchPageEffects();
 
+  // Auto-start: the lobby's "Start solo match" button sets a
+  // per-tab flag so the match route fires `startMatch()` as soon
+  // as the first `room_state` arrives — no extra click needed.
+  // The flag is one-shot: consumed on the first observation, so a
+  // reconnect into a "playing" room won't re-fire it.
+  const autoStartArmedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (autoStartArmedRef.current === null) {
+      autoStartArmedRef.current = takeAutoStart(matchId);
+    }
+    if (
+      autoStartArmedRef.current &&
+      view.roomState?.status === "waiting" &&
+      wsRef.current
+    ) {
+      autoStartArmedRef.current = false;
+      wsRef.current.startMatch();
+    }
+  }, [matchId, view.roomState]);
+
   // Mount Pixi + WS once, tear down on unmount.
   useEffect(() => {
     const container = containerRef.current;
@@ -302,8 +379,9 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
     }
     let cancelled = false;
 
-    // Reset store for this match; seat 0 = the user (slice convention).
-    useMatchStore.getState().setMatch(matchId, 0);
+    // Reset store for this match; mySeat is unknown until the
+    // server's first `room_state` / `snapshot` arrives.
+    useMatchStore.getState().setMatch(matchId);
 
     // Sound bindings subscribe to the store's game-event bus. Scoped
     // to the match-route lifecycle so SFX only fire while a match
@@ -327,6 +405,9 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           rendererRef.current = renderer;
           renderer.setPondCenterListener((pt) => {
             setPondCenter(pt);
+          });
+          renderer.setResultPanelBoundsListener((rect) => {
+            setResultPanelBounds(rect);
           });
           renderer.setOnTileClick(({ tile }) => {
             // Optimistic discard for own seat; the server confirmation
@@ -356,10 +437,20 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
             // Renderer internal-state changes (e.g. riichi mode toggle)
             // need an explicit re-render — store state hasn't changed,
             // so the subscribe-driven loop won't fire.
-            renderer.render(useMatchStore.getState());
+            const v = useMatchStore.getState();
+            renderer.render(
+              v.mySeat != null && v.mySeat !== 0
+                ? rotateMatchView(v, v.mySeat)
+                : v
+            );
           });
           // Initial draw with whatever the store currently holds.
-          renderer.render(useMatchStore.getState());
+          const v0 = useMatchStore.getState();
+          renderer.render(
+            v0.mySeat != null && v0.mySeat !== 0
+              ? rotateMatchView(v0, v0.mySeat)
+              : v0
+          );
         });
       }
     );
@@ -483,9 +574,22 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
       rendererRef.current.setHandResultOverride(
         eyeHeld && !view.lastHandResult ? stashedResult : null
       );
-      rendererRef.current.render(view);
+      rendererRef.current.setCenterLabels({
+        repeat: t.match.centerRepeat,
+        riichi: t.match.centerRiichi,
+        tiles: t.match.centerTiles,
+      });
+      // The Pixi renderer is seat-relative — it always paints
+      // seat 0 at the bottom. Rotate the live view so the
+      // human's actual seat lands there (replays already do the
+      // same in their projector).
+      const rendered =
+        view.mySeat != null && view.mySeat !== 0
+          ? rotateMatchView(view, view.mySeat)
+          : view;
+      rendererRef.current.render(rendered);
     }
-  }, [view, eyeHeld, livePressed, stashedResult]);
+  }, [view, eyeHeld, livePressed, stashedResult, t]);
 
   // Global mouseup / touchend so the press-to-hide gesture
   // releases even if the cursor leaves the canvas mid-press.
@@ -613,10 +717,165 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           readyCheck={view.readyCheck}
           mySeat={view.mySeat}
           seatNames={view.seatNames}
+          resultPanelBounds={view.lastHandResult ? resultPanelBounds : null}
           onReady={() => {
             wsRef.current?.ready();
           }}
         />
+        <WaitingRoomOverlay
+          matchId={matchId}
+          roomState={view.roomState}
+          onStart={() => {
+            wsRef.current?.startMatch();
+          }}
+          onLeave={() => {
+            // Tell the server to release the seat, then bounce back
+            // to the lobby. `releaseSeat` nulls our socket before
+            // broadcasting the new room_state, so we'd never see
+            // the update anyway — navigating away closes the
+            // socket and unmounts the route cleanly.
+            wsRef.current?.leaveSeat();
+            void navigate("/lobby");
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pre-match waiting-room overlay. Shown while the server reports
+ * `status === "waiting"`. Lists the four seats with their current
+ * occupants (you / friend / bot / empty), a "Start match" button
+ * that fills empties with bots and begins the ready check, and a
+ * "Leave seat" button. The match URL is exposed for sharing.
+ *
+ * Hidden in `playing` / `finished` status so the canvas takes
+ * over without interference.
+ */
+function WaitingRoomOverlay({
+  matchId,
+  roomState,
+  onStart,
+  onLeave,
+}: {
+  matchId: string;
+  roomState: RoomState | null;
+  onStart: () => void;
+  onLeave: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  if (!roomState || roomState.status !== "waiting") {
+    return null;
+  }
+
+  const shareUrl =
+    typeof window !== "undefined" ? window.location.href : matchId;
+
+  const handleCopy = (): void => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      return;
+    }
+    void navigator.clipboard
+      .writeText(shareUrl)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => {
+          setCopied(false);
+        }, 1500);
+      })
+      .catch(() => {
+        // Clipboard blocked — the URL is visible in the address
+        // bar so this is a soft failure.
+      });
+  };
+
+  return (
+    <div className="pointer-events-auto absolute inset-0 z-[120] flex items-center justify-center bg-black/70">
+      <div className="flex w-[min(420px,90vw)] flex-col gap-4 rounded-xl border border-emerald-500/40 bg-emerald-950 px-6 py-6 shadow-2xl">
+        <header>
+          <h2 className="text-xl font-bold text-emerald-100">Waiting room</h2>
+          <p className="text-sm text-emerald-300/80">
+            Share this URL with friends to fill seats — or hit Start to play
+            against bots.
+          </p>
+        </header>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            readOnly
+            value={shareUrl}
+            className="flex-1 rounded border border-emerald-700 bg-emerald-900/60 px-3 py-2 font-mono text-xs text-emerald-100"
+            onFocus={(e) => {
+              e.currentTarget.select();
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="rounded bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-600"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+
+        <ul className="flex flex-col gap-2">
+          {roomState.seats.map((slot) => {
+            const isMine = slot.seat === roomState.mySeat;
+            let label: string;
+            let tone: string;
+            if (slot.occupant.kind === "empty") {
+              label = "Empty seat";
+              tone = "text-emerald-300/60 italic";
+            } else if (slot.occupant.kind === "bot") {
+              label = `${slot.occupant.displayName} (bot)`;
+              tone = "text-amber-200";
+            } else {
+              const conn = slot.occupant.connected ? "" : " · offline";
+              label = `${slot.occupant.displayName}${conn}`;
+              tone = slot.occupant.connected
+                ? "text-sky-200"
+                : "text-sky-300/50";
+            }
+            return (
+              <li
+                key={slot.seat}
+                className={`flex items-center justify-between rounded border px-3 py-2 ${
+                  isMine
+                    ? "border-emerald-400 bg-emerald-900/50"
+                    : "border-emerald-800/60 bg-emerald-900/20"
+                }`}
+              >
+                <span className="font-mono text-xs text-emerald-300/80">
+                  seat {slot.seat}
+                </span>
+                <span className={`text-sm ${tone}`}>
+                  {isMine ? "You · " : ""}
+                  {label}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="flex gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onStart}
+            className="flex-1 rounded bg-emerald-500 px-4 py-2 font-semibold text-black hover:bg-emerald-400"
+          >
+            Start match
+          </button>
+          <button
+            type="button"
+            onClick={onLeave}
+            className="rounded border border-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-900"
+          >
+            Leave
+          </button>
+        </div>
       </div>
     </div>
   );

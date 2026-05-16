@@ -329,6 +329,36 @@ export class TableRenderer {
    */
   private handResultOverride: NonNullable<MatchView["lastHandResult"]> | null =
     null;
+  /**
+   * Currently-displayed page in a multi-winner result panel.
+   * For a multi-ron (or any result with `wins.length > 1`) the
+   * panel renders one winner at a time and the user clicks to
+   * advance; the index here cycles 0..N-1. Reset to 0 whenever
+   * the underlying result reference changes (new hand_end /
+   * different override).
+   */
+  private currentWinPage = 0;
+  /** Tracks which `lastHandResult` the {@link currentWinPage}
+   * applies to; on reference change we reset the page index. */
+  private currentWinPageResult: NonNullable<
+    MatchView["lastHandResult"]
+  > | null = null;
+  /** Cached last `view` passed to {@link render}, used to re-render
+   * after internal UI state changes (e.g. advancing the
+   * multi-winner page index) without waiting for a store update. */
+  private lastView: MatchView | null = null;
+  /** DOM listener detacher for the canvas right-click /
+   * contextmenu handlers installed in {@link mount}. Invoked
+   * during {@link destroy}. */
+  private rightClickCleanup: (() => void) | null = null;
+  /** Localized labels for the three center-square status lines.
+   * Defaults to English; the React layer calls `setCenterLabels`
+   * with translated strings after mount. */
+  private centerLabels: { repeat: string; riichi: string; tiles: string } = {
+    repeat: "Repeat",
+    riichi: "Riichi",
+    tiles: "Tiles",
+  };
   /** Callback invoked at the end of every `render()` with the
    * canvas-pixel rect of the currently-visible result panel
    * (win-info inner zone or match-end standings panel), or
@@ -391,6 +421,29 @@ export class TableRenderer {
     });
     container.appendChild(app.canvas);
     this.app = app;
+
+    // Right-click anywhere on the canvas acts as a generic
+    // "pass / tsumogiri" shortcut: if a `pass` legal action is
+    // available (call decision), fire it; otherwise if it's the
+    // player's turn after a fresh draw, discard the drawn tile
+    // (tsumogiri). Always suppress the browser context menu so
+    // the gesture feels native to the table.
+    const onContextMenu = (e: MouseEvent): void => {
+      e.preventDefault();
+    };
+    const onCanvasMouseDown = (e: MouseEvent): void => {
+      if (e.button !== 2) {
+        return;
+      }
+      e.preventDefault();
+      this.handleRightClick();
+    };
+    app.canvas.addEventListener("contextmenu", onContextMenu);
+    app.canvas.addEventListener("mousedown", onCanvasMouseDown);
+    this.rightClickCleanup = (): void => {
+      app.canvas.removeEventListener("contextmenu", onContextMenu);
+      app.canvas.removeEventListener("mousedown", onCanvasMouseDown);
+    };
 
     // Load every tile spritesheet in parallel. Each multi-tile
     // sheet's cell dimensions are derived from its natural size;
@@ -491,6 +544,54 @@ export class TableRenderer {
     this.onRenderRequest = handler;
   }
 
+  /**
+   * Right-click shortcut: dispatch a generic
+   * "pass / tsumogiri" action. Wired up to the canvas DOM in
+   * {@link mount}. Picks the first matching legal action in this
+   * order:
+   *
+   *   1. `pass` — present during a call-decision window
+   *      (someone else's discard offers chi/pon/kan/ron).
+   *   2. `discard` of the freshly-drawn tile (tsumogiri) — when
+   *      it is the human's turn and they just drew. Falls back to
+   *      the last tile in the hand, which is the conventional
+   *      "drawn" slot in our renderer.
+   *
+   * No-op when neither is available, so right-clicking outside
+   * of an active decision window is harmless.
+   */
+  private handleRightClick(): void {
+    const view = this.lastView;
+    if (!view || !this.onActionClick) {
+      return;
+    }
+    const pass = view.legalActions.find((a) => a.type === "pass");
+    if (pass) {
+      this.onActionClick({ action: pass });
+      return;
+    }
+    if (view.mySeat == null) {
+      return;
+    }
+    const hand = view.hands[view.mySeat];
+    if (!hand || hand.length === 0) {
+      return;
+    }
+    // After a fresh draw the drawn tile is the last entry of
+    // `hand` (see `sortHand` with `isFreshlyDrawn`). Match a
+    // discard legal-action against that tile for tsumogiri.
+    const drawn = hand[hand.length - 1];
+    if (drawn == null) {
+      return;
+    }
+    const tsumogiri = view.legalActions.find(
+      (a) => a.type === "discard" && a.tile === drawn
+    );
+    if (tsumogiri) {
+      this.onActionClick({ action: tsumogiri });
+    }
+  }
+
   /** Toggle the colored-region debug overlay. */
   setShowLayoutDebug(flag: boolean): void {
     this.showLayoutDebug = flag;
@@ -574,6 +675,17 @@ export class TableRenderer {
     this.handResultOverride = r;
   }
 
+  /** Update the localized labels used by the center-square status
+   * lines (honba / riichi sticks / live wall). Call from the
+   * React layer after locale changes. */
+  setCenterLabels(labels: {
+    repeat: string;
+    riichi: string;
+    tiles: string;
+  }): void {
+    this.centerLabels = labels;
+  }
+
   /** Subscribe to result-panel-bounds updates. The callback fires
    * after every `render()` with the canvas-pixel rect of the
    * currently-visible result panel, or `null` when nothing is
@@ -605,6 +717,10 @@ export class TableRenderer {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
+    if (this.rightClickCleanup) {
+      this.rightClickCleanup();
+      this.rightClickCleanup = null;
+    }
     if (this.app) {
       if (this.timerTickHandler) {
         this.app.ticker.remove(this.timerTickHandler);
@@ -635,6 +751,7 @@ export class TableRenderer {
     if (!this.app || !this.root || !this.hudText) {
       return;
     }
+    this.lastView = view;
     // Defensive: sync the canvas size to the `resizeTo` container.
     // Pixi v8's built-in `resizeTo` only auto-syncs on `window`
     // resize events, so if the container was zero-sized when
@@ -986,9 +1103,12 @@ export class TableRenderer {
     // field — the live wall starts at 70 tiles after the deal.
     const wallRemaining = Math.max(0, 70 - view.liveDrawsTaken);
     const lineSpecs: Array<{ text: string; color: number }> = [
-      { text: `本 ${view.honba}`, color: 0xfde68a },
-      { text: `供 ${view.riichiSticks}`, color: 0xfca5a5 },
-      { text: `山 ${wallRemaining}`, color: 0xd1d5db },
+      { text: `${this.centerLabels.repeat}: ${view.honba}`, color: 0xfde68a },
+      {
+        text: `${this.centerLabels.riichi}: ${view.riichiSticks}`,
+        color: 0xfca5a5,
+      },
+      { text: `${this.centerLabels.tiles}: ${wallRemaining}`, color: 0xd1d5db },
     ];
     // Vertically centre the whole block (heading + 3 lines + gaps)
     // on the centre rect.
@@ -1595,12 +1715,13 @@ export class TableRenderer {
     if (!this.root) {
       return null;
     }
-    // For wins, the upstream stream emits `win` then `hand_end`
-    // as two consecutive events. Both produce a `lastHandResult`,
-    // which would surface the panel twice while stepping through
-    // the replay. Suppress the intermediate state: a win's panel
-    // only renders once `hand_end` has filled in the deltas.
-    if (r.win && !r.delta) {
+    // For wins, the upstream stream emits one or more `win`
+    // events followed by `hand_end`. Both produce a
+    // `lastHandResult`, which would surface the panel prematurely
+    // (and without per-seat deltas). Suppress the intermediate
+    // state: a win's panel only renders once `hand_end` has
+    // filled in the deltas.
+    if (r.wins && r.wins.length > 0 && !r.delta) {
       return null;
     }
 
@@ -1666,69 +1787,219 @@ export class TableRenderer {
     const container = new Container();
 
     // Build the lines we want to render. Each entry is either a
-    // single label (centered) or a yaku name + value pair.
+    // single label (centered), a yaku name + value pair, a tile
+    // row, the winner's hand strip, a compact two-cell score
+    // row (han/fu + total pts, side-by-side so they read like a
+    // header strip), or a divider between winners.
     type Row =
       | { kind: "yaku"; name: string; value: string }
+      | {
+          kind: "yaku2";
+          left: { name: string; value: string };
+          right: { name: string; value: string } | null;
+        }
       | { kind: "title"; text: string; size: number }
-      | { kind: "label"; text: string; size: number; color?: number };
+      | { kind: "label"; text: string; size: number; color?: number }
+      | {
+          kind: "scoreRow";
+          han: string;
+          pts: string | null;
+          ptsColor?: number;
+        }
+      | { kind: "tiles"; tiles: (string | null)[] }
+      | {
+          kind: "hand";
+          concealed: string[];
+          winTile?: string;
+          melds?: Meld[];
+        }
+      | { kind: "divider" };
 
     const rows: Row[] = [];
 
-    if (r.win) {
-      // Title line: "Tsumo" / "Ron"
-      if (r.reason === "tsumo") {
-        rows.push({ kind: "title", text: "Tsumo", size: 36 });
-      } else if (r.reason === "ron") {
-        rows.push({ kind: "title", text: "Ron", size: 36 });
+    if (r.wins && r.wins.length > 0) {
+      // Reset the page index whenever the underlying result
+      // object changes (new hand_end, override toggle, replay
+      // seek). Reference identity is sufficient — the store /
+      // replay projector produce a fresh object on each update.
+      if (this.currentWinPageResult !== r) {
+        this.currentWinPageResult = r;
+        this.currentWinPage = 0;
       }
-      // Yaku rows. Skip yaku whose displayed value is 0 han
-      // (server may still emit them — typically dora when no dora
-      // tiles are held — and they shouldn't take up a line).
-      // Event producers (Majsoul / Tenhou / Riichi City adapters,
-      // internal scorer) emit `yaku` already sorted via
-      // `sortYakuRecord`, so insertion-order iteration is the
-      // canonical display order.
-      const yakuKeys = r.win.yaku ? Object.keys(r.win.yaku) : [];
-      for (const name of yakuKeys) {
-        const value = r.win.yaku?.[name] ?? "";
-        // value is typically of the form "1 han" / "2 han"; treat
-        // anything whose leading integer is 0 as zero-han.
-        const leading = parseInt(value, 10);
-        if (Number.isFinite(leading) && leading === 0) {
-          continue;
+      const total = r.wins.length;
+      // Clamp in case `wins` shrank (shouldn't happen in
+      // practice, but cheap defense).
+      if (this.currentWinPage >= total) {
+        this.currentWinPage = 0;
+      }
+      // For a multi-winner result we paginate: render one
+      // winner per panel; the user clicks the panel (handled
+      // below, after layout) to advance. For a single winner
+      // this is a no-op — page 0 of 1.
+      const pageIdx = this.currentWinPage;
+      const winsToRender = total > 1 ? [r.wins[pageIdx]] : r.wins;
+      if (total > 1) {
+        rows.push({
+          kind: "label",
+          text: `${pageIdx + 1} / ${total}`,
+          size: 18,
+          color: 0xcbd5e1,
+        });
+      }
+      winsToRender.forEach((win, idx) => {
+        if (idx > 0) {
+          rows.push({ kind: "divider" });
         }
-        rows.push({ kind: "yaku", name, value });
-      }
-      // Han/fu summary or yakuman line.
-      const han = r.win.han ?? 0;
-      const fu = r.win.fu ?? 0;
-      const ym = r.win.yakumanCount ?? 0;
-      if (ym > 0) {
+        // Title line: "Tsumo" / "Ron". For multi-ron each entry
+        // is a ron; the panel renders one block per winner so
+        // the title repeats with the winning hand below.
+        if (r.reason === "tsumo") {
+          rows.push({ kind: "title", text: "Tsumo", size: 36 });
+        } else if (r.reason === "ron") {
+          rows.push({ kind: "title", text: "Ron", size: 36 });
+        }
+        // Yaku rows. Skip yaku whose displayed value is 0 han
+        // (server may still emit them — typically dora when no
+        // dora tiles are held — and they shouldn't take up a
+        // line). Event producers (Majsoul / Tenhou / Riichi
+        // City adapters, internal scorer) emit `yaku` already
+        // sorted via `sortYakuRecord`, so insertion-order
+        // iteration is the canonical display order.
+        const yakuKeys = win.yaku ? Object.keys(win.yaku) : [];
+        // Filter out 0-han yaku (typically dora when no dora
+        // tiles are held); the rest preserve insertion order.
+        const visibleYaku: Array<{ name: string; value: string }> = [];
+        for (const name of yakuKeys) {
+          const value = win.yaku?.[name] ?? "";
+          const leading = parseInt(value, 10);
+          if (Number.isFinite(leading) && leading === 0) {
+            continue;
+          }
+          visibleYaku.push({ name, value });
+        }
+        // 1-column layout for short lists; 2-column for 5+
+        // entries so very-yaku-rich hands (e.g. yakuman piles)
+        // don't push the panel absurdly tall.
+        if (visibleYaku.length <= 4) {
+          for (const y of visibleYaku) {
+            rows.push({ kind: "yaku", name: y.name, value: y.value });
+          }
+        } else {
+          const half = Math.ceil(visibleYaku.length / 2);
+          for (let i = 0; i < half; i++) {
+            rows.push({
+              kind: "yaku2",
+              left: visibleYaku[i],
+              right: visibleYaku[i + half] ?? null,
+            });
+          }
+        }
+        // Han/fu summary or yakuman line, merged with the points
+        // line into a single two-cell `scoreRow`. Keeping them on
+        // one row makes that row narrow enough to sit at the same
+        // vertical level as the side score boxes (we anchor on it
+        // below), so the wide rows (yaku, hand, dora) can extend
+        // above and below without overlapping the side boxes.
+        const han = win.han ?? 0;
+        const fu = win.fu ?? 0;
+        const ym = win.yakumanCount ?? 0;
+        const hanLabel =
+          ym > 0
+            ? ym > 1
+              ? `${ym}× Yakuman`
+              : "Yakuman"
+            : // From 5 han up the fu no longer affects the basic-
+              // points calculation (mangan / haneman / ...), so
+              // suppress it.
+              han >= 5
+              ? `${han} han`
+              : `${han} han ${fu} fu`;
+        // Points line. We take the value straight from the log
+        // (`win.ten`) rather than re-computing from han/fu — the
+        // server is the source of truth for scoring, which keeps
+        // the display ruleset-agnostic.
+        const ptsLabel = typeof win.ten === "number" ? `${win.ten}pts` : null;
         rows.push({
-          kind: "label",
-          text: ym > 1 ? `${ym}× Yakuman` : "Yakuman",
-          size: 32,
+          kind: "scoreRow",
+          han: hanLabel,
+          pts: ptsLabel,
+          ptsColor: 0xfde68a,
         });
-      } else {
-        // From 5 han up the fu no longer affects the basic-points
-        // calculation (mangan / haneman / ...), so suppress it.
-        const text = han >= 5 ? `${han} han` : `${han} han ${fu} fu`;
-        rows.push({ kind: "label", text, size: 32 });
-      }
-      // Points line. We take the value straight from the log
-      // (`r.win.ten`) rather than re-computing from han/fu — the
-      // server is the source of truth for scoring, which keeps the
-      // display ruleset-agnostic.
-      if (typeof r.win.ten === "number") {
-        rows.push({
-          kind: "label",
-          text: `${r.win.ten}pts`,
-          size: 28,
-          color: 0xfde68a,
-        });
+        // Winning hand strip. The server records the concealed
+        // hand at win time; we display it as a single row with
+        // the agari tile separated by a small gap so reviewers
+        // can see what the winner achieved (especially useful
+        // for non-focused players).
+        if (win.hand && win.hand.length > 0) {
+          const rawConcealed = [...win.hand];
+          // The agari tile is always shown after a small gap.
+          // For tsumo the server includes it in `win.hand`, so
+          // strip it out so it doesn't render twice; for ron the
+          // hand carries only the 13 pre-ron tiles and there's
+          // nothing to strip.
+          let agari: string | undefined;
+          if (win.winTile) {
+            agari = win.winTile;
+            const idx2 = rawConcealed.lastIndexOf(win.winTile);
+            if (idx2 >= 0) {
+              rawConcealed.splice(idx2, 1);
+            }
+          }
+          // Sort the concealed portion so live wins render the
+          // same canonically-ordered hand as replays. The winTile
+          // is appended separately so it always sits on the
+          // right of the strip, after a small gap.
+          const concealed = sortHand(rawConcealed, false) as string[];
+          // Re-anchor each meld's `from` relative to seat 0 so the
+          // panel's upright `drawMeld(meld, 0)` lays the tilted
+          // called tile at the correct edge regardless of the
+          // winner's actual seat (server stores `from` as an
+          // absolute seat).
+          const melds: Meld[] | undefined = win.melds
+            ?.filter((m) => m.tiles.length > 0)
+            .map((m) => ({
+              ...m,
+              from:
+                m.from === null
+                  ? null
+                  : (((m.from - win.seat + 4) % 4) as 0 | 1 | 2 | 3),
+            }));
+          rows.push({ kind: "hand", concealed, winTile: agari, melds });
+        }
+      });
+      // Dora indicator row: always 5 slots, face-up for slots
+      // the dealer has revealed so far (1 by default, +1 per
+      // kan), the rest face-down. Shared across all winners in
+      // a multi-ron (the indicators are determined by the
+      // wall, not by who wins).
+      const sharedDora =
+        r.wins.find((w) => w.doraIndicators && w.doraIndicators.length > 0)
+          ?.doraIndicators ?? [];
+      const doraRow: (string | null)[] = Array.from({ length: 5 }, (_, i) =>
+        i < sharedDora.length ? (sharedDora[i] ?? null) : null
+      );
+      rows.push({ kind: "tiles", tiles: doraRow });
+      // Ura dora indicator row: only revealed when at least
+      // one winner had declared riichi. Server gates this by
+      // populating `uraDoraIndicators` only in that case.
+      const sharedUra =
+        r.wins.find(
+          (w) => w.uraDoraIndicators && w.uraDoraIndicators.length > 0
+        )?.uraDoraIndicators ?? [];
+      if (sharedUra.length > 0) {
+        const uraRow: (string | null)[] = Array.from({ length: 5 }, (_, i) =>
+          i < sharedUra.length ? (sharedUra[i] ?? null) : null
+        );
+        rows.push({ kind: "tiles", tiles: uraRow });
       }
     } else if (r.reason === "exhaustive_draw") {
       rows.push({ kind: "title", text: "Exhaustive draw", size: 32 });
+      // Tenpai hands are revealed at the seat positions (see
+      // `renderSeat` — it picks up `r.tenpaiHands[seat]` and
+      // replaces the seat's hand strip with it), so reviewers
+      // see each tenpai hand where the player's tiles usually
+      // sit. We intentionally omit them from this center panel
+      // to avoid duplicating the information.
     } else if (r.reason === "abort") {
       rows.push({
         kind: "title",
@@ -1754,11 +2025,31 @@ export class TableRenderer {
           value: Text;
           h: number;
         }
-      | { kind: "single"; text: Text; h: number };
+      | {
+          kind: "yaku2";
+          leftName: Text;
+          leftValue: Text;
+          rightName: Text | null;
+          rightValue: Text | null;
+          h: number;
+        }
+      | { kind: "single"; text: Text; h: number }
+      | {
+          kind: "scoreRow";
+          hanText: Text;
+          ptsText: Text | null;
+          w: number;
+          h: number;
+        }
+      | { kind: "tiles"; container: Container; w: number; h: number }
+      | { kind: "hand"; container: Container; w: number; h: number }
+      | { kind: "divider"; h: number };
     const built: Built[] = [];
     let maxYakuName = 0;
     let maxYakuValue = 0;
     let maxSingle = 0;
+    let maxTilesW = 0;
+    const scoreRowInnerGap = 24;
     for (const row of rows) {
       if (row.kind === "yaku") {
         const name = new Text({
@@ -1782,6 +2073,130 @@ export class TableRenderer {
         maxYakuName = Math.max(maxYakuName, name.width);
         maxYakuValue = Math.max(maxYakuValue, value.width);
         built.push({ kind: "yaku", name, value, h: yakuRowH });
+      } else if (row.kind === "yaku2") {
+        // Two-column yaku row: left and right pairs share the
+        // same per-column name/value widths (tracked via
+        // `maxYakuName`/`maxYakuValue` across both columns) so
+        // every yaku line in the panel aligns.
+        const makeText = (text: string, weight: "500" | "600"): Text =>
+          new Text({
+            text,
+            style: new TextStyle({
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: yakuFont,
+              fontWeight: weight,
+              fill: 0xffffff,
+            }),
+          });
+        const leftName = makeText(row.left.name, "500");
+        const leftValue = makeText(row.left.value, "600");
+        const rightName = row.right ? makeText(row.right.name, "500") : null;
+        const rightValue = row.right ? makeText(row.right.value, "600") : null;
+        maxYakuName = Math.max(
+          maxYakuName,
+          leftName.width,
+          rightName?.width ?? 0
+        );
+        maxYakuValue = Math.max(
+          maxYakuValue,
+          leftValue.width,
+          rightValue?.width ?? 0
+        );
+        built.push({
+          kind: "yaku2",
+          leftName,
+          leftValue,
+          rightName,
+          rightValue,
+          h: yakuRowH,
+        });
+      } else if (row.kind === "tiles") {
+        // Build a horizontal strip of seat-0 (upright) tiles.
+        // `null` slots render as face-down backs (used for
+        // unrevealed dora indicator slots).
+        const tileContainer = new Container();
+        const mt = meldTileDims(0);
+        let dx = 0;
+        for (const tile of row.tiles) {
+          const sprite = this.drawMeldTile(tile, 0);
+          sprite.position.set(dx, 0);
+          tileContainer.addChild(sprite);
+          dx += mt.w;
+        }
+        const w = row.tiles.length * mt.w;
+        const h = mt.h;
+        maxTilesW = Math.max(maxTilesW, w);
+        built.push({ kind: "tiles", container: tileContainer, w, h });
+      } else if (row.kind === "hand") {
+        // Winner's hand strip: concealed tiles, then a small
+        // gap, then the agari tile (if known and present in the
+        // concealed list), then declared melds (each meld
+        // rendered via `drawMeld` so the tilted called tile
+        // matches the seat-relative orientation it had at the
+        // table).
+        const handContainer = new Container();
+        const mt = meldTileDims(0);
+        const agariGap = 14;
+        const meldGap = 18;
+        let dx = 0;
+        for (const tile of row.concealed) {
+          const sprite = this.drawMeldTile(tile, 0);
+          sprite.position.set(dx, 0);
+          handContainer.addChild(sprite);
+          dx += mt.w;
+        }
+        if (row.winTile) {
+          dx += agariGap;
+          const sprite = this.drawMeldTile(row.winTile, 0);
+          sprite.position.set(dx, 0);
+          handContainer.addChild(sprite);
+          dx += mt.w;
+        }
+        if (row.melds && row.melds.length > 0) {
+          for (const meld of row.melds) {
+            dx += meldGap;
+            const { node, width } = this.drawMeld(meld, 0);
+            node.position.set(dx, 0);
+            handContainer.addChild(node);
+            dx += width;
+          }
+        }
+        const w = dx;
+        const h = mt.h;
+        maxTilesW = Math.max(maxTilesW, w);
+        built.push({ kind: "hand", container: handContainer, w, h });
+      } else if (row.kind === "divider") {
+        built.push({ kind: "divider", h: 12 });
+      } else if (row.kind === "scoreRow") {
+        // Two-cell row: han/fu on the left, total pts on the
+        // right, with a fixed inter-cell gap. Drawn larger than
+        // body text since it's the visual focal point.
+        const hanText = new Text({
+          text: row.han,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 30,
+            fontWeight: "700",
+            fill: 0xffffff,
+          }),
+        });
+        const ptsText = row.pts
+          ? new Text({
+              text: row.pts,
+              style: new TextStyle({
+                fontFamily: "Inter, system-ui, sans-serif",
+                fontSize: 30,
+                fontWeight: "700",
+                fill: row.ptsColor ?? 0xfde68a,
+              }),
+            })
+          : null;
+        const w = ptsText
+          ? hanText.width + scoreRowInnerGap + ptsText.width
+          : hanText.width;
+        const h = Math.max(hanText.height, ptsText?.height ?? 0) + 8;
+        maxSingle = Math.max(maxSingle, w);
+        built.push({ kind: "scoreRow", hanText, ptsText, w, h });
       } else {
         const t = new Text({
           text: row.text,
@@ -1798,14 +2213,28 @@ export class TableRenderer {
     }
 
     const yakuColW = maxYakuName + colGap + maxYakuValue;
-    const contentW = Math.max(yakuColW, maxSingle);
+    // Gap between the two yaku columns when the panel switches
+    // to the 2-column layout (>4 yaku). Wider than `colGap` so
+    // the visual split between the columns reads clearly.
+    const yakuColumnGap = 48;
+    const has2ColYaku = built.some((b) => b.kind === "yaku2");
+    const yakuBlockW = has2ColYaku ? yakuColW * 2 + yakuColumnGap : yakuColW;
+    const contentW = Math.max(yakuBlockW, maxSingle, maxTilesW);
     // Total height = sum of row heights + spacing.
     let totalH = 0;
-    let prevKind: "yaku" | "single" | null = null;
+    let prevKind:
+      | "yaku"
+      | "yaku2"
+      | "single"
+      | "scoreRow"
+      | "tiles"
+      | "hand"
+      | "divider"
+      | null = null;
     for (const b of built) {
       if (prevKind !== null) {
         totalH +=
-          b.kind !== prevKind || b.kind === "single"
+          b.kind !== prevKind || (b.kind !== "yaku" && b.kind !== "yaku2")
             ? labelGapBefore
             : lineSpacing;
       }
@@ -1825,10 +2254,17 @@ export class TableRenderer {
 
     let y = padY;
     prevKind = null;
+    // Y center (within the panel) of the `scoreRow` if present.
+    // Used to anchor the entire panel so that this row sits at
+    // the same vertical level as the side score boxes (which the
+    // result overlay places at `cy = inner-center-y`). For
+    // non-win results (exhaustive draw / abort) there is no
+    // `scoreRow` and we fall back to centering the panel.
+    let scoreRowCenterY: number | null = null;
     for (const b of built) {
       if (prevKind !== null) {
         y +=
-          b.kind !== prevKind || b.kind === "single"
+          b.kind !== prevKind || (b.kind !== "yaku" && b.kind !== "yaku2")
             ? labelGapBefore
             : lineSpacing;
       }
@@ -1837,6 +2273,42 @@ export class TableRenderer {
         b.name.position.set(colLeft, y);
         b.value.position.set(colLeft + yakuColW - b.value.width, y);
         container.addChild(b.name, b.value);
+      } else if (b.kind === "yaku2") {
+        // Two equal-width columns centered as a block.
+        const blockLeft = (panelW - yakuBlockW) / 2;
+        const rightColLeft = blockLeft + yakuColW + yakuColumnGap;
+        b.leftName.position.set(blockLeft, y);
+        b.leftValue.position.set(blockLeft + yakuColW - b.leftValue.width, y);
+        container.addChild(b.leftName, b.leftValue);
+        if (b.rightName && b.rightValue) {
+          b.rightName.position.set(rightColLeft, y);
+          b.rightValue.position.set(
+            rightColLeft + yakuColW - b.rightValue.width,
+            y
+          );
+          container.addChild(b.rightName, b.rightValue);
+        }
+      } else if (b.kind === "tiles" || b.kind === "hand") {
+        b.container.position.set((panelW - b.w) / 2, y);
+        container.addChild(b.container);
+      } else if (b.kind === "scoreRow") {
+        const rowLeft = (panelW - b.w) / 2;
+        b.hanText.position.set(rowLeft, y);
+        container.addChild(b.hanText);
+        if (b.ptsText) {
+          b.ptsText.position.set(
+            rowLeft + b.hanText.width + scoreRowInnerGap,
+            y
+          );
+          container.addChild(b.ptsText);
+        }
+        scoreRowCenterY = y + b.h / 2;
+      } else if (b.kind === "divider") {
+        const line = new Graphics()
+          .moveTo(padX, y + b.h / 2)
+          .lineTo(panelW - padX, y + b.h / 2)
+          .stroke({ color: 0xffffff, width: 1, alpha: 0.25 });
+        container.addChild(line);
       } else {
         b.text.position.set((panelW - b.text.width) / 2, y);
         container.addChild(b.text);
@@ -1844,8 +2316,42 @@ export class TableRenderer {
       y += b.h;
       prevKind = b.kind;
     }
-    container.position.set(cx - panelW / 2, cy - panelH / 2);
+    // Anchor the panel: if a `scoreRow` was rendered, shift the
+    // panel so that row's center sits at `cy` (the inner center
+    // y, which is also the side score boxes' center). Otherwise
+    // (exhaustive draw / abort: just a single title row) center
+    // the panel on `cy` so the title aligns with the side score
+    // boxes as well.
+    const panelY =
+      scoreRowCenterY !== null ? cy - scoreRowCenterY : cy - panelH / 2;
+    container.position.set(cx - panelW / 2, panelY);
     parent.addChild(container);
+
+    // For multi-winner results, make the panel clickable so the
+    // user can cycle through one winner per page. Backdrop +
+    // bg already cover the panel area; we attach the handler to
+    // the bg (panel-shaped) so clicks outside the panel still
+    // fall through to anything underneath. Auto-cycles back to
+    // page 0 after the last winner.
+    if (r.wins && r.wins.length > 1) {
+      bg.eventMode = "static";
+      bg.cursor = "pointer";
+      bg.on("pointerdown", (event) => {
+        // Right-clicks are reserved for the global pass /
+        // tsumogiri shortcut wired in `mount()`.
+        if (event.button === 2) {
+          return;
+        }
+        const total = r.wins?.length ?? 0;
+        if (total <= 1) {
+          return;
+        }
+        this.currentWinPage = (this.currentWinPage + 1) % total;
+        if (this.lastView) {
+          this.render(this.lastView);
+        }
+      });
+    }
   }
 
   /**
@@ -2232,7 +2738,61 @@ export class TableRenderer {
     if (!this.root) {
       return;
     }
-    const rawHand = view.hands[seat] ?? [];
+    const { rawHand, forceReveal } = ((): {
+      rawHand: (string | null)[];
+      forceReveal: boolean;
+    } => {
+      const live = view.hands[seat] ?? [];
+      // Reveal each winner's actual concealed hand at their seat
+      // band as soon as the win event lands (no need to wait for
+      // `hand_end`), so opponents' winning hands flash in
+      // immediately alongside the win sound. Multi-ron reveals
+      // each winner as their event fires. At exhaustive draw the
+      // same reveal kicks in for each tenpai seat once
+      // `tenpaiHands` is available on `hand_end`.
+      //
+      // When the hand is sourced from a win/tenpaiHands override
+      // we also flag `forceReveal` so the opponent-seat painters
+      // below (side seats 1/3 and top seat 2) actually flip the
+      // tiles face-up — otherwise they'd keep drawing the back
+      // sheet because `showHands` is gated on the user toggle.
+      const result = this.handResultOverride ?? view.lastHandResult;
+      if (result) {
+        if (result.wins) {
+          const winForSeat = result.wins.find((w) => w.seat === seat);
+          if (winForSeat?.hand && winForSeat.hand.length > 0) {
+            const hand = [...winForSeat.hand];
+            // For a tsumo, the renderer's sort logic uses the
+            // last element as the tsumo tile (kept separated by
+            // `TSUMO_GAP`). Adapters don't guarantee the hand is
+            // emitted with the agari tile last, so move the
+            // recorded `winTile` to the end ourselves — otherwise
+            // an arbitrary tile would be displayed as the tsumo.
+            if (result.reason === "tsumo" && winForSeat.winTile) {
+              const wt = winForSeat.winTile;
+              const idx = hand.lastIndexOf(wt);
+              if (idx >= 0) {
+                hand.splice(idx, 1);
+                hand.push(wt);
+              }
+            }
+            return { rawHand: hand, forceReveal: true };
+          }
+        }
+        if (
+          result.reason === "exhaustive_draw" &&
+          result.tenpaiHands &&
+          result.tenpaiHands[seat] &&
+          result.tenpaiHands[seat]!.length > 0
+        ) {
+          return {
+            rawHand: [...result.tenpaiHands[seat]!],
+            forceReveal: true,
+          };
+        }
+      }
+      return { rawHand: live, forceReveal: false };
+    })();
     const discards = view.discards[seat] ?? [];
 
     const isYou = view.mySeat === seat;
@@ -2283,7 +2843,9 @@ export class TableRenderer {
     // the narrower `tileSide` dims because its source is portrait
     // and would stretch badly at discard dims.
     const sideHandRevealed =
-      isSideHand && this.showHands && hand.some((t) => t !== null);
+      isSideHand &&
+      (this.showHands || forceReveal) &&
+      hand.some((t) => t !== null);
     if (isSideHand) {
       let stride: number;
       let endTileLong: number;
@@ -2360,7 +2922,7 @@ export class TableRenderer {
         const extraGap = handGap > 0 && i === hand.length - 1 ? handGap : 0;
         wrap.position.set(i * stride + extraGap, 0);
         wrap.zIndex = zSign * i;
-        const reveal = this.showHands && tile !== null;
+        const reveal = (this.showHands || forceReveal) && tile !== null;
         const tex = this.getTileTexture(
           reveal ? faceSheet : backSheet,
           reveal ? tile : null
@@ -2426,7 +2988,7 @@ export class TableRenderer {
           // With `showHands` and a real tile, swap to the face-up
           // cell of the same sheet (same orientation, just a
           // different sub-frame).
-          const reveal = this.showHands && tile !== null;
+          const reveal = (this.showHands || forceReveal) && tile !== null;
           const tex = this.getTileTexture("topSmall", reveal ? tile : null);
           const sprite = new Sprite(tex);
           sprite.anchor.set(0.5, 0.5);
@@ -2462,7 +3024,13 @@ export class TableRenderer {
           tileSprite.cursor = "pointer";
           const localTile = tile;
           const localIndex = i;
-          tileSprite.on("pointerdown", () => {
+          tileSprite.on("pointerdown", (event) => {
+            // Right-clicks are handled globally as
+            // pass / tsumogiri (see `mount()`); never let a
+            // right-click on a hand tile fire a discard.
+            if (event.button === 2) {
+              return;
+            }
             if (inRiichiMode) {
               // Only riichi-legal tiles complete the declaration;
               // clicks on dimmed tiles are no-ops.
@@ -3119,7 +3687,7 @@ export class TableRenderer {
     //   prev  (kamicha)  → 0 (left)
     //   across (toimen)  → 1 (middle)
     //   next  (shimocha) → 2 (right)
-    const calledSlot =
+    const calledSlot3 =
       meld.from === (seat + 3) % 4 ? 0 : meld.from === (seat + 2) % 4 ? 1 : 2;
 
     // Layout: walk slots in screen order. Chi / pon = 3 slots,
@@ -3127,6 +3695,14 @@ export class TableRenderer {
     // either irrelevant for chi/pon or stacked on top for shouminkan;
     // for daiminkan the 4th tile sits next to the called tile).
     const slotCount = meld.type === "daiminkan" ? 4 : 3;
+    // Daiminkan extends to 4 slots; the called (tilted) tile must
+    // still sit at the *edge* corresponding to the from-direction
+    // (kamicha → leftmost = 0, shimocha → rightmost = 3) so the
+    // rotated tile points outward at the discarder. The toimen
+    // case keeps the middle convention but shifts to slot 1 so the
+    // 4th non-called copy can sit to its right.
+    const calledSlot =
+      meld.type === "daiminkan" && calledSlot3 === 2 ? 3 : calledSlot3;
     const slots: Array<{ tile: string; rotated: boolean }> = [];
     let oi = 0;
     for (let s = 0; s < slotCount; s++) {
@@ -3444,7 +4020,10 @@ export class TableRenderer {
     c.addChild(bg, labelNode);
     c.eventMode = "static";
     c.cursor = "pointer";
-    c.on("pointerdown", () => {
+    c.on("pointerdown", (event) => {
+      if (event.button === 2) {
+        return;
+      }
       this.riichiMode = !this.riichiMode;
       if (this.onRenderRequest) {
         this.onRenderRequest();
@@ -3499,7 +4078,10 @@ export class TableRenderer {
     // Track which group's expansion this button toggles; ignored
     // by lint via the parameter usage above.
     void optionCount;
-    c.on("pointerdown", () => {
+    c.on("pointerdown", (event) => {
+      if (event.button === 2) {
+        return;
+      }
       this.expandedCallGroup = active ? null : group;
       if (this.onRenderRequest) {
         this.onRenderRequest();
@@ -3572,7 +4154,10 @@ export class TableRenderer {
 
     c.eventMode = "static";
     c.cursor = "pointer";
-    c.on("pointerdown", () => {
+    c.on("pointerdown", (event) => {
+      if (event.button === 2) {
+        return;
+      }
       this.expandedCallGroup = null;
       if (this.onActionClick) {
         this.onActionClick({ action });
@@ -3626,7 +4211,10 @@ export class TableRenderer {
     c.addChild(bg, labelNode);
     c.eventMode = "static";
     c.cursor = "pointer";
-    c.on("pointerdown", () => {
+    c.on("pointerdown", (event) => {
+      if (event.button === 2) {
+        return;
+      }
       if (this.onActionClick) {
         this.onActionClick({ action });
       }

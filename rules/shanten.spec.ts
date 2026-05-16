@@ -189,3 +189,52 @@ describe("waits — tenpai + kara-ten", () => {
     expect(waits(h)).toEqual([]);
   });
 });
+
+describe("partial hand (meldCount) — declared melds consume meld budget", () => {
+  it("10-tile hand 123456789s 1p is tenpai with 1 declared meld (waits 1p)", () => {
+    // Concealed shape: 123s 456s 789s + 1p (3 melds + lone pair).
+    // With one ankan declared, the seat needs 1p to complete the
+    // pair. Without `meldCount`, shanten reports 2 because the
+    // algorithm targets 4 melds + 1 pair from 10 tiles.
+    const h = tiles("123456789s1p");
+    expect(h).toHaveLength(10);
+    expect(shanten(h)).toBe(2);
+    expect(shanten(h, 1)).toBe(0);
+    expect(waits(h, 1)).toEqual(["1p"]);
+    expect(isTenpai(h, 1)).toBe(true);
+  });
+
+  it("10-tile hand 123m 456p 78s 1z1z is tenpai with 1 declared meld", () => {
+    // 2 suit melds + 1 partial (78s, kanchan waiting 6s/9s) + pair.
+    // With one ankan declared, the 78s partial completes the 4th
+    // meld via either 6s or 9s.
+    const h = tiles("123m456p78s11z");
+    expect(h).toHaveLength(10);
+    expect(shanten(h, 1)).toBe(0);
+    expect(waits(h, 1)).toEqual(["6s", "9s"]);
+  });
+
+  it("7-tile hand is tenpai with 2 declared melds", () => {
+    // 2 melds declared. Concealed: 234m + 11p + (partial 5m wait).
+    // Actually: 234m (1 meld) + 5m (wait) + 11p (pair) = 6 tiles.
+    // Use 7-tile shape: 234m 11p + 1z = 2 complete + pair + lone tile.
+    // That's 1-shanten with 2 declared (target = 2 more melds + pair).
+    const h = tiles("234m11p1z");
+    expect(h).toHaveLength(6);
+    // Wait, this is 6 tiles. For meldCount=2 the waiting hand is
+    // 13 - 6 = 7 tiles. So one more tile:
+    const tenpaiHand = tiles("234m11p12s");
+    expect(tenpaiHand).toHaveLength(7);
+    // Concealed 234m + 11p + 12s (1 meld + pair + partial). With 2
+    // ankans declared, this is tenpai waiting on 3s.
+    expect(shanten(tenpaiHand, 2)).toBe(0);
+    expect(waits(tenpaiHand, 2)).toEqual(["3s"]);
+  });
+
+  it("default meldCount=0 preserves 13-tile behavior", () => {
+    // Sanity: existing callers without meldCount should be unaffected.
+    const h = tiles("123m456p789s111z2z");
+    expect(shanten(h)).toBe(shanten(h, 0));
+    expect(waits(h)).toEqual(waits(h, 0));
+  });
+});

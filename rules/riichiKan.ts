@@ -171,17 +171,23 @@ function existsBadDecomp(
  * Preconditions enforced:
  *   - `hand13` contains exactly 3 copies of `kanTile`.
  *   - `hand13` is tenpai (at least one wait).
+ *
+ * `meldCount` is the number of melds already declared (ankan only,
+ * since the seat is in riichi). `hand13` is then
+ * `13 - 3 * meldCount` tiles and the tenpai / decomposition checks
+ * target `4 - meldCount` more melds + 1 pair.
  */
 export function isAnkanLegalDuringRiichi(
   hand13: readonly Tile[],
-  kanTile: Tile
+  kanTile: Tile,
+  meldCount = 0
 ): boolean {
   const counts = countsFromTiles(hand13);
   const { suit: kanSuit, index: kanIdx } = tileToIndex(kanTile);
   if (counts[kanSuit][kanIdx] !== 3) {
     return false;
   }
-  const waitSet = waits(hand13);
+  const waitSet = waits(hand13, meldCount);
   if (waitSet.length === 0) {
     return false;
   }

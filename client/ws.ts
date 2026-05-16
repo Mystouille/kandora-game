@@ -95,6 +95,25 @@ export class GameWS {
     this.send({ type: "ready", matchId });
   }
 
+  /** Request the server start the match (fills empty seats with
+   * bots and begins the ready check). No-op outside `waiting`. */
+  startMatch(): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "start_match", matchId });
+  }
+
+  /** Release the caller's seat in a `waiting` room. */
+  leaveSeat(): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "leave_seat", matchId });
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
@@ -212,6 +231,10 @@ export class GameWS {
       }
       case "ready_check_end": {
         store.setReadyCheck(null);
+        return;
+      }
+      case "room_state": {
+        store.setRoomState(msg);
         return;
       }
     }

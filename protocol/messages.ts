@@ -220,6 +220,14 @@ const HandEndEvent = z.object({
    * knows about them).
    */
   waits: z.array(z.array(TileSchema).nullable()).length(4).optional(),
+  /**
+   * Per-seat full concealed hand at exhaustive draw (length 4).
+   * Populated only when `reason === "exhaustive_draw"` and the
+   * seat was tenpai; `null` for non-tenpai seats. Lets the
+   * result panel reveal the winning structure each tenpai
+   * player was waiting on.
+   */
+  tenpaiHands: z.array(z.array(TileSchema).nullable()).length(4).optional(),
 });
 
 const CallEvent = z.object({
@@ -425,12 +433,66 @@ const ReadyCheckEndMsg = z.object({
   type: z.literal("ready_check_end"),
 });
 
+/**
+ * Room membership snapshot for a multi-human match.
+ *
+ * Phase 5 unifies "room" and "match": a match lives in `waiting`
+ * status until any seated human sends `start_match`, at which
+ * point the server fills empty seats with bots and flips to
+ * `playing`. The client uses `room_state` to render the waiting
+ * room (seat list, "Start" button) and to receive the post-start
+ * confirmation (status → `playing`) just before the first
+ * `snapshot` arrives.
+ *
+ * Re-sent every time membership changes (join, leave, bot-fill,
+ * disconnect/reconnect) and once on every fresh attach so the
+ * client never has to guess seat layout.
+ */
+export const RoomSeatOccupantSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("empty") }),
+  z.object({
+    kind: z.literal("human"),
+    userId: z.string(),
+    displayName: z.string(),
+    /** True when the human's socket is currently connected. False
+     * after a disconnect; the seat is still reserved for them by
+     * userId so they can reclaim it on reconnect. */
+    connected: z.boolean(),
+  }),
+  z.object({
+    kind: z.literal("bot"),
+    userId: z.string(),
+    displayName: z.string(),
+  }),
+]);
+export type RoomSeatOccupant = z.infer<typeof RoomSeatOccupantSchema>;
+
+const RoomSeatSchema = z.object({
+  seat: SeatSchema,
+  occupant: RoomSeatOccupantSchema,
+});
+
+const RoomStateMsg = z.object({
+  type: z.literal("room_state"),
+  matchId: z.string(),
+  /** Lifecycle: `waiting` = pre-start; `playing` = match running;
+   * `finished` = match ended (post-game lobby). */
+  status: z.enum(["waiting", "playing", "finished"]),
+  /** Recipient's own seat assignment, or `null` for a spectator
+   * (no available seat at attach time). */
+  mySeat: SeatSchema.nullable(),
+  /** All four seat slots, always present, ordered 0..3. */
+  seats: z.array(RoomSeatSchema).length(4),
+});
+export type RoomState = z.infer<typeof RoomStateMsg>;
+
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   SnapshotMsg,
   EventMsg,
   ErrorMsg,
   ReadyCheckMsg,
   ReadyCheckEndMsg,
+  RoomStateMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 
@@ -488,10 +550,39 @@ const ReadyMsg = z.object({
   matchId: z.string(),
 });
 
+/**
+ * Request to start the match: any seated human may send this
+ * while the room is in `waiting` status. The server fills any
+ * empty seat with a bot, broadcasts a final `room_state` with
+ * `status: "playing"`, and then begins the normal match flow
+ * (ready check → first hand).
+ *
+ * Rejected with an `error` frame if the sender is not a seated
+ * human or if the room is no longer in `waiting`.
+ */
+const StartMatchMsg = z.object({
+  type: z.literal("start_match"),
+  matchId: z.string(),
+});
+
+/**
+ * Release the sender's seat. Only valid while the room is in
+ * `waiting` status — once the match starts, a human can
+ * disconnect (their seat is held for reconnection) but cannot
+ * permanently leave mid-match. The server broadcasts the
+ * resulting `room_state`.
+ */
+const LeaveSeatMsg = z.object({
+  type: z.literal("leave_seat"),
+  matchId: z.string(),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   HelloMsg,
   ActMsg,
   ResyncMsg,
   ReadyMsg,
+  StartMatchMsg,
+  LeaveSeatMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
