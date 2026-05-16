@@ -29,6 +29,7 @@ import {
 } from "pixi.js";
 import type { MatchView } from "../store";
 import type { LegalAction, Meld } from "~/game/protocol/messages";
+import { playGameSound } from "../sound";
 import { computeTableLayout, type TableLayout, type Rect } from "./tableLayout";
 import ownHandUrl from "~/game/tenhouSprites/ownHand.png";
 import bottomSmallUrl from "~/game/tenhouSprites/bottomSmall.png";
@@ -76,7 +77,6 @@ const BIG_TILE_SRC = { w: 131, h: 198 } as const;
 const BIG_TILE_SCALE = 0.51;
 const BIG_TILE_W = BIG_TILE_SRC.w * BIG_TILE_SCALE;
 const BIG_TILE_H = BIG_TILE_SRC.h * BIG_TILE_SCALE;
-const HAND_PAD = 24;
 
 // Per-tile overlap along the row direction inside a discard pond.
 // Used both by `renderDiscards` and (when `showHands` reveals a side
@@ -118,6 +118,30 @@ const hudStyle = new TextStyle({
   fontFamily: "Inter, system-ui, sans-serif",
   fontSize: 14,
   fill: 0xffffff,
+});
+
+const timerStyleNormal = new TextStyle({
+  fontFamily: "Inter, system-ui, sans-serif",
+  fontSize: 18,
+  fontWeight: "700",
+  fill: 0xffffff,
+  stroke: { color: 0x000000, width: 4, join: "round" },
+});
+
+const timerStyleWarn = new TextStyle({
+  fontFamily: "Inter, system-ui, sans-serif",
+  fontSize: 18,
+  fontWeight: "700",
+  fill: 0xfacc15,
+  stroke: { color: 0x000000, width: 4, join: "round" },
+});
+
+const timerStyleDanger = new TextStyle({
+  fontFamily: "Inter, system-ui, sans-serif",
+  fontSize: 18,
+  fontWeight: "800",
+  fill: 0xef4444,
+  stroke: { color: 0x000000, width: 4, join: "round" },
 });
 
 /**
@@ -212,6 +236,49 @@ export class TableRenderer {
   private app: Application | null = null;
   private root: Container | null = null;
   private hudText: Text | null = null;
+  /** Top-right HUD timer node. Driven by `actionDeadline` +
+   * the Pixi ticker so the countdown updates every frame
+   * without forcing a full table re-render. Hidden whenever
+   * `actionDeadline` is `null` (no pending action). */
+  private timerText: Text | null = null;
+  /**
+   * Cached screen-space anchor for the timer HUD, computed in
+   * `render` as `rootPos + (feltRight, feltBottom) * scale`. Used
+   * by `tickTimer` so the countdown sits flush against the
+   * bottom-right corner of the green felt rather than the canvas
+   * letterbox.
+   */
+  private timerAnchor: { x: number; y: number } | null = null;
+  /**
+   * Cached bounding box of the green felt region in design-space
+   * coords. Stashed during `render` so subsequent helpers (action
+   * button strip, etc.) can clip themselves to the play area
+   * instead of bleeding into the dark canvas margin.
+   */
+  private feltBoxDesign: { x: number; y: number; w: number; h: number } | null =
+    null;
+  /** Cached deadline (Unix ms) read from the last `render(view)`
+   * call. The ticker reads this each frame to format the
+   * countdown. */
+  private actionDeadline: number | null = null;
+  /**
+   * Cached buffer-pool size (ms) from the last `render(view)`.
+   * Read by `tickTimer` to render the trailing "+ Y" component
+   * once the base countdown elapses. `null` when the server
+   * didn't supply one (slice servers, replays).
+   */
+  private actionBufferMs: number | null = null;
+  /**
+   * Last whole-second value of `total_remaining` shown by
+   * `tickTimer`. Used to fire `timer-tick` SFX on every
+   * second-crossing while `total_remaining <= 5s`, and to skip
+   * the tick on the first frame after the timer appears (no
+   * audible "5" before the player has had a chance to act).
+   */
+  private lastTimerSeconds: number | null = null;
+  /** Bound ticker callback retained so we can remove it on
+   * `destroy()`. */
+  private timerTickHandler: (() => void) | null = null;
   private onTileClick: ((click: TileClick) => void) | null = null;
   private onActionClick: ((click: ActionClick) => void) | null = null;
   /** Optional callback fired when the renderer's internal UI state
@@ -227,6 +294,16 @@ export class TableRenderer {
    * options (e.g. after the riichi declaration is confirmed).
    */
   private riichiMode = false;
+  /**
+   * Currently-expanded call group (chi / pon / kan with more than
+   * one tile-combination option). When set, the action button
+   * strip draws a secondary row of tile-preview buttons above the
+   * group's collapsed button — one button per option, clicking
+   * dispatches the underlying `LegalAction`. Reset to `null` in
+   * `renderActionButtons` whenever the group's options vanish
+   * (call window closed, ack received, etc.).
+   */
+  private expandedCallGroup: "chi" | "pon" | "kan" | null = null;
   /** When true, paint the colored layout regions on top of the
    * normal table (debug aid while migrating to the Tenhou-style
    * layout). Toggled via {@link setShowLayoutDebug}. */
@@ -244,6 +321,14 @@ export class TableRenderer {
    * "hide hand result" eye button next to the panel so reviewers
    * can peek at the board state underneath the overlay. */
   private showHandResult = true;
+  /**
+   * When non-null, the renderer paints the hand-result overlay
+   * using this data instead of `view.lastHandResult`. Used by
+   * the live match's "eye" button to re-show the previous hand's
+   * panel after the auto-advance has cleared it from the store.
+   */
+  private handResultOverride: NonNullable<MatchView["lastHandResult"]> | null =
+    null;
   /** Callback invoked at the end of every `render()` with the
    * canvas-pixel rect of the currently-visible result panel
    * (win-info inner zone or match-end standings panel), or
@@ -261,6 +346,14 @@ export class TableRenderer {
     w: number;
     h: number;
   } | null = null;
+  /** Canvas-pixel centre of the focused seat's discard pond,
+   * republished on every render via {@link setPondCenterListener}.
+   * The React layer uses this to anchor the "peek last hand
+   * result" eye button to the middle of the human's pond. */
+  private pondCenterListener:
+    | ((point: { x: number; y: number } | null) => void)
+    | null = null;
+  private lastPondCenter: { x: number; y: number } | null = null;
   /** Per-frame wait-tile set computed at the top of `render()` when
    * `showWaits` is on. Used by {@link tintIfWait} to colour every
    * matching tile (discards, walls, hands, melds) red. Normalized
@@ -325,6 +418,29 @@ export class TableRenderer {
     hud.position.set(16, 16);
     app.stage.addChild(hud);
     this.hudText = hud;
+
+    // Bottom-right action-timer HUD ("X + Y"). Anchored just
+    // below the player's hand on the right edge of the play area
+    // so the buffer pool sits next to the seat that owns it.
+    // Driven by a Pixi-ticker callback so the seconds tick down
+    // every frame without a full table re-render. The trailing
+    // component is the server-supplied per-hand think buffer
+    // (see `bufferMs` in the WS protocol); the leading component
+    // is the per-action base budget that ticks down to 0 first.
+    const timer = new Text({ text: "", style: timerStyleNormal });
+    timer.anchor.set(1, 1);
+    // Position is refreshed every tick against `app.screen` so the
+    // HUD hugs the real bottom-right of the canvas regardless of
+    // how the design space is letterboxed.
+    timer.position.set(app.screen.width - 6, app.screen.height - 4);
+    timer.visible = false;
+    app.stage.addChild(timer);
+    this.timerText = timer;
+    const tickHandler = () => {
+      this.tickTimer();
+    };
+    this.timerTickHandler = tickHandler;
+    app.ticker.add(tickHandler);
 
     // Re-fit on container resizes (window resize, sidebar
     // collapse, etc.). The actual scaling is applied by `render`,
@@ -446,6 +562,18 @@ export class TableRenderer {
     this.showHandResult = flag;
   }
 
+  /**
+   * Override the hand-result overlay's source data. Pass `null`
+   * to fall back to the live `view.lastHandResult`. Used by the
+   * live match route's eye button to peek at the previous hand's
+   * panel after the auto-advance cleared the store entry.
+   */
+  setHandResultOverride(
+    r: NonNullable<MatchView["lastHandResult"]> | null
+  ): void {
+    this.handResultOverride = r;
+  }
+
   /** Subscribe to result-panel-bounds updates. The callback fires
    * after every `render()` with the canvas-pixel rect of the
    * currently-visible result panel, or `null` when nothing is
@@ -458,6 +586,16 @@ export class TableRenderer {
     this.resultPanelBoundsListener = cb;
   }
 
+  /** Subscribe to focused-seat pond-centre updates. The callback
+   * fires after every `render()` with the canvas-pixel centre of
+   * the human's discard pond, or `null` when no view is mounted.
+   * Pass `null` to clear. */
+  setPondCenterListener(
+    cb: ((point: { x: number; y: number } | null) => void) | null
+  ): void {
+    this.pondCenterListener = cb;
+  }
+
   destroy(): void {
     if (this.resizeRafHandle !== null) {
       cancelAnimationFrame(this.resizeRafHandle);
@@ -468,6 +606,10 @@ export class TableRenderer {
       this.resizeObserver = null;
     }
     if (this.app) {
+      if (this.timerTickHandler) {
+        this.app.ticker.remove(this.timerTickHandler);
+        this.timerTickHandler = null;
+      }
       // IMPORTANT: do NOT pass `texture: true` here. Pixi's
       // `Assets` cache hands back the same `Texture` instances on
       // every `Assets.load(...)` call, so destroying the base
@@ -484,6 +626,8 @@ export class TableRenderer {
     }
     this.root = null;
     this.hudText = null;
+    this.timerText = null;
+    this.actionDeadline = null;
   }
 
   /** Re-render the entire table for the given view. Cheap enough at Phase 0.5 scale. */
@@ -571,11 +715,18 @@ export class TableRenderer {
     // the canvas background around the player-info chips stays
     // neutral dark gray.
     const feltBox = boundingBox([...layout.wall, ...layout.hands]);
+    this.feltBoxDesign = feltBox;
     root.addChild(
       new Graphics().rect(feltBox.x, feltBox.y, feltBox.w, feltBox.h).fill({
         color: FELT_COLOR,
       })
     );
+    // Stash the felt's bottom-right in screen coords so the timer
+    // HUD (which lives on `app.stage`, not `root`) can hug it.
+    this.timerAnchor = {
+      x: root.position.x + (feltBox.x + feltBox.w) * scale,
+      y: root.position.y + (feltBox.y + feltBox.h) * scale,
+    };
 
     // Legacy render passes anchor on DESIGN_W/2, DESIGN_H/2. The
     // layout's centre may not coincide with that point, so passes
@@ -612,9 +763,17 @@ export class TableRenderer {
     const seq = view.lastSeq;
     if (conn === "replay") {
       this.hudText.text = "";
+      this.actionDeadline = null;
+      this.actionBufferMs = null;
     } else {
       this.hudText.text = `conn: ${conn}   wall: ${wall}   seq: ${seq}`;
+      this.actionDeadline = view.actionDeadline;
+      this.actionBufferMs = view.actionBufferMs;
     }
+    // Render one timer frame immediately so the value reflects the
+    // latest `view` even if the Pixi ticker hasn't fired since the
+    // last `render()`.
+    this.tickTimer();
 
     // Call / action buttons (chi/pon/kan/ron/pass). Discard-style
     // legals stay tile-driven; only "decision" actions surface here.
@@ -627,8 +786,15 @@ export class TableRenderer {
     let designRect: { x: number; y: number; w: number; h: number } | null =
       null;
     if (this.showHandResult) {
-      if (view.lastHandResult && !view.matchEnded) {
-        designRect = this.renderHandResult(view, cx, cy, layout);
+      const effectiveResult = this.handResultOverride ?? view.lastHandResult;
+      if (effectiveResult && !view.matchEnded) {
+        designRect = this.renderHandResult(
+          view,
+          effectiveResult,
+          cx,
+          cy,
+          layout
+        );
       }
       if (view.matchEnded) {
         designRect = this.renderMatchEnd(view, cx, cy);
@@ -666,6 +832,30 @@ export class TableRenderer {
       this.lastResultPanelBounds = nextBounds;
       if (this.resultPanelBoundsListener) {
         this.resultPanelBoundsListener(nextBounds);
+      }
+    }
+
+    // Publish the focused seat's discard-pond centre so the
+    // React layer can anchor the post-hand "peek" eye button to
+    // the middle of the human's pond. Same fit-transform mirror
+    // + dedupe as the result-panel listener above.
+    const seat = view.mySeat ?? 0;
+    const pond = layout.discards[seat];
+    const sx2 = this.root.scale.x;
+    const sy2 = this.root.scale.y;
+    const nextPond = {
+      x: (pond.x + pond.w / 2) * sx2 + this.root.position.x,
+      y: (pond.y + pond.h / 2) * sy2 + this.root.position.y,
+    };
+    const prevPond = this.lastPondCenter;
+    if (
+      prevPond === null ||
+      prevPond.x !== nextPond.x ||
+      prevPond.y !== nextPond.y
+    ) {
+      this.lastPondCenter = nextPond;
+      if (this.pondCenterListener) {
+        this.pondCenterListener(nextPond);
       }
     }
   }
@@ -1397,15 +1587,12 @@ export class TableRenderer {
 
   private renderHandResult(
     view: MatchView,
+    r: NonNullable<MatchView["lastHandResult"]>,
     cx: number,
     cy: number,
     layout: TableLayout
   ): { x: number; y: number; w: number; h: number } | null {
     if (!this.root) {
-      return null;
-    }
-    const r = view.lastHandResult;
-    if (!r) {
       return null;
     }
     // For wins, the upstream stream emits `win` then `hand_end`
@@ -2559,6 +2746,14 @@ export class TableRenderer {
         wrap.position.set(cursorX, rowY);
         cursorX += tileStride;
       }
+      // Freshly-discarded tile: nudge the last tile by +10 design
+      // px along the row (+x, "right" in the seat's frame) and
+      // across rows (+y, "bottom" / away from center) so it reads
+      // as not-yet-settled. Settled flush by the next draw / call
+      // / hand boundary via the store clearing `freshlyDiscardedSeat`.
+      if (i === discards.length - 1 && view.freshlyDiscardedSeat === seat) {
+        wrap.position.set(wrap.position.x + 10, wrap.position.y + 10);
+      }
       discardContainer.addChild(wrap);
     });
     // Position the discard container inside `layout.discards[seat]`.
@@ -2967,65 +3162,227 @@ export class TableRenderer {
     return { node: c, width: xCursor + meldOverlap };
   }
 
-  private renderActionButtons(view: MatchView, cx: number): void {
+  /**
+   * Update the top-right action-timer countdown. Called from a
+   * Pixi-ticker callback every frame and also synchronously at
+   * the end of `render()` so values stay fresh between ticks.
+   *
+   * The deadline is a Unix-ms timestamp supplied by the server in
+   * its most recent `snapshot` / `event` frame; we tick locally
+   * against `Date.now()` so the countdown stays smooth without
+   * busy-pinging the server. Server clock skew shows up as a
+   * one-shot offset, not a drift.
+   */
+  private tickTimer(): void {
+    const timer = this.timerText;
+    if (!timer) {
+      return;
+    }
+    // Keep the HUD glued to the bottom-right corner of the green
+    // felt. `timerAnchor` is refreshed every `render` from the
+    // current root transform.
+    if (this.timerAnchor) {
+      timer.position.set(this.timerAnchor.x - 6, this.timerAnchor.y - 4);
+    } else if (this.app) {
+      timer.position.set(this.app.screen.width - 6, this.app.screen.height - 4);
+    }
+    const deadline = this.actionDeadline;
+    if (deadline === null) {
+      if (timer.visible) {
+        timer.visible = false;
+      }
+      this.lastTimerSeconds = null;
+      return;
+    }
+    const now = Date.now();
+    // Base = the per-action 5s budget that ticks down first.
+    // Once it hits 0, the trailing buffer starts burning.
+    const baseRemainingMs = Math.max(0, deadline - now);
+    const baseElapsedOverflowMs = Math.max(0, now - deadline);
+    const bufferStartMs = this.actionBufferMs ?? 0;
+    const bufferRemainingMs = Math.max(
+      0,
+      bufferStartMs - baseElapsedOverflowMs
+    );
+    const totalRemainingMs = baseRemainingMs + bufferRemainingMs;
+    const baseSec = Math.ceil(baseRemainingMs / 1000);
+    const bufferSec = Math.ceil(bufferRemainingMs / 1000);
+    const nextText =
+      this.actionBufferMs === null
+        ? `${baseSec}s`
+        : `${baseSec} + ${bufferSec}`;
+    if (timer.text !== nextText) {
+      timer.text = nextText;
+    }
+    // Tint thresholds: yellow when in the buffer pool, red when
+    // total ≤ 5s (matches the tick-sound threshold).
+    const totalSec = Math.ceil(totalRemainingMs / 1000);
+    const nextStyle =
+      totalSec <= 5
+        ? timerStyleDanger
+        : baseSec === 0
+          ? timerStyleWarn
+          : timerStyleNormal;
+    if (timer.style !== nextStyle) {
+      timer.style = nextStyle;
+    }
+    if (!timer.visible) {
+      timer.visible = true;
+    }
+    // Fire `timer-tick` on every whole-second crossing while the
+    // total remaining is at or below 5s (including the first
+    // frame the timer paints at ≤5s, so the player gets the
+    // full 5-4-3-2-1 sequence even if the window opens already
+    // inside the danger zone).
+    if (totalSec > 0 && totalSec <= 5 && totalSec !== this.lastTimerSeconds) {
+      playGameSound("timer-tick");
+    }
+    this.lastTimerSeconds = totalSec;
+  }
+
+  private renderActionButtons(view: MatchView, _cx: number): void {
     if (!this.root) {
       return;
     }
     // Pull every non-discard legal action — these are the call /
-    // riichi / win decisions that need explicit buttons. Discards are
-    // tile-driven (click a tile in the hand).
-    //
-    // Riichi is special: the server surfaces one legal action per
-    // legal declaration tile, but the UI consolidates them into a
-    // single "Riichi" toggle. Clicking the button enters
-    // `riichiMode`; the next click on a riichi-legal tile sends the
-    // matching `riichi:TILE` action id.
+    // riichi / win decisions that need explicit buttons. Discards
+    // are tile-driven (click a tile in the hand).
     const raw = view.legalActions.filter(
       (a) => a.type !== "discard" && a.type !== "draw"
     );
-    const buttons: Array<LegalAction | { synthetic: "riichi" }> = [];
-    let seenRiichi = false;
-    for (const a of raw) {
-      if (a.type === "riichi") {
-        if (!seenRiichi) {
-          seenRiichi = true;
-          buttons.push({ synthetic: "riichi" });
-        }
-        continue;
-      }
-      buttons.push(a);
+
+    // Group call-type actions (chi / pon / kan) so we can collapse
+    // multiple tile-combination options behind a single chevron
+    // button, and consolidate riichi declarations into one toggle.
+    const chi = raw.filter((a) => a.type === "chi");
+    const pon = raw.filter((a) => a.type === "pon");
+    const kan = raw.filter((a) => a.type === "kan");
+    const others = raw.filter(
+      (a) =>
+        a.type !== "chi" &&
+        a.type !== "pon" &&
+        a.type !== "kan" &&
+        a.type !== "riichi"
+    );
+    const riichiAvailable = raw.some((a) => a.type === "riichi");
+
+    // Clear stale expansion when its group is no longer offered.
+    if (
+      (this.expandedCallGroup === "chi" && chi.length === 0) ||
+      (this.expandedCallGroup === "pon" && pon.length === 0) ||
+      (this.expandedCallGroup === "kan" && kan.length === 0)
+    ) {
+      this.expandedCallGroup = null;
     }
-    if (buttons.length === 0) {
+
+    // Display order, right-to-left: primary win/ron sit closest to
+    // the right edge, then call buttons (chi/pon/kan), then
+    // riichi, finally pass on the far left.
+    type Entry =
+      | { kind: "action"; action: LegalAction }
+      | { kind: "group"; group: "chi" | "pon" | "kan"; actions: LegalAction[] }
+      | { kind: "riichi" };
+    const entries: Entry[] = [];
+    const others_pass = others.filter((a) => a.type === "pass");
+    const others_main = others.filter((a) => a.type !== "pass");
+    for (const a of others_pass) {
+      entries.push({ kind: "action", action: a });
+    }
+    if (riichiAvailable) {
+      entries.push({ kind: "riichi" });
+    }
+    if (chi.length === 1) {
+      entries.push({ kind: "action", action: chi[0] });
+    } else if (chi.length > 1) {
+      entries.push({ kind: "group", group: "chi", actions: chi });
+    }
+    if (pon.length === 1) {
+      entries.push({ kind: "action", action: pon[0] });
+    } else if (pon.length > 1) {
+      entries.push({ kind: "group", group: "pon", actions: pon });
+    }
+    if (kan.length === 1) {
+      entries.push({ kind: "action", action: kan[0] });
+    } else if (kan.length > 1) {
+      entries.push({ kind: "group", group: "kan", actions: kan });
+    }
+    for (const a of others_main) {
+      entries.push({ kind: "action", action: a });
+    }
+
+    if (entries.length === 0) {
       return;
     }
+
+    // Big, right-anchored strip in the empty zone between the
+    // central wall and the right-side discard pond. Right edge
+    // hugs the inside of the green felt so the buttons never
+    // bleed into the dark canvas margin.
+    const BTN_H = 64;
+    const BTN_GAP = 14;
+    const felt = this.feltBoxDesign;
+    const RIGHT_EDGE = felt ? felt.x + felt.w - 16 : DESIGN_W - 140;
+    const BASE_Y = felt ? felt.y + felt.h - 240 : DESIGN_H - 220;
+
     const strip = new Container();
-    const btnH = 44;
-    const btnPad = 16;
-    const btnGap = 12;
-    // Two passes: first measure, then position centered.
-    const rendered: Container[] = [];
-    const widths: number[] = [];
-    for (const entry of buttons) {
-      if ("synthetic" in entry) {
-        const { container, width } = this.drawRiichiToggleButton();
-        rendered.push(container);
-        widths.push(width);
+    // Walls set `wallContainer.zIndex` up to 2 via the root's
+    // sortable-children mode — bump the button strip well above
+    // that so the call buttons aren't obscured by the wall in
+    // front of seat 0.
+    strip.zIndex = 50;
+
+    // First pass: build buttons + measure.
+    const rendered: Array<{ c: Container; w: number }> = [];
+    for (const entry of entries) {
+      if (entry.kind === "riichi") {
+        rendered.push(this.drawRiichiToggleButton(BTN_H));
+      } else if (entry.kind === "group") {
+        rendered.push(
+          this.drawCallGroupButton(entry.group, entry.actions.length, BTN_H)
+        );
       } else {
-        const { container, width } = this.drawActionButton(entry);
-        rendered.push(container);
-        widths.push(width);
+        rendered.push(this.drawActionButton(entry.action, BTN_H));
       }
     }
     const totalW =
-      widths.reduce((a, b) => a + b, 0) + btnGap * (buttons.length - 1);
-    let x = -totalW / 2;
-    rendered.forEach((c, i) => {
-      c.position.set(x, 0);
+      rendered.reduce((acc, r) => acc + r.w, 0) +
+      BTN_GAP * (rendered.length - 1);
+    let x = RIGHT_EDGE - totalW;
+    rendered.forEach(({ c, w }) => {
+      c.position.set(x, BASE_Y);
       strip.addChild(c);
-      x += widths[i] + btnGap;
+      x += w + BTN_GAP;
     });
-    // Sit just above the bottom hand row.
-    strip.position.set(cx, DESIGN_H - HAND_PAD - SMALL_TILE_H - btnH - btnPad);
+
+    // Expanded option row — drawn ABOVE the group row, anchored to
+    // the right edge as well. Each option is a wide tile-preview
+    // button using the `bottomSmall` sheet.
+    if (this.expandedCallGroup) {
+      const opts =
+        this.expandedCallGroup === "chi"
+          ? chi
+          : this.expandedCallGroup === "pon"
+            ? pon
+            : kan;
+      if (opts.length > 0) {
+        const OPT_GAP = 12;
+        const optRendered: Array<{ c: Container; w: number }> = [];
+        for (const a of opts) {
+          optRendered.push(this.drawCallOptionButton(a, BTN_H));
+        }
+        const optTotal =
+          optRendered.reduce((acc, r) => acc + r.w, 0) +
+          OPT_GAP * (optRendered.length - 1);
+        let ox = RIGHT_EDGE - optTotal;
+        const optY = BASE_Y - BTN_H - 14;
+        optRendered.forEach(({ c, w }) => {
+          c.position.set(ox, optY);
+          strip.addChild(c);
+          ox += w + OPT_GAP;
+        });
+      }
+    }
+
     this.root.addChild(strip);
   }
 
@@ -3034,24 +3391,23 @@ export class TableRenderer {
    * next render then dims non-riichi-legal tiles and routes hand
    * clicks to the matching `riichi:TILE` legal action.
    */
-  private drawRiichiToggleButton(): {
-    container: Container;
-    width: number;
+  private drawRiichiToggleButton(height = 44): {
+    c: Container;
+    w: number;
   } {
     const labelStyle = new TextStyle({
       fontFamily: "Inter, system-ui, sans-serif",
-      fontSize: 18,
+      fontSize: Math.round(height * 0.42),
       fontWeight: "700",
       fill: 0xffffff,
     });
     const active = this.riichiMode;
-    const text = active ? "Cancel Riichi" : "Riichi";
+    const text = active ? "Cancel" : "Riichi";
     const labelNode = new Text({ text, style: labelStyle });
-    const padX = 18;
-    const width = Math.max(72, labelNode.width + padX * 2);
-    const height = 44;
+    const padX = 22;
+    const width = Math.max(110, labelNode.width + padX * 2);
     const bg = new Graphics()
-      .roundRect(0, 0, width, height, 8)
+      .roundRect(0, 0, width, height, 10)
       .fill({ color: active ? 0xe0c060 : 0xc0a040 });
     labelNode.anchor.set(0.5);
     labelNode.position.set(width / 2, height / 2);
@@ -3061,28 +3417,148 @@ export class TableRenderer {
     c.cursor = "pointer";
     c.on("pointerdown", () => {
       this.riichiMode = !this.riichiMode;
-      // Re-render so the new mode reflects in tile alpha + button
-      // label. We don't have a direct re-render hook; calling
-      // `render` requires the latest view, which the caller owns.
-      // Fire an action click with a sentinel so the host (match
-      // route) can trigger a re-render. Simpler: just rely on the
-      // host's render-on-state-change loop — toggling riichiMode
-      // alone won't trigger one, so we emit a no-op click that the
-      // host can ignore. Instead, we redraw directly:
       if (this.onRenderRequest) {
         this.onRenderRequest();
       }
     });
-    return { container: c, width };
+    return { c, w: width };
   }
 
-  private drawActionButton(action: LegalAction): {
-    container: Container;
-    width: number;
-  } {
+  /**
+   * Collapsed call-group button (Chi/Pon/Kan with > 1 options).
+   * Shows the label + a `▾` chevron; clicking toggles the
+   * expansion row so the player can pick a specific tile combo.
+   */
+  private drawCallGroupButton(
+    group: "chi" | "pon" | "kan",
+    optionCount: number,
+    height = 64
+  ): { c: Container; w: number } {
+    const palette: Record<typeof group, ColorSource> = {
+      chi: 0x4a7fb4,
+      pon: 0xb47f3a,
+      kan: 0x7a4ab4,
+    };
     const labelStyle = new TextStyle({
       fontFamily: "Inter, system-ui, sans-serif",
-      fontSize: 18,
+      fontSize: Math.round(height * 0.42),
+      fontWeight: "700",
+      fill: 0xffffff,
+    });
+    const active = this.expandedCallGroup === group;
+    const labelText = group === "chi" ? "Chi" : group === "pon" ? "Pon" : "Kan";
+    const text = `${labelText} ${active ? "▴" : "▾"}`;
+    const labelNode = new Text({ text, style: labelStyle });
+    const padX = 22;
+    const width = Math.max(120, labelNode.width + padX * 2);
+    const fillColor = palette[group];
+    const bg = new Graphics()
+      .roundRect(0, 0, width, height, 10)
+      .fill({ color: fillColor });
+    if (active) {
+      bg.roundRect(0, 0, width, height, 10).stroke({
+        color: 0xffffff,
+        width: 3,
+      });
+    }
+    labelNode.anchor.set(0.5);
+    labelNode.position.set(width / 2, height / 2);
+    const c = new Container();
+    c.addChild(bg, labelNode);
+    c.eventMode = "static";
+    c.cursor = "pointer";
+    // Track which group's expansion this button toggles; ignored
+    // by lint via the parameter usage above.
+    void optionCount;
+    c.on("pointerdown", () => {
+      this.expandedCallGroup = active ? null : group;
+      if (this.onRenderRequest) {
+        this.onRenderRequest();
+      }
+    });
+    return { c, w: width };
+  }
+
+  /**
+   * Tile-preview button used inside the expanded call-options row.
+   * Renders the meld's tiles (caller-contributed + called tile)
+   * using the `bottomSmall` sprite sheet, sized to fit the strip
+   * height. Clicking dispatches the underlying `LegalAction`.
+   */
+  private drawCallOptionButton(
+    action: LegalAction,
+    height = 64
+  ): { c: Container; w: number } {
+    // Compose the visible meld:
+    //   chi / pon / daiminkan: caller's tiles + called tile (from
+    //                          the discard)
+    //   ankan:                 4 same tiles (no called tile)
+    //   shouminkan:            single tile being added on top of
+    //                          an existing pon
+    const previewTiles: string[] = [];
+    if (action.tiles) {
+      previewTiles.push(...action.tiles);
+    }
+    if (
+      action.tile &&
+      action.kanKind !== "ankan" &&
+      action.kanKind !== "shouminkan"
+    ) {
+      previewTiles.push(action.tile);
+    }
+    // Sort ascending so chi previews read 4-5-6 left to right.
+    previewTiles.sort();
+
+    const tileH = height - 12;
+    const tileW = (tileH * SMALL_TILE_W) / SMALL_TILE_H;
+    const tileGap = 2;
+    const padX = 12;
+    const width =
+      padX * 2 +
+      previewTiles.length * tileW +
+      tileGap * Math.max(0, previewTiles.length - 1);
+
+    const palette: Record<string, ColorSource> = {
+      chi: 0x4a7fb4,
+      pon: 0xb47f3a,
+      kan: 0x7a4ab4,
+    };
+    const bg = new Graphics()
+      .roundRect(0, 0, width, height, 10)
+      .fill({ color: palette[action.type] ?? 0x666666 });
+
+    const c = new Container();
+    c.addChild(bg);
+
+    let tx = padX;
+    const ty = (height - tileH) / 2;
+    for (const tile of previewTiles) {
+      const sprite = new Sprite(this.getTileTexture("bottomSmall", tile));
+      sprite.width = tileW;
+      sprite.height = tileH;
+      sprite.position.set(tx, ty);
+      c.addChild(sprite);
+      tx += tileW + tileGap;
+    }
+
+    c.eventMode = "static";
+    c.cursor = "pointer";
+    c.on("pointerdown", () => {
+      this.expandedCallGroup = null;
+      if (this.onActionClick) {
+        this.onActionClick({ action });
+      }
+    });
+    return { c, w: width };
+  }
+
+  private drawActionButton(
+    action: LegalAction,
+    height = 44
+  ): { c: Container; w: number } {
+    const labelStyle = new TextStyle({
+      fontFamily: "Inter, system-ui, sans-serif",
+      fontSize: Math.round(height * 0.42),
       fontWeight: "700",
       fill: 0xffffff,
     });
@@ -3096,13 +3572,24 @@ export class TableRenderer {
       win: 0x40a060,
       riichi: 0xc0a040,
     };
-    const text = labelForAction(action);
+    // Single-option chi/pon/kan: shorten the label to just the
+    // group name (the discarded tile is already obvious on the
+    // table). Other action types keep their full label.
+    let text: string;
+    if (action.type === "chi") {
+      text = "Chi";
+    } else if (action.type === "pon") {
+      text = "Pon";
+    } else if (action.type === "kan") {
+      text = "Kan";
+    } else {
+      text = labelForAction(action);
+    }
     const labelNode = new Text({ text, style: labelStyle });
-    const padX = 18;
-    const width = Math.max(72, labelNode.width + padX * 2);
-    const height = 44;
+    const padX = 22;
+    const width = Math.max(110, labelNode.width + padX * 2);
     const bg = new Graphics()
-      .roundRect(0, 0, width, height, 8)
+      .roundRect(0, 0, width, height, 10)
       .fill({ color: palette[action.type] ?? 0x666666 });
     labelNode.anchor.set(0.5);
     labelNode.position.set(width / 2, height / 2);
@@ -3115,7 +3602,7 @@ export class TableRenderer {
         this.onActionClick({ action });
       }
     });
-    return { container: c, width };
+    return { c, w: width };
   }
 
   /**

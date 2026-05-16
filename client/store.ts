@@ -21,6 +21,60 @@ import type {
   Tile,
 } from "~/game/protocol/messages";
 
+/**
+ * Lightweight event bus for applied `GameEvent`s.
+ *
+ * The store is the canonical source of "what just happened in the
+ * match" — so anything that's a side-effect of game events (sound
+ * cues, animation triggers, future haptics, analytics) subscribes
+ * here, not to the transport layer. `ws.ts` only knows how to
+ * translate wire frames into store calls; it must not have a UI
+ * concern in it.
+ *
+ * Snapshots intentionally do NOT publish: a snapshot is a state
+ * rehydration (initial attach, resync, replay seek) and replaying
+ * a burst of catch-up cues would be noise. Only the incremental
+ * `applyEvent(event, seq)` path emits.
+ */
+export interface GameEventNotification {
+  event: GameEvent;
+  seq: number;
+  /** Recipient seat, snapshotted at emit time so listeners don't
+   * need to re-read the store. `null` before the match attaches. */
+  mySeat: Seat | null;
+}
+
+type GameEventListener = (notification: GameEventNotification) => void;
+
+const gameEventListeners = new Set<GameEventListener>();
+
+/**
+ * Register a listener that fires every time `applyEvent` lands a
+ * new `GameEvent`. Returns an unsubscribe function. Listeners are
+ * fired synchronously after the store `set` completes, so they
+ * may read the updated state via `useMatchStore.getState()`.
+ *
+ * Errors thrown by a listener are caught and logged so one
+ * misbehaving subscriber can't break the apply loop.
+ */
+export function subscribeToGameEvents(listener: GameEventListener): () => void {
+  gameEventListeners.add(listener);
+  return () => {
+    gameEventListeners.delete(listener);
+  };
+}
+
+function emitGameEvent(notification: GameEventNotification): void {
+  for (const listener of gameEventListeners) {
+    try {
+      listener(notification);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[game-events] listener threw", err);
+    }
+  }
+}
+
 export type ConnStatus =
   | "idle"
   | "connecting"
@@ -88,6 +142,20 @@ export interface MatchView {
   conn: ConnStatus;
   /** Optimistic discard markers; tile shown gray until server confirms. */
   pendingDiscard: { seat: Seat; tile: Tile } | null;
+  /**
+   * Unix-ms deadline for the current legal-action window, as sent
+   * by the server in the most recent `snapshot` / `event` frame.
+   * `null` when the server didn't supply one (slice servers, replays).
+   * Drives the renderer's countdown HUD.
+   */
+  actionDeadline: number | null;
+  /**
+   * Per-hand "think buffer" in ms remaining for the human seat,
+   * as supplied by the server. Drives the trailing component
+   * ("X + Y") of the bottom-left HUD timer. `null` when the
+   * server didn't supply one (slice servers, replays).
+   */
+  actionBufferMs: number | null;
   /** Per-seat display names. Populated from the `match_start`
    * event (live) or `ReplayLog.seats` (replay). `null` until the
    * match starts; falls back to the seat wind in the renderer
@@ -166,6 +234,30 @@ export interface MatchView {
    * `hand_start`, and snapshot resync.
    */
   freshlyDrawnSeat: Seat | null;
+
+  /**
+   * Seat whose latest discard hasn't been "settled" yet — i.e.
+   * the discard tile that's still hanging out, pre-call-window,
+   * before the next draw or hand-end pulls it flush against the
+   * rest of the pond. `null` outside of a discard→next-event
+   * window. The renderer uses this to offset just that one tile
+   * by a few px so the eye can register which tile was just put
+   * down. Set on every `discard`; cleared on `draw`, `call`,
+   * `win`, `hand_start`, and snapshot resync.
+   */
+  freshlyDiscardedSeat: Seat | null;
+
+  /**
+   * Pre-match ready-check state. `null` while no ready check is
+   * in flight (i.e. before `match_start` and once dealing has
+   * begun). `deadline` is the wall-clock ms at which the
+   * server auto-advances. `acked` is the per-seat bitmap so
+   * the overlay can render which seats have already pressed GO.
+   */
+  readyCheck: {
+    deadline: number;
+    acked: [boolean, boolean, boolean, boolean];
+  } | null;
 }
 
 interface MatchStore extends MatchView {
@@ -175,6 +267,11 @@ interface MatchStore extends MatchView {
   hydrateSnapshot: (state: SnapshotState, seq: number) => void;
   setLegalActions: (actions: LegalAction[]) => void;
   setPendingDiscard: (p: { seat: Seat; tile: Tile } | null) => void;
+  setActionDeadline: (deadline: number | null) => void;
+  setActionBufferMs: (ms: number | null) => void;
+  setReadyCheck: (
+    rc: { deadline: number; acked: [boolean, boolean, boolean, boolean] } | null
+  ) => void;
   reset: () => void;
 }
 
@@ -200,6 +297,8 @@ const initialState: MatchView = {
   lastSeq: -1,
   conn: "idle",
   pendingDiscard: null,
+  actionDeadline: null,
+  actionBufferMs: null,
   scores: [25000, 25000, 25000, 25000],
   dealer: 0,
   roundWind: "E",
@@ -213,6 +312,8 @@ const initialState: MatchView = {
   matchEnded: null,
   currentWaits: null,
   freshlyDrawnSeat: null,
+  freshlyDiscardedSeat: null,
+  readyCheck: null,
 };
 
 export const useMatchStore = create<MatchStore>((set) => ({
@@ -239,6 +340,18 @@ export const useMatchStore = create<MatchStore>((set) => ({
 
   setPendingDiscard: (pendingDiscard) => {
     set({ pendingDiscard });
+  },
+
+  setActionDeadline: (actionDeadline) => {
+    set({ actionDeadline });
+  },
+
+  setActionBufferMs: (actionBufferMs) => {
+    set({ actionBufferMs });
+  },
+
+  setReadyCheck: (readyCheck) => {
+    set({ readyCheck });
   },
 
   hydrateSnapshot: (snap, seq) => {
@@ -289,6 +402,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       lastHandResult: null,
       matchEnded: null,
       freshlyDrawnSeat: null,
+      freshlyDiscardedSeat: null,
     }));
   },
 
@@ -298,7 +412,6 @@ export const useMatchStore = create<MatchStore>((set) => ({
         ...state,
         lastSeq: seq,
       };
-
       switch (event.type) {
         case "match_start": {
           const namesArr = new Array<string>(4).fill("");
@@ -355,6 +468,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             lastHandResult: null,
             matchEnded: null,
             freshlyDrawnSeat: null,
+            freshlyDiscardedSeat: null,
           };
         }
         case "draw": {
@@ -373,6 +487,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
               ? state.liveDrawsTaken
               : state.liveDrawsTaken + 1,
             freshlyDrawnSeat: event.seat,
+            freshlyDiscardedSeat: null,
           };
         }
         case "discard": {
@@ -456,6 +571,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             riichiSticks,
             pendingDiscard,
             freshlyDrawnSeat: null,
+            freshlyDiscardedSeat: event.seat,
           };
         }
         case "win": {
@@ -630,6 +746,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             melds,
             discards,
             freshlyDrawnSeat: null,
+            freshlyDiscardedSeat: null,
           };
         }
         case "match_end": {
@@ -644,6 +761,10 @@ export const useMatchStore = create<MatchStore>((set) => ({
         }
       }
     });
+    // Notify side-effect subscribers (sound, future analytics) after
+    // the state transition has landed. Snapshots do NOT fire this
+    // path on purpose — see `subscribeToGameEvents`.
+    emitGameEvent({ event, seq, mySeat: useMatchStore.getState().mySeat });
   },
 
   reset: () => {

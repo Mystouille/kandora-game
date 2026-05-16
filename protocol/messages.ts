@@ -349,6 +349,14 @@ const SnapshotMsg = z.object({
   legalActions: z.array(LegalActionSchema),
   /** Unix ms; client uses this for the action timer. Optional in slice. */
   deadline: z.number().int().optional(),
+  /**
+   * Milliseconds of "think buffer" the human has left for the
+   * current hand, on top of the base per-action budget encoded
+   * in `deadline`. Driven by the server; renders as the
+   * second component of the bottom-left timer ("X + Y"). Refills
+   * to the per-hand allowance at every `hand_start`.
+   */
+  bufferMs: z.number().int().nonnegative().optional(),
 });
 
 const EventMsg = z.object({
@@ -357,6 +365,8 @@ const EventMsg = z.object({
   events: z.array(GameEventSchema),
   legalActions: z.array(LegalActionSchema),
   deadline: z.number().int().optional(),
+  /** See `SnapshotMsg.bufferMs`. */
+  bufferMs: z.number().int().nonnegative().optional(),
 });
 
 const ErrorMsg = z.object({
@@ -365,10 +375,35 @@ const ErrorMsg = z.object({
   message: z.string(),
 });
 
+/**
+ * Pre-match ready check. Sent once after `match_start` and re-
+ * sent every time a seat acks. The match's first hand only
+ * begins once all seats are acked or the deadline elapses
+ * (whichever first). Bots are pre-acked server-side so the
+ * panel only blocks on the human.
+ */
+const ReadyCheckMsg = z.object({
+  type: z.literal("ready_check"),
+  /** Unix ms; mirrors `SnapshotMsg.deadline`. */
+  deadline: z.number().int(),
+  /** Per-seat ack state, indexed 0..3 absolute seat order. */
+  acked: z.tuple([z.boolean(), z.boolean(), z.boolean(), z.boolean()]),
+});
+
+/**
+ * Sent once when the ready check is over (everyone acked or
+ * the deadline elapsed). Clears the client overlay.
+ */
+const ReadyCheckEndMsg = z.object({
+  type: z.literal("ready_check_end"),
+});
+
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   SnapshotMsg,
   EventMsg,
   ErrorMsg,
+  ReadyCheckMsg,
+  ReadyCheckEndMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 
@@ -417,9 +452,19 @@ const ResyncMsg = z.object({
   lastSeq: z.number().int().nonnegative(),
 });
 
+/**
+ * Human ack for the pre-match ready check. Bots are pre-acked
+ * server-side; this is the only way the human signals "go".
+ */
+const ReadyMsg = z.object({
+  type: z.literal("ready"),
+  matchId: z.string(),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   HelloMsg,
   ActMsg,
   ResyncMsg,
+  ReadyMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;

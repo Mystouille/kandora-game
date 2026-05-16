@@ -48,7 +48,14 @@ import {
   QuestionOutlined,
   EyeOutlined,
   EyeInvisibleOutlined,
+  SoundOutlined,
+  AudioMutedOutlined,
 } from "@ant-design/icons";
+import {
+  isGameSoundEnabled,
+  setGameSoundEnabled,
+  playSoundForEvent,
+} from "~/game/client/sound";
 
 /**
  * Loader-serialized shape of a `ReplayReview`. Drawing blobs are
@@ -422,6 +429,32 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
   );
   const [focusSeat, setFocusSeat] = useState<Seat>(initial.seat);
   const [copied, setCopied] = useState<boolean>(false);
+  // Audio toggle: persisted via the same `kandora.game.sound.enabled`
+  // localStorage key that the live-game UI uses, so the user's mute
+  // preference carries across both surfaces.
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() =>
+    isGameSoundEnabled()
+  );
+  // Play SFX only on forward single-step advances (the cue mapper
+  // is meant for the next event "happening"). Jumps via slider /
+  // round-skip, backward steps, and the initial mount stay silent
+  // so the replay doesn't blast a chord on every navigation.
+  const prevIndexRef = useRef<number>(initial.index);
+  useEffect(() => {
+    const prev = prevIndexRef.current;
+    prevIndexRef.current = index;
+    if (!soundEnabled) {
+      return;
+    }
+    if (index !== prev + 1) {
+      return;
+    }
+    const ev = log.events[index];
+    if (!ev) {
+      return;
+    }
+    playSoundForEvent(ev, focusSeat);
+  }, [index, soundEnabled, log.events, focusSeat]);
 
   // ── Review state ────────────────────────────────────────────────
   // `review` mirrors what the server returned at load time and is
@@ -1274,6 +1307,19 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
             When the editor has unpublished local edits the same
             slot turns into a "Publish" button that pushes them
             to the server before copying the share link. */}
+        <button
+          type="button"
+          onClick={() => {
+            const next = !soundEnabled;
+            setSoundEnabled(next);
+            setGameSoundEnabled(next);
+          }}
+          aria-label={soundEnabled ? "Mute sound" : "Unmute sound"}
+          title={soundEnabled ? "Mute sound" : "Unmute sound"}
+          className="absolute top-2 right-[13rem] z-30 h-11 w-11 flex items-center justify-center rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-xl transition-colors"
+        >
+          {soundEnabled ? <SoundOutlined /> : <AudioMutedOutlined />}
+        </button>
         <button
           type="button"
           onClick={() => {

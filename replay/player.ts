@@ -126,6 +126,17 @@ export interface ReplayView {
    * Cleared on `discard`, `call`, `hand_start`, and `match_end`.
    */
   freshlyDrawnSeat: Seat | null;
+
+  /**
+   * Mirror of `freshlyDrawnSeat` for the discard side: seat whose
+   * latest discard tile is still "in flight" — the renderer offsets
+   * just that one tile until the next draw / call / hand boundary
+   * settles it flush against the pond.
+   *
+   * Set on every `discard`; cleared on `draw`, `call`,
+   * `hand_start`, and `match_end`.
+   */
+  freshlyDiscardedSeat: Seat | null;
 }
 
 export function initialView(): ReplayView {
@@ -152,6 +163,7 @@ export function initialView(): ReplayView {
     lastHandResult: null,
     matchEnded: null,
     freshlyDrawnSeat: null,
+    freshlyDiscardedSeat: null,
   };
 }
 
@@ -210,6 +222,7 @@ export function applyReplayEvent(
         lastHandResult: null,
         matchEnded: null,
         freshlyDrawnSeat: null,
+        freshlyDiscardedSeat: null,
       };
     }
     case "draw": {
@@ -226,6 +239,7 @@ export function applyReplayEvent(
           ? view.liveDrawsTaken
           : view.liveDrawsTaken + 1,
         freshlyDrawnSeat: event.seat,
+        freshlyDiscardedSeat: null,
       };
     }
     case "discard": {
@@ -289,6 +303,7 @@ export function applyReplayEvent(
         riichiSticks,
         scores,
         freshlyDrawnSeat: null,
+        freshlyDiscardedSeat: event.seat,
       };
     }
     case "call": {
@@ -371,7 +386,14 @@ export function applyReplayEvent(
       // must still discard, but visually the closed hand has no
       // "drawn" tile to separate. (If the call is a kan, the
       // upcoming rinshan `draw` event will set this back.)
-      return { ...view, hands, melds, discards, freshlyDrawnSeat: null };
+      return {
+        ...view,
+        hands,
+        melds,
+        discards,
+        freshlyDrawnSeat: null,
+        freshlyDiscardedSeat: null,
+      };
     }
     case "new_dora": {
       return {
@@ -541,6 +563,9 @@ export function replayViewToMatchView(
     lastSeq: opts.index,
     conn: "replay",
     pendingDiscard: null,
+    actionDeadline: null,
+    actionBufferMs: null,
+    readyCheck: null,
     scores: view.scores,
     seatNames: opts.seatNames ?? null,
     dealer: view.dealer,
@@ -554,6 +579,7 @@ export function replayViewToMatchView(
     matchEnded: view.matchEnded,
     currentWaits: opts.currentWaits ?? null,
     freshlyDrawnSeat: view.freshlyDrawnSeat,
+    freshlyDiscardedSeat: view.freshlyDiscardedSeat,
   };
   if (focus === 0) {
     return base;
@@ -627,6 +653,8 @@ function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     lastHandResult: rotatedResult,
     freshlyDrawnSeat:
       mv.freshlyDrawnSeat != null ? rot(mv.freshlyDrawnSeat) : null,
+    freshlyDiscardedSeat:
+      mv.freshlyDiscardedSeat != null ? rot(mv.freshlyDiscardedSeat) : null,
     matchEnded: mv.matchEnded
       ? {
           ...mv.matchEnded,

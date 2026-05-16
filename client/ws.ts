@@ -86,6 +86,15 @@ export class GameWS {
     this.send({ type: "act", matchId, actionId });
   }
 
+  /** Convenience: ack the pre-match ready check. */
+  ready(): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "ready", matchId });
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
@@ -175,19 +184,34 @@ export class GameWS {
         // the ring buffer dropped events older than `snapshot.seq`.
         store.hydrateSnapshot(msg.state, msg.seq);
         store.setLegalActions(msg.legalActions);
+        store.setActionDeadline(msg.deadline ?? null);
+        store.setActionBufferMs(msg.bufferMs ?? null);
         return;
       }
       case "event": {
         // Events may arrive in batches; apply in order, advancing `seq`.
+        // `applyEvent` publishes to the store's event bus so side-
+        // effect subscribers (sound, future haptics) react without
+        // a coupling back into this transport layer.
         const startSeq = msg.seq - msg.events.length + 1;
         msg.events.forEach((ev, i) => {
           store.applyEvent(ev, startSeq + i);
         });
         store.setLegalActions(msg.legalActions);
+        store.setActionDeadline(msg.deadline ?? null);
+        store.setActionBufferMs(msg.bufferMs ?? null);
         return;
       }
       case "error": {
         this.reportError(msg.code, msg.message);
+        return;
+      }
+      case "ready_check": {
+        store.setReadyCheck({ deadline: msg.deadline, acked: msg.acked });
+        return;
+      }
+      case "ready_check_end": {
+        store.setReadyCheck(null);
         return;
       }
     }
