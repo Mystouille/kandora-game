@@ -30,6 +30,7 @@ import { compareTiles } from "./types";
 import type { Meld } from "./state";
 
 import Riichi from "riichi";
+import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 
 export interface ScoreInput {
   /**
@@ -334,7 +335,7 @@ export function scoreHand(input: ScoreInput): ScoreResult {
     han: raw.han,
     fu: raw.fu,
     ten: raw.ten,
-    yaku: raw.yaku,
+    yaku: sortYakuRecord(raw.yaku),
     isYakuman: raw.yakuman > 0,
     yakumanCount: raw.yakuman,
     oya: raw.oya,

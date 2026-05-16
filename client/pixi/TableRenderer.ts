@@ -1497,6 +1497,10 @@ export class TableRenderer {
       // Yaku rows. Skip yaku whose displayed value is 0 han
       // (server may still emit them — typically dora when no dora
       // tiles are held — and they shouldn't take up a line).
+      // Event producers (Majsoul / Tenhou / Riichi City adapters,
+      // internal scorer) emit `yaku` already sorted via
+      // `sortYakuRecord`, so insertion-order iteration is the
+      // canonical display order.
       const yakuKeys = r.win.yaku ? Object.keys(r.win.yaku) : [];
       for (const name of yakuKeys) {
         const value = r.win.yaku?.[name] ?? "";
