@@ -31,6 +31,8 @@ import type { MatchView } from "../store";
 import type { LegalAction, Meld } from "~/game/protocol/messages";
 import { playGameSound } from "../sound";
 import { computeTableLayout, type TableLayout, type Rect } from "./tableLayout";
+import { DiscardAnimator } from "./discardAnimator";
+import { HandSorter, naturalOrderRawIndices } from "./handSorter";
 import ownHandUrl from "~/game/tenhouSprites/ownHand.png";
 import bottomSmallUrl from "~/game/tenhouSprites/bottomSmall.png";
 import topSmallUrl from "~/game/tenhouSprites/topSmall.png";
@@ -360,6 +362,55 @@ export class TableRenderer {
    * after internal UI state changes (e.g. advancing the
    * multi-winner page index) without waiting for a store update. */
   private lastView: MatchView | null = null;
+  /**
+   * Orchestrates the two-phase discard slide animation (see
+   * {@link DiscardAnimator}). Updated via {@link beginFrame} at
+   * the top of each {@link render}, consumed by {@link renderSeat}
+   * when painting the hand strip and the discard pond. While
+   * {@link DiscardAnimator.hasActive} returns true, the per-frame
+   * ticker installed in {@link mount} re-fires
+   * {@link onRenderRequest} so the in-flight slide tweens forward.
+   */
+  private animator = new DiscardAnimator();
+  /** Bound animator-ticker callback retained so {@link destroy}
+   * can detach it cleanly. */
+  private animatorTickHandler: (() => void) | null = null;
+  /**
+   * Drives the focused player's hand sort + drag-to-reorder +
+   * smooth-slide animation. Reset at every hand boundary; the
+   * renderer treats it as the source of truth for seat 0's tile
+   * display order and per-tile x positions whenever the player
+   * has manually rearranged anything. See {@link HandSorter}.
+   */
+  private handSorter = new HandSorter();
+  /** Player's "Auto sort" preference from the live-play menu.
+   * Re-applied at every hand boundary in {@link render}. */
+  private autoSortPreference = true;
+  /** Listener fired whenever the focused hand's sort flag flips
+   * (drag promotion, explicit toggle, hand_start reset). Lets
+   * the host route keep its menu UI in sync. */
+  private onAutoSortChange: ((on: boolean) => void) | null = null;
+  /** Bound document-level pointer handlers for the focused-hand
+   * drag gesture. Tracked here so {@link destroy} can detach
+   * them cleanly. */
+  private handDragCleanup: (() => void) | null = null;
+  /** Cached design-space x of seat 0's hand-container origin
+   * (`handRect.x + longAxisOffset`). Stamped by `renderSeat` on
+   * every render so the document-level pointermove handler can
+   * convert page coordinates into handContainer-local coords
+   * without holding a stale Pixi node. */
+  private handContainerOriginX = 0;
+  /** Click-fallback thunk recorded by the seat-0 pointerdown
+   * handler. If pointerup fires before the drag is promoted
+   * (i.e. the gesture is a quick click), we invoke this to
+   * preserve the legacy click-to-discard / click-to-riichi
+   * semantics with the original surrounding closure context. */
+  private pendingHandClickCallback: (() => void) | null = null;
+  /** Cached previous-frame view, used only by the focused-hand
+   * sorter to detect hand boundaries (a `totalDiscards` reset).
+   * Kept separate from `lastView` because the discard animator's
+   * own `prevView` tracking is internal. */
+  private prevHandSorterView: MatchView | null = null;
   /** DOM listener detacher for the canvas right-click /
    * contextmenu handlers installed in {@link mount}. Invoked
    * during {@link destroy}. */
@@ -566,6 +617,95 @@ export class TableRenderer {
     this.timerTickHandler = tickHandler;
     app.ticker.add(tickHandler);
 
+    // Discard-animation pump: while the animator has in-flight
+    // slides, re-request a render every frame so the tween
+    // advances. Cheap no-op otherwise. We also pump while the
+    // focused-hand sorter is mid-slide or mid-drag for the same
+    // reason.
+    const animTickHandler = () => {
+      if (
+        (this.animator.hasActive() || this.handSorter.hasActiveAnimation()) &&
+        this.onRenderRequest
+      ) {
+        this.onRenderRequest();
+      }
+    };
+    this.animatorTickHandler = animTickHandler;
+    app.ticker.add(animTickHandler);
+
+    // Focused-hand drag gesture: pointerdown is wired on each
+    // tile in `renderSeat`; pointermove / pointerup live on
+    // `window` so the gesture continues even if the cursor
+    // leaves the canvas. Coords are converted from page space
+    // into handContainer-local space via the cached canvas rect,
+    // root scale + position, and the seat-0 hand origin stamped
+    // by `renderSeat`.
+    const pointerToHandLocalX = (clientX: number, clientY: number): number => {
+      const a = this.app;
+      if (!a || !this.root) {
+        return 0;
+      }
+      const rect = a.canvas.getBoundingClientRect();
+      const cssX = clientX - rect.left;
+      // `app.screen.*` is in CSS pixels with autoDensity, matching
+      // `rect.width`; no DPR math needed.
+      const screenX = (cssX / Math.max(1, rect.width)) * a.screen.width;
+      void clientY;
+      const designX = (screenX - this.root.position.x) / this.root.scale.x;
+      // Seat 0 (bottom): handContainer has no rotation, so
+      // local-x = design-x - handContainer.x.
+      return designX - this.handContainerOriginX;
+    };
+    const onWindowPointerMove = (e: PointerEvent): void => {
+      if (!this.handSorter.hasPointerDown()) {
+        return;
+      }
+      const view = this.lastView;
+      if (!view) {
+        return;
+      }
+      const localX = pointerToHandLocalX(e.clientX, e.clientY);
+      const rawHand = view.hands[0] ?? [];
+      const isFresh = view.freshlyDrawnSeat === 0;
+      const natural = naturalOrderRawIndices(rawHand, isFresh, tileSortKey);
+      this.handSorter.pointerMove(localX, natural);
+      if (this.onRenderRequest) {
+        this.onRenderRequest();
+      }
+    };
+    const onWindowPointerUp = (e: PointerEvent): void => {
+      if (e.button === 2) {
+        return;
+      }
+      if (!this.handSorter.hasPointerDown()) {
+        return;
+      }
+      const result = this.handSorter.pointerUp();
+      if (result.kind === "click") {
+        // Reproduce the legacy click-to-discard semantics. We
+        // don't have direct access to the riichi-mode logic
+        // here, so we route through a stashed click thunk set
+        // by the pointerdown handler (which has the
+        // surrounding closure context).
+        const cb = this.pendingHandClickCallback;
+        if (cb) {
+          cb();
+        }
+      }
+      this.pendingHandClickCallback = null;
+      if (this.onRenderRequest) {
+        this.onRenderRequest();
+      }
+    };
+    window.addEventListener("pointermove", onWindowPointerMove);
+    window.addEventListener("pointerup", onWindowPointerUp);
+    window.addEventListener("pointercancel", onWindowPointerUp);
+    this.handDragCleanup = (): void => {
+      window.removeEventListener("pointermove", onWindowPointerMove);
+      window.removeEventListener("pointerup", onWindowPointerUp);
+      window.removeEventListener("pointercancel", onWindowPointerUp);
+    };
+
     // Re-fit on container resizes (window resize, sidebar
     // collapse, etc.). The actual scaling is applied by `render`,
     // so we just re-trigger that via the host's render-request
@@ -613,6 +753,66 @@ export class TableRenderer {
 
   setOnRenderRequest(handler: () => void): void {
     this.onRenderRequest = handler;
+  }
+
+  /**
+   * Subscribe to focused-hand sort-flag flips. Fires whenever
+   * the sort flag changes — explicitly via {@link setAutoSort},
+   * implicitly when the player drags a tile (auto-sort turns
+   * off), or on hand_start when the menu preference is
+   * re-applied. The host route uses this to keep the live-play
+   * menu's "Auto sort" indicator in sync.
+   */
+  setOnAutoSortChange(cb: ((on: boolean) => void) | null): void {
+    this.onAutoSortChange = cb;
+    this.handSorter.setOnSortFlagChange(
+      cb === null ? null : (on) => this.onAutoSortChange?.(on)
+    );
+  }
+
+  /**
+   * Apply the player's "Auto sort" menu preference. Stored so
+   * the next hand_start (which wipes per-hand state) honours
+   * the preference, and applied immediately to the current
+   * hand: turning on snaps the hand back to natural sort (with
+   * smooth slides); turning off freezes the current display
+   * order as the player's custom order.
+   */
+  setAutoSort(on: boolean): void {
+    this.autoSortPreference = on;
+    const rawHand = this.lastView?.hands[0] ?? [];
+    const isFresh = this.lastView?.freshlyDrawnSeat === 0;
+    const natural = naturalOrderRawIndices(rawHand, isFresh, tileSortKey);
+    this.handSorter.setSortFlag(on, natural);
+    if (this.onRenderRequest) {
+      this.onRenderRequest();
+    }
+  }
+
+  /**
+   * Toggle the discard slide animations. When `false`, the
+   * renderer reverts to the legacy snap-to-nudged behaviour with
+   * no per-tile slide. In-flight animations are cancelled
+   * immediately so the next render snaps to the static layout.
+   *
+   * Wired up by hosts that want to disable motion (eg the future
+   * accessibility "reduce motion" toggle).
+   */
+  setAnimationsEnabled(flag: boolean): void {
+    this.animator.setEnabled(flag);
+  }
+
+  /**
+   * One-shot: skip discard-slide diffing for the immediately
+   * upcoming {@link render} call. The replay viewer uses this for
+   * mouse-wheel scrubbing so consecutive scroll-steps snap
+   * instantly (no chained slide animations) while single-step
+   * button / right-click advances still animate.
+   *
+   * Call this *before* the `render(view)` that should snap.
+   */
+  snapNextAnimation(): void {
+    this.animator.snapNext();
   }
 
   /**
@@ -820,6 +1020,17 @@ export class TableRenderer {
         this.app.ticker.remove(this.timerTickHandler);
         this.timerTickHandler = null;
       }
+      if (this.animatorTickHandler) {
+        this.app.ticker.remove(this.animatorTickHandler);
+        this.animatorTickHandler = null;
+      }
+      this.animator.reset();
+      this.handSorter.reset();
+      if (this.handDragCleanup) {
+        this.handDragCleanup();
+        this.handDragCleanup = null;
+      }
+      this.pendingHandClickCallback = null;
       // IMPORTANT: do NOT pass `texture: true` here. Pixi's
       // `Assets` cache hands back the same `Texture` instances on
       // every `Assets.load(...)` call, so destroying the base
@@ -846,6 +1057,26 @@ export class TableRenderer {
       return;
     }
     this.lastView = view;
+    // Diff against the previous frame *before* anything else uses
+    // `this.lastView`: the animator may schedule a new phase-A
+    // discard slide (which renderSeat consumes below) or transition
+    // a pending phase-A into phase B.
+    this.animator.beginFrame(view);
+    // Focused-hand sort state: wipe on every hand boundary, then
+    // reconcile customOrder + prune slide-tracks against the
+    // current raw hand so any draw / discard / call since the last
+    // frame is reflected.
+    const handBoundary = HandSorter.isHandBoundary(
+      this.prevHandSorterView,
+      view
+    );
+    if (handBoundary) {
+      this.handSorter.reset(this.autoSortPreference);
+    }
+    const rawHandSeat0 = view.hands[0] ?? [];
+    this.handSorter.reconcile(rawHandSeat0);
+    this.handSorter.pruneTracks(rawHandSeat0);
+    this.prevHandSorterView = view;
     // Defensive: sync the canvas size to the `resizeTo` container.
     // Pixi v8's built-in `resizeTo` only auto-syncs on `window`
     // resize events, so if the container was zero-sized when
@@ -3237,8 +3468,118 @@ export class TableRenderer {
     // so the reducer tags the seat that holds a freshly drawn tile in
     // `view.freshlyDrawnSeat`. Drives both the sort split and the
     // tsumo-gap rendering below.
-    const isFreshlyDrawn = view.freshlyDrawnSeat === seat;
-    const hand = sortHand(rawHand, isFreshlyDrawn);
+    const isFreshlyDrawnNatural = view.freshlyDrawnSeat === seat;
+    const handNatural = sortHand(rawHand, isFreshlyDrawnNatural);
+    // -----------------------------------------------------------------
+    // Discard animation: record this seat's natural (post-sort,
+    // pre-override) layout so the animator's next-frame diff has
+    // the exact pre-discard layout to source from; then, if a
+    // phase-A slide is currently in flight for this seat, override
+    // the rendered hand with the captured pre-discard snapshot so
+    // the painter draws the strip with one slot blanked out. The
+    // hidden-slot index is consumed below to skip that hand-tile
+    // sprite without disturbing the rest of the strip's geometry.
+    //
+    // `isConcealed` mirrors the visibility logic in the painting
+    // branches below: a hand is concealed unless this is the
+    // focused seat, the renderer-wide `showHands` toggle is on,
+    // or a win/tenpai override forced the hand face-up
+    // (`forceReveal`). Concealed-hand discards source their
+    // animation from a fixed middle slot for tedashi / the
+    // rightmost slot for tsumogiri.
+    // -----------------------------------------------------------------
+    const naturalIsConcealed = !isYou && !forceReveal && !this.showHands;
+    // -----------------------------------------------------------------
+    // Focused-hand custom sort: compute the seat-0 display order
+    // BEFORE handing the layout to the discard animator, so the
+    // snapshot it captures (and replays through phases A/B on
+    // the next discard) reflects exactly what the player was
+    // seeing — i.e. their custom order, not the natural sort.
+    // Without this the hand would briefly snap back to sorted
+    // for one frame at the moment of discard.
+    //
+    // Only seat 0 honours `HandSorter`; opponents always paint
+    // in the natural sort. `rawIndices[displaySlot] =
+    // rawHandIndex` lets each per-tile sprite ask the sorter
+    // for its smoothly-eased x position; `null` falls back to
+    // static slot x.
+    // -----------------------------------------------------------------
+    let rawIndices: number[] | null = null;
+    let seat0Display: { rawIndices: number[]; freshGap: boolean } | null = null;
+    if (seat === 0) {
+      const naturalIndices = naturalOrderRawIndices(
+        rawHand,
+        isFreshlyDrawnNatural,
+        tileSortKey
+      );
+      // If a drag is mid-flight, decide before paint whether a
+      // swap should fire this frame (so the swapped layout is
+      // what we actually paint, not the pre-swap one). We use
+      // the *current* display order's slot centers since those
+      // are what the cursor is being compared against.
+      if (this.handSorter.isDragging() && !this.handSorter.isSortFlagOn()) {
+        const beforeDisplay = this.handSorter.getDisplayOrder(
+          rawHand,
+          isFreshlyDrawnNatural,
+          naturalIndices
+        );
+        const t0 = layout.tileSelf;
+        const handGap0 = beforeDisplay.freshGap ? TSUMO_GAP : 0;
+        const slotCenters = beforeDisplay.rawIndices.map((_, idx) => {
+          const last = idx === beforeDisplay.rawIndices.length - 1;
+          const extra = handGap0 > 0 && last ? handGap0 : 0;
+          return idx * (t0.w + t0.gap) + extra + BIG_TILE_W / 2;
+        });
+        this.handSorter.maybeSwap(slotCenters);
+      }
+      seat0Display = this.handSorter.getDisplayOrder(
+        rawHand,
+        isFreshlyDrawnNatural,
+        naturalIndices
+      );
+    }
+    // The "base" layout: what we'd render absent any discard
+    // animation. For seat 0 with sortFlag off, this is the
+    // player's custom order. The animator gets this so the
+    // captured snapshot is in the user's chosen layout.
+    let baseHand: Array<string | null> = handNatural;
+    let baseFreshlyDrawn = isFreshlyDrawnNatural;
+    if (seat === 0 && seat0Display && !this.handSorter.isSortFlagOn()) {
+      baseHand = seat0Display.rawIndices.map((idx) => rawHand[idx] ?? null);
+      baseFreshlyDrawn = seat0Display.freshGap;
+    }
+    this.animator.recordHandLayout(seat, {
+      sorted: baseHand,
+      isFreshlyDrawn: baseFreshlyDrawn,
+      isConcealed: naturalIsConcealed,
+    });
+    const seatDiscardAnim = this.animator.getAnim(seat);
+    let hand: Array<string | null> = baseHand;
+    let isFreshlyDrawn = baseFreshlyDrawn;
+    let hiddenHandSlot: number | null = null;
+    if (seat === 0 && seat0Display) {
+      rawIndices = seat0Display.rawIndices;
+    }
+    // Apply the phase-A hand snapshot through BOTH phases. While
+    // phase A is parked (waiting for the next draw) and through
+    // phase B's slide, we keep the same gap-in-the-hand layout
+    // so the strip only "closes up" once the animation is fully
+    // dropped after phase B elapses. This matches the user-
+    // visible spec: the discarder's hand stays gapped while a
+    // call window is open, and only resorts after the next draw.
+    //
+    // For seat 0 we also clear `rawIndices` while the snapshot
+    // is in effect: the snapshot is captured one frame before
+    // rawHand mutates, so its slot indices no longer align with
+    // the post-discard `rawHand` the sorter is tracking. Static
+    // slot positions (no easing) are correct here — the snapshot
+    // *is* the pre-discard layout we want frozen on screen.
+    if (seatDiscardAnim && seatDiscardAnim.phaseASnapshot) {
+      hand = seatDiscardAnim.phaseASnapshot.hand;
+      isFreshlyDrawn = seatDiscardAnim.phaseASnapshot.isFreshlyDrawn;
+      hiddenHandSlot = seatDiscardAnim.phaseASnapshot.hiddenSlot;
+      rawIndices = null;
+    }
     const handContainer = new Container();
     // Side hands (seats 1 / 3, never the focused user) use a
     // dedicated tile size (`layout.tileSide`) and stack the tiles
@@ -3340,6 +3681,12 @@ export class TableRenderer {
       const faceSheet: SheetKey = seat === 1 ? "rightSmall" : "leftSmall";
       const localRot = seat === 1 ? Math.PI / 2 : -Math.PI / 2;
       hand.forEach((tile, i) => {
+        // Phase-A: leave the discarded slot blank in the strip so
+        // the animated discard sprite (added below in the discard
+        // pond) reads as having "come from" this slot.
+        if (i === hiddenHandSlot) {
+          return;
+        }
         const wrap = new Container();
         const extraGap = handGap > 0 && i === hand.length - 1 ? handGap : 0;
         wrap.position.set(i * stride + extraGap, 0);
@@ -3391,6 +3738,12 @@ export class TableRenderer {
       const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
       hand.forEach((tile, i) => {
+        // Phase-A: leave the discarded slot blank in the strip so
+        // the animated discard sprite (added below in the discard
+        // pond) reads as having "come from" this slot.
+        if (i === hiddenHandSlot) {
+          return;
+        }
         let tileSprite: Container;
         if (seat === 0) {
           // Face-up from the focused-hand sheet; sprite is sized
@@ -3426,7 +3779,26 @@ export class TableRenderer {
           tileSprite = wrap;
         }
         const extraGap = handGap > 0 && i === hand.length - 1 ? handGap : 0;
-        tileSprite.position.set(i * (t.w + t.gap) + extraGap, 0);
+        const slotX = i * (t.w + t.gap) + extraGap;
+        // Seat 0: ask the HandSorter for the smoothly-eased x
+        // (handles drag-to-reorder + post-swap slide). Seat 2:
+        // static slot x — opponents don't get the sort feature.
+        let posX = slotX;
+        if (seat === 0 && rawIndices !== null) {
+          posX = this.handSorter.getRenderX(rawIndices[i], slotX);
+        }
+        tileSprite.position.set(posX, 0);
+        // Float the dragged tile above its neighbours so it
+        // reads as being "picked up". `sortableChildren` is
+        // turned on below the forEach when we know a drag is
+        // active for this seat.
+        if (
+          seat === 0 &&
+          rawIndices !== null &&
+          this.handSorter.getDraggedRawIdx() === rawIndices[i]
+        ) {
+          tileSprite.zIndex = 1_000_000;
+        }
         // Optimistic pending discard tint.
         if (
           view.pendingDiscard &&
@@ -3446,6 +3818,20 @@ export class TableRenderer {
           tileSprite.cursor = "pointer";
           const localTile = tile;
           const localIndex = i;
+          const localRawIdx = rawIndices !== null ? rawIndices[i] : i;
+          const localSlotX = slotX;
+          const localSpriteW = spriteW;
+          // Count how many copies of this tile sit to the LEFT
+          // of the clicked slot in the *current* display order:
+          // that's the ordinal we hand to the discard animator
+          // so it can blank the actually-clicked slot (rather
+          // than the leftmost copy) when the discard fires.
+          let localOrd = 0;
+          for (let k = 0; k < i; k++) {
+            if (hand[k] === localTile) {
+              localOrd++;
+            }
+          }
           tileSprite.on("pointerdown", (event) => {
             // Right-clicks are handled globally as
             // pass / tsumogiri (see `mount()`); never let a
@@ -3453,26 +3839,62 @@ export class TableRenderer {
             if (event.button === 2) {
               return;
             }
-            if (inRiichiMode) {
-              // Only riichi-legal tiles complete the declaration;
-              // clicks on dimmed tiles are no-ops.
-              if (riichiLegal && this.onActionClick) {
-                this.riichiMode = false;
-                this.onActionClick({ action: riichiLegal });
+            // The click semantics (riichi-tile-select vs
+            // discard) are captured into a thunk and stashed
+            // for the window-level pointerup handler to fire
+            // if the gesture stays under the drag-promotion
+            // threshold. If it promotes to a drag, the thunk
+            // is discarded and the sorter handles the drop.
+            const fireClick = (): void => {
+              if (inRiichiMode) {
+                if (riichiLegal && this.onActionClick) {
+                  this.riichiMode = false;
+                  this.onActionClick({ action: riichiLegal });
+                }
+                return;
               }
-              return;
-            }
-            if (this.onTileClick) {
-              this.onTileClick({
-                seat,
-                index: localIndex,
-                tile: localTile,
-              });
-            }
+              if (this.onTileClick) {
+                // Tell the discard animator which copy of a
+                // duplicate tile the player actually clicked,
+                // so phase A blanks the correct slot.
+                this.animator.setNextDiscardSourceHint(
+                  seat,
+                  localTile,
+                  localOrd
+                );
+                this.onTileClick({
+                  seat,
+                  index: localIndex,
+                  tile: localTile,
+                });
+              }
+            };
+            this.pendingHandClickCallback = fireClick;
+            // Begin the drag-or-click gesture. Convert the
+            // event's stage-coords global x into
+            // handContainer-local x via Pixi's transform
+            // walker — handContainer is already parented at
+            // this point so the world transform is valid.
+            const localPt = handContainer.toLocal({
+              x: event.global.x,
+              y: event.global.y,
+            });
+            this.handSorter.pointerDown({
+              rawIdx: localRawIdx,
+              pointerLocalX: localPt.x,
+              tileLeftX: localSlotX,
+              tileLongAxisLen: localSpriteW,
+            });
           });
         }
         handContainer.addChild(tileSprite);
       });
+      if (seat === 0) {
+        // Drag-to-reorder: enable zIndex sorting so the
+        // currently-dragged tile (zIndex 1_000_000, set in the
+        // forEach above) floats above its neighbours.
+        handContainer.sortableChildren = true;
+      }
     }
 
     // Position the hand container within `layout.hands[seat]`.
@@ -3497,6 +3919,11 @@ export class TableRenderer {
         // bottom — +x to the right, +y downward (no rotation).
         // Inner edge = top of the rect.
         handContainer.position.set(handRect.x + longAxisOffset, handRect.y);
+        // Stamp the seat-0 hand origin in design coords so the
+        // window-level pointermove handler can convert page
+        // coords into handContainer-local x without keeping a
+        // stale Pixi node reference between renders.
+        this.handContainerOriginX = handRect.x + longAxisOffset;
         break;
       }
       case 1: {
@@ -3634,6 +4061,29 @@ export class TableRenderer {
     const riichiIdx = view.riichiTileIdx[seat];
     let cursorX = 0;
     let cursorRow = 0;
+    // -----------------------------------------------------------------
+    // Discard slide animation hookup. When this seat has an
+    // active phase-A or phase-B animation targeting the very
+    // last discard, we skip painting its static wrap inside the
+    // forEach and snapshot the base (pre-nudge) position +
+    // tile-local dimensions for the overlay below the loop.
+    //
+    // Riichi-declaration tiles use a different sheet, rotation,
+    // and stride than regular discards; rather than thread that
+    // pipeline through the animation overlay we just snap the
+    // riichi tile statically (animation is suppressed via
+    // `!isRiichi` on the animator side and mirrored here).
+    // -----------------------------------------------------------------
+    const lastIdx = discards.length - 1;
+    const lastIsAnimating =
+      seatDiscardAnim != null &&
+      lastIdx >= 0 &&
+      seatDiscardAnim.discardIndex === lastIdx &&
+      !(lastIdx === riichiIdx);
+    let animLastCursorX = 0;
+    let animLastRowY = 0;
+    let animLastTileLocalW = tileLocalW;
+    let animLastTileLocalH = tileLocalH;
     discards.forEach((tile, i) => {
       const row = Math.floor(i / discardCols);
       if (row !== cursorRow) {
@@ -3786,6 +4236,20 @@ export class TableRenderer {
       // across rows (+y, "bottom" / away from center) so it reads
       // as not-yet-settled. Settled flush by the next draw / call
       // / hand boundary via the store clearing `freshlyDiscardedSeat`.
+      //
+      // When the last discard is being slide-animated, we drop
+      // its static wrap entirely and let the post-loop overlay
+      // below draw a single interpolated copy. The base position
+      // (cursorX, rowY) and tile-local dims are snapshotted here
+      // so the overlay knows the phase-A→nudged and phase-B→final
+      // endpoints in discard-container-local coordinates.
+      if (lastIsAnimating && i === discards.length - 1) {
+        animLastCursorX = wrap.position.x;
+        animLastRowY = wrap.position.y;
+        animLastTileLocalW = tileLocalW;
+        animLastTileLocalH = tileLocalH;
+        return;
+      }
       if (i === discards.length - 1 && view.freshlyDiscardedSeat === seat) {
         wrap.position.set(wrap.position.x + 10, wrap.position.y + 10);
       }
@@ -3833,6 +4297,89 @@ export class TableRenderer {
       }
     }
     this.root.addChild(discardContainer);
+
+    // -----------------------------------------------------------------
+    // Animated last-discard overlay.
+    //
+    // Built after the container is parented to `this.root` so
+    // `handContainer.toGlobal(...)` / `discardContainer.toLocal(...)`
+    // produce valid coordinates (both containers' world
+    // transforms are now up to date).
+    //
+    // Phase A ("to-nudge"): interpolate from the hidden hand
+    // slot's center (transformed into discard-container-local
+    // coords) to the +10/+10 nudged pond position.
+    //
+    // Phase B ("to-final"): interpolate from the +10/+10 nudged
+    // position back to the flush row position.
+    // -----------------------------------------------------------------
+    if (lastIsAnimating && seatDiscardAnim) {
+      const progress = this.animator.getProgress(seat);
+      const finalX = animLastCursorX;
+      const finalY = animLastRowY;
+      const nudgedX = finalX + 10;
+      const nudgedY = finalY + 10;
+      let posX: number;
+      let posY: number;
+      if (seatDiscardAnim.phase === "to-final") {
+        posX = nudgedX + (finalX - nudgedX) * progress;
+        posY = nudgedY + (finalY - nudgedY) * progress;
+      } else {
+        const slotIdx = seatDiscardAnim.sourceSlot?.handIndex ?? 0;
+        const source = this.computeHandSlotInDiscardLocal(
+          handContainer,
+          discardContainer,
+          seat,
+          slotIdx,
+          layout,
+          isFreshlyDrawn,
+          hand.length,
+          isSideHand,
+          sideHandRevealed
+        );
+        posX = source.x + (nudgedX - source.x) * progress;
+        posY = source.y + (nudgedY - source.y) * progress;
+      }
+      const wrap = new Container();
+      const tex = this.getTileTexture(discardSheet, seatDiscardAnim.tile);
+      const sprite = new Sprite(tex);
+      sprite.anchor.set(0.5, 0.5);
+      // Tsumogiri fresh-tint: keep the animated tile consistent
+      // with how the static last-discard would have looked.
+      if (seatDiscardAnim.isTsumogiri) {
+        sprite.tint = TSUMOGIRI_FRESH_TINT;
+      }
+      if (isHorizontalDiscardSheet) {
+        sprite.width = animLastTileLocalH;
+        sprite.height = animLastTileLocalW;
+      } else {
+        sprite.width = animLastTileLocalW;
+        sprite.height = animLastTileLocalH;
+      }
+      sprite.rotation = spriteCounterRot;
+      sprite.position.set(animLastTileLocalW / 2, animLastTileLocalH / 2);
+      wrap.addChild(sprite);
+      wrap.position.set(posX, posY);
+      // Match the z-ordering the static loop would have used for
+      // this same (last) tile: seat 2's rows stack the other way
+      // (earlier row on top, since the container is rotated π
+      // and later rows end up higher on screen), and side seats
+      // also have a within-row ordering so neighbours overlap
+      // with the lower-on-screen tile on top. Forcing zIndex to
+      // a flat very-high value put the animated tile in front of
+      // the previous row (top seat) or in front of its same-row
+      // neighbour (right seat), breaking the pond perspective.
+      const lastIdx = discards.length - 1;
+      const lastRow = Math.floor(lastIdx / discardCols);
+      let lastWithinRowZ = 0;
+      if (seat === 1) {
+        lastWithinRowZ = -lastIdx;
+      } else if (seat === 3) {
+        lastWithinRowZ = lastIdx;
+      }
+      wrap.zIndex = (seat === 2 ? -lastRow : lastRow) * 1000 + lastWithinRowZ;
+      discardContainer.addChild(wrap);
+    }
 
     // Riichi stick: a horizontal white rectangle with a red dot,
     // laid in front of each seat that has declared riichi. Sits
@@ -3887,6 +4434,57 @@ export class TableRenderer {
       }
       this.root.addChild(stick);
     }
+  }
+
+  /**
+   * Compute the center of a hand tile slot, expressed in the
+   * discard container's local coordinate system, for the discard
+   * slide animation's phase-A source.
+   *
+   * The discard animator records which hand index a tile came
+   * from; this method mirrors the per-seat positioning math used
+   * inside `renderSeat` and then walks through Pixi's world
+   * transforms so the slide can be parameterised entirely in
+   * discard-container-local coordinates.
+   */
+  private computeHandSlotInDiscardLocal(
+    handContainer: Container,
+    discardContainer: Container,
+    seat: number,
+    slotIdx: number,
+    layout: TableLayout,
+    isFreshlyDrawn: boolean,
+    handLength: number,
+    isSideHand: boolean,
+    sideHandRevealed: boolean
+  ): { x: number; y: number } {
+    const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
+    const extraGap = handGap > 0 && slotIdx === handLength - 1 ? handGap : 0;
+    let lx: number;
+    let ly: number;
+    if (isSideHand) {
+      if (sideHandRevealed) {
+        const stride = SIDE_TILE_H - DISCARD_ROW_OVERLAP_HORIZ;
+        lx = slotIdx * stride + extraGap + SIDE_TILE_H / 2;
+        ly = SIDE_TILE_W / 2;
+      } else {
+        const ts = layout.tileSide;
+        const stride = ts.h - layout.tileSideOverlap;
+        lx = slotIdx * stride + extraGap + ts.h / 2;
+        ly = ts.w / 2;
+      }
+    } else if (seat === 0) {
+      const t = layout.tileSelf;
+      lx = slotIdx * (t.w + t.gap) + extraGap + BIG_TILE_W / 2;
+      ly = BIG_TILE_H / 2;
+    } else {
+      // Seat 2 (top): face-down small backs sized to tileHorizontal.
+      const t = layout.tileHorizontal;
+      lx = slotIdx * (t.w + t.gap) + extraGap + t.w / 2;
+      ly = t.h / 2;
+    }
+    const global = handContainer.toGlobal({ x: lx, y: ly });
+    return discardContainer.toLocal(global);
   }
 
   /**

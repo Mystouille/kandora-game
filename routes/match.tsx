@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { EyeOutlined } from "@ant-design/icons";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
@@ -7,6 +7,11 @@ import { useMatchStore, type MatchView } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
+import {
+  LivePlayMenu,
+  LIVE_PLAY_MENU_DEFAULTS,
+  type LivePlayMenuFlags,
+} from "~/game/client/LivePlayMenu";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
 import { rotateMatchView } from "~/game/replay/player";
 import type { RoomState } from "~/game/protocol/messages";
@@ -428,6 +433,103 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
   // canvas hides it; releasing brings it back. Mirrors the
   // replay route's annotation-overlay press-to-hide pattern.
   const [livePressed, setLivePressed] = useState(false);
+  // Live-play options menu state. Starts at
+  // {@link LIVE_PLAY_MENU_DEFAULTS} on every page load — no
+  // persistence — and round-trips with the renderer so a
+  // manual drag flipping `autoSort` off updates the menu UI.
+  const [liveMenuFlags, setLiveMenuFlags] = useState<LivePlayMenuFlags>(
+    LIVE_PLAY_MENU_DEFAULTS
+  );
+  const handleLiveMenuChange = useCallback((next: LivePlayMenuFlags) => {
+    setLiveMenuFlags((prev) => {
+      if (next.autoSort !== prev.autoSort && rendererRef.current !== null) {
+        rendererRef.current.setAutoSort(next.autoSort);
+      }
+      return next;
+    });
+  }, []);
+  // Dedupe ref for auto-action dispatch: tracks the last
+  // legal-action id we fired so the effect doesn't re-fire on
+  // unrelated store mutations that arrive before the server's
+  // ack clears `legalActions`.
+  const lastAutoActedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!ws) {
+      return;
+    }
+    if (view.mySeat === null) {
+      return;
+    }
+    const actions = view.legalActions;
+    if (actions.length === 0) {
+      lastAutoActedIdRef.current = null;
+      return;
+    }
+    const fire = (id: string): void => {
+      if (lastAutoActedIdRef.current === id) {
+        return;
+      }
+      lastAutoActedIdRef.current = id;
+      ws.act(id);
+    };
+    const hasWin = actions.some((a) => a.type === "ron" || a.type === "tsumo");
+    // 1) Auto-win — fires regardless of other flags so a player
+    //    never misses a ron / tsumo.
+    if (liveMenuFlags.autoWin) {
+      const win = actions.find((a) => a.type === "ron" || a.type === "tsumo");
+      if (win) {
+        fire(win.id);
+        return;
+      }
+    }
+    // 2) No-calls — pass on any chi / pon / daiminkan decision
+    //    window. Suppressed when a win is also available so the
+    //    player doesn't unintentionally skip a ron alongside.
+    if (liveMenuFlags.noCall && !hasWin) {
+      const hasCall = actions.some(
+        (a) =>
+          a.type === "chi" ||
+          a.type === "pon" ||
+          (a.type === "kan" && a.kanKind === "daiminkan")
+      );
+      const pass = actions.find((a) => a.type === "pass");
+      if (hasCall && pass) {
+        fire(pass.id);
+        return;
+      }
+    }
+    // 3) Auto-discard — tsumogiri the drawn tile. Suppressed
+    //    when a win is available (don't dump a winning tile).
+    if (liveMenuFlags.autoDiscard && !hasWin) {
+      const mySeat = view.mySeat;
+      if (view.freshlyDrawnSeat !== mySeat) {
+        return;
+      }
+      const hand = view.hands[mySeat] ?? [];
+      const drawn = hand[hand.length - 1];
+      if (!drawn) {
+        return;
+      }
+      const discard = actions.find(
+        (a) => a.type === "discard" && a.tile === drawn
+      );
+      if (discard) {
+        useMatchStore
+          .getState()
+          .setPendingDiscard({ seat: mySeat, tile: drawn });
+        fire(discard.id);
+      }
+    }
+  }, [
+    view.legalActions,
+    view.mySeat,
+    view.hands,
+    view.freshlyDrawnSeat,
+    liveMenuFlags.autoWin,
+    liveMenuFlags.noCall,
+    liveMenuFlags.autoDiscard,
+  ]);
   // Canvas-pixel centre of the focused seat's discard pond,
   // published by the renderer. Used to anchor the post-hand
   // "peek" eye button to the middle of the pond.
@@ -617,6 +719,19 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
                 : v
             );
           });
+          // Sync live-play menu's "Auto sort" preference into
+          // the renderer at mount, and listen for engine-driven
+          // flips (e.g. the player drags a tile → auto-sort
+          // turns off) so the menu indicator stays accurate.
+          renderer.setOnAutoSortChange((on) => {
+            setLiveMenuFlags((prev) => {
+              if (prev.autoSort === on) {
+                return prev;
+              }
+              return { ...prev, autoSort: on };
+            });
+          });
+          renderer.setAutoSort(LIVE_PLAY_MENU_DEFAULTS.autoSort);
           // Initial draw with whatever the store currently holds.
           const v0 = useMatchStore.getState();
           renderer.render(
@@ -876,6 +991,10 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
             Close
           </Link>
         </div>
+        {/* Left-side live-play options menu (semi-collapsible).
+            UI only for now; behaviour wiring lands in a
+            follow-up. */}
+        <LivePlayMenu flags={liveMenuFlags} onChange={handleLiveMenuChange} />
         {/* Post-hand peek eye — anchored to the centre of the
             focused seat's discard pond. Visible after the auto-
             advance clears `view.lastHandResult` until the player

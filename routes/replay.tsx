@@ -1213,9 +1213,16 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
       };
       if (wheelAccumRef.current >= threshold) {
         wheelAccumRef.current = 0;
+        // Wheel scrubs are discrete jumps to the next stop — we
+        // suppress the discard slide animation for that frame so
+        // the pond reads as a static board state rather than a
+        // tile sliding in from a hand that didn't visibly exist
+        // yet.
+        rendererRef.current?.snapNextAnimation();
         setIndex((i) => findNextDiscard(i));
       } else if (wheelAccumRef.current <= -threshold) {
         wheelAccumRef.current = 0;
+        rendererRef.current?.snapNextAnimation();
         setIndex((i) => findPrevDiscard(i));
       }
     };
