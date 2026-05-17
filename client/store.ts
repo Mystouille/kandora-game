@@ -487,13 +487,22 @@ export const useMatchStore = create<MatchStore>((set) => ({
         }
         case "hand_start": {
           const hands: Array<Array<Tile | null>> = [[], [], [], []];
-          if (state.mySeat !== null && event.hand) {
-            hands[state.mySeat] = [...event.hand];
-          }
-          // Opponents start with 13 redacted tiles.
-          for (let s = 0; s < 4; s++) {
-            if (s !== state.mySeat) {
-              hands[s] = new Array<Tile | null>(13).fill(null);
+          if (state.mySeat === null && event.startingHands) {
+            // Spectator path: server forwards omniscient
+            // `startingHands` so the client can render every
+            // seat's hand. Populate all four seats from it.
+            for (let s = 0; s < 4; s++) {
+              hands[s] = [...event.startingHands[s]];
+            }
+          } else {
+            if (state.mySeat !== null && event.hand) {
+              hands[state.mySeat] = [...event.hand];
+            }
+            // Opponents start with 13 redacted tiles.
+            for (let s = 0; s < 4; s++) {
+              if (s !== state.mySeat) {
+                hands[s] = new Array<Tile | null>(13).fill(null);
+              }
             }
           }
           return {
@@ -550,10 +559,17 @@ export const useMatchStore = create<MatchStore>((set) => ({
         }
         case "discard": {
           const hands = state.hands.map((h) => [...h]);
-          const idx =
-            event.seat === state.mySeat
-              ? hands[event.seat].lastIndexOf(event.tile)
-              : hands[event.seat].findIndex((t) => t === null);
+          // A hand slot is "visible" (real tile, not a redacted
+          // null placeholder) when it's our own seat or when we
+          // are a spectator (mySeat=null and the server forwarded
+          // omniscient hands). Either way we remove the actual
+          // tile; for opponents of a player we still hold null
+          // placeholders, so we pop one of those.
+          const visibleHand =
+            state.mySeat === null || event.seat === state.mySeat;
+          const idx = visibleHand
+            ? hands[event.seat].lastIndexOf(event.tile)
+            : hands[event.seat].findIndex((t) => t === null);
           if (idx >= 0) {
             hands[event.seat].splice(idx, 1);
           }
@@ -750,7 +766,12 @@ export const useMatchStore = create<MatchStore>((set) => ({
           })();
           for (const t of contributed) {
             const hand = hands[caller];
-            if (caller === state.mySeat) {
+            // Same visibility rule as `discard`: a spectator sees
+            // every seat's real tiles, a player sees only their
+            // own seat's tiles (others are null placeholders).
+            const visibleHand =
+              state.mySeat === null || caller === state.mySeat;
+            if (visibleHand) {
               const i = hand.lastIndexOf(t);
               if (i >= 0) {
                 hand.splice(i, 1);

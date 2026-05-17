@@ -334,7 +334,9 @@ export type LegalAction = z.infer<typeof LegalActionSchema>;
  * redacted to `null`; everything else is per-recipient public.
  */
 export const SnapshotStateSchema = z.object({
-  mySeat: SeatSchema,
+  /** Recipient's own seat, or `null` for a spectator view (all
+   * hands hidden, no own-hand re-attach on `hand_start`). */
+  mySeat: SeatSchema.nullable(),
   hands: z.array(z.array(TileSchema.nullable())).length(4),
   discards: z.array(z.array(TileSchema)).length(4),
   melds: z.array(z.array(MeldSchema)).length(4),
@@ -374,6 +376,22 @@ export const SnapshotStateSchema = z.object({
    * on a ron-wait). Optional for back-compat with snapshots
    * captured before this field existed. */
   furiten: z.array(z.boolean()).length(4).optional(),
+  /** Omniscient starting live wall (70 tiles in draw order) for
+   * the current hand. Only present on spectator snapshots, and
+   * only after the first `hand_start` of the match has been
+   * emitted. Powers the renderer's `showWalls` overlay when a
+   * spectator joins mid-hand — without this the wall reveal only
+   * works after the next round starts (because it's normally
+   * threaded in via `hand_start`'s archival fields). */
+  liveWall: z.array(TileSchema).optional(),
+  /** Number of tiles drawn from `liveWall` since the current
+   * hand began (excludes rinshan replacement draws when the
+   * server tracks them separately; in this build the engine
+   * doesn't distinguish, so this is `handStartLiveWall.length −
+   * state.liveWall.length`). Mirrors `MatchView.liveDrawsTaken`;
+   * the renderer uses it to hide positions already taken off
+   * the wall. Optional — only present alongside `liveWall`. */
+  liveDrawsTaken: z.number().int().nonnegative().optional(),
 });
 export type SnapshotState = z.infer<typeof SnapshotStateSchema>;
 
@@ -527,6 +545,16 @@ const HelloMsg = z.object({
   token: z.string(),
   matchId: z.string(),
   debug: MatchDebugSchema,
+  /** When true, the client wants to spectate (read-only public
+   * view) instead of claiming a seat. The server refuses spectate
+   * for matches not in `playing` status. */
+  spectate: z.boolean().optional(),
+  /** Optional dispatch delay (ms) for spectators. When > 0 the
+   * server holds each public event until `emittedAt + delayMs`
+   * elapses (~5 min in production) so a delayed watcher can't
+   * relay live info to a player. Ignored unless `spectate` is
+   * true. */
+  delayMs: z.number().int().nonnegative().optional(),
 });
 
 const ActMsg = z.object({
@@ -577,6 +605,21 @@ const LeaveSeatMsg = z.object({
   matchId: z.string(),
 });
 
+/**
+ * Self-reported AFK status. The client sends `afk: true` after a
+ * 25s idle window on its own call/discard prompt (no click input);
+ * the server flags the seat as disconnected and auto-defaults its
+ * actions until the user clicks the "Reconnect" overlay, which
+ * sends `afk: false`. Mid-action arrival is fine: the server's
+ * auto-default path is idempotent against an already-resolved
+ * window.
+ */
+const AfkMsg = z.object({
+  type: z.literal("afk"),
+  matchId: z.string(),
+  afk: z.boolean(),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   HelloMsg,
   ActMsg,
@@ -584,5 +627,6 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   ReadyMsg,
   StartMatchMsg,
   LeaveSeatMsg,
+  AfkMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;

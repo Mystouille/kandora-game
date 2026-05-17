@@ -1104,6 +1104,11 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
         riichi: t.match.centerRiichi,
         tiles: t.match.centerTiles,
       });
+      rendererRef.current.setResultLabels({
+        exhaustiveDraw: t.match.exhaustiveDraw,
+        abortTitle: t.match.abortTitle,
+        abortKinds: t.match.abortKinds,
+      });
       const args = replayViewToMatchView(currentView, {
         index,
         mySeat: focusSeat,

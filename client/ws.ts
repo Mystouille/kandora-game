@@ -25,6 +25,22 @@ export interface GameWSOptions {
   matchId: string;
   /** Optional debug seed sent once in the `hello` frame on first attach. */
   debug?: MatchDebug;
+  /** When true, the client is a read-only spectator. The server
+   * refuses `act`/`ready`/`start_match`/`leave_seat` frames; this
+   * client must not call those methods. */
+  spectate?: boolean;
+  /** Optional dispatch delay (ms) for spectators. The server
+   * holds each event until `emittedAt + delayMs` elapses so a
+   * delayed watcher can't relay live info to a player. Ignored
+   * unless `spectate` is true. */
+  delayMs?: number;
+  /** Optional callback fired for every successfully-parsed
+   * incoming `ServerMessage`. Runs *before* the default store
+   * dispatch so the caller can choose to mirror messages into a
+   * private buffer (e.g. the spectator route's replay-style
+   * timeline). The default store dispatch still happens — this
+   * is a pure observer, not an interceptor. */
+  onMessage?: (msg: ServerMessage) => void;
   onError?: (code: string, message: string) => void;
 }
 
@@ -114,6 +130,21 @@ export class GameWS {
     this.send({ type: "leave_seat", matchId });
   }
 
+  /**
+   * Self-report AFK status. Pass `true` after 25s of idle on a
+   * call/discard prompt to opt out of waiting on this client
+   * (the server auto-defaults the seat's open and future
+   * windows). Pass `false` when the user clicks the reconnect
+   * overlay button to opt back in.
+   */
+  sendAfk(afk: boolean): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "afk", matchId, afk });
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
@@ -139,6 +170,10 @@ export class GameWS {
         token: this.opts.token,
         matchId: this.opts.matchId,
         debug: this.opts.debug,
+        ...(this.opts.spectate ? { spectate: true } : {}),
+        ...(this.opts.spectate && this.opts.delayMs !== undefined
+          ? { delayMs: this.opts.delayMs }
+          : {}),
       });
       const { lastSeq } = useMatchStore.getState();
       if (lastSeq >= 0) {
@@ -190,6 +225,14 @@ export class GameWS {
     if (!parsed.success) {
       this.reportError("validation_error", parsed.error.message);
       return;
+    }
+    if (this.opts.onMessage) {
+      try {
+        this.opts.onMessage(parsed.data);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[game-ws] onMessage observer threw", err);
+      }
     }
     this.dispatch(parsed.data);
   }

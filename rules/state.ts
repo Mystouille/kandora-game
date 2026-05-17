@@ -110,6 +110,16 @@ export interface MatchState {
   turn: Seat;
   lastDrawn: (Tile | null)[];
   /**
+   * True when the most recent draw was a rinshan (dead-wall)
+   * replacement following a kan, rather than a normal live-wall
+   * draw. Used by the tsumo handler to distinguish rinshan kaihou
+   * (yaku from a dead-wall tsumo) from haitei (yaku from the last
+   * live-wall tsumo) when the live wall is also empty — the two
+   * cases collide on `liveWall.length === 0` and would otherwise
+   * be indistinguishable. Reset on every draw and at hand start.
+   */
+  lastDrawFromDeadWall: boolean;
+  /**
    * Most recent discard, available for ron until the next seat draws.
    * Cleared when a draw completes.
    */
@@ -245,6 +255,7 @@ export function createInitialState(
     doraIndicators: [...dealt.doraIndicators],
     turn: 0,
     lastDrawn: [null, null, null, null],
+    lastDrawFromDeadWall: false,
     lastDiscard: null,
     phase: "awaiting_draw",
     dealer: 0,

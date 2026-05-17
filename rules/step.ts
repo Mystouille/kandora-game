@@ -201,6 +201,7 @@ function clone(state: MatchState): MatchState {
     doraIndicators: [...state.doraIndicators],
     turn: state.turn,
     lastDrawn: [...state.lastDrawn],
+    lastDrawFromDeadWall: state.lastDrawFromDeadWall,
     lastDiscard: state.lastDiscard ? { ...state.lastDiscard } : null,
     phase: state.phase,
     dealer: state.dealer,
@@ -977,6 +978,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     const tile = next.liveWall.shift() as Tile;
     next.hands[next.turn].push(tile);
     next.lastDrawn[next.turn] = tile;
+    next.lastDrawFromDeadWall = false;
     next.lastDiscard = null; // ron window closes once next seat draws.
     next.phase = "awaiting_discard";
     return {
@@ -1200,6 +1202,16 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       melds: state.melds[action.seat],
       noKuitan: !state.ruleSet.kuitan,
       noAka: isAkaDisabled(state.ruleSet),
+      // Haitei raoyue: tsumo on the very last live-wall tile.
+      // Exclude rinshan draws (those score rinshan kaihou via
+      // `rinshanOrChankan` instead) — the two collide when the
+      // wall is already empty at kan time.
+      haiteiOrHoutei:
+        state.liveWall.length === 0 && !state.lastDrawFromDeadWall,
+      // Rinshan kaihou: tsumo on a dead-wall replacement draw
+      // (any kan kind). `lastDrawFromDeadWall` is set by every
+      // rinshan draw site and cleared by the next live-wall draw.
+      rinshanOrChankan: state.lastDrawFromDeadWall,
     });
     if (!score.isAgari) {
       return noop(state);
@@ -1293,6 +1305,11 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         noKuitan: !state.ruleSet.kuitan,
         noAka: isAkaDisabled(state.ruleSet),
         rinshanOrChankan: isChankan,
+        // Houtei raoyui: ron on the final discard of the hand —
+        // i.e. the discarder's last draw emptied the live wall.
+        // Chankan rons are excluded (they collide on the
+        // `rinshanOrChankan` flag the riichi lib gates on).
+        haiteiOrHoutei: !isChankan && state.liveWall.length === 0,
       });
       if (!score.isAgari) {
         return noop(state);
@@ -1449,6 +1466,15 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       if (state.riichiDeclared[action.seat]) {
         return noop(state);
       }
+      // Kan is only legal immediately after a draw (live wall or
+      // rinshan), never after a chi/pon. Chi/pon/daiminkan all
+      // clear `lastDrawn[seat]` to null; only a `draw` or kan-
+      // rinshan sets it. This gate prevents declaring shouminkan
+      // on the called tile of a fresh pon (post-chi/pon there's
+      // no rinshan window so the rules forbid it anyway).
+      if (state.lastDrawn[action.seat] === null) {
+        return noop(state);
+      }
       const targetKey =
         (action.tile[0] === "0" ? "5" : action.tile[0]) + action.tile[1];
       // Find a matching open pon owned by this seat.
@@ -1551,6 +1577,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       }
       next.hands[action.seat].push(rinshan);
       next.lastDrawn[action.seat] = rinshan;
+      next.lastDrawFromDeadWall = true;
       const events: EngineEvent[] = [
         { type: "call", seat: action.seat, meld },
         {
@@ -1573,6 +1600,11 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     // Ankan
     if (state.phase !== "awaiting_discard" || action.seat !== state.turn) {
+      return noop(state);
+    }
+    // Kan is only legal immediately after a draw — see the
+    // shouminkan branch above for the rationale.
+    if (state.lastDrawn[action.seat] === null) {
       return noop(state);
     }
     const targetKey =
@@ -1635,6 +1667,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     next.hands[action.seat].push(rinshan);
     next.lastDrawn[action.seat] = rinshan;
+    next.lastDrawFromDeadWall = true;
     const events: EngineEvent[] = [
       { type: "call", seat: action.seat, meld },
       {
@@ -1722,6 +1755,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     next.hands[declarer].push(rinshan);
     next.lastDrawn[declarer] = rinshan;
+    next.lastDrawFromDeadWall = true;
     next.pendingShouminkan = null;
     next.phase = "awaiting_discard";
     const events: EngineEvent[] = [
@@ -1817,6 +1851,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.pendingKanDora = [];
     next.pendingKanUraDora = [];
     next.lastDrawn = [null, null, null, null];
+    next.lastDrawFromDeadWall = false;
     next.lastDiscard = null;
     next.dealer = dealer;
     next.roundWind = roundWind;

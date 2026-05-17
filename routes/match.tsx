@@ -371,6 +371,38 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
     }
   }, [matchId, view.roomState]);
 
+  // AFK self-report: 25s after each call/discard prompt arrives,
+  // if the player hasn't clicked anything, send `afk: true` so
+  // the server flips us to disconnected (skips all our open and
+  // future windows). The timer resets every time a new legal-
+  // action set arrives (which happens on every action of ours,
+  // since the server echoes the post-act legals). Cleared when
+  // legals go empty (off-turn) or we're already flagged
+  // disconnected.
+  const ownOccupant =
+    view.mySeat !== null
+      ? view.roomState?.seats[view.mySeat]?.occupant
+      : undefined;
+  const ownConnected =
+    ownOccupant?.kind === "human" ? ownOccupant.connected !== false : true;
+  useEffect(() => {
+    if (
+      view.mySeat === null ||
+      view.legalActions.length === 0 ||
+      !ownConnected
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (wsRef.current) {
+        wsRef.current.sendAfk(true);
+      }
+    }, 25_000);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [view.legalActions, view.mySeat, ownConnected]);
+
   // Mount Pixi + WS once, tear down on unmount.
   useEffect(() => {
     const container = containerRef.current;
@@ -579,6 +611,11 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
         riichi: t.match.centerRiichi,
         tiles: t.match.centerTiles,
       });
+      rendererRef.current.setResultLabels({
+        exhaustiveDraw: t.match.exhaustiveDraw,
+        abortTitle: t.match.abortTitle,
+        abortKinds: t.match.abortKinds,
+      });
       // The Pixi renderer is seat-relative — it always paints
       // seat 0 at the bottom. Rotate the live view so the
       // human's actual seat lands there (replays already do the
@@ -653,6 +690,35 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
         <span className="pointer-events-none absolute top-0 left-4 font-mono text-[10px] text-emerald-100/70 select-text">
           match {matchId}
         </span>
+        {/* Reconnect overlay: shown whenever the server has
+            flagged this seat as disconnected (network loss or a
+            previous AFK self-report). The button sends
+            `afk: false` to opt back in; pending action windows
+            stay defaulted but future ones wait normally again. */}
+        {view.mySeat !== null && !ownConnected && !view.matchEnded && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 pointer-events-auto">
+            <div className="flex flex-col items-center gap-4 rounded-xl border border-amber-500/50 bg-emerald-950/95 px-8 py-6 shadow-2xl">
+              <div className="text-amber-300 text-lg font-semibold">
+                Disconnected
+              </div>
+              <div className="text-emerald-100/80 text-sm text-center max-w-xs">
+                Your actions are being auto-skipped. Click reconnect to resume
+                playing.
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (wsRef.current) {
+                    wsRef.current.sendAfk(false);
+                  }
+                }}
+                className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold shadow"
+              >
+                Reconnect
+              </button>
+            </div>
+          </div>
+        )}
         {/* Top-right controls: sound toggle + close. Absolutely
             positioned so the canvas occupies the full container;
             `pointer-events: auto` on the wrapper so clicks land

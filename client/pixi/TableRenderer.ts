@@ -359,6 +359,33 @@ export class TableRenderer {
     riichi: "Riichi",
     tiles: "Tiles",
   };
+  /** Localized labels for the result-panel titles shown at the end
+   * of a hand (exhaustive draw / abortive draw). `abortTitle`
+   * contains a `{kind}` placeholder filled with one of the
+   * `abortKinds` entries (or `unknown` when the kind is missing).
+   * Defaults to English; the React layer calls `setResultLabels`
+   * with translated strings after mount. */
+  private resultLabels: {
+    exhaustiveDraw: string;
+    abortTitle: string;
+    abortKinds: {
+      kyuushuu: string;
+      suufonRenda: string;
+      suuchaRiichi: string;
+      sanchahou: string;
+      unknown: string;
+    };
+  } = {
+    exhaustiveDraw: "Exhaustive draw",
+    abortTitle: "Abort: {kind}",
+    abortKinds: {
+      kyuushuu: "Nine Terminals",
+      suufonRenda: "Four Winds Discarded",
+      suuchaRiichi: "Four Players Riichi",
+      sanchahou: "Triple Ron",
+      unknown: "Unknown",
+    },
+  };
   /** Callback invoked at the end of every `render()` with the
    * canvas-pixel rect of the currently-visible result panel
    * (win-info inner zone or match-end standings panel), or
@@ -684,6 +711,23 @@ export class TableRenderer {
     tiles: string;
   }): void {
     this.centerLabels = labels;
+  }
+
+  /** Update the localized labels used by the end-of-hand result
+   * panel titles (exhaustive draw / abortive draw). Call from the
+   * React layer after locale changes. */
+  setResultLabels(labels: {
+    exhaustiveDraw: string;
+    abortTitle: string;
+    abortKinds: {
+      kyuushuu: string;
+      suufonRenda: string;
+      suuchaRiichi: string;
+      sanchahou: string;
+      unknown: string;
+    };
+  }): void {
+    this.resultLabels = labels;
   }
 
   /** Subscribe to result-panel-bounds updates. The callback fires
@@ -1161,13 +1205,26 @@ export class TableRenderer {
       }
       const rect = layout.discards[seat];
       const container = new Container();
+      // Disconnect styling (live / spectator views only —
+      // `roomState` is null in replay). Tints the name text and
+      // the plate border red, and renders a "DC" badge below the
+      // name plate.
+      const occ = view.roomState?.seats[seat]?.occupant;
+      const isDisconnected =
+        occ !== undefined &&
+        occ !== null &&
+        occ.kind === "human" &&
+        occ.connected === false;
+      const nameFill = isDisconnected ? 0xf87171 : 0xffffff;
+      const strokeColor = isDisconnected ? 0xf87171 : 0xffffff;
+      const strokeAlpha = isDisconnected ? 0.9 : 0.25;
       const txt = new Text({
         text: name,
         style: new TextStyle({
           fontFamily: "Inter, system-ui, sans-serif",
           fontSize,
           fontWeight: "600",
-          fill: 0xffffff,
+          fill: nameFill,
         }),
       });
       txt.anchor.set(0.5, 0.5);
@@ -1176,8 +1233,38 @@ export class TableRenderer {
       const bg = new Graphics()
         .roundRect(-w / 2, -h / 2, w, h, 4)
         .fill({ color: 0x000000, alpha: 0.65 })
-        .stroke({ color: 0xffffff, width: 1, alpha: 0.25 });
+        .stroke({ color: strokeColor, width: 1, alpha: strokeAlpha });
       container.addChild(bg, txt);
+      // Disconnect badge: only rendered for live game / spectator
+      // views (`roomState` populated). Replay viewer leaves
+      // `roomState === null`, so badges never paint in archived
+      // playback. A small red pill below the name reads "DC".
+      if (isDisconnected) {
+        const badgeTxt = new Text({
+          text: "DC",
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 10,
+            fontWeight: "700",
+            fill: 0xffffff,
+            letterSpacing: 0.5,
+          }),
+        });
+        badgeTxt.anchor.set(0.5, 0.5);
+        const bw = Math.ceil(badgeTxt.width) + 8;
+        const bh = Math.ceil(badgeTxt.height) + 2;
+        const badgeBg = new Graphics()
+          .roundRect(-bw / 2, -bh / 2, bw, bh, 4)
+          .fill({ color: 0xb91c1c, alpha: 0.95 })
+          .stroke({ color: 0xffffff, width: 1, alpha: 0.6 });
+        const badge = new Container();
+        badge.addChild(badgeBg, badgeTxt);
+        // Position below the name plate. Local +y is "down" in
+        // the unrotated frame; the container rotation below
+        // takes care of orienting it per seat.
+        badge.position.set(0, h / 2 + bh / 2 + 2);
+        container.addChild(badge);
+      }
       // Place the label adjacent to the discard rect on the
       // player's right-hand side. Discard local +x points to the
       // player's right; the seat's screen-side mapping is:
@@ -1993,7 +2080,11 @@ export class TableRenderer {
         rows.push({ kind: "tiles", tiles: uraRow });
       }
     } else if (r.reason === "exhaustive_draw") {
-      rows.push({ kind: "title", text: "Exhaustive draw", size: 32 });
+      rows.push({
+        kind: "title",
+        text: this.resultLabels.exhaustiveDraw,
+        size: 32,
+      });
       // Tenpai hands are revealed at the seat positions (see
       // `renderSeat` — it picks up `r.tenpaiHands[seat]` and
       // replaces the seat's hand strip with it), so reviewers
@@ -2001,9 +2092,19 @@ export class TableRenderer {
       // sit. We intentionally omit them from this center panel
       // to avoid duplicating the information.
     } else if (r.reason === "abort") {
+      const kindLabel =
+        r.abortKind === "kyuushuu"
+          ? this.resultLabels.abortKinds.kyuushuu
+          : r.abortKind === "suufon_renda"
+            ? this.resultLabels.abortKinds.suufonRenda
+            : r.abortKind === "suucha_riichi"
+              ? this.resultLabels.abortKinds.suuchaRiichi
+              : r.abortKind === "sanchahou"
+                ? this.resultLabels.abortKinds.sanchahou
+                : this.resultLabels.abortKinds.unknown;
       rows.push({
         kind: "title",
-        text: `Abort: ${r.abortKind ?? "unknown"}`,
+        text: this.resultLabels.abortTitle.replace("{kind}", kindLabel),
         size: 28,
       });
     }
@@ -3756,9 +3857,36 @@ export class TableRenderer {
     if (stackTile !== null) {
       const stack = this.drawMeldTile(stackTile, seat, tiltedSheet);
       stack.rotation = -Math.PI / 2;
-      // Render the stacked kan tile UNDER the called tile
-      stack.zIndex = tileZ(slots.length) - 1;
-      stack.position.set(calledX, mt.h - tilted.w + DISCARD_ROW_OVERLAP_HORIZ);
+      // Z-order:
+      //   - Bottom seat (0): stack renders UNDER the called tile so
+      //     the called tile's top edge occludes the small overlap
+      //     band, giving a subtle depth cue.
+      //   - Top seat (2): the meld container is rotated 180°, which
+      //     visually flips what is "under" into "over" from the
+      //     bottom-seat POV. To keep the same "added tile sits on
+      //     top of the called tile" semantics, flip z-order so the
+      //     stack draws OVER the called tile.
+      //   - Side seats (1, 3): the stack sits at the same X as the
+      //     called tile, so it overlaps the upright neighbour along
+      //     the row exactly like the called tile does. Match the
+      //     called tile's zIndex so the stack inherits the same
+      //     overlap behavior (called in front of/behind neighbour
+      //     per the side-strip discard rule).
+      if (seat === 1 || seat === 3) {
+        stack.zIndex = tileZ(calledSlot);
+      } else {
+        stack.zIndex =
+          seat === 2 ? tileZ(slots.length) + 1 : tileZ(slots.length) - 1;
+      }
+      // Vertical offset: bottom/top seats overlap the called tile
+      // by `DISCARD_ROW_OVERLAP_HORIZ` for a stacked-in-perspective
+      // look. Side seats (1, 3) butt the stack flush against the
+      // called tile with NO overlap — the tilted-tile silhouettes
+      // are already very close to the row edge and any overlap
+      // reads as a glitch from a side perspective.
+      const stackOverlap =
+        seat === 1 || seat === 3 ? 0 : DISCARD_ROW_OVERLAP_HORIZ;
+      stack.position.set(calledX, mt.h - tilted.w + stackOverlap);
       c.addChild(stack);
     }
     // Total footprint width = xCursor (sum of strides) + the last

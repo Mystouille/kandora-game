@@ -751,5 +751,20 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
           })),
         }
       : mv.matchEnded,
+    // Permute room composition so the disconnect badge in the
+    // renderer can read `roomState.seats[seatIdx]` using the
+    // same focused-relative indexing as `seatNames`. The
+    // occupant's nominal `seat` field stays as the absolute seat
+    // value, but the array slot is the rotated index.
+    roomState: mv.roomState
+      ? {
+          ...mv.roomState,
+          mySeat: mv.roomState.mySeat != null ? rot(mv.roomState.mySeat) : null,
+          seats: perm4(mv.roomState.seats).map((rs, i) => ({
+            ...rs,
+            seat: i as Seat,
+          })),
+        }
+      : mv.roomState,
   };
 }

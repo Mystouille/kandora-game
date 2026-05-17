@@ -41,6 +41,7 @@ export default function LobbyRoute() {
   const [humanDraws, setHumanDraws] = useState("");
   const [leftDiscards, setLeftDiscards] = useState("");
   const [joinId, setJoinId] = useState("");
+  const [spectateId, setSpectateId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   function buildDebug(): { debug: MatchDebug; ok: boolean } {
@@ -128,6 +129,30 @@ export default function LobbyRoute() {
     void navigate(`/game/${encodeURIComponent(id)}`);
   }
 
+  function spectateRoom() {
+    setError(null);
+    const id = spectateId.trim();
+    if (!id) {
+      setError("Enter a room ID to spectate.");
+      return;
+    }
+    setStarting(true);
+    void navigate(`/spectate/${encodeURIComponent(id)}`);
+  }
+
+  function spectateRoomDelayed() {
+    setError(null);
+    const id = spectateId.trim();
+    if (!id) {
+      setError("Enter a room ID to spectate.");
+      return;
+    }
+    setStarting(true);
+    // 5-minute delay — long enough to defeat real-time relaying
+    // without making the watch unwatchable.
+    void navigate(`/spectate/${encodeURIComponent(id)}?delay=${5 * 60_000}`);
+  }
+
   return (
     <main className="pt-16 p-6 container mx-auto max-w-2xl">
       <h1 className="text-3xl font-bold mb-2">Lobby</h1>
@@ -178,6 +203,39 @@ export default function LobbyRoute() {
           className="px-5 py-3 bg-slate-700 hover:bg-slate-800 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
         >
           Join
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 mb-8 p-4 bg-gray-50 dark:bg-gray-800 rounded-md">
+        <label className="flex-1 min-w-[240px]">
+          <span className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+            Spectate a live room (read-only)
+          </span>
+          <input
+            type="text"
+            value={spectateId}
+            onChange={(e) => {
+              setSpectateId(e.target.value);
+            }}
+            placeholder="room ID (e.g. AbCdEf123456)"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 rounded-md font-mono text-sm focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={spectateRoom}
+          disabled={starting}
+          className="px-5 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
+        >
+          Watch live
+        </button>
+        <button
+          type="button"
+          onClick={spectateRoomDelayed}
+          disabled={starting}
+          className="px-5 py-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
+        >
+          Watch (5min delay)
         </button>
       </div>
 
