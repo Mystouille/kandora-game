@@ -111,6 +111,40 @@ describe("step — riichi declaration", () => {
     expect(r.state.riichiDeclared[0]).toBe(false);
   });
 
+  it("stamps double-riichi for a non-dealer on their first turn even if earlier seats have discarded", () => {
+    // Seat 2 declares riichi on their very first turn. Seats 0
+    // and 1 have already discarded once each (normal turn order),
+    // and no calls have happened — this is still double riichi.
+    const handTenpai = tiles("11m22p33s44m55p66s7z");
+    const drawn: Tile = "9m";
+    const state = craft({
+      hands: [FILLER, FILLER, [...handTenpai, drawn], FILLER],
+      turn: 2,
+      phase: "awaiting_discard",
+      lastDrawn: drawn,
+      discards: [[tiles("1z")[0]], [tiles("2z")[0]], [], []],
+    });
+    const r = step(state, { type: "riichi", seat: 2, tile: drawn });
+    expect(r.state.riichiDeclared[2]).toBe(true);
+    expect(r.state.doubleRiichi[2]).toBe(true);
+  });
+
+  it("does NOT stamp double-riichi if the seat already discarded once", () => {
+    // Seat 0 already has a discard on the table (second go-around).
+    const handTenpai = tiles("11m22p33s44m55p66s7z");
+    const drawn: Tile = "9m";
+    const state = craft({
+      hands: [[...handTenpai, drawn], FILLER, FILLER, FILLER],
+      turn: 0,
+      phase: "awaiting_discard",
+      lastDrawn: drawn,
+      discards: [[tiles("1z")[0]], [], [], []],
+    });
+    const r = step(state, { type: "riichi", seat: 0, tile: drawn });
+    expect(r.state.riichiDeclared[0]).toBe(true);
+    expect(r.state.doubleRiichi[0]).toBe(false);
+  });
+
   it("rejects riichi when scores < 1000", () => {
     const handTenpai = tiles("11m22p33s44m55p66s7z");
     const drawn: Tile = "9m";
@@ -224,6 +258,34 @@ describe("step — ippatsu + ura-dora on riichi win", () => {
     }
     // No riichi, no ippatsu, no ura → chiitoitsu only = 2 han.
     expect(winEv.score.han).toBe(2);
+  });
+
+  it("double-riichi tsumo emits ダブル立直 (2 han), not regular 立直", () => {
+    const handTenpai = tiles("11m22p33s44m55p66s7z");
+    const winTile: Tile = "7z";
+    const state = craft({
+      hands: [[...handTenpai, winTile], FILLER, FILLER, FILLER],
+      turn: 0,
+      phase: "awaiting_discard",
+      dealer: 0,
+      lastDrawn: winTile,
+      // Non-empty discards on other seats so the winner is not
+      // on the first uninterrupted go-around (otherwise tenhou
+      // / chiihou yakuman fires and subsumes everything else).
+      discards: [[], ["1z"], ["2z"], ["3z"]],
+      riichiDeclared: [true, false, false, false],
+      ippatsuEligible: [false, false, false, false],
+    });
+    // Force double-riichi on top of regular riichi (mirroring the
+    // state after a first-turn riichi declaration).
+    state.doubleRiichi = [true, false, false, false];
+    const r = step(state, { type: "tsumo", seat: 0 });
+    const winEv = r.events.find((e) => e.type === "win");
+    if (winEv?.type !== "win") {
+      throw new Error("expected win event");
+    }
+    expect(winEv.score.yaku["ダブル立直"]).toBe("2飜");
+    expect(winEv.score.yaku["立直"]).toBeUndefined();
   });
 });
 

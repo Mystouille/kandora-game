@@ -11,6 +11,7 @@ import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
 import { rotateMatchView } from "~/game/replay/player";
 import type { RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
+import chipIconUrl from "~/game/client/icons/chips.png";
 import type { Route } from "./+types/match";
 
 /**
@@ -96,6 +97,127 @@ export async function loader({ params }: Route.LoaderArgs) {
 }
 
 /**
+ * Buu multi-game session continue-vote overlay. Renders a dim
+ * modal asking "Continue with another game?" after a `match_end`
+ * when the server opens a vote window (Buu mode only). Shows the
+ * four per-seat vote chips so each player can see who's pending
+ * vs. yes/no, plus a wall-clock countdown. The local human votes
+ * via the YES / NO buttons (idempotent on the wire). Once the
+ * server resolves the window the overlay disappears
+ * automatically — either via `match_start` (unanimous yes) or
+ * `session_end` (any no / timeout).
+ */
+function SessionVoteOverlay({
+  sessionVote,
+  mySeat,
+  seatNames,
+  onVote,
+}: {
+  sessionVote: {
+    deadline: number;
+    votes: Array<"yes" | "no" | null>;
+    gameIndex: number;
+  } | null;
+  mySeat: number | null;
+  seatNames: [string, string, string, string] | null;
+  onVote: (vote: "yes" | "no") => void;
+}) {
+  const [remainingMs, setRemainingMs] = useState<number>(() =>
+    sessionVote ? Math.max(0, sessionVote.deadline - Date.now()) : 0
+  );
+  useEffect(() => {
+    if (!sessionVote) {
+      return;
+    }
+    let frame: number;
+    const loop = () => {
+      const ms = Math.max(0, sessionVote.deadline - Date.now());
+      setRemainingMs(ms);
+      if (ms > 0) {
+        frame = requestAnimationFrame(loop);
+      }
+    };
+    frame = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [sessionVote]);
+
+  if (!sessionVote) {
+    return null;
+  }
+
+  const names: [string, string, string, string] = seatNames ?? [
+    "P1",
+    "P2",
+    "P3",
+    "P4",
+  ];
+  const seconds = Math.ceil(remainingMs / 1000);
+  const myVote = mySeat !== null ? sessionVote.votes[mySeat] : null;
+
+  return (
+    <div className="pointer-events-auto absolute inset-0 z-[110] flex items-center justify-center bg-black/55">
+      <div className="relative flex flex-col items-center justify-center gap-5 rounded-xl border border-amber-400/60 bg-black/90 px-10 py-7 shadow-2xl">
+        <div className="text-xs uppercase tracking-widest text-amber-300/80">
+          Game {sessionVote.gameIndex + 1} complete
+        </div>
+        <div className="text-lg font-semibold text-white">
+          Play another East game?
+        </div>
+        <div className="flex gap-3">
+          {[0, 1, 2, 3].map((s) => {
+            const v = sessionVote.votes[s];
+            const color =
+              v === "yes"
+                ? "border-emerald-400/70 text-emerald-200 bg-emerald-500/15"
+                : v === "no"
+                  ? "border-rose-400/70 text-rose-200 bg-rose-500/15"
+                  : "border-white/30 text-white/70 bg-white/5";
+            return (
+              <div
+                key={s}
+                className={`min-w-20 rounded border px-2 py-1 text-center text-xs ${color}`}
+              >
+                <div className="truncate font-medium">{names[s]}</div>
+                <div className="mt-0.5 text-[0.7rem] tracking-widest">
+                  {v === "yes" ? "YES" : v === "no" ? "NO" : "…"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {mySeat !== null && (
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                onVote("yes");
+              }}
+              disabled={myVote === "yes"}
+              className="rounded bg-emerald-500 px-5 py-1.5 text-base font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
+            >
+              YES
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onVote("no");
+              }}
+              disabled={myVote === "no"}
+              className="rounded bg-rose-500 px-5 py-1.5 text-base font-bold text-black shadow disabled:cursor-default disabled:bg-rose-800 disabled:text-rose-300"
+            >
+              NO
+            </button>
+          </div>
+        )}
+        <div className="font-mono text-sm text-amber-200">{seconds}s</div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Pre-match ready-check overlay. Renders a centred dark panel
  * with the four seat names anchored to the panel's edges by
  * absolute position (mySeat = bottom), a big GO button for the
@@ -106,6 +228,8 @@ function ReadyCheckOverlay({
   readyCheck,
   mySeat,
   seatNames,
+  chips,
+  buuMode,
   resultPanelBounds,
   onReady,
 }: {
@@ -115,6 +239,8 @@ function ReadyCheckOverlay({
   } | null;
   mySeat: number | null;
   seatNames: [string, string, string, string] | null;
+  chips: [number, number, number, number] | null;
+  buuMode: boolean;
   resultPanelBounds: { x: number; y: number; w: number; h: number } | null;
   onReady: () => void;
 }) {
@@ -214,12 +340,27 @@ function ReadyCheckOverlay({
     <span
       className={
         readyCheck.acked[seat]
-          ? "text-emerald-300 font-semibold"
-          : "text-white/80"
+          ? "flex flex-col items-center text-emerald-300 font-semibold"
+          : "flex flex-col items-center text-white/80"
       }
     >
-      {names[seat]}
-      {readyCheck.acked[seat] ? " ✓" : ""}
+      <span>
+        {names[seat]}
+        {readyCheck.acked[seat] ? " ✓" : ""}
+      </span>
+      {buuMode && chips ? (
+        <span className="mt-1 inline-flex items-center gap-1.5 font-mono font-bold text-amber-300">
+          <img
+            src={chipIconUrl}
+            alt=""
+            width={28}
+            height={28}
+            className="inline-block"
+            style={{ imageRendering: "auto" }}
+          />
+          <span className="text-[26px] leading-none">{chips[seat]}</span>
+        </span>
+      ) : null}
     </span>
   );
 
@@ -615,6 +756,8 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
         exhaustiveDraw: t.match.exhaustiveDraw,
         abortTitle: t.match.abortTitle,
         abortKinds: t.match.abortKinds,
+        chomboTitle: t.match.chomboTitle,
+        chomboReasons: t.match.chomboReasons,
       });
       // The Pixi renderer is seat-relative — it always paints
       // seat 0 at the bottom. Rotate the live view so the
@@ -783,9 +926,19 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           readyCheck={view.readyCheck}
           mySeat={view.mySeat}
           seatNames={view.seatNames}
+          chips={view.chips}
+          buuMode={view.buuMode}
           resultPanelBounds={view.lastHandResult ? resultPanelBounds : null}
           onReady={() => {
             wsRef.current?.ready();
+          }}
+        />
+        <SessionVoteOverlay
+          sessionVote={view.sessionVote}
+          mySeat={view.mySeat}
+          seatNames={view.seatNames}
+          onVote={(vote) => {
+            wsRef.current?.voteContinue(vote);
           }}
         />
         <WaitingRoomOverlay

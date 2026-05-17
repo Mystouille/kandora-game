@@ -70,6 +70,12 @@ export interface ScoreInput {
   /** Disable red-five dora (treat 0X as a normal 5X). Default: enabled. */
   noAka?: boolean;
   /**
+   * Clamp the result’s payment to the named tier when the
+   * lib-computed `ten` exceeds it. `null` / omitted leaves the
+   * payment untouched. See `RuleSet.scoreCap`.
+   */
+  scoreCap?: "mangan" | "haneman" | "baiman" | "sanbaiman" | null;
+  /**
    * Open / concealed melds owned by the winner (chi, pon, kan).
    * The riichi package counts each meld as 3 tiles regardless of
    * kan, so the concealed `hand` must contain `13 - 3*melds.length`
@@ -330,6 +336,10 @@ export function scoreHand(input: ScoreInput): ScoreResult {
   }
   const raw = r.calc() as RiichiRaw;
 
+  if (input.scoreCap) {
+    applyScoreCap(raw, input.scoreCap, input.tsumo, input.seatWind === "E");
+  }
+
   return {
     isAgari: raw.isAgari && !raw.error,
     han: raw.han,
@@ -343,4 +353,48 @@ export function scoreHand(input: ScoreInput): ScoreResult {
     text: raw.text,
     raw,
   };
+}
+
+/**
+ * Base unit per scoring tier (riichi-lib `base` value: ten =
+ * `base*6` dealer / `base*4` non-dealer; tsumo splits per
+ * `payments.ts`). Used to clamp the lib’s output when a
+ * `RuleSet.scoreCap` is in effect.
+ */
+const SCORE_CAP_BASE: Record<NonNullable<ScoreInput["scoreCap"]>, number> = {
+  mangan: 2000,
+  haneman: 3000,
+  baiman: 4000,
+  sanbaiman: 6000,
+};
+
+/**
+ * Clamp `raw.oya` / `raw.ko` / `raw.ten` to the named tier when
+ * `raw.ten` already exceeds it. Preserves the lib’s array shape
+ * so `distributePayments` keeps working without branching:
+ *   - tsumo: `oya = [b*2, b*2, b*2]`, `ko = [b*2, b, b]`
+ *   - ron:   `oya = [b*6]`, `ko = [b*4]`
+ * `raw.han` / `raw.yaku` / `raw.yakuman` are kept as-is so the UI
+ * still shows the true hand value (e.g. “baiman → mangan” is
+ * obvious from yaku list + capped ten).
+ */
+function applyScoreCap(
+  raw: RiichiRaw,
+  cap: NonNullable<ScoreInput["scoreCap"]>,
+  isTsumo: boolean,
+  isDealer: boolean
+): void {
+  const base = SCORE_CAP_BASE[cap];
+  const capTen = isDealer ? base * 6 : base * 4;
+  if (raw.ten <= capTen) {
+    return;
+  }
+  if (isTsumo) {
+    raw.oya = [base * 2, base * 2, base * 2];
+    raw.ko = [base * 2, base, base];
+  } else {
+    raw.oya = [base * 6];
+    raw.ko = [base * 4];
+  }
+  raw.ten = capTen;
 }

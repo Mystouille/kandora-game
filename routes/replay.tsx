@@ -1108,6 +1108,8 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
         exhaustiveDraw: t.match.exhaustiveDraw,
         abortTitle: t.match.abortTitle,
         abortKinds: t.match.abortKinds,
+        chomboTitle: t.match.chomboTitle,
+        chomboReasons: t.match.chomboReasons,
       });
       const args = replayViewToMatchView(currentView, {
         index,

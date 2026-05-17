@@ -8,8 +8,6 @@
  *
  *   - `busted` (tobi): any seat's score is at or below
  *     `ruleSet.bustedScore`. Disabled when `bustedScore` is `null`.
- *   - `mangan_end`: a win scored mangan-or-better and the rule set
- *     opts into `manganEnds` (Buu and some house rules).
  *   - `agari_yame`: dealer wins the final hand of the final round
  *     and the rule set opts into `agariYame`.
  *   - `tenpai_yame`: dealer is tenpai at the exhaustive draw of the
@@ -32,7 +30,7 @@ export type MatchEndReason =
   | "busted"
   | "agari_yame"
   | "tenpai_yame"
-  | "mangan_end";
+  | "winner_threshold";
 
 export type MatchEndDecision =
   | { ended: true; reason: MatchEndReason }
@@ -64,20 +62,28 @@ export function shouldEndMatch(
 ): MatchEndDecision {
   const rs = state.ruleSet;
 
-  // Busted (tobi): any seat at or below the configured threshold.
+  // Busted (tobi): any seat at or below the configured threshold
+  // (or strictly below it when `bustedStrict` is on).
   if (rs.bustedScore !== null) {
     const threshold = rs.bustedScore;
-    if (state.scores.some((s) => s <= threshold)) {
+    const isBusted = rs.bustedStrict
+      ? (s: number) => s < threshold
+      : (s: number) => s <= threshold;
+    if (state.scores.some(isBusted)) {
       return { ended: true, reason: "busted" };
     }
   }
 
-  // Mangan-end: any win of mangan-or-better ends the match.
-  if (rs.manganEnds && (result.reason === "tsumo" || result.reason === "ron")) {
-    const isYakuman = result.winYakuman === true;
-    const isMangan = (result.winHan ?? 0) >= 5;
-    if (isYakuman || isMangan) {
-      return { ended: true, reason: "mangan_end" };
+  // Winner-threshold (Buu "floating to victory"): any seat at or
+  // above the configured threshold ends the match. Evaluated
+  // strictly after the busted check so a single hand that both
+  // floats the winner and sinks a loser ends as `busted` (which
+  // happens to be the same outcome semantically, but keeps the
+  // event taxonomy stable).
+  if (rs.winnerThreshold !== null) {
+    const wt = rs.winnerThreshold;
+    if (state.scores.some((s) => s >= wt)) {
+      return { ended: true, reason: "winner_threshold" };
     }
   }
 

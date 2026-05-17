@@ -213,4 +213,50 @@ describe("scoreHand — closed-hand wins", () => {
     expect(r.han).toBe(0);
     expect(r.ten).toBe(0);
   });
+
+  it("scoreCap clamps a 6-han haneman down to mangan (non-dealer tsumo)", () => {
+    // Same haneman tsumo as above; cap drops ten 12000 → 8000.
+    const r = scoreHand({
+      hand: tiles("234m234p11s23445s"),
+      winTile: "6s",
+      tsumo: true,
+      riichi: true,
+      ippatsu: true,
+      scoreCap: "mangan",
+    });
+    expect(r.isAgari).toBe(true);
+    expect(r.han).toBe(6); // han / yaku unchanged
+    expect(r.ten).toBe(8000); // mangan, non-dealer tsumo
+    expect(r.oya).toEqual([4000, 4000, 4000]);
+    expect(r.ko).toEqual([4000, 2000, 2000]);
+  });
+
+  it("scoreCap clamps a double-yakuman down to mangan (dealer tsumo)", () => {
+    // 13-way kokushi: lib reports 64000; cap drops to dealer
+    // mangan (12000 total = 4000 × 3).
+    const r = scoreHand({
+      hand: tiles("19m19p19s1234567z"),
+      winTile: "1z",
+      tsumo: true,
+      seatWind: "E",
+      scoreCap: "mangan",
+    });
+    expect(r.isAgari).toBe(true);
+    expect(r.isYakuman).toBe(true); // yakuman flag stays
+    expect(r.ten).toBe(12000);
+    expect(r.oya).toEqual([4000, 4000, 4000]);
+  });
+
+  it("scoreCap leaves sub-cap hands untouched", () => {
+    const r = scoreHand({
+      hand: tiles("234m234p234s222z1z"),
+      winTile: "1z",
+      tsumo: true,
+      roundWind: "S",
+      seatWind: "S",
+      scoreCap: "mangan",
+    });
+    // 5 han non-dealer tsumo → already mangan (8000); cap is a no-op.
+    expect(r.ten).toBe(8000);
+  });
 });

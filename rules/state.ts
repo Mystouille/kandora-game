@@ -227,6 +227,23 @@ export interface MatchState {
    * transitions to `hand_ended`; cleared on the next hand start.
    */
   lastHandResult: HandResult | null;
+  /**
+   * Buu Mahjong chip ledger. Per-seat running chip totals
+   * accumulated by sankoro / nikoro / chinmai payouts at
+   * hand-end. Always present (zeros under non-Buu rule sets so
+   * the wire shape never changes) but only mutated when
+   * `ruleSet.buuMode` is on. Chips are a parallel currency to
+   * `scores` — the engine never converts between the two.
+   */
+  chips: [number, number, number, number];
+  /**
+   * Buu Mahjong "dabuken" (double-chip) tokens. A seat holding a
+   * dabuken doubles the chip income from its next sankoro payout
+   * (token consumed on use). Earned by yakuman wins under
+   * `ruleSet.immediateSankoroOnYakuman`. Always present; only
+   * mutated when `ruleSet.buuMode` is on.
+   */
+  dabuken: [boolean, boolean, boolean, boolean];
 }
 
 export function createInitialState(
@@ -283,5 +300,12 @@ export function createInitialState(
     furitenTemp: [false, false, false, false],
     paoDaisangen: [null, null, null, null],
     paoDaisuushii: [null, null, null, null],
+    chips: [
+      ruleSet.startingChips,
+      ruleSet.startingChips,
+      ruleSet.startingChips,
+      ruleSet.startingChips,
+    ],
+    dabuken: [false, false, false, false],
   };
 }

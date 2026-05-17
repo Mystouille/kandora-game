@@ -1,12 +1,7 @@
 import { useNavigate } from "react-router";
-import { useState } from "react";
-import { nanoid } from "nanoid";
+import { useCallback, useEffect, useState } from "react";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
-import {
-  parseTileList,
-  saveAutoStart,
-  saveMatchDebug,
-} from "~/game/client/debugSeed";
+import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
 import type { MatchDebug } from "~/game/protocol/messages";
 import type { Route } from "./+types/lobby";
 
@@ -33,6 +28,17 @@ const PLACEHOLDER_HAND = "123456789m1234p";
 const PLACEHOLDER_DRAWS = "555z";
 const PLACEHOLDER_LEFT = "123z";
 
+interface LiveRoomSeat {
+  name: string | null;
+  isBot: boolean;
+}
+interface LiveRoom {
+  matchId: string;
+  status: "waiting" | "playing" | "finished";
+  buuMode: boolean;
+  seats: Array<LiveRoomSeat | null>;
+}
+
 export default function LobbyRoute() {
   const navigate = useNavigate();
   const [starting, setStarting] = useState(false);
@@ -41,8 +47,38 @@ export default function LobbyRoute() {
   const [humanDraws, setHumanDraws] = useState("");
   const [leftDiscards, setLeftDiscards] = useState("");
   const [joinId, setJoinId] = useState("");
-  const [spectateId, setSpectateId] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [rooms, setRooms] = useState<LiveRoom[] | null>(null);
+  const [roomsLoading, setRoomsLoading] = useState(false);
+  const [roomsError, setRoomsError] = useState<string | null>(null);
+
+  const refreshRooms = useCallback(async () => {
+    setRoomsLoading(true);
+    setRoomsError(null);
+    try {
+      const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+      const res = await fetch(`${basePath}/api/game/rooms`, {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        setRoomsError(`Failed to load rooms (${res.status}).`);
+        return;
+      }
+      const data = (await res.json()) as { rooms?: LiveRoom[] };
+      setRooms(data.rooms ?? []);
+    } catch (err) {
+      setRoomsError(
+        `Failed to reach server: ${(err as Error).message ?? "unknown"}`
+      );
+    } finally {
+      setRoomsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRooms();
+  }, [refreshRooms]);
 
   function buildDebug(): { debug: MatchDebug; ok: boolean } {
     if (!showDebug) {
@@ -93,28 +129,70 @@ export default function LobbyRoute() {
     };
   }
 
-  function startSoloMatch() {
+  /**
+   * Ask the portal to create a fresh room on the game-server.
+   * Returns the new `matchId`, or `null` on failure (a message
+   * is set on `error`). We do NOT generate the id client-side
+   * anymore: the game-server owns room lifecycle so that the
+   * `/game/:matchId` URL is purely a join target and a refresh
+   * can never spin up a brand-new game with the same id.
+   */
+  async function createRoomOnServer(debug: MatchDebug): Promise<string | null> {
+    try {
+      const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+      const res = await fetch(`${basePath}/api/game/rooms`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ debug, preset: "buu-east" }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setError(`Failed to create room (${res.status}): ${text || "unknown"}`);
+        return null;
+      }
+      const data = (await res.json()) as { matchId?: string };
+      if (!data.matchId) {
+        setError("Game server returned no matchId.");
+        return null;
+      }
+      return data.matchId;
+    } catch (err) {
+      setError(
+        `Failed to reach game server: ${(err as Error).message ?? "unknown"}`
+      );
+      return null;
+    }
+  }
+
+  async function startSoloMatch() {
     setError(null);
     const { debug, ok } = buildDebug();
     if (!ok) {
       return;
     }
-    const matchId = nanoid(12);
-    saveMatchDebug(matchId, debug);
-    saveAutoStart(matchId);
     setStarting(true);
+    const matchId = await createRoomOnServer(debug);
+    if (!matchId) {
+      setStarting(false);
+      return;
+    }
+    saveAutoStart(matchId);
     void navigate(`/game/${matchId}`);
   }
 
-  function createRoom() {
+  async function createRoom() {
     setError(null);
     const { debug, ok } = buildDebug();
     if (!ok) {
       return;
     }
-    const matchId = nanoid(12);
-    saveMatchDebug(matchId, debug);
     setStarting(true);
+    const matchId = await createRoomOnServer(debug);
+    if (!matchId) {
+      setStarting(false);
+      return;
+    }
     void navigate(`/game/${matchId}`);
   }
 
@@ -129,43 +207,39 @@ export default function LobbyRoute() {
     void navigate(`/game/${encodeURIComponent(id)}`);
   }
 
-  function spectateRoom() {
+  function watchLive(id: string) {
     setError(null);
-    const id = spectateId.trim();
-    if (!id) {
-      setError("Enter a room ID to spectate.");
-      return;
-    }
     setStarting(true);
     void navigate(`/spectate/${encodeURIComponent(id)}`);
   }
 
-  function spectateRoomDelayed() {
+  function watchLiveDelayed(id: string) {
     setError(null);
-    const id = spectateId.trim();
-    if (!id) {
-      setError("Enter a room ID to spectate.");
-      return;
-    }
     setStarting(true);
     // 5-minute delay — long enough to defeat real-time relaying
     // without making the watch unwatchable.
     void navigate(`/spectate/${encodeURIComponent(id)}?delay=${5 * 60_000}`);
   }
 
+  function joinRoomById(id: string) {
+    setError(null);
+    setStarting(true);
+    void navigate(`/game/${encodeURIComponent(id)}`);
+  }
+
   return (
     <main className="pt-16 p-6 container mx-auto max-w-2xl">
       <h1 className="text-3xl font-bold mb-2">Lobby</h1>
       <p className="text-gray-600 dark:text-gray-300 mb-8">
-        Walking skeleton — play solo against bots, or create a room and share
-        the URL with friends. Calls, riichi, and scoring are wired; final polish
-        is still in flight.
+        Let's play some mahjong!
       </p>
 
       <div className="flex flex-wrap gap-3 mb-6">
         <button
           type="button"
-          onClick={startSoloMatch}
+          onClick={() => {
+            void startSoloMatch();
+          }}
           disabled={starting}
           className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
         >
@@ -173,7 +247,9 @@ export default function LobbyRoute() {
         </button>
         <button
           type="button"
-          onClick={createRoom}
+          onClick={() => {
+            void createRoom();
+          }}
           disabled={starting}
           className="px-5 py-3 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
         >
@@ -206,37 +282,111 @@ export default function LobbyRoute() {
         </button>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3 mb-8 p-4 bg-gray-50 dark:bg-gray-800 rounded-md">
-        <label className="flex-1 min-w-[240px]">
-          <span className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-            Spectate a live room (read-only)
-          </span>
-          <input
-            type="text"
-            value={spectateId}
-            onChange={(e) => {
-              setSpectateId(e.target.value);
+      <div className="mb-8 p-4 bg-gray-50 dark:bg-gray-800 rounded-md">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-medium text-gray-700 dark:text-gray-200">
+            Live games
+          </h2>
+          <button
+            type="button"
+            onClick={() => {
+              void refreshRooms();
             }}
-            placeholder="room ID (e.g. AbCdEf123456)"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 rounded-md font-mono text-sm focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={spectateRoom}
-          disabled={starting}
-          className="px-5 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
-        >
-          Watch live
-        </button>
-        <button
-          type="button"
-          onClick={spectateRoomDelayed}
-          disabled={starting}
-          className="px-5 py-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
-        >
-          Watch (5min delay)
-        </button>
+            disabled={roomsLoading}
+            className="px-3 py-1.5 text-sm bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 disabled:opacity-60 text-gray-800 dark:text-gray-100 rounded-md"
+          >
+            {roomsLoading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+        {roomsError && (
+          <p className="text-sm text-red-600 dark:text-red-400 mb-2">
+            {roomsError}
+          </p>
+        )}
+        {rooms !== null && rooms.length === 0 && !roomsError && (
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            No live games right now.
+          </p>
+        )}
+        {rooms !== null && rooms.length > 0 && (
+          <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+            {rooms.map((r) => {
+              const seatLabels = r.seats.map((s, i) => {
+                if (s === null) {
+                  return `[${i + 1}] empty`;
+                }
+                const tag = s.isBot ? " (bot)" : "";
+                return `[${i + 1}] ${s.name || "?"}${tag}`;
+              });
+              return (
+                <li
+                  key={r.matchId}
+                  className="py-3 flex flex-wrap items-center gap-3"
+                >
+                  <div className="flex-1 min-w-[240px]">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-block px-2 py-0.5 text-xs font-semibold rounded ${
+                          r.status === "playing"
+                            ? "bg-emerald-200 text-emerald-900 dark:bg-emerald-700 dark:text-emerald-50"
+                            : "bg-amber-200 text-amber-900 dark:bg-amber-700 dark:text-amber-50"
+                        }`}
+                      >
+                        {r.status === "playing" ? "playing" : "waiting"}
+                      </span>
+                      <span className="font-mono text-sm text-gray-800 dark:text-gray-100">
+                        {r.matchId}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        {r.buuMode ? "buu-east" : "tenhou"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">
+                      {seatLabels.join(" · ")}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {r.status === "playing" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            watchLive(r.matchId);
+                          }}
+                          disabled={starting}
+                          className="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-semibold rounded-md"
+                        >
+                          Watch live
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            watchLiveDelayed(r.matchId);
+                          }}
+                          disabled={starting}
+                          className="px-4 py-2 text-sm bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-semibold rounded-md"
+                        >
+                          5min delay
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          joinRoomById(r.matchId);
+                        }}
+                        disabled={starting}
+                        className="px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-md"
+                      >
+                        Join game
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
       {error && (

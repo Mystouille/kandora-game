@@ -38,6 +38,8 @@ import leftSmallUrl from "~/game/tenhouSprites/leftSmall.png";
 import rightSmallUrl from "~/game/tenhouSprites/rightSmall.png";
 import sideHandLUrl from "~/game/tenhouSprites/uprightSideHandL.png";
 import sideHandRUrl from "~/game/tenhouSprites/uprightSideHandR.png";
+import chipIconUrl from "~/game/client/icons/chips.png";
+import dabukenIconUrl from "~/game/client/icons/dabuken.png";
 
 /**
  * Tile sprite sizing. There are three categories of tile sprites,
@@ -375,6 +377,12 @@ export class TableRenderer {
       sanchahou: string;
       unknown: string;
     };
+    chomboTitle: string;
+    chomboReasons: {
+      sinkingWinNotFloating: string;
+      gameEndingWinNotFirst: string;
+      gameEndingChinmai: string;
+    };
   } = {
     exhaustiveDraw: "Exhaustive draw",
     abortTitle: "Abort: {kind}",
@@ -384,6 +392,12 @@ export class TableRenderer {
       suuchaRiichi: "Four Players Riichi",
       sanchahou: "Triple Ron",
       unknown: "Unknown",
+    },
+    chomboTitle: "Chombo: {reason}",
+    chomboReasons: {
+      sinkingWinNotFloating: "sinking win without tenpai",
+      gameEndingWinNotFirst: "game-ending win not in first",
+      gameEndingChinmai: "game-ending chinmai",
     },
   };
   /** Callback invoked at the end of every `render()` with the
@@ -433,6 +447,10 @@ export class TableRenderer {
   /** Per-tile sub-textures, keyed by `"sheet:row:col"`. Lazily
    * built by `getTileTexture`. */
   private tileTextures = new Map<string, Texture>();
+  /** Chip icon texture (Buu nameplate). Loaded in `mount()`. */
+  private chipIconTex: Texture | null = null;
+  /** Dabuken token texture (Buu nameplate). Loaded in `mount()`. */
+  private dabukenIconTex: Texture | null = null;
 
   async mount(container: HTMLElement): Promise<void> {
     const app = new Application();
@@ -488,6 +506,21 @@ export class TableRenderer {
       const cellW = isMulti ? tex.width / MULTI_TILE_SHEET_COLS : tex.width;
       const cellH = isMulti ? tex.height / MULTI_TILE_SHEET_ROWS : tex.height;
       this.sheets.set(key, { texture: tex, cellW, cellH });
+    }
+
+    // Load the Buu nameplate icons (chip + dabuken). Best-effort:
+    // a failure leaves `*IconTex` null and the renderer falls back
+    // to procedural Graphics so the table still paints.
+    try {
+      const [chipTex, dabukenTex] = (await Promise.all([
+        Assets.load(chipIconUrl),
+        Assets.load(dabukenIconUrl),
+      ])) as [Texture, Texture];
+      this.chipIconTex = chipTex;
+      this.dabukenIconTex = dabukenTex;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[TableRenderer] failed to load nameplate icons", err);
     }
 
     const root = new Container();
@@ -726,6 +759,12 @@ export class TableRenderer {
       sanchahou: string;
       unknown: string;
     };
+    chomboTitle: string;
+    chomboReasons: {
+      sinkingWinNotFloating: string;
+      gameEndingWinNotFirst: string;
+      gameEndingChinmai: string;
+    };
   }): void {
     this.resultLabels = labels;
   }
@@ -900,8 +939,15 @@ export class TableRenderer {
       this.renderLayoutDebug(layout);
     }
 
-    // Seat 0 (bottom — `you`), 1 (right), 2 (top), 3 (left)
-    for (let seat = 0; seat < 4; seat++) {
+    // Seat 0 (bottom — `you`), 1 (right), 2 (top), 3 (left).
+    // Painter's order: top first (furthest from viewer), then the
+    // side seats, then the bottom seat last so the human's own
+    // discards / melds / hand always sit on top of any neighbour
+    // pond that extends into the same screen area (e.g. a long
+    // right-seat discard row spilling toward the centre would
+    // otherwise occlude the human's row).
+    const seatPaintOrder: ReadonlyArray<number> = [2, 1, 3, 0];
+    for (const seat of seatPaintOrder) {
       this.renderSeat(view, seat, cx, cy, layout);
     }
 
@@ -1061,7 +1107,9 @@ export class TableRenderer {
           fontFamily: "Inter, system-ui, sans-serif",
           fontSize: Math.max(12, Math.round(chipH * 0.6)),
           fontWeight: "700",
-          fill: 0xffffff,
+          // Sinking seats (Buu mode, score <= sinkThreshold) get
+          // a red score; everyone else stays white.
+          fill: view.sinking[seat] ? 0xff6b6b : 0xffffff,
         }),
       });
       txt.anchor.set(0.5, 0.5);
@@ -1198,17 +1246,25 @@ export class TableRenderer {
     // Shift each label toward the table centre along the seat's
     // player-up axis (screen-up for seat 0, etc.).
     const centerShift = 15;
+    const buuMode = view.buuMode === true;
+    // Build all per-seat sub-objects first so we can pick a single
+    // uniform box size for every seat (user requirement).
+    type Built = {
+      seat: 0 | 1 | 2 | 3;
+      nameText: Text;
+      chipText: Text | null;
+      isDisconnected: boolean;
+      hasDabuken: boolean;
+    };
+    const built: Built[] = [];
+    let maxNameW = 0;
+    let maxChipTextW = 0;
+    let maxNameH = 0;
     for (let seat = 0; seat < 4; seat++) {
       const name = view.seatNames[seat];
       if (!name) {
         continue;
       }
-      const rect = layout.discards[seat];
-      const container = new Container();
-      // Disconnect styling (live / spectator views only —
-      // `roomState` is null in replay). Tints the name text and
-      // the plate border red, and renders a "DC" badge below the
-      // name plate.
       const occ = view.roomState?.seats[seat]?.occupant;
       const isDisconnected =
         occ !== undefined &&
@@ -1216,9 +1272,7 @@ export class TableRenderer {
         occ.kind === "human" &&
         occ.connected === false;
       const nameFill = isDisconnected ? 0xf87171 : 0xffffff;
-      const strokeColor = isDisconnected ? 0xf87171 : 0xffffff;
-      const strokeAlpha = isDisconnected ? 0.9 : 0.25;
-      const txt = new Text({
+      const nameText = new Text({
         text: name,
         style: new TextStyle({
           fontFamily: "Inter, system-ui, sans-serif",
@@ -1227,18 +1281,131 @@ export class TableRenderer {
           fill: nameFill,
         }),
       });
-      txt.anchor.set(0.5, 0.5);
-      const w = Math.ceil(txt.width) + padX * 2;
-      const h = Math.ceil(txt.height) + padY * 2;
+      nameText.anchor.set(0.5, 0.5);
+      maxNameW = Math.max(maxNameW, Math.ceil(nameText.width));
+      maxNameH = Math.max(maxNameH, Math.ceil(nameText.height));
+      let chipText: Text | null = null;
+      if (buuMode) {
+        chipText = new Text({
+          text: String(view.chips[seat] ?? 0),
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 13,
+            fontWeight: "700",
+            fill: 0xfde68a,
+          }),
+        });
+        chipText.anchor.set(0.5, 0.5);
+        maxChipTextW = Math.max(maxChipTextW, Math.ceil(chipText.width));
+      }
+      built.push({
+        seat: seat as 0 | 1 | 2 | 3,
+        nameText,
+        chipText,
+        isDisconnected,
+        hasDabuken: buuMode && view.dabuken[seat] === true,
+      });
+    }
+    if (built.length === 0) {
+      return;
+    }
+    // Row metrics.
+    const nameRowH = maxNameH + padY * 2;
+    const chipIconR = 7; // chip icon radius (px)
+    const chipIconGap = 4; // gap between chip icon and count
+    const chipRowH = buuMode ? Math.max(maxNameH, chipIconR * 2) + 4 : 0;
+    const dabukenR = 26; // dabuken token radius (px) — 2× the chip icon
+    const dabukenRowH = buuMode ? dabukenR * 2 + 4 : 0;
+    // Width: max of name, chip-line content, and dabuken token.
+    const chipLineW = buuMode ? chipIconR * 2 + chipIconGap + maxChipTextW : 0;
+    const dabukenW = buuMode ? dabukenR * 2 : 0;
+    const contentW = Math.max(maxNameW, chipLineW, dabukenW);
+    const w = contentW + padX * 2;
+    const h = nameRowH + chipRowH + dabukenRowH;
+    // Row centre y positions inside the box (anchor at (0,0) =
+    // box centre; +y down).
+    const nameCY = -h / 2 + nameRowH / 2;
+    const chipCY = -h / 2 + nameRowH + chipRowH / 2;
+    const dabukenCY = -h / 2 + nameRowH + chipRowH + dabukenRowH / 2;
+    for (const b of built) {
+      const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
+      const rect = layout.discards[seat];
+      const container = new Container();
+      const strokeColor = isDisconnected ? 0xf87171 : 0xffffff;
+      const strokeAlpha = isDisconnected ? 0.9 : 0.25;
       const bg = new Graphics()
-        .roundRect(-w / 2, -h / 2, w, h, 4)
+        .roundRect(-w / 2, -h / 2, w, h, 6)
         .fill({ color: 0x000000, alpha: 0.65 })
         .stroke({ color: strokeColor, width: 1, alpha: strokeAlpha });
-      container.addChild(bg, txt);
+      container.addChild(bg);
+      nameText.position.set(0, nameCY);
+      container.addChild(nameText);
+      if (buuMode && chipText) {
+        // Chip icon: use the imported PNG when available; fall
+        // back to a procedural two-tone disc when the texture
+        // hasn't loaded (or failed to load).
+        const iconCX = -chipLineW / 2 + chipIconR;
+        let icon: Container;
+        if (this.chipIconTex) {
+          const sprite = new Sprite(this.chipIconTex);
+          sprite.anchor.set(0.5, 0.5);
+          sprite.width = chipIconR * 2;
+          sprite.height = chipIconR * 2;
+          icon = sprite;
+        } else {
+          icon = new Graphics()
+            .circle(0, 0, chipIconR)
+            .fill({ color: 0xfacc15 })
+            .stroke({ color: 0xffffff, width: 1, alpha: 0.9 })
+            .circle(0, 0, chipIconR - 3)
+            .stroke({ color: 0xffffff, width: 1, alpha: 0.6 });
+        }
+        icon.position.set(iconCX, chipCY);
+        container.addChild(icon);
+        chipText.position.set(
+          iconCX + chipIconR + chipIconGap + Math.ceil(chipText.width) / 2,
+          chipCY
+        );
+        container.addChild(chipText);
+      }
+      if (hasDabuken) {
+        // Dabuken: use the imported PNG when available; fall back
+        // to a procedural red disc with "x2" overlay otherwise.
+        let token: Container;
+        if (this.dabukenIconTex) {
+          const sprite = new Sprite(this.dabukenIconTex);
+          sprite.anchor.set(0.5, 0.5);
+          sprite.width = dabukenR * 2;
+          sprite.height = dabukenR * 2;
+          token = sprite;
+        } else {
+          const g = new Graphics()
+            .circle(0, 0, dabukenR)
+            .fill({ color: 0xdc2626 })
+            .stroke({ color: 0xffffff, width: 1.5, alpha: 0.95 })
+            .circle(0, 0, dabukenR - 4)
+            .stroke({ color: 0xffffff, width: 1, alpha: 0.7 });
+          const x2 = new Text({
+            text: "x2",
+            style: new TextStyle({
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 12,
+              fontWeight: "800",
+              fill: 0xffffff,
+            }),
+          });
+          x2.anchor.set(0.5, 0.5);
+          const c = new Container();
+          c.addChild(g, x2);
+          token = c;
+        }
+        token.position.set(0, dabukenCY);
+        container.addChild(token);
+      }
       // Disconnect badge: only rendered for live game / spectator
       // views (`roomState` populated). Replay viewer leaves
       // `roomState === null`, so badges never paint in archived
-      // playback. A small red pill below the name reads "DC".
+      // playback. A small red pill below the box reads "DC".
       if (isDisconnected) {
         const badgeTxt = new Text({
           text: "DC",
@@ -1259,13 +1426,10 @@ export class TableRenderer {
           .stroke({ color: 0xffffff, width: 1, alpha: 0.6 });
         const badge = new Container();
         badge.addChild(badgeBg, badgeTxt);
-        // Position below the name plate. Local +y is "down" in
-        // the unrotated frame; the container rotation below
-        // takes care of orienting it per seat.
         badge.position.set(0, h / 2 + bh / 2 + 2);
         container.addChild(badge);
       }
-      // Place the label adjacent to the discard rect on the
+      // Place the box adjacent to the discard rect on the
       // player's right-hand side. Discard local +x points to the
       // player's right; the seat's screen-side mapping is:
       //   seat 0 (bottom, no rotation) → right edge of rect
@@ -1840,7 +2004,14 @@ export class TableRenderer {
 
     // Center info: title, yaku list, han/fu total, and points
     // line (for wins); reason text otherwise.
-    this.renderResultCenterInfo(r, cx, cy, overlay);
+    this.renderResultCenterInfo(
+      r,
+      cx,
+      cy,
+      overlay,
+      view.seatNames,
+      view.scoreCap
+    );
 
     // Honba / riichi sticks pill, tucked into the top-left of the
     // result overlay.
@@ -1866,7 +2037,9 @@ export class TableRenderer {
     r: NonNullable<MatchView["lastHandResult"]>,
     cx: number,
     cy: number,
-    parent: Container
+    parent: Container,
+    seatNames: MatchView["seatNames"],
+    scoreCap: MatchView["scoreCap"]
   ): void {
     if (!this.root) {
       return;
@@ -1904,7 +2077,7 @@ export class TableRenderer {
 
     const rows: Row[] = [];
 
-    if (r.wins && r.wins.length > 0) {
+    if (r.wins && r.wins.length > 0 && !r.buuChombo) {
       // Reset the page index whenever the underlying result
       // object changes (new hand_end, override toggle, replay
       // seek). Reference identity is sufficient — the store /
@@ -1990,8 +2163,30 @@ export class TableRenderer {
         const han = win.han ?? 0;
         const fu = win.fu ?? 0;
         const ym = win.yakumanCount ?? 0;
-        const hanLabel =
-          ym > 0
+        // When the rule set caps the score at a tier (e.g. Buu
+        // Mahjong: `scoreCap = "mangan"`), the server has already
+        // clamped `win.ten` down to that tier. The raw han count
+        // (and any yakuman flag) would otherwise misrepresent
+        // the actual payout — a Buu hand worth 8 han or a single
+        // yakuman both pay out as mangan, so we surface the cap
+        // tier name instead of "8 han" / "Yakuman".
+        const capMinHan = {
+          mangan: 5,
+          haneman: 6,
+          baiman: 8,
+          sanbaiman: 11,
+        } as const;
+        const capLabel = {
+          mangan: "Mangan",
+          haneman: "Haneman",
+          baiman: "Baiman",
+          sanbaiman: "Sanbaiman",
+        } as const;
+        const isCapped =
+          scoreCap !== null && (ym > 0 || han >= capMinHan[scoreCap]);
+        const hanLabel = isCapped
+          ? capLabel[scoreCap]
+          : ym > 0
             ? ym > 1
               ? `${ym}× Yakuman`
               : "Yakuman"
@@ -2078,6 +2273,47 @@ export class TableRenderer {
           i < sharedUra.length ? (sharedUra[i] ?? null) : null
         );
         rows.push({ kind: "tiles", tiles: uraRow });
+      }
+    } else if (r.buuChombo) {
+      // Buu Mahjong chombo: the engine emits a `buu_chombo`
+      // event right before this abort `hand_end`, and the
+      // store/replay layer threads it through onto
+      // `lastHandResult.buuChombo` so we can render a clear
+      // reason instead of "Abort: unknown". This branch also
+      // runs while the result is still in its transient
+      // `reason: "ron" | "tsumo"` shape (chombo-by-winning
+      // flow — the win event arrives first, the chombo
+      // event swaps the panel over before the eventual abort
+      // `hand_end` finalises `reason` to `"abort"`).
+      const reasonLabel =
+        r.buuChombo.reason === "sinking_win_not_floating"
+          ? this.resultLabels.chomboReasons.sinkingWinNotFloating
+          : r.buuChombo.reason === "game_ending_win_not_first"
+            ? this.resultLabels.chomboReasons.gameEndingWinNotFirst
+            : this.resultLabels.chomboReasons.gameEndingChinmai;
+      rows.push({
+        kind: "title",
+        text: this.resultLabels.chomboTitle.replace("{reason}", reasonLabel),
+        size: 28,
+      });
+      // Per-seat chip totals + this-chombo delta. Seats are
+      // already in renderer-relative order (seat 0 = focus at
+      // bottom) because `rotateMatchView` permuted the
+      // `buuChombo.chips` / `chipDelta` arrays.
+      const chipDelta = r.buuChombo.chipDelta;
+      const chips = r.buuChombo.chips;
+      for (let s = 0; s < 4; s++) {
+        const name = seatNames?.[s] || `Player ${s + 1}`;
+        const total = chips[s];
+        const delta = chipDelta[s];
+        const sign = delta > 0 ? "+" : "";
+        const color = delta < 0 ? 0xff6b6b : delta > 0 ? 0x86efac : 0xcbd5e1;
+        rows.push({
+          kind: "label",
+          text: `${name}: ${total} (${sign}${delta})`,
+          size: 20,
+          color,
+        });
       }
     } else if (r.reason === "exhaustive_draw") {
       rows.push({
@@ -2651,10 +2887,18 @@ export class TableRenderer {
       (a, b) => a.place - b.place
     );
     const seatNames = view.seatNames;
+    const showChipDelta =
+      view.buuMode === true &&
+      Array.isArray(view.matchEnded.chipsDelta) &&
+      view.matchEnded.chipsDelta.length === 4;
+    const chipDelta = showChipDelta
+      ? (view.matchEnded.chipsDelta as number[])
+      : null;
     const rows = ordered.map((f) => ({
       place: f.place,
       name: seatNames?.[f.seat] ?? `Seat ${f.seat}`,
       score: f.score,
+      chipDelta: chipDelta ? chipDelta[f.seat] : 0,
     }));
 
     const padX = 28;
@@ -2682,10 +2926,39 @@ export class TableRenderer {
 
     // Build per-row text triples so we can right-align scores at a
     // common x within the panel.
+    // Format a signed chip delta as "+N" / "−N" / "0". Uses
+    // a real minus sign (U+2212) so the figure visually
+    // matches the chip icon's plus/zero variants.
+    const formatChipDelta = (n: number): string => {
+      if (n > 0) {
+        return `+${n}`;
+      }
+      if (n < 0) {
+        return `\u2212${Math.abs(n)}`;
+      }
+      return "0";
+    };
+
     const rowTexts = rows.map((r) => ({
       place: new Text({ text: `${r.place}.`, style: rowStyle }),
       name: new Text({ text: r.name, style: rowStyle }),
       score: new Text({ text: `${r.score}`, style: rowStyle }),
+      chipDeltaText: showChipDelta
+        ? new Text({
+            text: formatChipDelta(r.chipDelta),
+            style: new TextStyle({
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: rowSize,
+              fontWeight: "700",
+              fill:
+                r.chipDelta > 0
+                  ? 0x86efac
+                  : r.chipDelta < 0
+                    ? 0xfca5a5
+                    : 0xe5e7eb,
+            }),
+          })
+        : null,
     }));
 
     const placeColW = Math.max(...rowTexts.map((r) => r.place.width));
@@ -2693,7 +2966,27 @@ export class TableRenderer {
     const scoreColW = Math.max(...rowTexts.map((r) => r.score.width));
     const placeGap = 8; // space between place number and name
     const scoreGap = 28; // space between name column and scores
-    const contentW = placeColW + placeGap + nameColW + scoreGap + scoreColW;
+    // Chip-delta column (Buu only): chip icon + signed number.
+    const chipIconR = 9;
+    const chipIconGap = 5;
+    const chipDeltaGap = 24; // space between score and chip-delta cols
+    const chipDeltaTextW = showChipDelta
+      ? Math.max(
+          ...rowTexts.map((r) =>
+            r.chipDeltaText ? Math.ceil(r.chipDeltaText.width) : 0
+          )
+        )
+      : 0;
+    const chipDeltaColW = showChipDelta
+      ? chipIconR * 2 + chipIconGap + chipDeltaTextW
+      : 0;
+    const contentW =
+      placeColW +
+      placeGap +
+      nameColW +
+      scoreGap +
+      scoreColW +
+      (showChipDelta ? chipDeltaGap + chipDeltaColW : 0);
 
     const innerW = Math.max(280, titleText.width, contentW);
     const w = innerW + padX * 2;
@@ -2731,16 +3024,33 @@ export class TableRenderer {
       const y = rowsStartY + i * rowHeight;
       r.place.position.set(rowsX, y);
       r.name.position.set(rowsX + placeColW + placeGap, y);
-      r.score.position.set(
-        rowsX +
-          placeColW +
-          placeGap +
-          nameColW +
-          scoreGap +
-          (scoreColW - r.score.width),
-        y
-      );
+      const scoreRightX =
+        rowsX + placeColW + placeGap + nameColW + scoreGap + scoreColW;
+      r.score.position.set(scoreRightX - r.score.width, y);
       panel.addChild(r.place, r.name, r.score);
+
+      // Chip-delta column (Buu only): chip icon + signed delta.
+      if (showChipDelta && r.chipDeltaText) {
+        const colLeftX = scoreRightX + chipDeltaGap;
+        const rowCY = y + rowHeight / 2 - 4; // visual centre of the text line
+        let icon: Container;
+        if (this.chipIconTex) {
+          const sprite = new Sprite(this.chipIconTex);
+          sprite.anchor.set(0.5, 0.5);
+          sprite.width = chipIconR * 2;
+          sprite.height = chipIconR * 2;
+          icon = sprite;
+        } else {
+          icon = new Graphics()
+            .circle(0, 0, chipIconR)
+            .fill({ color: 0xfacc15 })
+            .stroke({ color: 0xffffff, width: 1, alpha: 0.9 });
+        }
+        icon.position.set(colLeftX + chipIconR, rowCY);
+        panel.addChild(icon);
+        r.chipDeltaText.position.set(colLeftX + chipIconR * 2 + chipIconGap, y);
+        panel.addChild(r.chipDeltaText);
+      }
     });
 
     panel.position.set(cx - w / 2, cy - h / 2);

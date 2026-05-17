@@ -10,9 +10,10 @@ import {
   replayViewToMatchView,
   type ReplayView,
 } from "~/game/replay/player";
-import { installGameSoundBindings } from "~/game/client/sound";
+import { playSoundForEvent } from "~/game/client/sound";
 import type {
   GameEvent,
+  RoomState,
   Seat,
   ServerMessage,
   SnapshotState,
@@ -101,6 +102,23 @@ function snapshotToReplayView(s: SnapshotState): ReplayView {
     furiten: s.furiten
       ? [s.furiten[0], s.furiten[1], s.furiten[2], s.furiten[3]]
       : [false, false, false, false],
+    // Buu Mahjong overlays. The server only emits `chips` /
+    // `dabuken` on Buu snapshots, so their presence is also our
+    // signal for `buuMode` — without this a mid-match spectator
+    // attach would render the table as if the rule set were
+    // tenhou-default (no chip row, no dabuken token, no sinking
+    // tint).
+    sinking: s.sinking
+      ? [s.sinking[0], s.sinking[1], s.sinking[2], s.sinking[3]]
+      : [false, false, false, false],
+    chips: s.chips
+      ? [s.chips[0], s.chips[1], s.chips[2], s.chips[3]]
+      : [0, 0, 0, 0],
+    dabuken: s.dabuken
+      ? [s.dabuken[0], s.dabuken[1], s.dabuken[2], s.dabuken[3]]
+      : [false, false, false, false],
+    buuMode: s.chips !== undefined,
+    scoreCap: s.scoreCap ?? null,
   };
 }
 
@@ -134,6 +152,7 @@ export default function GameSpectateRoute({
     "",
     "",
   ]);
+  const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [conn, setConn] = useState<string>("idle");
 
   // Refs for stale-closure-safe access inside the WS callback.
@@ -153,7 +172,14 @@ export default function GameSpectateRoute({
     let cancelled = false;
 
     useMatchStore.getState().setMatch(matchId, null);
-    const uninstallSound = installGameSoundBindings();
+    // NOTE: we deliberately do not call `installGameSoundBindings()`
+    // here. That helper plays SFX off the live store's apply-event
+    // bus, which would mean a spectator browsing past events (live
+    // off) still hears the live action arriving over the WS. Sound
+    // is driven from the local `playIndex` instead — see the
+    // dedicated effect below — so cues track the event the user is
+    // actually watching, both in live mode (playhead auto-advances)
+    // and while stepping through history (silent on backward seeks).
 
     void import("~/game/client/pixi/TableRenderer").then(
       ({ TableRenderer }) => {
@@ -229,6 +255,10 @@ export default function GameSpectateRoute({
                 }
               }
               setSeatNames(names);
+              // Capture the full room state so the renderer can
+              // surface the per-seat `connected` flag (used to
+              // paint the "disconnected" badge on nameplates).
+              setRoomState(msg);
             }
           },
         });
@@ -251,7 +281,6 @@ export default function GameSpectateRoute({
     return () => {
       cancelled = true;
       unsub();
-      uninstallSound();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -292,6 +321,29 @@ export default function GameSpectateRoute({
     return out;
   }, [events]);
 
+  // Sound cue dispatch — driven off the local `playIndex` rather
+  // than the live store's event bus (see the mount effect for the
+  // rationale). Forward steps emit one cue per newly-revealed
+  // event; backward seeks and snapshot resets advance the cursor
+  // silently. Mirrors the live player's per-event soundscape
+  // when `live === true` (playhead auto-tracks new arrivals).
+  const lastPlayedSoundIndexRef = useRef<number>(-1);
+  useEffect(() => {
+    const from = lastPlayedSoundIndexRef.current;
+    lastPlayedSoundIndexRef.current = playIndex;
+    if (playIndex <= from) {
+      return;
+    }
+    for (let i = from + 1; i <= playIndex && i < events.length; i++) {
+      try {
+        playSoundForEvent(events[i], null);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[game] spectator sound dispatch threw", err);
+      }
+    }
+  }, [playIndex, events]);
+
   useEffect(() => {
     const r = rendererRef.current;
     if (!r || !view) {
@@ -307,9 +359,10 @@ export default function GameSpectateRoute({
       mySeat: focusSeat,
       matchId,
       seatNames,
+      roomState,
     });
     r.render(args);
-  }, [view, playIndex, focusSeat, overlays, matchId, seatNames]);
+  }, [view, playIndex, focusSeat, overlays, matchId, seatNames, roomState]);
 
   // -----------------------------------------------------------------------
   // Navigation helpers

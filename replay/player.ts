@@ -26,7 +26,13 @@
  * The two paths intentionally diverge on that one point and share
  * everything else through the `GameEvent` schema.
  */
-import type { GameEvent, Meld, Seat, Tile } from "~/game/protocol/messages";
+import type {
+  GameEvent,
+  Meld,
+  RoomState,
+  Seat,
+  Tile,
+} from "~/game/protocol/messages";
 import type { MatchView } from "~/game/client/store";
 import type { ReplayLog } from "./types";
 
@@ -74,6 +80,25 @@ export interface ReplayView {
   honba: number;
   riichiSticks: number;
   riichiDeclared: [boolean, boolean, boolean, boolean];
+  /** Per-seat: is this seat currently "sinking" in Buu Mahjong
+   * (score at or below `ruleSet.sinkThreshold`). Set from
+   * `hand_start.sinking` and refreshed by `sinking_update`. Always
+   * all-false in non-Buu modes. */
+  sinking: [boolean, boolean, boolean, boolean];
+  /** Per-seat in-game chip totals (Buu only; non-Buu sessions
+   * keep this at `[0, 0, 0, 0]` throughout). */
+  chips: [number, number, number, number];
+  /** Per-seat dabuken (double-chip token) state (Buu only). */
+  dabuken: [boolean, boolean, boolean, boolean];
+  /** True iff this match is a Buu Mahjong session. Latched at
+   * `match_start` from the wire `ruleSet` id. */
+  buuMode: boolean;
+  /** Active score-cap tier from the rule set, if any. Latched
+   * at `match_start` from the wire `scoreCap` field. Drives the
+   * win-panel label so a hand whose points have been clamped
+   * shows the tier name (e.g. "Mangan") instead of the raw
+   * han / yakuman value. `null` for rule sets without a cap. */
+  scoreCap: "mangan" | "haneman" | "baiman" | "sanbaiman" | null;
   /** Per-seat: is this seat currently in furiten (any flavor).
    * Mirrors the engine's `isFuritenForRon` predicate and is
    * driven by `furiten` archived events. Drives the "Furiten"
@@ -120,6 +145,20 @@ export interface ReplayView {
       doraIndicators?: Tile[];
       uraDoraIndicators?: Tile[];
     }>;
+    /** Buu Mahjong chombo metadata. Set when a `buu_chombo`
+     * event precedes the abort `hand_end`, so the result panel
+     * can render "Chombo: <reason>" instead of "Abort: unknown". */
+    buuChombo?: {
+      seat: Seat;
+      reason:
+        | "sinking_win_not_floating"
+        | "game_ending_win_not_first"
+        | "game_ending_chinmai";
+      /** Per-seat chip delta from the chombo penalty (sums to zero). */
+      chipDelta: number[];
+      /** Per-seat in-game chip totals AFTER the penalty. */
+      chips: number[];
+    };
   };
   matchEnded: null | {
     reason:
@@ -127,7 +166,7 @@ export interface ReplayView {
       | "busted"
       | "agari_yame"
       | "tenpai_yame"
-      | "mangan_end";
+      | "winner_threshold";
     finalScores: Array<{ seat: Seat; score: number; place: number }>;
   };
   /**
@@ -176,6 +215,11 @@ export function initialView(): ReplayView {
     honba: 0,
     riichiSticks: 0,
     riichiDeclared: [false, false, false, false],
+    sinking: [false, false, false, false],
+    chips: [0, 0, 0, 0],
+    dabuken: [false, false, false, false],
+    buuMode: false,
+    scoreCap: null,
     riichiTileIdx: [null, null, null, null],
     lastHandResult: null,
     matchEnded: null,
@@ -197,7 +241,25 @@ export function applyReplayEvent(
 ): ReplayView {
   switch (event.type) {
     case "match_start": {
-      return view;
+      return {
+        ...view,
+        buuMode: event.ruleSet === "buu-east",
+        scoreCap: event.scoreCap ?? null,
+        chips: (event.chips ? [...event.chips] : view.chips) as [
+          number,
+          number,
+          number,
+          number,
+        ],
+        dabuken: (event.dabuken ? [...event.dabuken] : view.dabuken) as [
+          boolean,
+          boolean,
+          boolean,
+          boolean,
+        ],
+        lastHandResult: null,
+        matchEnded: null,
+      };
     }
     case "hand_start": {
       // Archived `hand_start` events always carry the omniscient
@@ -236,6 +298,26 @@ export function applyReplayEvent(
           number,
         ],
         riichiDeclared: [false, false, false, false],
+        sinking: (event.sinking
+          ? [...event.sinking]
+          : [false, false, false, false]) as [
+          boolean,
+          boolean,
+          boolean,
+          boolean,
+        ],
+        chips: (event.chips ? [...event.chips] : view.chips) as [
+          number,
+          number,
+          number,
+          number,
+        ],
+        dabuken: (event.dabuken ? [...event.dabuken] : view.dabuken) as [
+          boolean,
+          boolean,
+          boolean,
+          boolean,
+        ],
         riichiTileIdx: [null, null, null, null],
         lastHandResult: null,
         matchEnded: null,
@@ -486,6 +568,7 @@ export function applyReplayEvent(
     }
     case "hand_end": {
       const existingWins = view.lastHandResult?.wins;
+      const existingBuuChombo = view.lastHandResult?.buuChombo;
       const eventWaits = event.waits;
       // Replay adapters (Majsoul / Tenhou / Riichi City) don't
       // populate `tenpaiHands` on `hand_end` the way the live
@@ -531,6 +614,7 @@ export function applyReplayEvent(
             : {}),
           ...(derivedTenpaiHands ? { tenpaiHands: derivedTenpaiHands } : {}),
           ...(existingWins ? { wins: existingWins } : {}),
+          ...(existingBuuChombo ? { buuChombo: existingBuuChombo } : {}),
         },
       };
     }
@@ -547,6 +631,39 @@ export function applyReplayEvent(
       const furiten = [...view.furiten] as [boolean, boolean, boolean, boolean];
       furiten[event.seat] = event.active;
       return { ...view, furiten };
+    }
+    case "sinking_update": {
+      return {
+        ...view,
+        sinking: [
+          event.sinking[0],
+          event.sinking[1],
+          event.sinking[2],
+          event.sinking[3],
+        ],
+      };
+    }
+    case "buu_chombo": {
+      // Stash chombo offender + reason + chip info on
+      // `lastHandResult` so the following abort `hand_end`
+      // carries it through to the renderer (see store.ts for
+      // the parallel live path). Also update the live `chips`
+      // for the player-name box (the abort `hand_end` itself
+      // carries no chip delta).
+      const existing = view.lastHandResult;
+      return {
+        ...view,
+        chips: [...event.chips] as [number, number, number, number],
+        lastHandResult: {
+          ...(existing ?? { reason: "abort" as const }),
+          buuChombo: {
+            seat: event.seat,
+            reason: event.reason,
+            chipDelta: [...event.chipDelta],
+            chips: [...event.chips],
+          },
+        },
+      };
     }
     default: {
       return view;
@@ -622,6 +739,10 @@ export function replayViewToMatchView(
      * by `annotateWaits` so the renderer doesn't run shanten on
      * the client. `null` when no precompute is available. */
     currentWaits?: Tile[][] | null;
+    /** Live `room_state` from the spectator socket. Carries the
+     * per-seat `connected` flag so the renderer can paint a
+     * "disconnected" badge on nameplates. */
+    roomState?: RoomState | null;
   }
 ): MatchView {
   const focus: Seat = opts.mySeat ?? 0;
@@ -655,14 +776,24 @@ export function replayViewToMatchView(
     riichiSticks: view.riichiSticks,
     riichiDeclared: view.riichiDeclared,
     riichiTileIdx: view.riichiTileIdx,
+    sinking: view.sinking,
+    chips: view.chips,
+    dabuken: view.dabuken,
+    buuMode: view.buuMode,
+    scoreCap: view.scoreCap,
     lastHandResult: view.lastHandResult,
     matchEnded: view.matchEnded,
     currentWaits: opts.currentWaits ?? null,
     freshlyDrawnSeat: view.freshlyDrawnSeat,
     freshlyDiscardedSeat: view.freshlyDiscardedSeat,
     furiten: view.furiten,
-    // Replays never enter a live waiting room.
-    roomState: null,
+    // Replays never enter a live waiting room. Spectators can
+    // opt in via `opts.roomState` so the disconnect badge works
+    // in the live spectator view.
+    roomState: opts.roomState ?? null,
+    // Replays don't drive session-level vote / end UI.
+    sessionVote: null,
+    sessionEnded: null,
   };
   if (focus === 0) {
     return base;
@@ -707,6 +838,14 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
               loser: w.loser != null ? rot(w.loser) : w.loser,
             }))
           : result.wins,
+        buuChombo: result.buuChombo
+          ? {
+              ...result.buuChombo,
+              seat: rot(result.buuChombo.seat),
+              chipDelta: perm4(result.buuChombo.chipDelta),
+              chips: perm4(result.buuChombo.chips),
+            }
+          : result.buuChombo,
       }
     : result;
   return {
@@ -732,6 +871,9 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     dealer: rot(mv.dealer),
     riichiDeclared: perm4(mv.riichiDeclared),
     riichiTileIdx: perm4(mv.riichiTileIdx),
+    sinking: perm4(mv.sinking),
+    chips: perm4(mv.chips),
+    dabuken: perm4(mv.dabuken),
     furiten: perm4(mv.furiten),
     currentWaits: mv.currentWaits ? perm4(mv.currentWaits) : mv.currentWaits,
     lastHandResult: rotatedResult,

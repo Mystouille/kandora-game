@@ -16,6 +16,7 @@
 
 import tenhouHanchan from "./tenhou-hanchan.json";
 import tenhouTonpuusen from "./tenhou-tonpuusen.json";
+import buuEast from "./buu-east.json";
 
 import type { RuleSet } from "../ruleSet";
 
@@ -26,7 +27,11 @@ export interface RuleSetPreset extends RuleSet {
   description?: string;
 }
 
-const PRESET_SOURCES: ReadonlyArray<unknown> = [tenhouHanchan, tenhouTonpuusen];
+const PRESET_SOURCES: ReadonlyArray<unknown> = [
+  tenhouHanchan,
+  tenhouTonpuusen,
+  buuEast,
+];
 
 /** The default preset id used when no override is supplied. */
 export const DEFAULT_PRESET_ID = "tenhou-hanchan";
@@ -136,8 +141,66 @@ function validatePreset(raw: unknown): RuleSetPreset {
   if (obj.bustedScore !== null) {
     expectFiniteInt(obj, "bustedScore", ctx);
   }
-  for (const key of ["agariYame", "tenpaiYame", "manganEnds"] as const) {
+  for (const key of ["bustedStrict", "agariYame", "tenpaiYame"] as const) {
     expectBoolean(obj, key, ctx);
+  }
+
+  // ----- Buu-specific fields ---------------------------------------------
+  // All preset JSONs are required to declare these (no implicit
+  // defaults at the preset layer; defaults live in `resolveRuleSet`
+  // for partial overrides only).
+  for (const key of [
+    "buuMode",
+    "honbaPayments",
+    "tenpaiPayments",
+    "tenpaiRenchan",
+    "kiriageMangan",
+    "immediateSankoroOnYakuman",
+    "illegalVictoryAllLastOff",
+  ] as const) {
+    expectBoolean(obj, key, ctx);
+  }
+  expectFiniteInt(obj, "riichiBetValue", ctx, { min: 0 });
+  expectFiniteInt(obj, "sinkThreshold", ctx);
+  if (obj.winnerThreshold !== null) {
+    expectFiniteInt(obj, "winnerThreshold", ctx);
+  }
+  if (obj.chipChomboPenalty !== null) {
+    expectFiniteInt(obj, "chipChomboPenalty", ctx, { min: 0 });
+  }
+  expectFiniteInt(obj, "startingChips", ctx, { min: 0 });
+  if (obj.scoreCap !== null) {
+    const cap = obj.scoreCap;
+    if (
+      cap !== "mangan" &&
+      cap !== "haneman" &&
+      cap !== "baiman" &&
+      cap !== "sanbaiman"
+    ) {
+      throw new Error(
+        `${ctx}scoreCap must be one of "mangan" | "haneman" | "baiman" | "sanbaiman" | null`
+      );
+    }
+  }
+  const chipPayouts = obj.chipPayouts;
+  if (typeof chipPayouts !== "object" || chipPayouts === null) {
+    throw new Error(`${ctx}chipPayouts must be an object`);
+  }
+  const chipObj = chipPayouts as Record<string, unknown>;
+  for (const key of ["sankoro", "nikoro", "chinmai"] as const) {
+    expectFiniteInt(chipObj, key, `${ctx}chipPayouts.`, { min: 0 });
+  }
+  const ivr = obj.illegalVictoryRules;
+  if (typeof ivr !== "object" || ivr === null) {
+    throw new Error(`${ctx}illegalVictoryRules must be an object`);
+  }
+  const ivrObj = ivr as Record<string, unknown>;
+  for (const key of [
+    "sinkingWinNotFloating",
+    "gameEndingWinNotFirst",
+    "gameEndingChinmai",
+  ] as const) {
+    expectBoolean(ivrObj, key, `${ctx}illegalVictoryRules.`);
   }
 
   return raw as RuleSetPreset;

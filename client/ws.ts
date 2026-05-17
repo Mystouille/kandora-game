@@ -145,6 +145,20 @@ export class GameWS {
     this.send({ type: "afk", matchId, afk });
   }
 
+  /**
+   * Cast a Buu session continue-vote. Sent in response to a
+   * `session_vote_open` event. No-op outside an open vote
+   * window (server-side guard); may be sent repeatedly to
+   * change one's mind before the window resolves.
+   */
+  voteContinue(vote: "yes" | "no"): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "vote_continue", matchId, vote });
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------

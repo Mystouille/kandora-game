@@ -25,7 +25,26 @@
   },
   "atamahane": false,
   "bustedScore": 0,
+  "bustedStrict": true,
   "agariYame": false,
   "tenpaiYame": false,
-  "manganEnds": false
+  "buuMode": false,
+  "riichiBetValue": 1000,
+  "honbaPayments": true,
+  "tenpaiPayments": true,
+  "tenpaiRenchan": true,
+  "kiriageMangan": false,
+  "scoreCap": null,
+  "chipPayouts": { "sankoro": 0, "nikoro": 0, "chinmai": 0 },
+  "sinkThreshold": 0,
+  "winnerThreshold": null,
+  "immediateSankoroOnYakuman": false,
+  "illegalVictoryRules": {
+    "sinkingWinNotFloating": false,
+    "gameEndingWinNotFirst": false,
+    "gameEndingChinmai": false
+  },
+  "illegalVictoryAllLastOff": true,
+  "chipChomboPenalty": null,
+  "startingChips": 0
 }

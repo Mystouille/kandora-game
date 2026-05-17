@@ -107,6 +107,17 @@ export interface RuleSet {
    */
   bustedScore: number | null;
   /**
+   * When `true`, the bust check is strict: a seat busts only when
+   * its score is *strictly* below `bustedScore` (`score <
+   * bustedScore`). When `false` (default), the check is inclusive
+   * (`score <= bustedScore`), matching Tenhou-on-zero house rules
+   * and Buu Mahjong (where exactly 0 is "sinking").
+   *
+   * Most ranked Japanese variants run strict-below (a seat at
+   * exactly 0 keeps playing); set this `true` for those.
+   */
+  bustedStrict: boolean;
+  /**
    * Dealer-wins-out: if the dealer wins (tsumo or ron) the final
    * hand of the final round, the match ends instead of advancing.
    * Tenhou-default ranked rooms: `false` (the match plays out).
@@ -119,11 +130,126 @@ export interface RuleSet {
    */
   tenpaiYame: boolean;
   /**
-   * Match ends immediately at hand-end on any win of mangan-or-
-   * better (5+ han or any yakuman). Off by default; used by Buu
-   * variants and some house rules.
+   * Master toggle for Buu Mahjong mechanics. When `true`, the
+   * engine reads the additional Buu-specific fields below
+   * (chip ledger, sinking, sankoro/nikoro/chinmai payouts,
+   * winnerThreshold float-win, immediate-sankoro-on-yakuman,
+   * illegal-victory chombos). When `false`, every Buu field is
+   * ignored regardless of value and the engine is behaviorally
+   * identical to before these fields existed.
    */
-  manganEnds: boolean;
+  buuMode: boolean;
+  /**
+   * Point value of a single riichi stick. Standard riichi: 1000.
+   * Buu: 100. Affects both the at-declaration deduction and the
+   * winner pickup at hand-end (`riichiSticks * riichiBetValue`).
+   */
+  riichiBetValue: number;
+  /**
+   * When `false`, the 300/100-per-honba bonus at win-end is
+   * skipped (Buu has no repeat counters). The honba counter
+   * itself still ticks internally so each re-deal gets a
+   * distinct seed.
+   */
+  honbaPayments: boolean;
+  /**
+   * When `false`, the 3000-point tenpai/noten split at exhaustive
+   * draw is skipped (Buu has no tenpai payments).
+   */
+  tenpaiPayments: boolean;
+  /**
+   * When `false`, dealer-tenpai at exhaustive draw does NOT keep
+   * the dealer (Buu disables tenpai renchan; honba still ticks).
+   * When `true` (default), the standard rule applies.
+   */
+  tenpaiRenchan: boolean;
+  /**
+   * When `true`, a 4-han 30-fu win is rounded up to mangan
+   * (kiriage mangan). Currently a recognized flag only — the
+   * scoring lib reports the un-rounded result and the post-hoc
+   * promotion lands alongside the chip system.
+   */
+  kiriageMangan: boolean;
+  /**
+   * Hard score-tier ceiling. When set, any hand whose computed
+   * payment exceeds the named tier is clamped to that tier’s
+   * fixed payout (mangan = 8000 non-dealer / 12000 dealer,
+   * etc.) — yakuman included. `null` means no cap (the riichi
+   * lib’s natural haneman/baiman/sanbaiman/yakuman tiers apply).
+   * Buu Mahjong: `"mangan"`.
+   */
+  scoreCap: "mangan" | "haneman" | "baiman" | "sanbaiman" | null;
+  /**
+   * Chip payouts per sinking-player count at hand-end. Only
+   * consulted when `buuMode` is on.
+   *   - chinmai (1 sinker):  each sinker pays `chinmai` chips.
+   *   - nikoro  (2 sinkers): each sinker pays `nikoro` chips.
+   *   - sankoro (3 sinkers): each sinker pays `sankoro` chips.
+   */
+  chipPayouts: {
+    sankoro: number;
+    nikoro: number;
+    chinmai: number;
+  };
+  /**
+   * A seat is "sinking" when `score <= sinkThreshold` at hand-end.
+   * For Buu Mahjong the configured value is `startingScore - 1`
+   * (i.e. strictly below the starting score), so per-hand sankoro/
+   * nikoro/chinmai payouts are triggered against any non-winner who
+   * has dipped below their initial 6000. Distinct from `bustedScore`
+   * (“busted-out” at <=0), which terminates the match entirely.
+   * Used for chip distribution and the illegal-victory rules.
+   */
+  sinkThreshold: number;
+  /**
+   * Match ends at hand-end if any seat's score reaches at least
+   * this value ("floating to victory"). `null` disables the
+   * check. Buu: 12000.
+   */
+  winnerThreshold: number | null;
+  /**
+   * When `true`, a yakuman win immediately distributes chips as
+   * if all three non-winners were sinking (sankoro), regardless
+   * of actual scores, AND awards a dabuken token to the winner
+   * (consumed by the next sankoro of that seat). Buu: `true`.
+   */
+  immediateSankoroOnYakuman: boolean;
+  /**
+   * Three Buu-specific "you cannot win this way" rules. When
+   * violated they incur a chombo (delta reverted, chip penalty
+   * applied). All three are gated by `illegalVictoryAllLastOff`
+   * during the final hand.
+   *
+   *   - sinkingWinNotFloating: a sinking seat winning a hand that
+   *     would sink another player without lifting the winner
+   *     itself out of sinking.
+   *   - gameEndingWinNotFirst: winning a hand that would end the
+   *     match without making the winner the first-place seat.
+   *   - gameEndingChinmai: winning a hand that would end the
+   *     match with only one player sinking.
+   */
+  illegalVictoryRules: {
+    sinkingWinNotFloating: boolean;
+    gameEndingWinNotFirst: boolean;
+    gameEndingChinmai: boolean;
+  };
+  /**
+   * When `true`, the three `illegalVictoryRules` are suspended
+   * during the final hand of the match ("all last"). Buu: `true`.
+   */
+  illegalVictoryAllLastOff: boolean;
+  /**
+   * Chip penalty applied to a chombo'd seat (paid to every other
+   * seat). `null` disables chip-based chombo penalty. Buu: 2.
+   */
+  chipChomboPenalty: number | null;
+  /**
+   * Per-seat chip count at the start of a match. Buu: 30; the
+   * non-Buu presets keep this at 0 since chips are unused
+   * there. Only consulted when initialising `MatchState.chips`
+   * in `createInitialState`.
+   */
+  startingChips: number;
 }
 
 /**
@@ -142,7 +268,12 @@ export const TONPUU_RULE_SET: RuleSet = presetToRuleSet(
 /** Resolve a partial override into a complete `RuleSet`. */
 export function resolveRuleSet(partial?: RuleSetOverride): RuleSet {
   if (!partial) {
-    return { ...DEFAULT_RULE_SET, aborts: { ...DEFAULT_RULE_SET.aborts } };
+    return {
+      ...DEFAULT_RULE_SET,
+      aborts: { ...DEFAULT_RULE_SET.aborts },
+      chipPayouts: { ...DEFAULT_RULE_SET.chipPayouts },
+      illegalVictoryRules: { ...DEFAULT_RULE_SET.illegalVictoryRules },
+    };
   }
   return {
     ...DEFAULT_RULE_SET,
@@ -150,6 +281,14 @@ export function resolveRuleSet(partial?: RuleSetOverride): RuleSet {
     aborts: {
       ...DEFAULT_RULE_SET.aborts,
       ...(partial.aborts ?? {}),
+    },
+    chipPayouts: {
+      ...DEFAULT_RULE_SET.chipPayouts,
+      ...(partial.chipPayouts ?? {}),
+    },
+    illegalVictoryRules: {
+      ...DEFAULT_RULE_SET.illegalVictoryRules,
+      ...(partial.illegalVictoryRules ?? {}),
     },
   } as RuleSet;
 }

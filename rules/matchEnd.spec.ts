@@ -3,7 +3,7 @@
  *
  * Builds minimal `MatchState` + `HandResult` fixtures and verifies
  * the helper returns the expected `{ ended, reason }` for each
- * RuleSet toggle (busted / agari_yame / tenpai_yame / mangan_end)
+ * RuleSet toggle (busted / agari_yame / tenpai_yame)
  * and the always-on round_limit cutoff.
  */
 
@@ -57,8 +57,23 @@ function drawResult(tenpai: [boolean, boolean, boolean, boolean]): HandResult {
 }
 
 describe("shouldEndMatch — busted (tobi)", () => {
-  it("ends with reason 'busted' when any seat is at or below bustedScore", () => {
+  it("ends with reason 'busted' when any seat is strictly below bustedScore under default (strict) rules", () => {
+    const s = setProgress(makeState(), { scores: [25000, 25000, 25000, -100] });
+    const d = shouldEndMatch(s, winResult(0, { han: 1 }), false);
+    expect(d.ended).toBe(true);
+    expect(d.ended && d.reason).toBe("busted");
+  });
+
+  it("does NOT bust on exactly bustedScore under strict mode (Tenhou default)", () => {
     const s = setProgress(makeState(), { scores: [25000, 25000, 25000, 0] });
+    const d = shouldEndMatch(s, winResult(0, { han: 1 }), false);
+    expect(d.ended).toBe(false);
+  });
+
+  it("busts on exactly bustedScore when bustedStrict is off (Buu-style)", () => {
+    const s = setProgress(makeState({ bustedStrict: false }), {
+      scores: [25000, 25000, 25000, 0],
+    });
     const d = shouldEndMatch(s, winResult(0, { han: 1 }), false);
     expect(d.ended).toBe(true);
     expect(d.ended && d.reason).toBe("busted");
@@ -73,9 +88,9 @@ describe("shouldEndMatch — busted (tobi)", () => {
     expect(d.ended).toBe(false);
   });
 
-  it("custom threshold (e.g. 5000) triggers earlier", () => {
+  it("custom threshold (e.g. 5000) triggers earlier (strict-below: 4999 busts, 5000 doesn't)", () => {
     const s = setProgress(makeState({ bustedScore: 5000 }), {
-      scores: [40000, 30000, 25000, 5000],
+      scores: [40000, 30000, 25000, 4999],
     });
     const d = shouldEndMatch(s, winResult(0, { han: 1 }), false);
     expect(d.ended).toBe(true);
@@ -156,50 +171,6 @@ describe("shouldEndMatch — tenpai_yame", () => {
     // Dealer noten → dealerKeeps=false on final hand → round_limit.
     expect(d.ended).toBe(true);
     expect(d.ended && d.reason).toBe("round_limit");
-  });
-});
-
-describe("shouldEndMatch — mangan_end", () => {
-  it("triggers on a 5+ han win when manganEnds is on", () => {
-    const s = setProgress(makeState({ manganEnds: true, bustedScore: null }), {
-      scores: [25000, 25000, 25000, 25000],
-    });
-    const d = shouldEndMatch(s, winResult(1, { han: 5 }), false);
-    expect(d.ended).toBe(true);
-    expect(d.ended && d.reason).toBe("mangan_end");
-  });
-
-  it("triggers on yakuman even with han=0", () => {
-    const s = setProgress(makeState({ manganEnds: true, bustedScore: null }), {
-      scores: [25000, 25000, 25000, 25000],
-    });
-    const d = shouldEndMatch(
-      s,
-      winResult(1, { han: 0, isYakuman: true }),
-      false
-    );
-    expect(d.ended).toBe(true);
-    expect(d.ended && d.reason).toBe("mangan_end");
-  });
-
-  it("does NOT trigger on a 4-han win", () => {
-    const s = setProgress(makeState({ manganEnds: true, bustedScore: null }), {
-      scores: [25000, 25000, 25000, 25000],
-    });
-    const d = shouldEndMatch(s, winResult(1, { han: 4 }), false);
-    expect(d.ended).toBe(false);
-  });
-
-  it("does NOT trigger when manganEnds is off", () => {
-    const s = setProgress(makeState({ manganEnds: false, bustedScore: null }), {
-      scores: [25000, 25000, 25000, 25000],
-    });
-    const d = shouldEndMatch(
-      s,
-      winResult(1, { han: 13, isYakuman: true }),
-      false
-    );
-    expect(d.ended).toBe(false);
   });
 });
 

@@ -20,11 +20,22 @@ import { dealMatch } from "./wall";
 import type { HandResult, MatchState, Meld } from "./state";
 import { distributePayments } from "./payments";
 import { isAkaDisabled } from "./ruleSet";
-import { shouldEndMatch, type MatchEndReason } from "./matchEnd";
+import {
+  shouldEndMatch,
+  isFinalHandOfMatch,
+  type MatchEndReason,
+} from "./matchEnd";
 import { scoreHand, type ScoreResult } from "./score";
 import { isWinningShape, waits } from "./shanten";
 import { isAnkanLegalDuringRiichi } from "./riichiKan";
 import { type Seat, type Tile, type Wind } from "./types";
+import {
+  evaluateBuuHandEnd,
+  applyChipDelta,
+  checkBuuVictoryLegality,
+  type ChipDelta,
+  type IllegalVictoryReason,
+} from "./buu";
 
 export type EngineEvent =
   | {
@@ -60,6 +71,24 @@ export type EngineEvent =
       reason: "exhaustive_draw" | "tsumo" | "ron" | "abort";
       delta: [number, number, number, number];
       abortKind?: "kyuushuu" | "suufon_renda" | "suucha_riichi" | "sanchahou";
+      /** Buu chip delta (winner gain, sinkers loss). Omitted when `buuMode` off. */
+      chipDelta?: ChipDelta;
+      /** Buu sinking-player count for this hand (winner excluded). */
+      sinkingCount?: 0 | 1 | 2 | 3;
+      /** True iff this hand consumed the winner's dabuken token. */
+      dabukenConsumed?: boolean;
+      /** True iff this hand awarded a dabuken to the winner. */
+      dabukenAwarded?: boolean;
+    }
+  | {
+      type: "buu_chombo";
+      /** Seat penalized for an illegal victory under Buu rules. */
+      seat: Seat;
+      reason: IllegalVictoryReason;
+      /** Chip delta applied as the penalty (sums to zero). */
+      chipDelta: ChipDelta;
+      /** In-game chip totals AFTER the penalty has been applied. */
+      chips: ChipDelta;
     }
   | {
       type: "call";
@@ -248,6 +277,8 @@ function clone(state: MatchState): MatchState {
     furitenTemp: [...state.furitenTemp] as [boolean, boolean, boolean, boolean],
     paoDaisangen: [...state.paoDaisangen],
     paoDaisuushii: [...state.paoDaisuushii],
+    chips: [...state.chips] as [number, number, number, number],
+    dabuken: [...state.dabuken] as [boolean, boolean, boolean, boolean],
   };
 }
 
@@ -617,6 +648,153 @@ function applyPaoOverride(
 }
 
 /**
+ * Buu side-effects on a successful win: legality check, chip
+ * distribution, dabuken bookkeeping. On an illegal win this
+ * reverts the point delta in place, applies the chip chombo
+ * penalty, and returns the events the engine should emit
+ * INSTEAD of the win + hand_end pair.
+ *
+ * Returns `{kind: "ok", ...}` when no chombo fires; the caller
+ * proceeds with its normal win/hand_end emission and merges
+ * the chip metadata into the `hand_end` event.
+ *
+ * A no-op (returns ok with a zero chip delta) when `buuMode`
+ * is off.
+ */
+function applyBuuWinSideEffects(
+  next: MatchState,
+  args: {
+    winner: Seat;
+    delta: [number, number, number, number];
+    winnerPreScore: number;
+    score: ScoreResult;
+  }
+):
+  | {
+      kind: "ok";
+      chipDelta: ChipDelta;
+      sinkingCount: 0 | 1 | 2 | 3;
+      consumedDabuken: boolean;
+      awardedDabuken: boolean;
+    }
+  | { kind: "chombo"; events: EngineEvent[] } {
+  const rs = next.ruleSet;
+  if (!rs.buuMode) {
+    return {
+      kind: "ok",
+      chipDelta: [0, 0, 0, 0],
+      sinkingCount: 0,
+      consumedDabuken: false,
+      awardedDabuken: false,
+    };
+  }
+
+  // Centralized check: would this win end the match? We need this
+  // to apply illegal-victory rules 2 & 3 BEFORE returning a normal
+  // result. We synthesize a stub `HandResult` for the helper.
+  const stubResult: HandResult = {
+    reason: args.score === null ? "tsumo" : "tsumo",
+    winner: args.winner,
+    loser: null,
+    delta: args.delta,
+    tenpai: null,
+    abortKind: null,
+    winHan: args.score.han,
+    winYakuman: args.score.isYakuman,
+  };
+  // dealerKeeps is irrelevant for the match-end branches we care
+  // about (busted / winner_threshold); pass `false`
+  // so the round-limit branch only fires at all-last.
+  const endDecision = shouldEndMatch(next, stubResult, false);
+  const wouldEndMatch = endDecision.ended;
+  const isFinalHand = isFinalHandOfMatch(next);
+
+  const legality = checkBuuVictoryLegality({
+    state: next,
+    winner: args.winner,
+    winnerWasSinking: args.winnerPreScore <= rs.sinkThreshold,
+    wouldEndMatch,
+    isFinalHand,
+  });
+
+  if (!legality.legal) {
+    // Chombo: revert the point delta we just applied.
+    for (let s = 0; s < 4; s++) {
+      next.scores[s] -= args.delta[s];
+    }
+    // Apply chip chombo penalty: `chipChomboPenalty` from the
+    // offender to every other seat.
+    const penalty = rs.chipChomboPenalty;
+    const chipPenalty: ChipDelta = [0, 0, 0, 0];
+    if (penalty !== null && penalty > 0) {
+      for (let s = 0; s < 4; s++) {
+        if (s === args.winner) {
+          chipPenalty[s] -= penalty * 3;
+        } else {
+          chipPenalty[s] += penalty;
+        }
+      }
+      applyChipDelta(next.chips, chipPenalty);
+    }
+    // Match the standard chombo convention: cancel payments,
+    // dealer keeps, honba advances by one (no riichi stick change).
+    // This mirrors the abort-like flow start_next_hand will use.
+    next.lastHandResult = {
+      reason: "abort",
+      winner: null,
+      loser: null,
+      delta: [0, 0, 0, 0],
+      tenpai: null,
+      abortKind: null,
+      winHan: null,
+      winYakuman: null,
+    };
+    next.phase = "hand_ended";
+    return {
+      kind: "chombo",
+      events: [
+        {
+          type: "buu_chombo",
+          seat: args.winner,
+          reason: legality.reason!,
+          chipDelta: chipPenalty,
+          chips: [...next.chips] as ChipDelta,
+        },
+        {
+          type: "hand_end",
+          reason: "abort",
+          delta: [0, 0, 0, 0],
+        },
+      ],
+    };
+  }
+
+  // Legal: compute chip distribution and dabuken bookkeeping.
+  const outcome = evaluateBuuHandEnd(next, args.winner, args.score.isYakuman);
+  applyChipDelta(next.chips, outcome.chipDelta);
+  // Order matters: wipe every seat's dabuken first (clears any
+  // stale token a non-winner was carrying — including the case
+  // where seat A had a dabuken and seat B just won a sankoro),
+  // then apply the optional new award to the winner. `consumed`
+  // has already affected the chip multiplier in `evaluateBuuHandEnd`
+  // so it doesn't need a separate state mutation here.
+  if (outcome.clearAllDabuken) {
+    next.dabuken = [false, false, false, false];
+  }
+  if (outcome.awardedDabuken) {
+    next.dabuken[args.winner] = true;
+  }
+
+  return {
+    kind: "ok",
+    chipDelta: outcome.chipDelta,
+    sinkingCount: outcome.sinkingCount,
+    consumedDabuken: outcome.consumedDabuken,
+    awardedDabuken: outcome.awardedDabuken,
+  };
+}
+
+/**
  * Build the win event + transition phase to `hand_ended`.
  * `winner`'s hand should already be the 13-tile concealed shape (i.e.
  * for tsumo, splice out the winning draw before calling; for ron the
@@ -650,8 +828,9 @@ function applyWin(
     delta = applyPaoOverride(delta, winner, loser, paoPayer);
   }
   // Honba bonus: ron → 300/honba from discarder; tsumo → 100/honba
-  // from each non-winner. Goes entirely to the winner.
-  if (next.honba > 0) {
+  // from each non-winner. Goes entirely to the winner. Gated by
+  // `ruleSet.honbaPayments` (Buu has no repeat-counter bonus).
+  if (next.honba > 0 && next.ruleSet.honbaPayments) {
     if (loser !== null) {
       const bonus = next.honba * 300;
       delta[loser] -= bonus;
@@ -667,10 +846,35 @@ function applyWin(
       }
     }
   }
-  // Carry over riichi sticks to the winner; reset.
-  delta[winner] += next.riichiSticks * 1000;
+  // Carry over riichi sticks to the winner; reset. Stick value
+  // is `ruleSet.riichiBetValue` (1000 standard, 100 Buu).
+  delta[winner] += next.riichiSticks * next.ruleSet.riichiBetValue;
   next.riichiSticks = 0;
+  // Snapshot winner's pre-win sinking status for Buu legality.
+  const winnerPreScore = next.scores[winner];
   applyDelta(next.scores, delta);
+  // Buu victory-legality + chip distribution. On illegal wins
+  // (chombo) the point delta is reverted, a chip penalty is
+  // applied, and the dealer keeps + honba advances — the hand is
+  // effectively replayed. See `buu.ts`.
+  const buuOutcome = applyBuuWinSideEffects(next, {
+    winner,
+    delta,
+    winnerPreScore,
+    score,
+  });
+  if (buuOutcome.kind === "chombo") {
+    // Emit the would-be `win` event first so the client renders
+    // the win-info panel (yaku / han / fu / winning hand) for its
+    // normal display duration before the `buu_chombo` event
+    // switches the panel over to the chombo screen. The server
+    // inserts the inter-screen delay between these two events
+    // (see `emitEngineEvent` in `game-server/src/match.ts`).
+    return [
+      { type: "win", winner, loser, winTile, score, delta },
+      ...buuOutcome.events,
+    ];
+  }
   const result: HandResult = {
     reason: loser === null ? "tsumo" : "ron",
     winner,
@@ -683,10 +887,20 @@ function applyWin(
   };
   next.lastHandResult = result;
   next.phase = "hand_ended";
-  return [
-    { type: "win", winner, loser, winTile, score, delta },
-    { type: "hand_end", reason: result.reason, delta },
-  ];
+  const handEndEvent: EngineEvent = {
+    type: "hand_end",
+    reason: result.reason,
+    delta,
+    ...(buuOutcome.kind === "ok" && next.ruleSet.buuMode
+      ? {
+          chipDelta: buuOutcome.chipDelta,
+          sinkingCount: buuOutcome.sinkingCount,
+          dabukenConsumed: buuOutcome.consumedDabuken,
+          dabukenAwarded: buuOutcome.awardedDabuken,
+        }
+      : {}),
+  };
+  return [{ type: "win", winner, loser, winTile, score, delta }, handEndEvent];
 }
 
 /**
@@ -728,14 +942,15 @@ function applyMultiRon(
     events.push({ type: "win", winner: w, loser, winTile, score, delta: d });
   }
   // Honba bonus on multi-ron: only the head bumper collects, paid in
-  // full by the discarder (Tenhou / standard ruling).
-  if (next.honba > 0) {
+  // full by the discarder (Tenhou / standard ruling). Gated by
+  // `ruleSet.honbaPayments`.
+  if (next.honba > 0 && next.ruleSet.honbaPayments) {
     const bonus = next.honba * 300;
     combined[loser] -= bonus;
     combined[winners[0]] += bonus;
   }
   // Riichi sticks all go to the head bumper.
-  combined[winners[0]] += next.riichiSticks * 1000;
+  combined[winners[0]] += next.riichiSticks * next.ruleSet.riichiBetValue;
   next.riichiSticks = 0;
   applyDelta(next.scores, combined);
   // Pick the dealer-favoring winner so the rotation logic in
@@ -938,7 +1153,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           }
         }
       }
-      const tenpaiDelta = tenpaiPaymentDelta(tenpai);
+      const tenpaiDelta = next.ruleSet.tenpaiPayments
+        ? tenpaiPaymentDelta(tenpai)
+        : ([0, 0, 0, 0] as [number, number, number, number]);
       const nagashiDelta = nagashiPaymentDelta(nagashi, next.dealer);
       const delta: [number, number, number, number] = [
         tenpaiDelta[0] + nagashiDelta[0],
@@ -1076,7 +1293,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (state.riichiDeclared[action.seat]) {
       return noop(state);
     }
-    if (state.scores[action.seat] < 1000) {
+    if (state.scores[action.seat] < state.ruleSet.riichiBetValue) {
       return noop(state);
     }
     // Concealed-hand rule: any open meld (chi / pon / daiminkan /
@@ -1113,18 +1330,22 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.discards[action.seat].push(action.tile);
     next.lastDrawn[action.seat] = null;
     next.lastDiscard = { seat: action.seat, tile: action.tile };
-    // Pay the 1000-point stick to the table.
-    next.scores[action.seat] -= 1000;
+    // Pay the riichi stick to the table. Stick value is
+    // `ruleSet.riichiBetValue` (1000 standard, 100 Buu).
+    next.scores[action.seat] -= next.ruleSet.riichiBetValue;
     next.riichiSticks += 1;
     next.riichiDeclared[action.seat] = true;
     if (next.ruleSet.ippatsu) {
       next.ippatsuEligible[action.seat] = true;
     }
-    // Double riichi: every seat's discard pile was still empty right
-    // before this action (i.e. nobody has discarded yet this hand).
+    // Double riichi: this seat hasn't discarded yet (so this is
+    // their first turn of the hand) and no call of any kind
+    // (chi / pon / kan / ankan — all of which add a meld) has
+    // interrupted the natural turn order.
     if (next.ruleSet.doubleRiichi) {
-      const noDiscardsYet = state.discards.every((d) => d.length === 0);
-      if (noDiscardsYet) {
+      const seatHasNotDiscarded = state.discards[action.seat].length === 0;
+      const noCallsYet = state.melds.every((m) => m.length === 0);
+      if (seatHasNotDiscarded && noCallsYet) {
         next.doubleRiichi[action.seat] = true;
       }
     }
@@ -1202,6 +1423,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       melds: state.melds[action.seat],
       noKuitan: !state.ruleSet.kuitan,
       noAka: isAkaDisabled(state.ruleSet),
+      scoreCap: state.ruleSet.scoreCap,
       // Haitei raoyue: tsumo on the very last live-wall tile.
       // Exclude rinshan draws (those score rinshan kaihou via
       // `rinshanOrChankan` instead) — the two collide when the
@@ -1304,6 +1526,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         melds: state.melds[w],
         noKuitan: !state.ruleSet.kuitan,
         noAka: isAkaDisabled(state.ruleSet),
+        scoreCap: state.ruleSet.scoreCap,
         rinshanOrChankan: isChankan,
         // Houtei raoyui: ron on the final discard of the hand —
         // i.e. the discarder's last draw emptied the live wall.
@@ -1791,7 +2014,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       result.winner === state.dealer
         ? true
         : result.reason === "exhaustive_draw"
-          ? result.tenpai !== null && result.tenpai[state.dealer]
+          ? state.ruleSet.tenpaiRenchan &&
+            result.tenpai !== null &&
+            result.tenpai[state.dealer]
           : // Abortive draws: dealer always keeps; honba advances.
             result.reason === "abort";
     // Centralized end-of-match check. Covers tobi/agari-yame/
@@ -1812,9 +2037,15 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         ],
       };
     }
-    if (dealerKeeps) {
+    // Chombos are surfaced as `reason: "abort"` with a `null`
+    // `abortKind` (regular abortive draws always carry a
+    // non-null kind — see `endAbort`). On a chombo the dealer
+    // keeps but the repeat counter does NOT advance: the hand
+    // is simply replayed.
+    const isChombo = result.reason === "abort" && result.abortKind === null;
+    if (dealerKeeps && !isChombo) {
       honba += 1;
-    } else {
+    } else if (!dealerKeeps) {
       honba = result.reason === "exhaustive_draw" ? honba + 1 : 0;
       dealer = ((state.dealer + 1) % 4) as Seat;
       roundNumber += 1;

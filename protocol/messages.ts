@@ -49,6 +49,27 @@ const MatchStartEvent = z.object({
     })
   ),
   ruleSet: z.string(),
+  /**
+   * Per-seat in-game chip totals at match start. Buu only —
+   * non-Buu matches omit the field. Carries the session chip
+   * ledger (starting chips for the first game; rolling totals
+   * for subsequent games) so the pre-deal player-name boxes
+   * already show the correct count instead of zeros.
+   */
+  chips: z.array(z.number().int()).length(4).optional(),
+  /** Per-seat dabuken token state at match start (Buu only). */
+  dabuken: z.array(z.boolean()).length(4).optional(),
+  /**
+   * Active score-cap tier from the rule set, if any. Mirrors
+   * `RuleSet.scoreCap`. Drives the win-panel label so a hand
+   * whose points have been clamped also reports the tier name
+   * (e.g. "Mangan") instead of the raw "8 han" / "Yakuman" that
+   * would misrepresent the actual payout.
+   */
+  scoreCap: z
+    .enum(["mangan", "haneman", "baiman", "sanbaiman"])
+    .nullable()
+    .optional(),
 });
 
 const HandStartEvent = z.object({
@@ -65,6 +86,28 @@ const HandStartEvent = z.object({
   riichiSticks: z.number().int().nonnegative().optional(),
   /** Per-seat scores at hand start. */
   scores: z.array(z.number().int()).length(4).optional(),
+  /**
+   * Per-seat "sinking" flag at hand start under the active rule
+   * set. A sinking seat has `score <= rs.sinkThreshold`; the
+   * renderer paints its centre-square score in red. Omitted
+   * when the rule set has no notion of sinking (non-Buu); the
+   * client treats absence as `[false, false, false, false]`.
+   */
+  sinking: z.array(z.boolean()).length(4).optional(),
+  /**
+   * Per-seat in-game chip totals at hand start. Buu only — non-Buu
+   * matches omit the field and the client treats absence as
+   * `[0, 0, 0, 0]`. Carries the session-level chip ledger into
+   * each game so the live player-name boxes can display the
+   * current chip count.
+   */
+  chips: z.array(z.number().int()).length(4).optional(),
+  /**
+   * Per-seat dabuken (double-chip token) state at hand start.
+   * Buu only — non-Buu matches omit the field and the client
+   * treats absence as `[false, false, false, false]`.
+   */
+  dabuken: z.array(z.boolean()).length(4).optional(),
   /** Initial hand tiles for the recipient seat only; redacted for others. */
   hand: z.array(TileSchema).optional(),
   /**
@@ -228,6 +271,47 @@ const HandEndEvent = z.object({
    * player was waiting on.
    */
   tenpaiHands: z.array(z.array(TileSchema).nullable()).length(4).optional(),
+  /**
+   * Buu Mahjong chip delta for this hand (winner gain + sinker
+   * losses). Sums to zero. Omitted when `ruleSet.buuMode` is off.
+   */
+  chipDelta: z.array(z.number().int()).length(4).optional(),
+  /** Number of sinking seats (winner excluded) at hand-end. */
+  sinkingCount: z.number().int().min(0).max(3).optional(),
+  /** True iff this hand consumed the winner's dabuken token. */
+  dabukenConsumed: z.boolean().optional(),
+  /** True iff this hand awarded a dabuken to the winner. */
+  dabukenAwarded: z.boolean().optional(),
+  /**
+   * Buu Mahjong absolute chip totals AFTER this hand's
+   * chipDelta has been applied. Lets the client refresh the
+   * player-nameplate chip counters immediately on hand_end
+   * without recomputing from chipDelta. Omitted for non-Buu.
+   */
+  chips: z.array(z.number().int()).length(4).optional(),
+  /**
+   * Buu Mahjong per-seat dabuken token state AFTER this hand's
+   * award / clearing has been applied. Lets the client refresh
+   * the dabuken token overlay immediately on hand_end. Omitted
+   * for non-Buu.
+   */
+  dabuken: z.array(z.boolean()).length(4).optional(),
+});
+
+const BuuChomboEvent = z.object({
+  type: z.literal("buu_chombo"),
+  seat: SeatSchema,
+  reason: z.enum([
+    "sinking_win_not_floating",
+    "game_ending_win_not_first",
+    "game_ending_chinmai",
+  ]),
+  chipDelta: z.array(z.number().int()).length(4),
+  /** In-game chip totals AFTER the penalty has been applied
+   * (sums need not equal zero — these are running totals, not a
+   * delta). Lets the result panel show each seat's chip stack
+   * alongside the chombo penalty. */
+  chips: z.array(z.number().int()).length(4),
 });
 
 const CallEvent = z.object({
@@ -261,7 +345,7 @@ const MatchEndEvent = z.object({
     "busted",
     "agari_yame",
     "tenpai_yame",
-    "mangan_end",
+    "winner_threshold",
   ]),
   finalScores: z.array(
     z.object({
@@ -270,6 +354,78 @@ const MatchEndEvent = z.object({
       place: z.number().int().min(1).max(4),
     })
   ),
+  /** Session-level chip totals after this game (Buu only). */
+  chips: z.array(z.number().int()).length(4).optional(),
+  /** Session-level dabuken state after this game (Buu only). */
+  dabuken: z.array(z.boolean()).length(4).optional(),
+  /**
+   * Per-seat chip delta for THIS game only (post-game chip total
+   * minus the snapshot taken at game start). Buu-only — shown
+   * next to each player's final score in the end-of-game panel.
+   */
+  chipsDelta: z.array(z.number().int()).length(4).optional(),
+  /** Zero-based index of this game within its session (Buu only). */
+  gameIndex: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * Buu session: continue-vote window opened after a game ends.
+ * Sent once, followed by zero or more `session_vote_update` frames
+ * as seats cast their vote, and ultimately followed by either a
+ * fresh `match_start` (unanimous yes → next game) or a
+ * `session_end` (any no / timeout). Bots are pre-voted server-side.
+ */
+const SessionVoteOpenEvent = z.object({
+  type: z.literal("session_vote_open"),
+  /** Unix ms; auto-resolves as "no" for any seat still unset at this time. */
+  deadline: z.number().int(),
+  /** Per-seat vote state. `null` means undecided. */
+  votes: z.tuple([
+    z.enum(["yes", "no"]).nullable(),
+    z.enum(["yes", "no"]).nullable(),
+    z.enum(["yes", "no"]).nullable(),
+    z.enum(["yes", "no"]).nullable(),
+  ]),
+  /** Zero-based index of the just-finished game. */
+  gameIndex: z.number().int().nonnegative(),
+});
+
+const SessionVoteUpdateEvent = z.object({
+  type: z.literal("session_vote_update"),
+  votes: z.tuple([
+    z.enum(["yes", "no"]).nullable(),
+    z.enum(["yes", "no"]).nullable(),
+    z.enum(["yes", "no"]).nullable(),
+    z.enum(["yes", "no"]).nullable(),
+  ]),
+});
+
+/**
+ * Buu session: terminal frame emitted when the session is fully
+ * over (any "no" vote, vote timeout, or non-Buu single-game match).
+ * For non-Buu matches this is emitted immediately after
+ * `match_end` with `gamesPlayed: 1`. Carries the final session-
+ * level summary (cumulative chip totals + per-game final scores).
+ */
+const SessionEndEvent = z.object({
+  type: z.literal("session_end"),
+  reason: z.enum(["vote_no", "vote_timeout", "single_game", "server_abort"]),
+  gamesPlayed: z.number().int().positive(),
+  /** Cumulative chip totals per seat (Buu only; all zero for non-Buu). */
+  chips: z.array(z.number().int()).length(4),
+});
+
+/**
+ * Mid-hand refresh of the per-seat sinking flag. Currently the
+ * server only emits this after a riichi declaration (the one
+ * in-hand event whose 1000-point deduction can push a seat
+ * across `rs.sinkThreshold`). The `hand_start` event carries
+ * the post-payout view at every round boundary, so this event
+ * is sufficient to keep the client view in sync. Buu only.
+ */
+const SinkingUpdateEvent = z.object({
+  type: z.literal("sinking_update"),
+  sinking: z.tuple([z.boolean(), z.boolean(), z.boolean(), z.boolean()]),
 });
 
 export const GameEventSchema = z.discriminatedUnion("type", [
@@ -283,6 +439,11 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   NewDoraEvent,
   MatchEndEvent,
   FuritenEvent,
+  BuuChomboEvent,
+  SessionVoteOpenEvent,
+  SessionVoteUpdateEvent,
+  SessionEndEvent,
+  SinkingUpdateEvent,
 ]);
 export type GameEvent = z.infer<typeof GameEventSchema>;
 
@@ -355,6 +516,33 @@ export const SnapshotStateSchema = z.object({
   honba: z.number().int().nonnegative(),
   riichiSticks: z.number().int().nonnegative(),
   scores: z.array(z.number().int()).length(4),
+  /**
+   * Per-seat "sinking" flag (same semantics as
+   * `HandStartEvent.sinking`). Optional for back-compat with
+   * snapshots captured before this field existed; absent ==
+   * all-false on the client side.
+   */
+  sinking: z.array(z.boolean()).length(4).optional(),
+  /**
+   * Per-seat in-game chip totals (Buu only; absent / treated as
+   * `[0, 0, 0, 0]` outside Buu).
+   */
+  chips: z.array(z.number().int()).length(4).optional(),
+  /**
+   * Per-seat dabuken (double-chip token) state (Buu only; absent
+   * / treated as `[false, false, false, false]` outside Buu).
+   */
+  dabuken: z.array(z.boolean()).length(4).optional(),
+  /**
+   * Active score-cap tier from the rule set, if any. Mirrors
+   * `RuleSet.scoreCap`. Needed on snapshots so a spectator
+   * (or a player reconnecting mid-match) can render capped han
+   * labels without having received the original `match_start`.
+   */
+  scoreCap: z
+    .enum(["mangan", "haneman", "baiman", "sanbaiman"])
+    .nullable()
+    .optional(),
   riichiDeclared: z.array(z.boolean()).length(4),
   /** Per-seat index into `discards[seat]` of the riichi declaration
    * tile (null when that seat has not declared riichi). */
@@ -620,6 +808,20 @@ const AfkMsg = z.object({
   afk: z.boolean(),
 });
 
+/**
+ * Cast a Buu session continue-vote. Sent in response to a
+ * `session_vote_open` event. The server ignores the message
+ * outside an open vote window. Any seat may change its vote
+ * (yes ↔ no) until the window closes; once unanimous yes is
+ * reached the next game starts and further messages are
+ * ignored until the next `session_vote_open`.
+ */
+const VoteContinueMsg = z.object({
+  type: z.literal("vote_continue"),
+  matchId: z.string(),
+  vote: z.enum(["yes", "no"]),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   HelloMsg,
   ActMsg,
@@ -628,5 +830,6 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   StartMatchMsg,
   LeaveSeatMsg,
   AfkMsg,
+  VoteContinueMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;

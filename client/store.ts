@@ -170,6 +170,47 @@ export interface MatchView {
   currentWaits: Tile[][] | null;
   /** Per-seat current scores (1000-point chips × multiplier). */
   scores: [number, number, number, number];
+  /**
+   * Per-seat "sinking" flag. A sinking seat's score is at or
+   * below the rule set's `sinkThreshold` and the renderer
+   * paints its centre-square score in red. Authoritatively
+   * computed by the server (engine has the threshold + scores)
+   * and propagated to the client via:
+   *   - `hand_start` (round-boundary refresh)
+   *   - `sinking_update` (in-hand refresh — currently only
+   *     emitted right after a riichi declaration, which is the
+   *     only mid-hand event that can push a seat below the
+   *     threshold).
+   * Always `[false, false, false, false]` outside Buu sessions;
+   * the server simply never emits a positive entry.
+   */
+  sinking: [boolean, boolean, boolean, boolean];
+  /**
+   * Per-seat in-game chip totals. Buu only — non-Buu sessions
+   * keep this at `[0, 0, 0, 0]` throughout. Refreshed at every
+   * `hand_start` and on `buu_chombo`, and (re)hydrated from the
+   * snapshot state. Drives the live chip count line in each
+   * player-name box.
+   */
+  chips: [number, number, number, number];
+  /**
+   * Per-seat dabuken (double-chip token) state. Buu only.
+   * Drives the dabuken token visible in each player-name box.
+   */
+  dabuken: [boolean, boolean, boolean, boolean];
+  /** True iff this match is a Buu Mahjong session (drives the
+   * chip line + dabuken token in each player-name box).
+   * Latched at `match_start` from the wire `ruleSet` id. */
+  buuMode: boolean;
+  /**
+   * Active score-cap tier from the rule set, if any. Latched
+   * at `match_start` from the wire `scoreCap` field. Drives the
+   * win-panel label so a hand whose points have been clamped
+   * also reports the tier name (e.g. "Mangan") instead of the
+   * raw "8 han" / "Yakuman" that would misrepresent the actual
+   * payout. `null` for rule sets without a cap.
+   */
+  scoreCap: "mangan" | "haneman" | "baiman" | "sanbaiman" | null;
   /** Current dealer seat. */
   dealer: Seat;
   /** Round wind (E / S / W / N). */
@@ -236,6 +277,22 @@ export interface MatchView {
       doraIndicators?: Tile[];
       uraDoraIndicators?: Tile[];
     }>;
+    /** Buu Mahjong chombo metadata. Set when a `buu_chombo` event
+     * arrives (which precedes the abort `hand_end`) so the result
+     * panel can render "Chombo: <reason>" instead of the generic
+     * "Abort: unknown". `null` outside Buu mode or for non-chombo
+     * aborts. */
+    buuChombo?: {
+      seat: Seat;
+      reason:
+        | "sinking_win_not_floating"
+        | "game_ending_win_not_first"
+        | "game_ending_chinmai";
+      /** Per-seat chip delta from the chombo penalty (sums to zero). */
+      chipDelta: number[];
+      /** Per-seat in-game chip totals AFTER the penalty. */
+      chips: number[];
+    };
   };
   matchEnded: null | {
     reason:
@@ -243,8 +300,38 @@ export interface MatchView {
       | "busted"
       | "agari_yame"
       | "tenpai_yame"
-      | "mangan_end";
+      | "winner_threshold";
     finalScores: Array<{ seat: Seat; score: number; place: number }>;
+    /** Session-level chip totals after this game (Buu only). */
+    chips?: number[];
+    /** Session-level dabuken state after this game (Buu only). */
+    dabuken?: boolean[];
+    /** Per-seat chip delta for THIS game only (Buu only). */
+    chipsDelta?: number[];
+    /** Zero-based index of this game within its session (Buu only). */
+    gameIndex?: number;
+  };
+  /**
+   * Buu session continue-vote state. `null` while no vote
+   * window is open; populated by `session_vote_open`, updated
+   * by `session_vote_update`, cleared on next `match_start`
+   * (game-1+) or `session_end`.
+   */
+  sessionVote: null | {
+    deadline: number;
+    votes: Array<"yes" | "no" | null>;
+    gameIndex: number;
+  };
+  /**
+   * Terminal Buu session view. `null` until `session_end`
+   * arrives. After that, the post-match panel renders the
+   * cumulative session summary instead of just the last
+   * game's `matchEnded` payload.
+   */
+  sessionEnded: null | {
+    reason: "vote_no" | "vote_timeout" | "single_game" | "server_abort";
+    gamesPlayed: number;
+    chips: number[];
   };
   /**
    * Seat that has a freshly drawn tile sitting at the end of its
@@ -335,6 +422,11 @@ const initialState: MatchView = {
   actionDeadline: null,
   actionBufferMs: null,
   scores: [25000, 25000, 25000, 25000],
+  sinking: [false, false, false, false],
+  chips: [0, 0, 0, 0],
+  dabuken: [false, false, false, false],
+  buuMode: false,
+  scoreCap: null,
   dealer: 0,
   roundWind: "E",
   roundNumber: 1,
@@ -345,6 +437,8 @@ const initialState: MatchView = {
   riichiTileIdx: [null, null, null, null],
   lastHandResult: null,
   matchEnded: null,
+  sessionVote: null,
+  sessionEnded: null,
   currentWaits: null,
   freshlyDrawnSeat: null,
   freshlyDiscardedSeat: null,
@@ -444,6 +538,28 @@ export const useMatchStore = create<MatchStore>((set) => ({
         number | null,
       ],
       scores: [...snap.scores] as [number, number, number, number],
+      sinking: (snap.sinking
+        ? [...snap.sinking]
+        : [false, false, false, false]) as [boolean, boolean, boolean, boolean],
+      chips: (snap.chips ? [...snap.chips] : [0, 0, 0, 0]) as [
+        number,
+        number,
+        number,
+        number,
+      ],
+      dabuken: (snap.dabuken
+        ? [...snap.dabuken]
+        : [false, false, false, false]) as [boolean, boolean, boolean, boolean],
+      // Snapshot presence of `chips` is a reliable Buu signal
+      // (the server only emits the field for Buu rule sets).
+      buuMode: snap.chips !== undefined ? true : state.buuMode,
+      // Score cap from the rule set, if any. Snapshots emit this
+      // explicitly so a mid-match reconnect / spectator can cap
+      // han labels without having received the original
+      // `match_start`. Fall back to the latched value when the
+      // server omits the field (older snapshots / non-capped
+      // rule sets).
+      scoreCap: snap.scoreCap ?? state.scoreCap,
       lastSeq: seq,
       // A snapshot is the authoritative current view; clear any
       // optimistic / panel state that may not survive the resync.
@@ -483,6 +599,28 @@ export const useMatchStore = create<MatchStore>((set) => ({
               string,
               string,
             ],
+            buuMode: event.ruleSet === "buu-east",
+            scoreCap: event.scoreCap ?? null,
+            chips: (event.chips ? [...event.chips] : state.chips) as [
+              number,
+              number,
+              number,
+              number,
+            ],
+            dabuken: (event.dabuken ? [...event.dabuken] : state.dabuken) as [
+              boolean,
+              boolean,
+              boolean,
+              boolean,
+            ],
+            // A fresh `match_start` mid-session (Buu next game)
+            // wipes the lingering post-game / vote state so the
+            // table can render cleanly — including any stale
+            // win / chombo / draw panel that would otherwise
+            // shadow the new game's start screen.
+            lastHandResult: null,
+            matchEnded: null,
+            sessionVote: null,
           };
         }
         case "hand_start": {
@@ -528,6 +666,26 @@ export const useMatchStore = create<MatchStore>((set) => ({
               number,
               number,
               number,
+            ],
+            sinking: (event.sinking
+              ? [...event.sinking]
+              : [false, false, false, false]) as [
+              boolean,
+              boolean,
+              boolean,
+              boolean,
+            ],
+            chips: (event.chips ? [...event.chips] : state.chips) as [
+              number,
+              number,
+              number,
+              number,
+            ],
+            dabuken: (event.dabuken ? [...event.dabuken] : state.dabuken) as [
+              boolean,
+              boolean,
+              boolean,
+              boolean,
             ],
             riichiDeclared: [false, false, false, false],
             riichiTileIdx: [null, null, null, null],
@@ -692,6 +850,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
         }
         case "hand_end": {
           const existingWins = state.lastHandResult?.wins;
+          const existingBuuChombo = state.lastHandResult?.buuChombo;
           return {
             ...next,
             scores: (event.scores ?? state.scores) as [
@@ -701,6 +860,25 @@ export const useMatchStore = create<MatchStore>((set) => ({
               number,
             ],
             riichiSticks: event.riichiSticks ?? state.riichiSticks,
+            // Buu: refresh the live chips/dabuken view so the
+            // player-nameplate chip counter + dabuken token
+            // update immediately on hand_end (e.g. after a
+            // sankoro win) instead of waiting for the next
+            // hand_start / match_start. Non-Buu events omit
+            // these fields, in which case we keep the prior
+            // values.
+            chips: (event.chips ? [...event.chips] : state.chips) as [
+              number,
+              number,
+              number,
+              number,
+            ],
+            dabuken: (event.dabuken ? [...event.dabuken] : state.dabuken) as [
+              boolean,
+              boolean,
+              boolean,
+              boolean,
+            ],
             lastHandResult: {
               reason: event.reason,
               ...(event.abortKind ? { abortKind: event.abortKind } : {}),
@@ -720,6 +898,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
                   }
                 : {}),
               ...(existingWins ? { wins: existingWins } : {}),
+              ...(existingBuuChombo ? { buuChombo: existingBuuChombo } : {}),
             },
           };
         }
@@ -842,6 +1021,47 @@ export const useMatchStore = create<MatchStore>((set) => ({
             matchEnded: {
               reason: event.reason,
               finalScores: event.finalScores,
+              ...(event.chips ? { chips: [...event.chips] } : {}),
+              ...(event.dabuken ? { dabuken: [...event.dabuken] } : {}),
+              ...(event.chipsDelta
+                ? { chipsDelta: [...event.chipsDelta] }
+                : {}),
+              ...(event.gameIndex !== undefined
+                ? { gameIndex: event.gameIndex }
+                : {}),
+            },
+          };
+        }
+        case "session_vote_open": {
+          return {
+            ...next,
+            sessionVote: {
+              deadline: event.deadline,
+              votes: [...event.votes],
+              gameIndex: event.gameIndex,
+            },
+          };
+        }
+        case "session_vote_update": {
+          if (!state.sessionVote) {
+            return next;
+          }
+          return {
+            ...next,
+            sessionVote: {
+              ...state.sessionVote,
+              votes: [...event.votes],
+            },
+          };
+        }
+        case "session_end": {
+          return {
+            ...next,
+            sessionVote: null,
+            sessionEnded: {
+              reason: event.reason,
+              gamesPlayed: event.gamesPlayed,
+              chips: [...event.chips],
             },
           };
         }
@@ -854,6 +1074,40 @@ export const useMatchStore = create<MatchStore>((set) => ({
           ];
           furiten[event.seat] = event.active;
           return { ...next, furiten };
+        }
+        case "sinking_update": {
+          return {
+            ...next,
+            sinking: [
+              event.sinking[0],
+              event.sinking[1],
+              event.sinking[2],
+              event.sinking[3],
+            ],
+          };
+        }
+        case "buu_chombo": {
+          // `buu_chombo` is emitted by the engine just before the
+          // abort `hand_end`. Stash the offender + reason + chip
+          // info on `lastHandResult` so the `hand_end` handler can
+          // carry it through (it merges over `state.lastHandResult`).
+          // Also update the live `chips` so the player-name box
+          // chip counts refresh immediately (the abort `hand_end`
+          // itself carries no chip delta).
+          const existing = state.lastHandResult;
+          return {
+            ...next,
+            chips: [...event.chips] as [number, number, number, number],
+            lastHandResult: {
+              ...(existing ?? { reason: "abort" as const }),
+              buuChombo: {
+                seat: event.seat,
+                reason: event.reason,
+                chipDelta: [...event.chipDelta],
+                chips: [...event.chips],
+              },
+            },
+          };
         }
         default: {
           // Exhaustiveness — Phase 1 will tighten as new event types land.
