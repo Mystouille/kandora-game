@@ -100,6 +100,17 @@ const DESIGN_H = 800;
  * width. */
 const TSUMO_GAP = 8;
 
+/** Multiplicative tint for a freshly-discarded tsumogiri tile —
+ * "very slightly" darker than the natural face. Persists for the
+ * tsumogiri discard plus the next {@link TSUMOGIRI_FRESH_WINDOW}
+ * - 1 discards across all seats, then drops back to no tint. */
+const TSUMOGIRI_FRESH_TINT = 0xc8c8c8;
+/** Number of consecutive discards (across all seats, counting the
+ * tsumogiri discard itself) over which the darken cue persists.
+ * After this many discards have been seen since the tsumogiri
+ * landed, the tint is removed. */
+const TSUMOGIRI_FRESH_WINDOW = 3;
+
 const BG_COLOR: ColorSource = 0x2a2a2a;
 const FELT_COLOR: ColorSource = 0x0d4d2c;
 
@@ -3671,7 +3682,23 @@ export class TableRenderer {
       const tex = this.getTileTexture(sheetToUse, tile);
       const sprite = new Sprite(tex);
       sprite.anchor.set(0.5, 0.5);
-      this.tintIfWait(sprite, tile);
+      const tinted = this.tintIfWait(sprite, tile);
+      // Fresh-tsumogiri darken cue: very slight tint applied to a
+      // tile that was discarded immediately after being drawn,
+      // aged out after `TSUMOGIRI_FRESH_WINDOW` discards (counting
+      // the tsumogiri itself). Suppressed when the tile is
+      // already wait-tinted so the stronger red cue stays
+      // legible. Parallel-array lookups are defensive (?.) so
+      // older snapshots without per-discard flags fall through
+      // cleanly to no tint.
+      const wasTsumogiri = view.discardTsumogiri[seat]?.[i] ?? false;
+      const discardOrdinal = view.discardOrdinals[seat]?.[i] ?? 0;
+      const isFreshTsumogiri =
+        wasTsumogiri &&
+        view.totalDiscards - discardOrdinal < TSUMOGIRI_FRESH_WINDOW;
+      if (!tinted && isFreshTsumogiri) {
+        sprite.tint = TSUMOGIRI_FRESH_TINT;
+      }
       // Pre-rotation sprite dims chosen so that after sprite
       // rotation (and container rotation) the on-screen bounds
       // are tileLocalH × tileLocalW.

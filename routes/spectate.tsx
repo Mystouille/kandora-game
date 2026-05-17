@@ -69,6 +69,13 @@ function snapshotToReplayView(s: SnapshotState): ReplayView {
     hands: s.hands.map((h) => [...h]),
     melds: s.melds.map((m) => [...m]),
     discards: s.discards.map((d) => [...d]),
+    // Snapshots don't carry per-discard tsumogiri / ordinal info
+    // (the fresh-tsumogiri darken effect is a transient cue, not
+    // worth replicating on reconnect/attach). Initialize parallel
+    // arrays so the renderer's per-tile lookups stay in bounds.
+    discardTsumogiri: s.discards.map((d) => d.map(() => false)),
+    discardOrdinals: s.discards.map((d) => d.map((_, i) => i)),
+    totalDiscards: s.discards.reduce((acc, d) => acc + d.length, 0),
     wallRemaining: s.wallRemaining,
     drawsTaken: s.drawsTaken ?? 70 - s.wallRemaining,
     // Mid-hand wall reveal: the server attaches the starting live

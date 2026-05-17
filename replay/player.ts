@@ -43,6 +43,17 @@ export interface ReplayView {
   /** Open / declared melds per seat, in declaration order. */
   melds: Meld[][];
   discards: Tile[][];
+  /** Parallel to `discards`: per-tile flag — `true` when the
+   * discard was tsumogiri. Drives the brief darken cue in the
+   * renderer, faded out by `discardOrdinals` + `totalDiscards`. */
+  discardTsumogiri: boolean[][];
+  /** Parallel to `discards`: per-tile cross-seat ordinal
+   * (0-based) at the moment the discard landed. */
+  discardOrdinals: number[][];
+  /** Running count of discards in the current hand across all
+   * seats. Reset on `hand_start`; incremented on every
+   * `discard` event. */
+  totalDiscards: number;
   wallRemaining: number;
   /** Omniscient live wall in draw order at the start of the
    * current hand (70 tiles). `null` when the source replay log
@@ -200,6 +211,9 @@ export function initialView(): ReplayView {
     hands: [[], [], [], []],
     melds: [[], [], [], []],
     discards: [[], [], [], []],
+    discardTsumogiri: [[], [], [], []],
+    discardOrdinals: [[], [], [], []],
+    totalDiscards: 0,
     wallRemaining: 70,
     liveWall: null,
     deadWall: null,
@@ -276,6 +290,9 @@ export function applyReplayEvent(
         hands,
         melds: [[], [], [], []],
         discards: [[], [], [], []],
+        discardTsumogiri: [[], [], [], []],
+        discardOrdinals: [[], [], [], []],
+        totalDiscards: 0,
         doraIndicators: [...event.doraIndicators],
         wallRemaining: 70,
         liveWall: event.liveWall ? [...event.liveWall] : null,
@@ -358,6 +375,12 @@ export function applyReplayEvent(
       }
       const discards = view.discards.map((d) => [...d]);
       discards[event.seat].push(event.tile);
+      // Parallel arrays for the fresh-tsumogiri darken cue.
+      const discardTsumogiri = view.discardTsumogiri.map((a) => [...a]);
+      discardTsumogiri[event.seat].push(event.tsumogiri);
+      const discardOrdinals = view.discardOrdinals.map((a) => [...a]);
+      discardOrdinals[event.seat].push(view.totalDiscards);
+      const totalDiscards = view.totalDiscards + 1;
       const riichiDeclared = event.riichi
         ? ((): [boolean, boolean, boolean, boolean] => {
             const arr = [...view.riichiDeclared] as [
@@ -399,6 +422,9 @@ export function applyReplayEvent(
         ...view,
         hands,
         discards,
+        discardTsumogiri,
+        discardOrdinals,
+        totalDiscards,
         riichiDeclared,
         riichiTileIdx,
         riichiSticks,
@@ -410,15 +436,20 @@ export function applyReplayEvent(
     case "call": {
       const hands = view.hands.map((h) => [...h]);
       const discards = view.discards.map((d) => [...d]);
+      const discardTsumogiri = view.discardTsumogiri.map((a) => [...a]);
+      const discardOrdinals = view.discardOrdinals.map((a) => [...a]);
       const caller = event.seat;
       const meld = event.meld;
       // Remove the claimed tile from the discarder's pile (chi /
       // pon / daiminkan / shouminkan — ankan has `from === null`).
+      // Keep the parallel tsumogiri / ordinal arrays in sync.
       if (meld.from !== null && meld.claimedTile !== null) {
         const pile = discards[meld.from];
         const idx = pile.lastIndexOf(meld.claimedTile);
         if (idx >= 0) {
           pile.splice(idx, 1);
+          discardTsumogiri[meld.from].splice(idx, 1);
+          discardOrdinals[meld.from].splice(idx, 1);
         }
       }
       // Caller's contributed tiles = meld.tiles minus a single copy
@@ -492,6 +523,8 @@ export function applyReplayEvent(
         hands,
         melds,
         discards,
+        discardTsumogiri,
+        discardOrdinals,
         freshlyDrawnSeat: null,
         freshlyDiscardedSeat: null,
       };
@@ -752,6 +785,9 @@ export function replayViewToMatchView(
     hands: view.hands,
     melds: view.melds,
     discards: view.discards,
+    discardTsumogiri: view.discardTsumogiri,
+    discardOrdinals: view.discardOrdinals,
+    totalDiscards: view.totalDiscards,
     wallRemaining: view.wallRemaining,
     liveWall: view.liveWall,
     deadWall: view.deadWall,
@@ -863,6 +899,8 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
       }))
     ) as [Meld[], Meld[], Meld[], Meld[]],
     discards: perm4(mv.discards),
+    discardTsumogiri: perm4(mv.discardTsumogiri),
+    discardOrdinals: perm4(mv.discardOrdinals),
     liveDrawSchedule: mv.liveDrawSchedule
       ? mv.liveDrawSchedule.map((s) => rot(s))
       : mv.liveDrawSchedule,

@@ -95,6 +95,23 @@ export interface MatchView {
   /** Open / declared melds per seat, in declaration order. */
   melds: Meld[][];
   discards: Tile[][];
+  /** Parallel to `discards`: per-tile flag — `true` when the
+   * discard was tsumogiri (discarded immediately after being
+   * drawn). Drives the brief "fresh tsumogiri" darken in the
+   * renderer; combined with `discardOrdinals` + `totalDiscards`
+   * to fade the shading after 2 more discards have passed. */
+  discardTsumogiri: boolean[][];
+  /** Parallel to `discards`: per-tile cross-seat ordinal
+   * (0-based) at the moment the discard landed. `totalDiscards -
+   * discardOrdinals[seat][i]` is the number of discards that
+   * have happened up to and including the current frame, so the
+   * renderer can age-out the tsumogiri darken after a fixed
+   * number of subsequent discards. */
+  discardOrdinals: number[][];
+  /** Running count of discards in the current hand across all
+   * seats. Reset on `hand_start`; incremented on every
+   * `discard` event. */
+  totalDiscards: number;
   wallRemaining: number;
   /** Omniscient live wall in draw order at the start of the
    * current hand (70 tiles after the initial 4×13 deal). `null`
@@ -407,6 +424,9 @@ const initialState: MatchView = {
   hands: emptyHands,
   melds: emptyMelds,
   discards: emptyDiscards,
+  discardTsumogiri: [[], [], [], []],
+  discardOrdinals: [[], [], [], []],
+  totalDiscards: 0,
   wallRemaining: 70,
   liveWall: null,
   deadWall: null,
@@ -462,6 +482,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
       hands: [[], [], [], []],
       melds: [[], [], [], []],
       discards: [[], [], [], []],
+      discardTsumogiri: [[], [], [], []],
+      discardOrdinals: [[], [], [], []],
+      totalDiscards: 0,
     });
   },
 
@@ -504,6 +527,15 @@ export const useMatchStore = create<MatchStore>((set) => ({
       hands: snap.hands.map((h) => [...h]),
       melds: snap.melds.map((m) => m.map((x) => ({ ...x }))),
       discards: snap.discards.map((d) => [...d]),
+      // Snapshots don't carry per-discard tsumogiri / ordinal
+      // info (they're a fresh "current state" rather than an
+      // event log), so we conservatively reset all flags to
+      // `false`. The tsumogiri darken simply won't appear for
+      // any discards that pre-date the snapshot — acceptable
+      // since the effect is a brief in-the-moment cue.
+      discardTsumogiri: snap.discards.map((d) => d.map(() => false)),
+      discardOrdinals: snap.discards.map((d) => d.map((_, i) => i)),
+      totalDiscards: snap.discards.reduce((acc, d) => acc + d.length, 0),
       wallRemaining: snap.wallRemaining,
       dice: snap.dice ? [snap.dice[0], snap.dice[1]] : null,
       // Prefer the server's exact count when present; older
@@ -648,6 +680,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
             hands,
             melds: [[], [], [], []],
             discards: [[], [], [], []],
+            discardTsumogiri: [[], [], [], []],
+            discardOrdinals: [[], [], [], []],
+            totalDiscards: 0,
             doraIndicators: [...event.doraIndicators],
             wallRemaining: 70,
             drawsTaken: 0,
@@ -733,6 +768,15 @@ export const useMatchStore = create<MatchStore>((set) => ({
           }
           const discards = state.discards.map((d) => [...d]);
           discards[event.seat].push(event.tile);
+          // Parallel arrays for the tsumogiri-darken effect:
+          // record the flag and the cross-seat ordinal at the
+          // time of discard so the renderer can age-out the
+          // shading after a couple more discards land.
+          const discardTsumogiri = state.discardTsumogiri.map((a) => [...a]);
+          discardTsumogiri[event.seat].push(event.tsumogiri);
+          const discardOrdinals = state.discardOrdinals.map((a) => [...a]);
+          discardOrdinals[event.seat].push(state.totalDiscards);
+          const totalDiscards = state.totalDiscards + 1;
           // Riichi declaration: record the index where this tile
           // landed in the seat's pile and flip the seat's flag. The
           // server folds the rotation into the same `discard` event
@@ -797,6 +841,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ...next,
             hands,
             discards,
+            discardTsumogiri,
+            discardOrdinals,
+            totalDiscards,
             riichiDeclared,
             riichiTileIdx,
             scores,
@@ -915,15 +962,21 @@ export const useMatchStore = create<MatchStore>((set) => ({
           // discards don't trip the renderer.
           const hands = state.hands.map((h) => [...h]);
           const discards = state.discards.map((d) => [...d]);
+          const discardTsumogiri = state.discardTsumogiri.map((a) => [...a]);
+          const discardOrdinals = state.discardOrdinals.map((a) => [...a]);
           const caller = event.seat;
           const meld = event.meld;
           // Remove the claimed tile from the discarder's pile (chi/
-          // pon/daiminkan/shouminkan — never ankan).
+          // pon/daiminkan/shouminkan — never ankan). Keep the
+          // parallel tsumogiri / ordinal arrays in sync so the
+          // renderer's per-discard flag lookup stays aligned.
           if (meld.from !== null && meld.claimedTile !== null) {
             const pile = discards[meld.from];
             const idx = pile.lastIndexOf(meld.claimedTile);
             if (idx >= 0) {
               pile.splice(idx, 1);
+              discardTsumogiri[meld.from].splice(idx, 1);
+              discardOrdinals[meld.from].splice(idx, 1);
             }
           }
           // Remove the caller's contributed tiles from their hand.
@@ -1011,6 +1064,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
             hands,
             melds,
             discards,
+            discardTsumogiri,
+            discardOrdinals,
             freshlyDrawnSeat: null,
             freshlyDiscardedSeat: null,
           };
