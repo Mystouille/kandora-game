@@ -395,11 +395,13 @@ function ReadyCheckOverlay({
               onReady();
             }
           }}
-          className="rounded-lg bg-emerald-500 px-8 py-3 text-2xl font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
+          className="flex flex-row items-center gap-2 rounded-lg bg-emerald-500 px-8 py-3 text-2xl font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
         >
-          {humanAcked ? "READY" : "GO"}
+          <span>{humanAcked ? "READY" : "GO"}</span>
+          <span className="font-mono text-xs font-normal opacity-80">
+            {seconds}s
+          </span>
         </button>
-        <div className="font-mono text-base text-emerald-200">{seconds}s</div>
       </div>
     </div>
   );
@@ -707,6 +709,13 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
             if (wsRef.current) {
               wsRef.current.act(action.id);
             }
+            // Optimistically clear our legal actions so the call
+            // button strip disappears the instant the user clicks.
+            // The next server snapshot will repopulate them if the
+            // turn comes back around. Without this the strip lingers
+            // visibly until the server's response round-trips
+            // (especially noticeable on riichi / ron / tsumo).
+            useMatchStore.getState().setLegalActions([]);
           });
           renderer.setOnRenderRequest(() => {
             // Renderer internal-state changes (e.g. riichi mode toggle)

@@ -1553,7 +1553,7 @@ export class TableRenderer {
     }
     // Row metrics.
     const nameRowH = maxNameH + padY * 2;
-    const chipIconR = 7; // chip icon radius (px)
+    const chipIconR = 14; // chip icon radius (px)
     const chipIconGap = 4; // gap between chip icon and count
     const chipRowH = buuMode ? Math.max(maxNameH, chipIconR * 2) + 4 : 0;
     const dabukenR = 26; // dabuken token radius (px) — 2× the chip icon
@@ -4080,6 +4080,15 @@ export class TableRenderer {
       lastIdx >= 0 &&
       seatDiscardAnim.discardIndex === lastIdx &&
       !(lastIdx === riichiIdx);
+    // Walls live on `this.root` with zIndex 0..2. While the
+    // last discard is slide-animating, lift the whole discard
+    // container above the walls so the flying tile passes *over*
+    // the wall in front of seat 0 instead of behind it. Reverts
+    // to the default (0) on the next frame once the animation
+    // finishes, restoring the resting wall-over-pond stacking.
+    if (lastIsAnimating) {
+      discardContainer.zIndex = 5;
+    }
     let animLastCursorX = 0;
     let animLastRowY = 0;
     let animLastTileLocalW = tileLocalW;
