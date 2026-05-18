@@ -233,7 +233,10 @@ export class HandSorter {
    * re-indexing that the store does on every mutation).
    */
   reconcile(rawHand: Array<string | null>): void {
-    if (this.customOrder !== null && this.prevRawHand !== null) {
+    if (
+      this.prevRawHand !== null &&
+      !rawHandsEqual(this.prevRawHand, rawHand)
+    ) {
       // Skip the multiset remap when `rawHand` hasn't actually
       // mutated since the previous frame: `remapCustomOrder`'s
       // duplicate-disambiguation policy claims occurrences in
@@ -245,7 +248,7 @@ export class HandSorter {
       // tile" feedback loop. Identity-equal hands are by far
       // the common case (every render frame during a drag), so
       // this also cuts the per-frame work.
-      if (!rawHandsEqual(this.prevRawHand, rawHand)) {
+      if (this.customOrder !== null) {
         const oldOrder = this.customOrder.slice();
         const oldRawHand = this.prevRawHand;
         this.customOrder = remapCustomOrder(
@@ -266,6 +269,22 @@ export class HandSorter {
           oldOrder,
           oldRawHand,
           this.customOrder,
+          rawHand
+        );
+      } else {
+        // sortFlag-ON path: no customOrder to remap, but tracks
+        // are still keyed by raw-hand index. A `discard` splices
+        // the hand in the store, shifting raw indices ≥ the
+        // discarded one down by 1; a `call` removes 1–3 tiles
+        // with the same effect. Without re-keying tracks by
+        // physical tile identity, every surviving tile to the
+        // right of the spliced position inherits the previous
+        // raw-idx neighbour's slot, producing visible spurious
+        // slides on tiles that should have stayed put (and a
+        // wrong source position for tiles that did move).
+        this.tracks = remapTracksByTileIdentity(
+          this.tracks,
+          this.prevRawHand,
           rawHand
         );
       }
@@ -771,4 +790,56 @@ export function remapCustomOrder(
     }
   }
   return result;
+}
+
+/**
+ * Re-key a `tracks` map across a raw-hand mutation
+ * (discard / call / draw) by matching physical tile identity
+ * with ordinal disambiguation (left-to-right in raw-hand
+ * order). Each new raw index inherits the track of the old
+ * raw index that referenced the same physical tile.
+ *
+ * Used by the sortFlag-ON path in `reconcile`. Old raw indices
+ * whose tiles are absent from `newRawHand` (the discarded /
+ * called tiles) drop out. New raw indices with no match
+ * (freshly-drawn tiles) get no track — `getRenderX` will seed
+ * a parked track at their target slot on the next call.
+ */
+function remapTracksByTileIdentity(
+  oldTracks: Map<number, TileTrack>,
+  oldRawHand: Array<string | null>,
+  newRawHand: Array<string | null>
+): Map<number, TileTrack> {
+  const NULL_KEY = "\u0000";
+  // Group old raw indices by tile in raw-hand order so the
+  // i-th entry is the i-th occurrence of that tile.
+  const oldIndicesByTile = new Map<string, number[]>();
+  for (let i = 0; i < oldRawHand.length; i++) {
+    const key = oldRawHand[i] ?? NULL_KEY;
+    let list = oldIndicesByTile.get(key);
+    if (list === undefined) {
+      list = [];
+      oldIndicesByTile.set(key, list);
+    }
+    list.push(i);
+  }
+  const claimed = new Map<string, number>();
+  const newTracks = new Map<number, TileTrack>();
+  for (let i = 0; i < newRawHand.length; i++) {
+    const key = newRawHand[i] ?? NULL_KEY;
+    const list = oldIndicesByTile.get(key);
+    if (list === undefined) {
+      continue;
+    }
+    const n = claimed.get(key) ?? 0;
+    if (n >= list.length) {
+      continue;
+    }
+    claimed.set(key, n + 1);
+    const track = oldTracks.get(list[n]);
+    if (track !== undefined) {
+      newTracks.set(i, track);
+    }
+  }
+  return newTracks;
 }
