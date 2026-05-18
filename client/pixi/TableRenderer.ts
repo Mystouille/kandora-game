@@ -500,6 +500,13 @@ export class TableRenderer {
    * the ResizeObserver dozens of times per second; we only need one
    * render per frame. Cleared in `destroy`. */
   private resizeRafHandle: number | null = null;
+  /** rAF handle used to coalesce burst-y internal render requests
+   * (pointermove during a hand-drag, animator-tick + pointermove in
+   * the same frame, etc.) into a single host render per animation
+   * frame. High-rate pointer devices can fire `pointermove` 500+ Hz;
+   * without coalescing every event triggers a full table re-render.
+   * Cleared in `destroy`. */
+  private renderRequestRafHandle: number | null = null;
   /** Per-sheet loaded textures, keyed by sheet name. Populated in
    * `mount()`. */
   private sheets = new Map<
@@ -623,11 +630,8 @@ export class TableRenderer {
     // focused-hand sorter is mid-slide or mid-drag for the same
     // reason.
     const animTickHandler = () => {
-      if (
-        (this.animator.hasActive() || this.handSorter.hasActiveAnimation()) &&
-        this.onRenderRequest
-      ) {
-        this.onRenderRequest();
+      if (this.animator.hasActive() || this.handSorter.hasActiveAnimation()) {
+        this.requestRender();
       }
     };
     this.animatorTickHandler = animTickHandler;
@@ -669,9 +673,7 @@ export class TableRenderer {
       const isFresh = view.freshlyDrawnSeat === 0;
       const natural = naturalOrderRawIndices(rawHand, isFresh, tileSortKey);
       this.handSorter.pointerMove(localX, natural);
-      if (this.onRenderRequest) {
-        this.onRenderRequest();
-      }
+      this.requestRender();
     };
     const onWindowPointerUp = (e: PointerEvent): void => {
       if (e.button === 2) {
@@ -693,9 +695,7 @@ export class TableRenderer {
         }
       }
       this.pendingHandClickCallback = null;
-      if (this.onRenderRequest) {
-        this.onRenderRequest();
-      }
+      this.requestRender();
     };
     window.addEventListener("pointermove", onWindowPointerMove);
     window.addEventListener("pointerup", onWindowPointerUp);
@@ -734,9 +734,7 @@ export class TableRenderer {
           if (this.app) {
             this.app.resize();
           }
-          if (this.onRenderRequest) {
-            this.onRenderRequest();
-          }
+          this.requestRender();
         });
       });
       this.resizeObserver.observe(container);
@@ -753,6 +751,28 @@ export class TableRenderer {
 
   setOnRenderRequest(handler: () => void): void {
     this.onRenderRequest = handler;
+  }
+
+  /**
+   * Coalesced render request. Multiple calls within the same
+   * animation frame collapse to a single `onRenderRequest`
+   * invocation on the next rAF tick. Use this in preference to
+   * calling `this.onRenderRequest` directly, especially from
+   * high-frequency callers (pointermove, ticker handlers).
+   */
+  private requestRender(): void {
+    if (this.renderRequestRafHandle !== null) {
+      return;
+    }
+    if (!this.onRenderRequest) {
+      return;
+    }
+    this.renderRequestRafHandle = requestAnimationFrame(() => {
+      this.renderRequestRafHandle = null;
+      if (this.onRenderRequest) {
+        this.onRenderRequest();
+      }
+    });
   }
 
   /**
@@ -784,9 +804,7 @@ export class TableRenderer {
     const isFresh = this.lastView?.freshlyDrawnSeat === 0;
     const natural = naturalOrderRawIndices(rawHand, isFresh, tileSortKey);
     this.handSorter.setSortFlag(on, natural);
-    if (this.onRenderRequest) {
-      this.onRenderRequest();
-    }
+    this.requestRender();
   }
 
   /**
@@ -1007,6 +1025,10 @@ export class TableRenderer {
       cancelAnimationFrame(this.resizeRafHandle);
       this.resizeRafHandle = null;
     }
+    if (this.renderRequestRafHandle !== null) {
+      cancelAnimationFrame(this.renderRequestRafHandle);
+      this.renderRequestRafHandle = null;
+    }
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
@@ -1149,7 +1171,19 @@ export class TableRenderer {
       (screenH - layout.table.h * scale) / 2
     );
     const root = this.root;
-    root.removeChildren();
+    // Tear down the previous frame's display tree. `removeChildren()`
+    // alone only detaches — it leaves the per-child GPU buffers
+    // (Graphics geometry, render-group caches) live until GC.
+    // During a hand drag we rebuild the entire tree ~60+ times per
+    // second; without explicit destruction those buffers pile up
+    // and the renderer (and any subsequent discard animation)
+    // chokes. Sprites share cached `Texture` instances from
+    // `getTileTexture`, so `texture: false` keeps the asset cache
+    // intact.
+    const oldChildren = root.removeChildren();
+    for (const child of oldChildren) {
+      child.destroy({ children: true, texture: false });
+    }
 
     // Felt: paint the central tile-bearing region (bounding box of
     // the four wall bands plus the four player hands) in classic
@@ -5106,9 +5140,7 @@ export class TableRenderer {
         return;
       }
       this.riichiMode = !this.riichiMode;
-      if (this.onRenderRequest) {
-        this.onRenderRequest();
-      }
+      this.requestRender();
     });
     return { c, w: width };
   }
@@ -5164,9 +5196,7 @@ export class TableRenderer {
         return;
       }
       this.expandedCallGroup = active ? null : group;
-      if (this.onRenderRequest) {
-        this.onRenderRequest();
-      }
+      this.requestRender();
     });
     return { c, w: width };
   }

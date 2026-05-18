@@ -9,7 +9,9 @@ import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
 import {
   LivePlayMenu,
-  LIVE_PLAY_MENU_DEFAULTS,
+  buildInitialLivePlayMenuFlags,
+  resetEphemeralFlags,
+  writePersistedAutoSort,
   type LivePlayMenuFlags,
 } from "~/game/client/LivePlayMenu";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
@@ -435,21 +437,37 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
   // canvas hides it; releasing brings it back. Mirrors the
   // replay route's annotation-overlay press-to-hide pattern.
   const [livePressed, setLivePressed] = useState(false);
-  // Live-play options menu state. Starts at
-  // {@link LIVE_PLAY_MENU_DEFAULTS} on every page load — no
-  // persistence — and round-trips with the renderer so a
-  // manual drag flipping `autoSort` off updates the menu UI.
+  // Live-play options menu state. `autoSort` is persisted to
+  // `localStorage` and reloaded on every fresh mount; the other
+  // three "auto play" flags (autoWin / noCall / autoDiscard)
+  // are deliberately ephemeral and reset to `false` on every
+  // hand boundary (see the `useEffect` below keyed on the
+  // active hand identity).
   const [liveMenuFlags, setLiveMenuFlags] = useState<LivePlayMenuFlags>(
-    LIVE_PLAY_MENU_DEFAULTS
+    buildInitialLivePlayMenuFlags
   );
   const handleLiveMenuChange = useCallback((next: LivePlayMenuFlags) => {
     setLiveMenuFlags((prev) => {
-      if (next.autoSort !== prev.autoSort && rendererRef.current !== null) {
-        rendererRef.current.setAutoSort(next.autoSort);
+      if (next.autoSort !== prev.autoSort) {
+        // Persist the autoSort preference so it survives both
+        // hand boundaries and page reloads.
+        writePersistedAutoSort(next.autoSort);
+        if (rendererRef.current !== null) {
+          rendererRef.current.setAutoSort(next.autoSort);
+        }
       }
       return next;
     });
   }, []);
+  // Per-hand ephemeral-flag reset. Whenever the active hand
+  // identity (round / honba / dealer) flips we clear autoWin,
+  // noCall, and autoDiscard back to `false` so they only apply
+  // for the hand the player explicitly enabled them on. The
+  // `autoSort` preference is preserved.
+  const handKey = `${view.roundWind}:${view.roundNumber}:${view.honba}:${view.dealer}`;
+  useEffect(() => {
+    setLiveMenuFlags((prev) => resetEphemeralFlags(prev));
+  }, [handKey]);
   // Dedupe ref for auto-action dispatch: tracks the last
   // legal-action id we fired so the effect doesn't re-fire on
   // unrelated store mutations that arrive before the server's
@@ -732,7 +750,10 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           // the renderer at mount, and listen for engine-driven
           // flips (e.g. the player drags a tile → auto-sort
           // turns off) so the menu indicator stays accurate.
+          // Engine-driven flips also persist so the next mount
+          // reflects the player's last actually-used setting.
           renderer.setOnAutoSortChange((on) => {
+            writePersistedAutoSort(on);
             setLiveMenuFlags((prev) => {
               if (prev.autoSort === on) {
                 return prev;
@@ -740,7 +761,11 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
               return { ...prev, autoSort: on };
             });
           });
-          renderer.setAutoSort(LIVE_PLAY_MENU_DEFAULTS.autoSort);
+          // Initialise the renderer from the persisted preference
+          // rather than the hardcoded default so a player who
+          // turned auto-sort off on a previous session keeps it
+          // off here.
+          renderer.setAutoSort(liveMenuFlags.autoSort);
           // Initial draw with whatever the store currently holds.
           const v0 = useMatchStore.getState();
           renderer.render(

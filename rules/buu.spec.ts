@@ -11,7 +11,11 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState, type MatchState } from "./state";
 import { resolveRuleSet } from "./ruleSet";
-import { evaluateBuuHandEnd, checkBuuVictoryLegality } from "./buu";
+import {
+  evaluateBuuHandEnd,
+  checkBuuVictoryLegality,
+  evaluateBuuEndOfGameChips,
+} from "./buu";
 import { getPreset, presetToRuleSet } from "./presets";
 import type { Seat } from "./types";
 
@@ -147,6 +151,111 @@ describe("evaluateBuuHandEnd", () => {
     // Seat 0 wasn't the winner, so its dabuken wasn't consumed
     // (no doubling) — the wipe handled by the caller still drops it.
     expect(sankoro.consumedDabuken).toBe(false);
+  });
+});
+
+describe("evaluateBuuEndOfGameChips", () => {
+  it("no-op when buuMode is off", () => {
+    const s = createInitialState(1);
+    const out = evaluateBuuEndOfGameChips(s);
+    expect(out.chipDelta).toEqual([0, 0, 0, 0]);
+    expect(out.perSinker).toBe(0);
+    expect(out.sinkingSeats).toEqual([]);
+  });
+
+  it("no transfer when no non-winner sinks", () => {
+    const out = evaluateBuuEndOfGameChips(buuState([8000, 6000, 6000, 6000]));
+    expect(out.winner).toBe(0);
+    expect(out.sinkingSeats).toEqual([]);
+    expect(out.chipDelta).toEqual([0, 0, 0, 0]);
+  });
+
+  it("chinmai: one non-winner sinks → 1 chip from sinker to winner", () => {
+    // Winner seat 0 (8000), one sinker seat 3 (5000 < 6000).
+    const out = evaluateBuuEndOfGameChips(buuState([8000, 6000, 6000, 5000]));
+    expect(out.winner).toBe(0);
+    expect(out.sinkingSeats).toEqual([3]);
+    expect(out.perSinker).toBe(1);
+    expect(out.chipDelta).toEqual([1, 0, 0, -1]);
+  });
+
+  it("nikoro: two non-winners sink → 3 chips each to winner", () => {
+    const out = evaluateBuuEndOfGameChips(buuState([10000, 6000, 4000, 4000]));
+    expect(out.winner).toBe(0);
+    expect(out.sinkingSeats).toEqual([2, 3]);
+    expect(out.perSinker).toBe(3);
+    expect(out.chipDelta).toEqual([6, 0, -3, -3]);
+  });
+
+  it("sankoro: all three non-winners sink → 5 chips each to winner", () => {
+    const out = evaluateBuuEndOfGameChips(buuState([3000, 15000, 3000, 3000]));
+    expect(out.winner).toBe(1);
+    expect(out.sinkingSeats).toEqual([0, 2, 3]);
+    expect(out.perSinker).toBe(5);
+    expect(out.chipDelta).toEqual([-5, 15, -5, -5]);
+  });
+
+  it("ties on highest score broken by lowest seat index (closer to dealer)", () => {
+    // Seats 0 and 2 tied at 9000 — winner is seat 0.
+    const out = evaluateBuuEndOfGameChips(buuState([9000, 3000, 9000, 3000]));
+    expect(out.winner).toBe(0);
+    expect(out.sinkingSeats).toEqual([1, 3]);
+    expect(out.chipDelta).toEqual([6, -3, 0, -3]);
+  });
+
+  it("awards a fresh dabuken to the winner on sankoro (3 sinkers)", () => {
+    const out = evaluateBuuEndOfGameChips(buuState([15000, 3000, 3000, 3000]));
+    expect(out.winner).toBe(0);
+    expect(out.sinkingSeats).toEqual([1, 2, 3]);
+    expect(out.awardedDabuken).toBe(true);
+    expect(out.consumedDabuken).toBe(false);
+    expect(out.perSinker).toBe(5);
+  });
+
+  it("does not award a dabuken on chinmai or nikoro", () => {
+    const chinmai = evaluateBuuEndOfGameChips(
+      buuState([8000, 6000, 6000, 5000])
+    );
+    expect(chinmai.awardedDabuken).toBe(false);
+    const nikoro = evaluateBuuEndOfGameChips(
+      buuState([10000, 6000, 4000, 4000])
+    );
+    expect(nikoro.awardedDabuken).toBe(false);
+  });
+
+  it("winner holding a dabuken consumes it and doubles the chip transfer", () => {
+    // Seat 0 wins with 1 sinker (seat 3) and already holds a
+    // dabuken from the previous game.
+    const out = evaluateBuuEndOfGameChips(
+      buuState([8000, 6000, 6000, 5000], [true, false, false, false])
+    );
+    expect(out.consumedDabuken).toBe(true);
+    expect(out.perSinker).toBe(2); // chinmai × 2
+    expect(out.chipDelta).toEqual([2, 0, 0, -2]);
+    // A chinmai consumes but does not re-award.
+    expect(out.awardedDabuken).toBe(false);
+  });
+
+  it("end-of-game sankoro for a dabuken holder both consumes and re-awards", () => {
+    const out = evaluateBuuEndOfGameChips(
+      buuState([15000, 3000, 3000, 3000], [true, false, false, false])
+    );
+    expect(out.consumedDabuken).toBe(true);
+    expect(out.awardedDabuken).toBe(true);
+    expect(out.perSinker).toBe(10); // sankoro × 2
+    expect(out.chipDelta).toEqual([30, -10, -10, -10]);
+  });
+
+  it("does not consume a dabuken when no chips would move", () => {
+    // Winner holds a dabuken but no non-winner sinks — token
+    // is wiped by the caller but `consumedDabuken` stays false
+    // (it only flips when the doubling actually applies).
+    const out = evaluateBuuEndOfGameChips(
+      buuState([8000, 6000, 6000, 6000], [true, false, false, false])
+    );
+    expect(out.consumedDabuken).toBe(false);
+    expect(out.perSinker).toBe(0);
+    expect(out.chipDelta).toEqual([0, 0, 0, 0]);
   });
 });
 

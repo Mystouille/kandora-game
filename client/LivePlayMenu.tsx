@@ -10,8 +10,16 @@
  *
  * Controlled component: parent owns `flags` (so external
  * signals — e.g. a manual hand drag flipping `autoSort` off
- * — can update the menu). No state is persisted: every fresh
- * page load starts at {@link LIVE_PLAY_MENU_DEFAULTS}.
+ * — can update the menu).
+ *
+ * Persistence: only the `autoSort` preference survives across
+ * page loads and hand boundaries (via `localStorage`). The
+ * other three "auto play" flags (autoWin / noCall / autoDiscard)
+ * are deliberately ephemeral — they reset to `false` on every
+ * `hand_start` so a player can't leave a hand on full auto by
+ * accident. See {@link readPersistedAutoSort} and
+ * {@link writePersistedAutoSort} for the persistence helpers
+ * and {@link resetEphemeralFlags} for the per-hand reset.
  */
 import { useState } from "react";
 
@@ -32,6 +40,87 @@ export const LIVE_PLAY_MENU_DEFAULTS: LivePlayMenuFlags = {
   noCall: false,
   autoDiscard: false,
 };
+
+/** `localStorage` key for the persisted `autoSort` preference. */
+export const LIVE_PLAY_MENU_AUTOSORT_STORAGE_KEY = "kandora.live.autoSort";
+
+/**
+ * Read the persisted `autoSort` preference from `localStorage`.
+ * Returns `LIVE_PLAY_MENU_DEFAULTS.autoSort` when nothing is
+ * stored, the stored value is not a recognised boolean string,
+ * or `localStorage` isn't available (SSR / privacy mode).
+ */
+export function readPersistedAutoSort(): boolean {
+  if (typeof window === "undefined") {
+    return LIVE_PLAY_MENU_DEFAULTS.autoSort;
+  }
+  try {
+    const raw = window.localStorage.getItem(
+      LIVE_PLAY_MENU_AUTOSORT_STORAGE_KEY
+    );
+    if (raw === "true") {
+      return true;
+    }
+    if (raw === "false") {
+      return false;
+    }
+  } catch {
+    // localStorage may throw under quota / privacy modes.
+  }
+  return LIVE_PLAY_MENU_DEFAULTS.autoSort;
+}
+
+/**
+ * Persist the `autoSort` preference. No-op when `localStorage`
+ * isn't available or throws (quota / privacy mode).
+ */
+export function writePersistedAutoSort(on: boolean): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(
+      LIVE_PLAY_MENU_AUTOSORT_STORAGE_KEY,
+      on ? "true" : "false"
+    );
+  } catch {
+    // localStorage may throw under quota / privacy modes.
+  }
+}
+
+/**
+ * Build the initial flag set for a fresh mount: persisted
+ * `autoSort` (with the default fallback) and every ephemeral
+ * "auto play" flag reset to `false`.
+ */
+export function buildInitialLivePlayMenuFlags(): LivePlayMenuFlags {
+  return {
+    ...LIVE_PLAY_MENU_DEFAULTS,
+    autoSort: readPersistedAutoSort(),
+    autoWin: false,
+    noCall: false,
+    autoDiscard: false,
+  };
+}
+
+/**
+ * Reset the ephemeral "auto play" flags (autoWin / noCall /
+ * autoDiscard) on a hand boundary, leaving `autoSort` unchanged.
+ * Returns the same reference when nothing would change.
+ */
+export function resetEphemeralFlags(
+  flags: LivePlayMenuFlags
+): LivePlayMenuFlags {
+  if (!flags.autoWin && !flags.noCall && !flags.autoDiscard) {
+    return flags;
+  }
+  return {
+    ...flags,
+    autoWin: false,
+    noCall: false,
+    autoDiscard: false,
+  };
+}
 
 export interface LivePlayMenuProps {
   /** Controlled flags. Parent should pass the current state. */

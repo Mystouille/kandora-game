@@ -375,12 +375,29 @@ export class DiscardAnimator {
     //
     // Phase A animations are NOT dropped on duration elapse:
     // once the tile has reached the nudged position we want it
-    // to *stay* there (with the hand still gapped) until a draw
-    // event triggers phase B. They're dropped via hard-reset
-    // (call / hand_end) or via the phase-B transition above.
+    // to *stay* there (with the hand free to close its gap)
+    // until a draw event triggers phase B. They're dropped via
+    // hard-reset (call / hand_end) or via the phase-B transition
+    // above.
+    //
+    // We DO clear `phaseASnapshot` once phase A elapses: the
+    // discarder's hand should re-flow into the gap as soon as
+    // the slide animation reaches the nudged position, rather
+    // than waiting for the next draw. The animation entry stays
+    // alive (with `phase: "to-nudge"` and progress saturating at
+    // 1) so the discard tile keeps painting at the nudged
+    // position; only the per-frame hand snapshot is dropped.
     for (const [seat, anim] of this.anims) {
       if (anim.phase === "to-final" && now - anim.startMs >= anim.durationMs) {
         this.anims.delete(seat);
+        continue;
+      }
+      if (
+        anim.phase === "to-nudge" &&
+        anim.phaseASnapshot !== null &&
+        now - anim.startMs >= anim.durationMs
+      ) {
+        anim.phaseASnapshot = null;
       }
     }
 
@@ -394,15 +411,21 @@ export class DiscardAnimator {
   }
 
   /** True iff at least one animation is *currently sliding*
-   * (i.e. has elapsed less than its full duration). Phase-A
-   * animations that have reached the nudged position and are
-   * waiting for the next draw event do NOT count as active —
-   * their visual state is stable, so the renderer doesn't need
-   * to keep pumping per-frame re-renders for them. */
+   * (i.e. has elapsed less than its full duration), OR a phase-A
+   * snapshot is still pending clearance. The latter case is
+   * needed so the host keeps pumping renders past the phase-A
+   * duration: the snapshot is cleared inside `beginFrame`, so
+   * one more render must fire after elapse to actually close
+   * the hand's gap on screen. Phase-A entries whose snapshot
+   * has already been cleared (tile parked at the nudged
+   * position, hand re-flowed) are stable and don't count. */
   hasActive(): boolean {
     const now = this.now();
     for (const anim of this.anims.values()) {
       if (now - anim.startMs < anim.durationMs) {
+        return true;
+      }
+      if (anim.phase === "to-nudge" && anim.phaseASnapshot !== null) {
         return true;
       }
     }

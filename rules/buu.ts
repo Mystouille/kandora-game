@@ -147,6 +147,94 @@ export function applyChipDelta(chips: ChipDelta, delta: ChipDelta): void {
   }
 }
 
+/**
+ * Compute the end-of-game chip payout under the Buu rules.
+ *
+ * Called once when a game ends (round limit reached, a player
+ * busts, or a player meets/exceeds `winnerThreshold`) — NOT
+ * per hand. The winner is the seat with the highest final
+ * `scores[s]`, ties broken by lowest seat index (closer-to-
+ * dealer). Every OTHER seat whose final score is at or below
+ * `ruleSet.sinkThreshold` counts as a sinker. The per-sinker
+ * chip rate scales with how many seats sank:
+ *   1 sinker  → `chipPayouts.chinmai`
+ *   2 sinkers → `chipPayouts.nikoro`
+ *   3 sinkers → `chipPayouts.sankoro`
+ *
+ * Dabuken bookkeeping also moves to end-of-game (it no longer
+ * fires per hand). On settlement:
+ *   - If the winner is currently holding a dabuken from a
+ *     prior game in this session, it is CONSUMED and every
+ *     chip transferred this settlement is doubled.
+ *   - If the settlement is a sankoro (3 non-winners sank), a
+ *     fresh dabuken is AWARDED to the winner to carry into
+ *     the next game.
+ *   - All other dabuken tokens are wiped on every settlement
+ *     (caller resets `state.dabuken` first, then sets
+ *     `state.dabuken[winner] = true` iff `awardedDabuken`).
+ *
+ * Returns the all-zero delta when `buuMode` is off or no
+ * non-winner sank.
+ */
+export function evaluateBuuEndOfGameChips(state: MatchState): {
+  chipDelta: ChipDelta;
+  winner: Seat;
+  sinkingSeats: Seat[];
+  /** Per-sinker chip rate AFTER the optional dabuken doubling. */
+  perSinker: number;
+  /** True when the winner consumed a carried-over dabuken. */
+  consumedDabuken: boolean;
+  /** True when this settlement awards a fresh dabuken to the winner. */
+  awardedDabuken: boolean;
+} {
+  const rs = state.ruleSet;
+  const delta: ChipDelta = [0, 0, 0, 0];
+  if (!rs.buuMode) {
+    return {
+      chipDelta: delta,
+      winner: 0,
+      sinkingSeats: [],
+      perSinker: 0,
+      consumedDabuken: false,
+      awardedDabuken: false,
+    };
+  }
+  let winner: Seat = 0;
+  for (let s = 1; s < 4; s++) {
+    if (state.scores[s] > state.scores[winner]) {
+      winner = s as Seat;
+    }
+  }
+  const sinkingSeats: Seat[] = [];
+  for (let s = 0; s < 4; s++) {
+    if (s === winner) {
+      continue;
+    }
+    if (state.scores[s] <= rs.sinkThreshold) {
+      sinkingSeats.push(s as Seat);
+    }
+  }
+  const count = sinkingSeats.length as 0 | 1 | 2 | 3;
+  const base = chipPerSinker(rs, count);
+  const consumedDabuken = base > 0 && state.dabuken[winner] === true;
+  const perSinker = consumedDabuken ? base * 2 : base;
+  if (perSinker > 0) {
+    for (const s of sinkingSeats) {
+      delta[s] -= perSinker;
+      delta[winner] += perSinker;
+    }
+  }
+  const awardedDabuken = count === 3;
+  return {
+    chipDelta: delta,
+    winner,
+    sinkingSeats,
+    perSinker,
+    consumedDabuken,
+    awardedDabuken,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Victory-legality checks
 // ---------------------------------------------------------------------------

@@ -380,8 +380,12 @@ export class HandSorter {
    *
    * - sortFlag on → natural sort, last slot is the drawn tile,
    *   gap = `isFreshlyDrawn`.
-   * - sortFlag off → `customOrder`, no gap (the gap disappears
-   *   the moment the player rearranges anything).
+   * - sortFlag off → `customOrder`. The freshly-drawn tile keeps
+   *   its TSUMO_GAP as long as it still occupies the rightmost
+   *   slot of `customOrder` — i.e. the player has dragged some
+   *   *other* tile but not yet touched the drawn one. The gap
+   *   only disappears once the drawn tile itself is moved out
+   *   of the right edge.
    */
   getDisplayOrder(
     rawHand: Array<string | null>,
@@ -391,11 +395,15 @@ export class HandSorter {
     if (this.sortFlag) {
       return { rawIndices: naturalRawIndices, freshGap: isFreshlyDrawn };
     }
-    // Defensive: if customOrder is missing (shouldn't happen
-    // when sortFlag is false), initialize from the natural
-    // order so the renderer never crashes.
+    // sortFlag off and no customOrder yet → fall back to the
+    // raw-hand deal order (identity permutation `[0, 1, …, N-1]`)
+    // so a hand that begins with auto-sort OFF is rendered in
+    // its dealt sequence, not natural-sorted. The player's first
+    // drag will then re-seed `customOrder` from the live display
+    // order (see {@link setSortFlag}); explicit toggles always
+    // go through {@link setSortFlag}, which never lands here.
     if (this.customOrder === null) {
-      this.customOrder = naturalRawIndices.slice();
+      this.customOrder = rawHand.map((_, i) => i);
     }
     // Defensive: length mismatch (reconcile bug) — pad with any
     // missing raw indices appended.
@@ -408,7 +416,19 @@ export class HandSorter {
       }
       this.customOrder = this.customOrder.filter((i) => i < rawHand.length);
     }
-    return { rawIndices: this.customOrder.slice(), freshGap: false };
+    // The drawn tile's raw index is `rawHand.length - 1` (the
+    // engine always appends it at the end of the raw hand). The
+    // gap survives as long as that raw index is still parked in
+    // the rightmost display slot.
+    const lastRaw = rawHand.length - 1;
+    const drawnStillAtRight =
+      isFreshlyDrawn &&
+      this.customOrder.length > 0 &&
+      this.customOrder[this.customOrder.length - 1] === lastRaw;
+    return {
+      rawIndices: this.customOrder.slice(),
+      freshGap: drawnStillAtRight,
+    };
   }
 
   /**

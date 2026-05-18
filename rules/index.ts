@@ -84,5 +84,12 @@ export {
 
 export { isAnkanLegalDuringRiichi } from "./riichiKan";
 
+export type { ChipDelta } from "./buu";
+export {
+  applyChipDelta,
+  evaluateBuuEndOfGameChips,
+  evaluateBuuHandEnd,
+} from "./buu";
+
 export type { CallOption, SeatCallOptions } from "./calls";
 export { enumerateCalls } from "./calls";

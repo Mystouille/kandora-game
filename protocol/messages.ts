@@ -580,6 +580,13 @@ export const SnapshotStateSchema = z.object({
    * the renderer uses it to hide positions already taken off
    * the wall. Optional — only present alongside `liveWall`. */
   liveDrawsTaken: z.number().int().nonnegative().optional(),
+  /** Display names for each seat in absolute-seat order. Optional
+   * for back-compat with older snapshots / replays — the renderer
+   * falls back to `Player N` placeholders when absent. Populated
+   * by the server so a reconnecting human (or a spectator joining
+   * mid-match) sees the correct player names + HUD chips without
+   * having to wait for a fresh `match_start` event. */
+  seatNames: z.array(z.string()).length(4).optional(),
 });
 export type SnapshotState = z.infer<typeof SnapshotStateSchema>;
 

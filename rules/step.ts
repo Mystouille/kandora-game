@@ -30,7 +30,6 @@ import { isWinningShape, waits } from "./shanten";
 import { isAnkanLegalDuringRiichi } from "./riichiKan";
 import { type Seat, type Tile, type Wind } from "./types";
 import {
-  evaluateBuuHandEnd,
   applyChipDelta,
   checkBuuVictoryLegality,
   type ChipDelta,
@@ -769,28 +768,20 @@ function applyBuuWinSideEffects(
     };
   }
 
-  // Legal: compute chip distribution and dabuken bookkeeping.
-  const outcome = evaluateBuuHandEnd(next, args.winner, args.score.isYakuman);
-  applyChipDelta(next.chips, outcome.chipDelta);
-  // Order matters: wipe every seat's dabuken first (clears any
-  // stale token a non-winner was carrying — including the case
-  // where seat A had a dabuken and seat B just won a sankoro),
-  // then apply the optional new award to the winner. `consumed`
-  // has already affected the chip multiplier in `evaluateBuuHandEnd`
-  // so it doesn't need a separate state mutation here.
-  if (outcome.clearAllDabuken) {
-    next.dabuken = [false, false, false, false];
-  }
-  if (outcome.awardedDabuken) {
-    next.dabuken[args.winner] = true;
-  }
-
+  // Legal: per-hand sankoro/nikoro/chinmai chip distribution and
+  // dabuken bookkeeping are DISABLED for the in-house Buu rules.
+  // Chips only move via the chombo penalty (handled above) or
+  // the end-of-game payout computed in `match.ts#endMatch`,
+  // which keys off final scores rather than per-hand sinkers.
+  // `state.chips` and `state.dabuken` are therefore left untouched
+  // here; the win/hand_end events carry no chip metadata, so the
+  // result panel only shows the point delta mid-match.
   return {
     kind: "ok",
-    chipDelta: outcome.chipDelta,
-    sinkingCount: outcome.sinkingCount,
-    consumedDabuken: outcome.consumedDabuken,
-    awardedDabuken: outcome.awardedDabuken,
+    chipDelta: [0, 0, 0, 0],
+    sinkingCount: 0,
+    consumedDabuken: false,
+    awardedDabuken: false,
   };
 }
 

@@ -608,6 +608,18 @@ export const useMatchStore = create<MatchStore>((set) => ({
       furiten: (snap.furiten
         ? [...snap.furiten]
         : [false, false, false, false]) as [boolean, boolean, boolean, boolean],
+      // Per-seat display names from the snapshot. When absent
+      // (older snapshots / replays) keep whatever's already in
+      // the store — e.g. seatNames set by an earlier `match_start`
+      // — so a no-op snapshot doesn't blank out the HUD.
+      seatNames: snap.seatNames
+        ? ([
+            snap.seatNames[0],
+            snap.seatNames[1],
+            snap.seatNames[2],
+            snap.seatNames[3],
+          ] as [string, string, string, string])
+        : state.seatNames,
     }));
   },
 
