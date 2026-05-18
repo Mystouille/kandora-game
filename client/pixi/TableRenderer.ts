@@ -3799,14 +3799,6 @@ export class TableRenderer {
         ) {
           tileSprite.zIndex = 1_000_000;
         }
-        // Optimistic pending discard tint.
-        if (
-          view.pendingDiscard &&
-          view.pendingDiscard.seat === seat &&
-          tile === view.pendingDiscard.tile
-        ) {
-          tileSprite.alpha = 0.4;
-        }
         if (isYou && tile) {
           const riichiLegal = riichiLegalsByTile.get(tile);
           // Dim tiles that aren't legal riichi discards while the
@@ -3816,6 +3808,23 @@ export class TableRenderer {
           }
           tileSprite.eventMode = "static";
           tileSprite.cursor = "pointer";
+          // Light-red hover highlight on the focused hand. Tint
+          // applies only to Sprite children (seat 0's tileSprite
+          // is a Sprite directly), and we capture the pre-hover
+          // tint so wait-tinted tiles restore correctly on out.
+          // No persistent style change on click — the optimistic
+          // pending-discard tint that used to live here was
+          // removed at the user's request.
+          if ("tint" in tileSprite) {
+            const tintable = tileSprite as unknown as { tint: number };
+            const originalTint = tintable.tint;
+            tileSprite.on("pointerover", () => {
+              tintable.tint = 0xffaaaa;
+            });
+            tileSprite.on("pointerout", () => {
+              tintable.tint = originalTint;
+            });
+          }
           const localTile = tile;
           const localIndex = i;
           const localRawIdx = rawIndices !== null ? rawIndices[i] : i;
