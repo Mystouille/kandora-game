@@ -150,7 +150,7 @@ export function LivePlayMenu(props: LivePlayMenuProps): React.JSX.Element {
       // Vertically centred on the left edge. `pointer-events-auto`
       // because the outer match container disables touch
       // gestures on the canvas, not on overlay children.
-      className="pointer-events-auto absolute left-2 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-1 rounded-lg border border-emerald-700/60 bg-emerald-950/85 p-1.5 shadow-xl"
+      className="pointer-events-auto absolute left-2 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-2 rounded-lg border border-emerald-700/60 bg-emerald-950/85 p-3 shadow-xl"
     >
       <button
         type="button"
@@ -160,14 +160,24 @@ export function LivePlayMenu(props: LivePlayMenuProps): React.JSX.Element {
         }
         aria-label={expanded ? "Collapse options menu" : "Expand options menu"}
         aria-expanded={expanded}
-        className="self-end text-emerald-200 hover:text-white text-2xl font-bold leading-none px-2 py-0.5 rounded hover:bg-emerald-800/60"
+        className={
+          "h-14 flex items-center justify-center text-emerald-200 hover:text-white text-4xl font-bold leading-none rounded hover:bg-emerald-800/60 " +
+          // Expanded: chevron stretches across the full drawer
+          // width so it reads as a "close" affordance. Collapsed:
+          // square w-14 button so it matches the letter glyphs
+          // below and the drawer keeps a single-column shape.
+          (expanded ? "w-full" : "w-14")
+        }
       >
         {expanded ? "«" : "»"}
       </button>
       {OPTIONS.map((opt) => {
         const active = flags[opt.key];
         if (expanded) {
-          // Expanded row: full label, active = filled bg.
+          // Expanded row: a w-14 letter glyph (same size and X
+          // position as the collapsed letter buttons) plus the
+          // full label to the right. The active background spans
+          // the whole row so it reads as a single toggle target.
           return (
             <button
               key={opt.key}
@@ -176,13 +186,16 @@ export function LivePlayMenu(props: LivePlayMenuProps): React.JSX.Element {
               onContextMenu={(e) => handleContextMenu(e, () => toggle(opt.key))}
               aria-pressed={active}
               className={
-                "min-w-[120px] text-left px-3 py-1.5 rounded text-sm font-semibold transition-colors " +
+                "h-14 flex items-center rounded text-base font-semibold transition-colors " +
                 (active
                   ? "bg-emerald-500 text-emerald-950 hover:bg-emerald-400"
                   : "bg-emerald-900/70 text-white hover:bg-emerald-800")
               }
             >
-              {opt.label}
+              <span className="w-14 h-14 flex items-center justify-center font-mono font-bold text-2xl">
+                {opt.letter}
+              </span>
+              <span className="pr-6">{opt.label}</span>
             </button>
           );
         }
@@ -197,7 +210,7 @@ export function LivePlayMenu(props: LivePlayMenuProps): React.JSX.Element {
             aria-pressed={active}
             title={opt.label}
             className={
-              "w-7 h-7 flex items-center justify-center rounded font-mono font-bold text-sm transition-colors hover:bg-emerald-800/60 " +
+              "w-14 h-14 flex items-center justify-center rounded font-mono font-bold text-2xl transition-colors hover:bg-emerald-800/60 " +
               (active ? "text-emerald-300" : "text-white")
             }
           >

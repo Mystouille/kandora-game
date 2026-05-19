@@ -179,6 +179,16 @@ export interface ReplayView {
       | "tenpai_yame"
       | "winner_threshold";
     finalScores: Array<{ seat: Seat; score: number; place: number }>;
+    /** Session-level chip totals after this game (Buu only). */
+    chips?: number[];
+    /** Session-level dabuken state after this game (Buu only). */
+    dabuken?: boolean[];
+    /** Per-seat chip delta for THIS game only (Buu only). Drives
+     * the "+N / −N" column shown next to each player's final
+     * score in the renderer's match-end panel. */
+    chipsDelta?: number[];
+    /** Zero-based index of this game within its session (Buu only). */
+    gameIndex?: number;
   };
   /**
    * Seat that has a freshly drawn tile sitting at the end of its
@@ -654,9 +664,39 @@ export function applyReplayEvent(
     case "match_end": {
       return {
         ...view,
+        // Roll the post-game session-level chip / dabuken totals
+        // into the top-level view fields so the player-info
+        // squares pick up the delta applied this game; mirrors
+        // the live store handler.
+        ...(event.chips
+          ? {
+              chips: [
+                event.chips[0],
+                event.chips[1],
+                event.chips[2],
+                event.chips[3],
+              ] as [number, number, number, number],
+            }
+          : {}),
+        ...(event.dabuken
+          ? {
+              dabuken: [
+                event.dabuken[0],
+                event.dabuken[1],
+                event.dabuken[2],
+                event.dabuken[3],
+              ] as [boolean, boolean, boolean, boolean],
+            }
+          : {}),
         matchEnded: {
           reason: event.reason,
           finalScores: event.finalScores,
+          ...(event.chips ? { chips: [...event.chips] } : {}),
+          ...(event.dabuken ? { dabuken: [...event.dabuken] } : {}),
+          ...(event.chipsDelta ? { chipsDelta: [...event.chipsDelta] } : {}),
+          ...(event.gameIndex !== undefined
+            ? { gameIndex: event.gameIndex }
+            : {}),
         },
       };
     }
@@ -929,6 +969,15 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
             ...fs,
             seat: rot(fs.seat),
           })),
+          ...(mv.matchEnded.chips
+            ? { chips: [...perm4(mv.matchEnded.chips)] }
+            : {}),
+          ...(mv.matchEnded.dabuken
+            ? { dabuken: [...perm4(mv.matchEnded.dabuken)] }
+            : {}),
+          ...(mv.matchEnded.chipsDelta
+            ? { chipsDelta: [...perm4(mv.matchEnded.chipsDelta)] }
+            : {}),
         }
       : mv.matchEnded,
     // Permute room composition so the disconnect badge in the

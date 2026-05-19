@@ -22,6 +22,16 @@ import chipIconUrl from "~/game/client/icons/chips.png";
 import type { Route } from "./+types/match";
 
 /**
+ * Pause inserted between a draw event and the auto-fired
+ * discard for the local seat when it is auto-discarding —
+ * either because the `autoDiscard` live-play toggle is on, or
+ * because the seat has declared riichi (tsumogiri-locked).
+ * Mirrors the server's `DRAW_TO_DISCARD_DELAY_MS` so every
+ * seat (auto-played or otherwise) shares the same cadence.
+ */
+const DRAW_TO_DISCARD_DELAY_MS = 700;
+
+/**
  * Mobile-shell prep, scoped to the match route only:
  *
  *   - Swap the global viewport meta to one with `maximum-scale=1`
@@ -473,6 +483,14 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
   // unrelated store mutations that arrive before the server's
   // ack clears `legalActions`.
   const lastAutoActedIdRef = useRef<string | null>(null);
+  // Pending timer for the human auto-discard delay (riichi or
+  // the `autoDiscard` toggle). Held in a ref so the effect can
+  // cancel it whenever the legal-actions snapshot changes
+  // before the timer fires (e.g. an interrupting ron window),
+  // and so the unmount cleanup can clear it too.
+  const autoDiscardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   useEffect(() => {
     const ws = wsRef.current;
     if (!ws) {
@@ -484,6 +502,10 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
     const actions = view.legalActions;
     if (actions.length === 0) {
       lastAutoActedIdRef.current = null;
+      if (autoDiscardTimerRef.current !== null) {
+        clearTimeout(autoDiscardTimerRef.current);
+        autoDiscardTimerRef.current = null;
+      }
       return;
     }
     const fire = (id: string): void => {
@@ -519,10 +541,19 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
         return;
       }
     }
-    // 3) Auto-discard — tsumogiri the drawn tile. Suppressed
+    // 3) Auto-discard — tsumogiri the drawn tile. Triggered
+    //    either by the `autoDiscard` toggle or because the seat
+    //    is locked into tsumogiri by an active riichi. Suppressed
     //    when a win is available (don't dump a winning tile).
-    if (liveMenuFlags.autoDiscard && !hasWin) {
-      const mySeat = view.mySeat;
+    //    Mirrors the shared draw→discard pacing so the table
+    //    doesn't feel jarring when on autopilot: the discard
+    //    is scheduled `DRAW_TO_DISCARD_DELAY_MS` after the
+    //    draw, and the timer is cancelled if the legal-actions
+    //    snapshot changes before it fires (e.g. an interrupting
+    //    ron window for another seat clearing this seat's legals).
+    const mySeat = view.mySeat;
+    const inRiichi = view.riichiDeclared[mySeat];
+    if ((liveMenuFlags.autoDiscard || inRiichi) && !hasWin) {
       if (view.freshlyDrawnSeat !== mySeat) {
         return;
       }
@@ -534,11 +565,30 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
       const discard = actions.find(
         (a) => a.type === "discard" && a.tile === drawn
       );
-      if (discard) {
-        useMatchStore
-          .getState()
-          .setPendingDiscard({ seat: mySeat, tile: drawn });
-        fire(discard.id);
+      if (discard && lastAutoActedIdRef.current !== discard.id) {
+        // If a previous timer is still pending (shouldn't happen
+        // in practice — `legalActions` changing re-runs the
+        // effect and clears it), drop it before scheduling a new
+        // one so we never double-fire.
+        if (autoDiscardTimerRef.current !== null) {
+          clearTimeout(autoDiscardTimerRef.current);
+        }
+        autoDiscardTimerRef.current = setTimeout(() => {
+          autoDiscardTimerRef.current = null;
+          // Re-check the live store: another event could have
+          // landed during the delay (ron window opening, hand
+          // ending, etc.) and invalidated this discard.
+          const live = useMatchStore.getState();
+          if (live.mySeat !== mySeat) {
+            return;
+          }
+          const stillLegal = live.legalActions.some((a) => a.id === discard.id);
+          if (!stillLegal) {
+            return;
+          }
+          live.setPendingDiscard({ seat: mySeat, tile: drawn });
+          fire(discard.id);
+        }, DRAW_TO_DISCARD_DELAY_MS);
       }
     }
   }, [
@@ -546,10 +596,21 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
     view.mySeat,
     view.hands,
     view.freshlyDrawnSeat,
+    view.riichiDeclared,
     liveMenuFlags.autoWin,
     liveMenuFlags.noCall,
     liveMenuFlags.autoDiscard,
   ]);
+  // Clear any pending auto-discard timer on unmount so it can't
+  // fire against a closed `ws` or a stale store snapshot.
+  useEffect(() => {
+    return () => {
+      if (autoDiscardTimerRef.current !== null) {
+        clearTimeout(autoDiscardTimerRef.current);
+        autoDiscardTimerRef.current = null;
+      }
+    };
+  }, []);
   // Canvas-pixel centre of the focused seat's discard pond,
   // published by the renderer. Used to anchor the post-hand
   // "peek" eye button to the middle of the pond.
@@ -1029,6 +1090,46 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
             UI only for now; behaviour wiring lands in a
             follow-up. */}
         <LivePlayMenu flags={liveMenuFlags} onChange={handleLiveMenuChange} />
+        {/* Bottom-of-hand quick toggles: duplicates of "Auto win"
+            and "No call" from the left drawer. Anchored at the
+            horizontal centre of the canvas and extending to the
+            right, so the row sits under the right half of the
+            focused player's hand (which itself spans most of the
+            centred play area). Mirror the drawer's expanded-row
+            styling so the active state reads the same. */}
+        <div className="pointer-events-auto absolute left-1/2 bottom-0 z-30 flex gap-2">
+          {(["autoWin", "noCall"] as const).map((key) => {
+            const label = key === "autoWin" ? "Auto win" : "No call";
+            const letter = key === "autoWin" ? "W" : "C";
+            const active = liveMenuFlags[key];
+            const toggle = (): void => {
+              handleLiveMenuChange({ ...liveMenuFlags, [key]: !active });
+            };
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={toggle}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  toggle();
+                }}
+                aria-pressed={active}
+                className={
+                  "h-7 flex items-center rounded text-xs font-semibold transition-colors shadow-lg border border-emerald-700/60 " +
+                  (active
+                    ? "bg-emerald-500 text-emerald-950 hover:bg-emerald-400"
+                    : "bg-emerald-950/85 text-white hover:bg-emerald-800")
+                }
+              >
+                <span className="w-7 h-7 flex items-center justify-center font-mono font-bold text-sm">
+                  {letter}
+                </span>
+                <span className="pr-3">{label}</span>
+              </button>
+            );
+          })}
+        </div>
         {/* Post-hand peek eye — anchored to the centre of the
             focused seat's discard pond. Visible after the auto-
             advance clears `view.lastHandResult` until the player

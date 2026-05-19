@@ -141,6 +141,18 @@ export default function GameSpectateRoute({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<TableRenderer | null>(null);
   const wsRef = useRef<GameWS | null>(null);
+  // Latest render args, snapshotted on every dispatch into the
+  // renderer. Read back by the renderer's `onRenderRequest`
+  // callback so animation-frame re-renders (discard slide,
+  // hand-sort tween, etc.) replay against the freshest view
+  // even when no React state change has fired since the last
+  // dispatch — without this hook the discard tile parks at
+  // its phase-A start position (next to the discarder's hand)
+  // during call-window pauses, instead of sliding to the
+  // +10/+10 nudged position in the pond.
+  const latestRenderRef = useRef<ReturnType<
+    typeof replayViewToMatchView
+  > | null>(null);
 
   // ---- Local replay-style state -----------------------------------------
   const [baseline, setBaseline] = useState<ReplayView | null>(null);
@@ -194,6 +206,13 @@ export default function GameSpectateRoute({
           return;
         }
         const renderer = new TableRenderer();
+        renderer.setOnRenderRequest(() => {
+          const r = rendererRef.current;
+          const args = latestRenderRef.current;
+          if (r && args) {
+            r.render(args);
+          }
+        });
         void renderer.mount(container).then(() => {
           if (cancelled) {
             renderer.destroy();
@@ -368,6 +387,7 @@ export default function GameSpectateRoute({
       seatNames,
       roomState,
     });
+    latestRenderRef.current = args;
     r.render(args);
   }, [view, playIndex, focusSeat, overlays, matchId, seatNames, roomState]);
 

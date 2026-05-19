@@ -1712,19 +1712,25 @@ export class TableRenderer {
       //   seat 1 (right, -90°)         → top edge of rect
       //   seat 2 (top, 180°)           → left edge of rect
       //   seat 3 (left, +90°)          → bottom edge of rect
+      // `lowerShift` nudges the box along the seat's
+      // player-down axis (relative to the discard's orientation,
+      // i.e. away from the table centre toward the player) so
+      // it sits a touch lower than the centre of the discard
+      // pond's long edge.
+      const lowerShift = 10;
       switch (seat) {
         case 0: {
           container.rotation = 0;
           container.position.set(
             rect.x + rect.w + gap + w / 2,
-            rect.y + rect.h / 2 - centerShift
+            rect.y + rect.h / 2 - centerShift + lowerShift
           );
           break;
         }
         case 1: {
           container.rotation = -Math.PI / 2;
           container.position.set(
-            rect.x + rect.w / 2 - centerShift,
+            rect.x + rect.w / 2 - centerShift + lowerShift,
             rect.y - gap - w / 2
           );
           break;
@@ -1733,14 +1739,14 @@ export class TableRenderer {
           container.rotation = Math.PI;
           container.position.set(
             rect.x - gap - w / 2,
-            rect.y + rect.h / 2 + centerShift
+            rect.y + rect.h / 2 + centerShift - lowerShift
           );
           break;
         }
         case 3: {
           container.rotation = Math.PI / 2;
           container.position.set(
-            rect.x + rect.w / 2 + centerShift,
+            rect.x + rect.w / 2 + centerShift - lowerShift,
             rect.y + rect.h + gap + w / 2
           );
           break;

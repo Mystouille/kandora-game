@@ -37,7 +37,7 @@ import type { MatchView } from "../store";
 const SEAT_COUNT = 4;
 
 /** Per-spec snappy timings (ms). */
-export const PHASE_A_DURATION_MS = 150;
+export const PHASE_A_DURATION_MS = 250;
 export const PHASE_B_DURATION_MS = 120;
 
 /** Hidden hand slot for tedashi from a concealed (non-focused,

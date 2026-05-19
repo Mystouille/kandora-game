@@ -1085,6 +1085,32 @@ export const useMatchStore = create<MatchStore>((set) => ({
         case "match_end": {
           return {
             ...next,
+            // Post-game session-level chip / dabuken totals (Buu
+            // only) need to roll forward to the top-level view
+            // fields too — otherwise the player-info squares keep
+            // showing the pre-game chip count even though the
+            // match-end panel renders the delta that was just
+            // applied. Mirrored in `replay/player.ts`.
+            ...(event.chips
+              ? {
+                  chips: [
+                    event.chips[0],
+                    event.chips[1],
+                    event.chips[2],
+                    event.chips[3],
+                  ] as [number, number, number, number],
+                }
+              : {}),
+            ...(event.dabuken
+              ? {
+                  dabuken: [
+                    event.dabuken[0],
+                    event.dabuken[1],
+                    event.dabuken[2],
+                    event.dabuken[3],
+                  ] as [boolean, boolean, boolean, boolean],
+                }
+              : {}),
             matchEnded: {
               reason: event.reason,
               finalScores: event.finalScores,
