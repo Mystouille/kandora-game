@@ -46,12 +46,24 @@ export interface GameWSOptions {
 
 const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 10_000;
+/**
+ * If we haven't received any frame from the server for this long
+ * while the socket is reportedly OPEN, treat the connection as a
+ * silent stall (dead TCP / browser sleep / mobile NAT timeout) and
+ * force a reconnect. Without a server-side `ping` frame this is
+ * the only way to recover from "frozen game" symptoms when the
+ * OS hasn't yet noticed the link is dead.
+ */
+const STALL_THRESHOLD_MS = 30_000;
+const STALL_CHECK_INTERVAL_MS = 5_000;
 
 export class GameWS {
   private ws: WebSocket | null = null;
   private backoff = INITIAL_BACKOFF_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionallyClosed = false;
+  private lastInboundAt = 0;
+  private stallTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly opts: GameWSOptions) {}
 
@@ -73,11 +85,45 @@ export class GameWS {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopStallWatchdog();
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
     useMatchStore.getState().setConn("closed");
+  }
+
+  /**
+   * Manually trigger a reconnect right now (used by the
+   * "Reconnect" button in the disconnection overlay). Cancels any
+   * pending backoff, drops the current socket if any, resets the
+   * backoff to its initial value, and opens a fresh socket. Safe
+   * to call regardless of current connection state.
+   */
+  forceReconnect(): void {
+    if (!this.opts.wsUrl) {
+      return;
+    }
+    this.intentionallyClosed = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopStallWatchdog();
+    this.backoff = INITIAL_BACKOFF_MS;
+    if (this.ws) {
+      // Detach listeners we don't want to fire (the close handler
+      // would otherwise schedule a backoff reconnect we just
+      // bypassed).
+      const stale = this.ws;
+      this.ws = null;
+      try {
+        stale.close();
+      } catch {
+        // ignored — stale socket cleanup
+      }
+    }
+    this.openSocket();
   }
 
   send(message: ClientMessage): void {
@@ -175,6 +221,8 @@ export class GameWS {
 
     ws.addEventListener("open", () => {
       this.backoff = INITIAL_BACKOFF_MS;
+      this.lastInboundAt = Date.now();
+      this.startStallWatchdog();
       useMatchStore.getState().setConn("open");
 
       // Send `hello`; if we have a positive `lastSeq` we're reconnecting
@@ -205,6 +253,7 @@ export class GameWS {
 
     ws.addEventListener("close", () => {
       this.ws = null;
+      this.stopStallWatchdog();
       if (this.intentionallyClosed) {
         useMatchStore.getState().setConn("closed");
         return;
@@ -227,7 +276,37 @@ export class GameWS {
     }, delay);
   }
 
+  private startStallWatchdog(): void {
+    this.stopStallWatchdog();
+    this.stallTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (Date.now() - this.lastInboundAt < STALL_THRESHOLD_MS) {
+        return;
+      }
+      // Silent stall: socket is OPEN as far as the browser knows,
+      // but we haven't heard anything for too long. Force-close to
+      // kick off a reconnect; the `close` handler will schedule a
+      // backoff retry which calls `resync(lastSeq)` so the server
+      // replays the gap.
+      try {
+        this.ws.close();
+      } catch {
+        // ignored — best-effort tear-down
+      }
+    }, STALL_CHECK_INTERVAL_MS);
+  }
+
+  private stopStallWatchdog(): void {
+    if (this.stallTimer) {
+      clearInterval(this.stallTimer);
+      this.stallTimer = null;
+    }
+  }
+
   private handleMessage(raw: unknown): void {
+    this.lastInboundAt = Date.now();
     let parsed: ReturnType<typeof ServerMessageSchema.safeParse>;
     try {
       const data = typeof raw === "string" ? JSON.parse(raw) : raw;

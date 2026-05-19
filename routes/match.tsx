@@ -1072,6 +1072,42 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
             </div>
           </div>
         )}
+        {/* Transport-level disconnect overlay: shown whenever the
+            WebSocket itself has dropped and the client is in the
+            middle of (re)connecting. Distinct from the server-flag
+            "Disconnected" overlay above — that one means the server
+            has already marked us absent; this one means we lost the
+            link before the server even noticed (silent TCP stall,
+            wifi drop, mobile NAT timeout, browser sleep). The
+            button cancels backoff and reconnects immediately. */}
+        {view.mySeat !== null &&
+          !view.matchEnded &&
+          ownConnected &&
+          (view.conn === "reconnecting" || view.conn === "connecting") &&
+          view.lastSeq >= 0 && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 pointer-events-auto">
+              <div className="flex flex-col items-center gap-4 rounded-xl border border-amber-500/50 bg-emerald-950/95 px-8 py-6 shadow-2xl">
+                <div className="text-amber-300 text-lg font-semibold">
+                  Connection lost
+                </div>
+                <div className="text-emerald-100/80 text-sm text-center max-w-xs">
+                  Reconnecting… If the game stays frozen, click below to retry
+                  now.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (wsRef.current) {
+                      wsRef.current.forceReconnect();
+                    }
+                  }}
+                  className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold shadow"
+                >
+                  Reconnect now
+                </button>
+              </div>
+            </div>
+          )}
         {/* Top-right controls: sound toggle + close. Absolutely
             positioned so the canvas occupies the full container;
             `pointer-events: auto` on the wrapper so clicks land
