@@ -1470,8 +1470,17 @@ export class TableRenderer {
     // than reading the server's authoritative `wallRemaining`
     // field — the live wall starts at 70 tiles after the deal.
     const wallRemaining = Math.max(0, 70 - view.liveDrawsTaken);
+    // Buu Mahjong has no repeat counter, so omit the honba line
+    // entirely in that mode rather than rendering a stale "Repeat: 0".
     const lineSpecs: Array<{ text: string; color: number }> = [
-      { text: `${this.centerLabels.repeat}: ${view.honba}`, color: 0xfde68a },
+      ...(view.buuMode === true
+        ? []
+        : [
+            {
+              text: `${this.centerLabels.repeat}: ${view.honba}`,
+              color: 0xfde68a,
+            },
+          ]),
       {
         text: `${this.centerLabels.riichi}: ${view.riichiSticks}`,
         color: 0xfca5a5,

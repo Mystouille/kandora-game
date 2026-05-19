@@ -233,3 +233,81 @@ describe("shouldEndMatch — precedence", () => {
     expect(d.ended && d.reason).toBe("busted");
   });
 });
+
+describe("shouldEndMatch — agari_yame in Buu mode", () => {
+  // Buu: East-only, final hand = E4, sinkThreshold = 5999, starting = 6000.
+  const baseBuu = {
+    buuMode: true,
+    agariYame: true,
+    roundWindCount: 1,
+    roundLimit: 4,
+    bustedScore: null,
+    winnerThreshold: null,
+    sinkThreshold: 5999,
+    immediateSankoroOnYakuman: true,
+    startingScore: 6000,
+  } as const;
+
+  it("triggers agari_yame on dealer win when all three non-dealer seats sink (sankoro)", () => {
+    const s = setProgress(makeState(baseBuu), {
+      roundWind: "E",
+      roundNumber: 4,
+      dealer: 2,
+      // Three non-dealers all <= 5999 → sankoro.
+      scores: [3000, 4000, 18000, 5000],
+    });
+    const d = shouldEndMatch(s, winResult(2, { han: 1 }), true);
+    expect(d.ended).toBe(true);
+    expect(d.ended && d.reason).toBe("agari_yame");
+  });
+
+  it("does NOT end on dealer win when fewer than three non-dealer seats sink (renchan)", () => {
+    const s = setProgress(makeState(baseBuu), {
+      roundWind: "E",
+      roundNumber: 4,
+      dealer: 2,
+      // Only two sinkers among non-dealers → not a sankoro, dealer must
+      // get another shot.
+      scores: [3000, 4000, 14000, 7000],
+    });
+    const d = shouldEndMatch(s, winResult(2, { han: 1 }), true);
+    expect(d.ended).toBe(false);
+  });
+
+  it("triggers agari_yame on dealer yakuman win via immediateSankoroOnYakuman even with no natural sinkers", () => {
+    const s = setProgress(makeState(baseBuu), {
+      roundWind: "E",
+      roundNumber: 4,
+      dealer: 2,
+      // No seat is naturally sinking, but a yakuman force-promotes to sankoro.
+      scores: [7000, 7000, 9000, 7000],
+    });
+    const d = shouldEndMatch(
+      s,
+      winResult(2, { han: 13, isYakuman: true }),
+      true
+    );
+    expect(d.ended).toBe(true);
+    expect(d.ended && d.reason).toBe("agari_yame");
+  });
+
+  it("non-Buu agari_yame still ends regardless of sinker count", () => {
+    const s = setProgress(
+      makeState({
+        agariYame: true,
+        bustedScore: null,
+        roundWindCount: 2,
+        roundLimit: 4,
+      }),
+      {
+        roundWind: "S",
+        roundNumber: 4,
+        dealer: 2,
+        scores: [25000, 25000, 25000, 25000],
+      }
+    );
+    const d = shouldEndMatch(s, winResult(2, { han: 1 }), true);
+    expect(d.ended).toBe(true);
+    expect(d.ended && d.reason).toBe("agari_yame");
+  });
+});

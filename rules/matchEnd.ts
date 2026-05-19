@@ -20,7 +20,7 @@
  * `start_next_hand` in `step.ts` is the sole caller.
  */
 
-import type { Wind } from "./types";
+import type { Seat, Wind } from "./types";
 import type { HandResult, MatchState } from "./state";
 
 const WINDS: readonly Wind[] = ["E", "S", "W", "N"];
@@ -88,13 +88,35 @@ export function shouldEndMatch(
   }
 
   // Agari-yame: dealer wins the final hand of the final round.
+  //
+  // Buu Mahjong twist: when `buuMode` is on, agari-yame only fires
+  // on a *sankoro* win (the three non-dealer seats all end at or
+  // below `sinkThreshold` after the payment — or any yakuman win
+  // under `immediateSankoroOnYakuman`, which force-promotes to a
+  // sankoro). Any other dealer win on the final hand falls through,
+  // so the dealer keeps (renchan) and gets another shot at a
+  // sankoro instead of ending the game on a regular win.
   if (
     rs.agariYame &&
     isFinalHandOfMatch(state) &&
     (result.reason === "tsumo" || result.reason === "ron") &&
     result.winner === state.dealer
   ) {
-    return { ended: true, reason: "agari_yame" };
+    if (rs.buuMode) {
+      const yakumanForcedSankoro =
+        result.winYakuman === true && rs.immediateSankoroOnYakuman;
+      const sinkerCount = yakumanForcedSankoro
+        ? 3
+        : ([0, 1, 2, 3] as Seat[]).filter(
+            (s) => s !== result.winner && state.scores[s] <= rs.sinkThreshold
+          ).length;
+      if (sinkerCount === 3) {
+        return { ended: true, reason: "agari_yame" };
+      }
+      // Not a sankoro: fall through so the dealer renchans.
+    } else {
+      return { ended: true, reason: "agari_yame" };
+    }
   }
 
   // Tenpai-yame: dealer tenpai at exhaustive draw of the final hand.

@@ -80,6 +80,18 @@ export default function LobbyRoute() {
     void refreshRooms();
   }, [refreshRooms]);
 
+  // When the user logs in (or out) the rooms endpoint requires a
+  // fresh request — without this the list stays stuck on the 401
+  // it returned while we were anonymous. The `auth-changed` event
+  // is dispatched by the login flow and the account page.
+  useEffect(() => {
+    const handler = () => {
+      void refreshRooms();
+    };
+    window.addEventListener("auth-changed", handler);
+    return () => window.removeEventListener("auth-changed", handler);
+  }, [refreshRooms]);
+
   function buildDebug(): { debug: MatchDebug; ok: boolean } {
     if (!showDebug) {
       return { debug: undefined, ok: true };

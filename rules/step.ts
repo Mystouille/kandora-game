@@ -2033,11 +2033,22 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // non-null kind — see `endAbort`). On a chombo the dealer
     // keeps but the repeat counter does NOT advance: the hand
     // is simply replayed.
+    //
+    // Buu Mahjong has no repeat counter at all — `honba` stays
+    // pinned at 0 across every continuation, and the matching
+    // `honbaPayments: false` flag on the preset already prevents
+    // any honba-derived score bonus.
     const isChombo = result.reason === "abort" && result.abortKind === null;
     if (dealerKeeps && !isChombo) {
-      honba += 1;
+      if (!state.ruleSet.buuMode) {
+        honba += 1;
+      }
     } else if (!dealerKeeps) {
-      honba = result.reason === "exhaustive_draw" ? honba + 1 : 0;
+      if (state.ruleSet.buuMode) {
+        honba = 0;
+      } else {
+        honba = result.reason === "exhaustive_draw" ? honba + 1 : 0;
+      }
       dealer = ((state.dealer + 1) % 4) as Seat;
       roundNumber += 1;
       if (roundNumber > state.roundLimit) {
