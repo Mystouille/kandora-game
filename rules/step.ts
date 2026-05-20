@@ -721,6 +721,24 @@ function applyBuuWinSideEffects(
     for (let s = 0; s < 4; s++) {
       next.scores[s] -= args.delta[s];
     }
+    // Refund any riichi sticks declared THIS hand. Convention:
+    // a chombo aborts the hand cleanly, so anyone who declared
+    // riichi (including the offender) gets their bet back —
+    // `ruleSet.riichiBetValue` points per declaration — and the
+    // matching sticks are taken back off the table. Carried-over
+    // sticks from prior unfinished hands stay on the table for
+    // the next winner. The score refund is reflected in the
+    // `hand_end` delta so renderers (and stored replays) show
+    // the per-seat point change.
+    const riichiRefundDelta: [number, number, number, number] = [0, 0, 0, 0];
+    const refundValue = rs.riichiBetValue;
+    for (let s = 0; s < 4; s++) {
+      if (next.riichiDeclared[s]) {
+        next.scores[s] += refundValue;
+        next.riichiSticks -= 1;
+        riichiRefundDelta[s] = refundValue;
+      }
+    }
     // Apply chip chombo penalty: `chipChomboPenalty` from the
     // offender to every other seat.
     const penalty = rs.chipChomboPenalty;
@@ -736,13 +754,13 @@ function applyBuuWinSideEffects(
       applyChipDelta(next.chips, chipPenalty);
     }
     // Match the standard chombo convention: cancel payments,
-    // dealer keeps, honba advances by one (no riichi stick change).
-    // This mirrors the abort-like flow start_next_hand will use.
+    // dealer keeps, honba advances by one. The only point-level
+    // change is the riichi-bet refund recorded above.
     next.lastHandResult = {
       reason: "abort",
       winner: null,
       loser: null,
-      delta: [0, 0, 0, 0],
+      delta: riichiRefundDelta,
       tenpai: null,
       abortKind: null,
       winHan: null,
@@ -762,7 +780,7 @@ function applyBuuWinSideEffects(
         {
           type: "hand_end",
           reason: "abort",
-          delta: [0, 0, 0, 0],
+          delta: riichiRefundDelta,
         },
       ],
     };

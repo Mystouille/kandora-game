@@ -70,6 +70,15 @@ const MatchStartEvent = z.object({
     .enum(["mangan", "haneman", "baiman", "sanbaiman"])
     .nullable()
     .optional(),
+  /**
+   * Point value of a single riichi stick (`RuleSet.riichiBetValue`).
+   * Drives the client-side optimistic score deduction when a seat
+   * declares riichi (the authoritative score is re-synced at the
+   * next `hand_start`). Optional for back-compat with replays
+   * archived before the field was added; absent ⇒ assume 1000
+   * (standard riichi).
+   */
+  riichiBetValue: z.number().int().positive().optional(),
 });
 
 const HandStartEvent = z.object({
@@ -543,6 +552,15 @@ export const SnapshotStateSchema = z.object({
     .enum(["mangan", "haneman", "baiman", "sanbaiman"])
     .nullable()
     .optional(),
+  /**
+   * Point value of a single riichi stick (`RuleSet.riichiBetValue`).
+   * Needed on snapshots so a reconnecting client or spectator can
+   * apply the optimistic riichi-bet deduction with the correct
+   * amount without having received the original `match_start`.
+   * Optional for back-compat — absent ⇒ assume 1000 (standard
+   * riichi).
+   */
+  riichiBetValue: z.number().int().positive().optional(),
   riichiDeclared: z.array(z.boolean()).length(4),
   /** Per-seat index into `discards[seat]` of the riichi declaration
    * tile (null when that seat has not declared riichi). */

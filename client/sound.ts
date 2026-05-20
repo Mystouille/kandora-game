@@ -19,8 +19,8 @@
  * a mute persists across page loads.
  */
 import { Howl } from "howler";
-import type { GameEvent, Seat } from "~/game/protocol/messages";
-import { subscribeToGameEvents } from "./store";
+import type { GameEvent, LegalAction, Seat } from "~/game/protocol/messages";
+import { subscribeToGameEvents, useMatchStore } from "./store";
 
 /**
  * Hashed-URL map of every SFX shipped in this build, keyed by
@@ -62,7 +62,8 @@ export type SoundKey =
   | "handStart"
   | "matchStart"
   | "timer-tick"
-  | "game-start-tick";
+  | "game-start-tick"
+  | "call-prompt";
 
 /**
  * Per-cue file basename(s) under `app/game/client/sfx/`. A
@@ -81,6 +82,7 @@ const SOUND_FILES: Record<SoundKey, string | readonly string[]> = {
   matchStart: "match_start",
   "timer-tick": "timer_tick",
   "game-start-tick": "game_start_tick",
+  "call-prompt": "call_prompt",
 };
 
 const LS_ENABLED_KEY = "kandora.game.sound.enabled";
@@ -296,6 +298,14 @@ export function playSoundForEvent(
  * the binding lives next to the store (the canonical event
  * publisher), not next to the WebSocket (which is purely
  * transport).
+ *
+ * Also installs an in-game-only `call-prompt` cue that fires when
+ * the focused user is offered a call decision (chi / pon / kan /
+ * ron / tsumo). Because this binding is only installed from the
+ * live match route (`spectate` and `replay` deliberately skip
+ * `installGameSoundBindings`), the cue is naturally gated to the
+ * play-from-your-own-seat case and never plays for spectators or
+ * replay viewers.
  */
 let uninstallBinding: (() => void) | null = null;
 export function installGameSoundBindings(): () => void {
@@ -306,12 +316,59 @@ export function installGameSoundBindings(): () => void {
   const unsubscribe = subscribeToGameEvents(({ event, mySeat }) => {
     playSoundForEvent(event, mySeat);
   });
+  const unsubscribeCallPrompt = subscribeToCallPrompt();
   const teardown = (): void => {
     unsubscribe();
+    unsubscribeCallPrompt();
     if (uninstallBinding === teardown) {
       uninstallBinding = null;
     }
   };
   uninstallBinding = teardown;
   return teardown;
+}
+
+/**
+ * Legal-action types that represent a *call* decision the player
+ * must respond to (as opposed to their own turn's draw / discard /
+ * riichi declaration). When the focused seat's `legalActions`
+ * transitions from "no call offered" to "call offered", we cue
+ * `call-prompt` so the player notices even if they were looking
+ * away from the screen.
+ *
+ * Notes:
+ * - `riichi` is excluded: it's a self-discard variant on the
+ *   player's own turn, not a reactive call window.
+ * - We fire on the rising edge only — the prompt stays up for
+ *   the whole window, but we don't want the cue to repeat on
+ *   every re-render.
+ */
+const CALL_PROMPT_ACTION_TYPES: ReadonlySet<LegalAction["type"]> = new Set([
+  "chi",
+  "pon",
+  "kan",
+  "ron",
+  "tsumo",
+]);
+
+function hasCallPrompt(actions: readonly LegalAction[]): boolean {
+  for (const action of actions) {
+    if (CALL_PROMPT_ACTION_TYPES.has(action.type)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function subscribeToCallPrompt(): () => void {
+  return useMatchStore.subscribe((state, prev) => {
+    if (state.legalActions === prev.legalActions) {
+      return;
+    }
+    const hadCall = hasCallPrompt(prev.legalActions);
+    const hasCall = hasCallPrompt(state.legalActions);
+    if (!hadCall && hasCall) {
+      playGameSound("call-prompt");
+    }
+  });
 }

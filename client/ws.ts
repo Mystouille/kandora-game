@@ -218,12 +218,18 @@ export class GameWS {
 
     const ws = new WebSocket(this.opts.wsUrl);
     this.ws = ws;
+    const openedAt = Date.now();
+    let wsOpenedAt = 0;
 
     ws.addEventListener("open", () => {
+      wsOpenedAt = Date.now();
       this.backoff = INITIAL_BACKOFF_MS;
       this.lastInboundAt = Date.now();
       this.startStallWatchdog();
       useMatchStore.getState().setConn("open");
+      console.log(
+        `[game-ws] open handshake=${wsOpenedAt - openedAt}ms url=${this.opts.wsUrl}`
+      );
 
       // Send `hello`; if we have a positive `lastSeq` we're reconnecting
       // and should immediately request a gap-fill afterward.
@@ -251,7 +257,16 @@ export class GameWS {
       this.handleMessage(msgEvent.data);
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (event) => {
+      const now = Date.now();
+      const lifetime = wsOpenedAt > 0 ? now - wsOpenedAt : now - openedAt;
+      const sinceLastInbound =
+        this.lastInboundAt > 0 ? now - this.lastInboundAt : -1;
+      console.log(
+        `[game-ws] close code=${event.code} reason="${event.reason}" ` +
+          `wasClean=${event.wasClean} lifetime=${lifetime}ms ` +
+          `sinceLastMsg=${sinceLastInbound}ms intentional=${this.intentionallyClosed}`
+      );
       this.ws = null;
       this.stopStallWatchdog();
       if (this.intentionallyClosed) {
@@ -262,6 +277,9 @@ export class GameWS {
     });
 
     ws.addEventListener("error", () => {
+      console.log(
+        `[game-ws] error after=${Date.now() - openedAt}ms readyState=${ws.readyState}`
+      );
       // The `close` handler will follow and trigger reconnect.
     });
   }

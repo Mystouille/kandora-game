@@ -104,6 +104,14 @@ export interface ReplayView {
   /** True iff this match is a Buu Mahjong session. Latched at
    * `match_start` from the wire `ruleSet` id. */
   buuMode: boolean;
+  /** Point value of a single riichi stick (`RuleSet.riichiBetValue`).
+   * Latched at `match_start`. Drives the optimistic mid-hand
+   * score deduction when a seat declares riichi so replays
+   * archived under non-standard rule sets (e.g. Buu = 100)
+   * render the correct delta. Defaults to 1000 (standard riichi)
+   * for back-compat with replays archived before the field was
+   * added. */
+  riichiBetValue: number;
   /** Active score-cap tier from the rule set, if any. Latched
    * at `match_start` from the wire `scoreCap` field. Drives the
    * win-panel label so a hand whose points have been clamped
@@ -243,6 +251,7 @@ export function initialView(): ReplayView {
     chips: [0, 0, 0, 0],
     dabuken: [false, false, false, false],
     buuMode: false,
+    riichiBetValue: 1000,
     scoreCap: null,
     riichiTileIdx: [null, null, null, null],
     lastHandResult: null,
@@ -268,6 +277,7 @@ export function applyReplayEvent(
       return {
         ...view,
         buuMode: event.ruleSet === "buu-east",
+        riichiBetValue: event.riichiBetValue ?? view.riichiBetValue,
         scoreCap: event.scoreCap ?? null,
         chips: (event.chips ? [...event.chips] : view.chips) as [
           number,
@@ -416,16 +426,19 @@ export function applyReplayEvent(
           })()
         : view.riichiTileIdx;
       // When a player declares riichi, visually bump the stick
-      // counter and deduct 1000 from the declarer's score. The
-      // authoritative `scores` / `riichiSticks` are re-set at the
-      // next hand boundary; this just keeps the table state
-      // visually consistent mid-hand.
+      // counter and deduct the rule set's `riichiBetValue`
+      // (latched at `match_start`) from the declarer's score.
+      // The authoritative `scores` / `riichiSticks` are re-set
+      // at the next hand boundary; this just keeps the table
+      // state visually consistent mid-hand. Hardcoding 1000 here
+      // misrepresented the score under non-standard bets
+      // (e.g. Buu = 100).
       let riichiSticks = view.riichiSticks;
       let scores = view.scores;
       if (event.riichi) {
         riichiSticks = view.riichiSticks + 1;
         const next = [...view.scores] as [number, number, number, number];
-        next[event.seat] = next[event.seat] - 1000;
+        next[event.seat] = next[event.seat] - view.riichiBetValue;
         scores = next;
       }
       return {
@@ -856,6 +869,7 @@ export function replayViewToMatchView(
     chips: view.chips,
     dabuken: view.dabuken,
     buuMode: view.buuMode,
+    riichiBetValue: view.riichiBetValue,
     scoreCap: view.scoreCap,
     lastHandResult: view.lastHandResult,
     matchEnded: view.matchEnded,

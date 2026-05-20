@@ -220,6 +220,15 @@ export interface MatchView {
    * Latched at `match_start` from the wire `ruleSet` id. */
   buuMode: boolean;
   /**
+   * Point value of a single riichi stick (`RuleSet.riichiBetValue`).
+   * Latched at `match_start` and resynced on every `snapshot`.
+   * Drives the client-side optimistic score deduction when a seat
+   * declares riichi so the table reflects the correct amount under
+   * non-standard rule sets (e.g. Buu = 100). Defaults to 1000 (the
+   * standard riichi bet) until the wire field is latched.
+   */
+  riichiBetValue: number;
+  /**
    * Active score-cap tier from the rule set, if any. Latched
    * at `match_start` from the wire `scoreCap` field. Drives the
    * win-panel label so a hand whose points have been clamped
@@ -446,6 +455,7 @@ const initialState: MatchView = {
   chips: [0, 0, 0, 0],
   dabuken: [false, false, false, false],
   buuMode: false,
+  riichiBetValue: 1000,
   scoreCap: null,
   dealer: 0,
   roundWind: "E",
@@ -585,6 +595,12 @@ export const useMatchStore = create<MatchStore>((set) => ({
       // Snapshot presence of `chips` is a reliable Buu signal
       // (the server only emits the field for Buu rule sets).
       buuMode: snap.chips !== undefined ? true : state.buuMode,
+      // Point value of a riichi stick from the rule set. Snapshots
+      // emit this so a mid-match reconnect / spectator can apply
+      // the optimistic riichi deduction with the correct amount.
+      // Fall back to the latched value when the server omits the
+      // field (older snapshots).
+      riichiBetValue: snap.riichiBetValue ?? state.riichiBetValue,
       // Score cap from the rule set, if any. Snapshots emit this
       // explicitly so a mid-match reconnect / spectator can cap
       // han labels without having received the original
@@ -644,6 +660,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
               string,
             ],
             buuMode: event.ruleSet === "buu-east",
+            riichiBetValue: event.riichiBetValue ?? state.riichiBetValue,
             scoreCap: event.scoreCap ?? null,
             chips: (event.chips ? [...event.chips] : state.chips) as [
               number,
@@ -822,11 +839,14 @@ export const useMatchStore = create<MatchStore>((set) => ({
                 return arr;
               })()
             : state.riichiTileIdx;
-          // Riichi declaration also deposits a 1000-point stick on
-          // the table: optimistically deduct the seat's score and
-          // bump the stick counter so the UI reflects it the moment
-          // the declaration tile lands, without waiting for the
-          // server's authoritative score event.
+          // Riichi declaration also deposits a stick on the table:
+          // optimistically deduct the seat's score and bump the
+          // stick counter so the UI reflects it the moment the
+          // declaration tile lands, without waiting for the
+          // server's authoritative score event. The deducted
+          // amount is the rule set's `riichiBetValue` (latched at
+          // `match_start`) — hardcoding 1000 here misrepresented
+          // the score under non-standard bets (e.g. Buu = 100).
           const scores = event.riichi
             ? ((): [number, number, number, number] => {
                 const arr = [...state.scores] as [
@@ -835,7 +855,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
                   number,
                   number,
                 ];
-                arr[event.seat] = arr[event.seat] - 1000;
+                arr[event.seat] = arr[event.seat] - state.riichiBetValue;
                 return arr;
               })()
             : state.scores;
