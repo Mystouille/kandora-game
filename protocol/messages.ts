@@ -703,6 +703,21 @@ const RoomSeatSchema = z.object({
   occupant: RoomSeatOccupantSchema,
 });
 
+/**
+ * Application-level keepalive. Emitted by the server on the
+ * heartbeat tick (in addition to the WS protocol PING) so the
+ * browser client's stall watchdog — which can only see
+ * application frames, never protocol pongs — knows the link
+ * is still alive during quiet periods (e.g., a player thinking
+ * for minutes between turns). Carries the server timestamp for
+ * diagnostics.
+ */
+const KeepaliveMsg = z.object({
+  type: z.literal("keepalive"),
+  t: z.number(),
+});
+export type Keepalive = z.infer<typeof KeepaliveMsg>;
+
 const RoomStateMsg = z.object({
   type: z.literal("room_state"),
   matchId: z.string(),
@@ -724,6 +739,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   ReadyCheckMsg,
   ReadyCheckEndMsg,
   RoomStateMsg,
+  KeepaliveMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 

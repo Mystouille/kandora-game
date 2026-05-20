@@ -53,8 +53,15 @@ const MAX_BACKOFF_MS = 3_000;
  * force a reconnect. Without a server-side `ping` frame this is
  * the only way to recover from "frozen game" symptoms when the
  * OS hasn't yet noticed the link is dead.
+ *
+ * The server sends an application-level `keepalive` frame every
+ * `HEARTBEAT_INTERVAL_MS` (15s on the game-server) so under
+ * normal conditions `lastInboundAt` is bumped well within this
+ * window. Threshold is set to 60s — comfortably more than 3×
+ * the heartbeat interval — to absorb a missed keepalive plus
+ * one stall-check tick before declaring the link dead.
  */
-const STALL_THRESHOLD_MS = 30_000;
+const STALL_THRESHOLD_MS = 60_000;
 const STALL_CHECK_INTERVAL_MS = 5_000;
 
 export class GameWS {
