@@ -45,7 +45,7 @@ export interface GameWSOptions {
 }
 
 const INITIAL_BACKOFF_MS = 500;
-const MAX_BACKOFF_MS = 10_000;
+const MAX_BACKOFF_MS = 3_000;
 /**
  * If we haven't received any frame from the server for this long
  * while the socket is reportedly OPEN, treat the connection as a
