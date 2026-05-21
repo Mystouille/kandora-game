@@ -358,6 +358,40 @@ export class TableRenderer {
   private currentWinPageResult: NonNullable<
     MatchView["lastHandResult"]
   > | null = null;
+  /**
+   * Wall-clock time at which the current win panel page began
+   * playing its staged reveal animation, in `performance.now()`
+   * milliseconds. Reset to `null` when no win panel is active or
+   * when staged reveal is disabled (replay playback). Bumped to
+   * a fresh `performance.now()` whenever the win-result reference
+   * or {@link currentWinPage} changes, so each multi-ron page
+   * replays the reveal from scratch.
+   */
+  private winPageRevealStartedAt: number | null = null;
+  /**
+   * Number of yaku entries on the current win-panel page that
+   * have already triggered a `yaku-reveal` SFX play. Used to
+   * fire the cue exactly once per yaku as the staged reveal
+   * advances, regardless of how many `render()` calls happen
+   * inside the same reveal step. Reset together with
+   * {@link winPageRevealStartedAt}.
+   */
+  private winPageYakuRevealSoundsPlayed = 0;
+  /**
+   * Whether the ura-dora indicators flip has already triggered a
+   * `yaku-reveal` SFX play on the current page. Suppressed when
+   * an "Ura Dora" yaku is present — that yaku's own reveal
+   * already plays the sound, and the indicator flip happens
+   * simultaneously, so we'd otherwise double up.
+   */
+  private winPageUraRevealSoundPlayed = false;
+  /**
+   * When true, the win-info panel reveals its yaku list and
+   * ura-dora indicators progressively (staged reveal). When false
+   * (default for replay playback), the full panel is shown
+   * immediately on appearance.
+   */
+  private stagedRevealEnabled = true;
   /** Cached last `view` passed to {@link render}, used to re-render
    * after internal UI state changes (e.g. advancing the
    * multi-winner page index) without waiting for a store update. */
@@ -950,6 +984,25 @@ export class TableRenderer {
    * standings panel. Defaults to true. */
   setShowHandResult(flag: boolean): void {
     this.showHandResult = flag;
+  }
+
+  /**
+   * Toggle the staged win-info reveal animation (yaku appearing
+   * one at a time, ura-dora indicators revealed last). Disable
+   * during replay playback so seekers see the full panel
+   * immediately rather than waiting through a beat-locked
+   * reveal that competes with the playhead. Defaults to true.
+   */
+  setStagedRevealEnabled(flag: boolean): void {
+    if (this.stagedRevealEnabled === flag) {
+      return;
+    }
+    this.stagedRevealEnabled = flag;
+    // Clearing the start timestamp forces the next render to
+    // either pick a fresh `now()` (enabled) or fall through to
+    // the "fully revealed" branch (disabled).
+    this.winPageRevealStartedAt = null;
+    this.requestRender();
   }
 
   /**
@@ -2376,12 +2429,14 @@ export class TableRenderer {
       if (this.currentWinPageResult !== r) {
         this.currentWinPageResult = r;
         this.currentWinPage = 0;
+        this.winPageRevealStartedAt = null;
       }
       const total = r.wins.length;
       // Clamp in case `wins` shrank (shouldn't happen in
       // practice, but cheap defense).
       if (this.currentWinPage >= total) {
         this.currentWinPage = 0;
+        this.winPageRevealStartedAt = null;
       }
       // For a multi-winner result we paginate: render one
       // winner per panel; the user clicks the panel (handled
@@ -2389,6 +2444,37 @@ export class TableRenderer {
       // this is a no-op — page 0 of 1.
       const pageIdx = this.currentWinPage;
       const winsToRender = total > 1 ? [r.wins[pageIdx]] : r.wins;
+      // Staged reveal: each panel page (re)starts a per-yaku
+      // reveal sequence. We record the wall-clock moment the
+      // page first appeared and use elapsed time to decide how
+      // many yaku entries are visible and whether the ura-dora
+      // indicators have been flipped. When staged reveal is
+      // disabled (replay playback) the elapsed time is set to
+      // `Infinity` so everything renders fully revealed.
+      if (this.stagedRevealEnabled) {
+        if (this.winPageRevealStartedAt === null) {
+          this.winPageRevealStartedAt = performance.now();
+          // Fresh page: clear the SFX play tracking so each
+          // subsequent yaku / ura reveal triggers exactly one
+          // `yaku-reveal` cue.
+          this.winPageYakuRevealSoundsPlayed = 0;
+          this.winPageUraRevealSoundPlayed = false;
+        }
+      } else {
+        this.winPageRevealStartedAt = null;
+      }
+      const revealElapsedMs = this.stagedRevealEnabled
+        ? performance.now() - (this.winPageRevealStartedAt ?? 0)
+        : Number.POSITIVE_INFINITY;
+      // Per-yaku reveal interval. Mirrored on the server in
+      // `WIN_YAKU_REVEAL_INTERVAL_MS` so the post-hand OK-timer
+      // doesn't start mid-reveal. Keep the two values in sync.
+      const YAKU_REVEAL_INTERVAL_MS = 750;
+      // Extra delay after the last yaku reveal before the
+      // ura-dora indicators flip face-up (only used when the
+      // hand had no "Ura Dora" yaku to peg the flip to). Also
+      // mirrored on the server.
+      const URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
       if (total > 1) {
         rows.push({
           kind: "label",
@@ -2397,6 +2483,12 @@ export class TableRenderer {
           color: 0xcbd5e1,
         });
       }
+      // Tracking for the post-loop ura-dora row visibility and
+      // for the render-pump that keeps frames flowing while the
+      // staged reveal is still mid-sequence.
+      let pageHasUraYaku = false;
+      let pageRevealedYakuCount = 0;
+      let pageVisibleYakuTotal = 0;
       winsToRender.forEach((win, idx) => {
         if (idx > 0) {
           rows.push({ kind: "divider" });
@@ -2419,30 +2511,89 @@ export class TableRenderer {
         const yakuKeys = win.yaku ? Object.keys(win.yaku) : [];
         // Filter out 0-han yaku (typically dora when no dora
         // tiles are held); the rest preserve insertion order.
-        const visibleYaku: Array<{ name: string; value: string }> = [];
+        const visibleYakuAll: Array<{ name: string; value: string }> = [];
         for (const name of yakuKeys) {
           const value = win.yaku?.[name] ?? "";
           const leading = parseInt(value, 10);
           if (Number.isFinite(leading) && leading === 0) {
             continue;
           }
-          visibleYaku.push({ name, value });
+          visibleYakuAll.push({ name, value });
         }
+        // Move "Ura Dora" to the end of the list so the staged
+        // reveal always saves it for last (it doubles as the
+        // cue to flip the ura-dora indicators face-up). The
+        // adapter / scorer order is otherwise preserved.
+        const uraIdx = visibleYakuAll.findIndex((y) => y.name === "Ura Dora");
+        const hasUraYaku = uraIdx >= 0;
+        if (hasUraYaku && uraIdx !== visibleYakuAll.length - 1) {
+          const [u] = visibleYakuAll.splice(uraIdx, 1);
+          visibleYakuAll.push(u);
+        }
+        // Slice to the staged reveal frontier. Yaku k appears at
+        // t = (k + 1) * YAKU_REVEAL_INTERVAL_MS, i.e. nothing is
+        // visible until the first interval elapses.
+        const revealedCount = this.stagedRevealEnabled
+          ? Math.max(
+              0,
+              Math.min(
+                visibleYakuAll.length,
+                Math.floor(revealElapsedMs / YAKU_REVEAL_INTERVAL_MS)
+              )
+            )
+          : visibleYakuAll.length;
+        const visibleYaku = visibleYakuAll.slice(0, revealedCount);
+        // Fire one `yaku-reveal` SFX per newly revealed yaku.
+        // Idempotent across repeated `render()` calls within the
+        // same reveal step thanks to `winPageYakuRevealSoundsPlayed`.
+        if (
+          this.stagedRevealEnabled &&
+          revealedCount > this.winPageYakuRevealSoundsPlayed
+        ) {
+          const toPlay = revealedCount - this.winPageYakuRevealSoundsPlayed;
+          for (let i = 0; i < toPlay; i++) {
+            playGameSound("yaku-reveal");
+          }
+          this.winPageYakuRevealSoundsPlayed = revealedCount;
+        }
+        // Stash per-page totals for the ura-row gate + render
+        // pump below. With pagination there is only one entry in
+        // `winsToRender`, so an unconditional assign here is fine.
+        pageVisibleYakuTotal = visibleYakuAll.length;
+        pageRevealedYakuCount = revealedCount;
+        pageHasUraYaku = hasUraYaku;
         // 1-column layout for short lists; 2-column for 5+
         // entries so very-yaku-rich hands (e.g. yakuman piles)
-        // don't push the panel absurdly tall.
-        if (visibleYaku.length <= 4) {
+        // don't push the panel absurdly tall. We base the
+        // column choice on the FULL list length so the layout
+        // doesn't reflow mid-reveal as new yaku appear.
+        if (visibleYakuAll.length <= 4) {
           for (const y of visibleYaku) {
             rows.push({ kind: "yaku", name: y.name, value: y.value });
           }
         } else {
-          const half = Math.ceil(visibleYaku.length / 2);
+          const half = Math.ceil(visibleYakuAll.length / 2);
           for (let i = 0; i < half; i++) {
-            rows.push({
-              kind: "yaku2",
-              left: visibleYaku[i],
-              right: visibleYaku[i + half] ?? null,
-            });
+            const left = i < visibleYaku.length ? visibleYaku[i] : null;
+            const rightIdx = i + half;
+            const right =
+              rightIdx < visibleYaku.length ? visibleYaku[rightIdx] : null;
+            if (left === null && right === null) {
+              continue;
+            }
+            if (left === null) {
+              // No left entry yet but right has appeared (only
+              // possible once `revealedCount > half`). The yaku2
+              // row requires a left, so emit a placeholder via
+              // `yaku` row with empty strings to keep alignment.
+              rows.push({
+                kind: "yaku2",
+                left: { name: "", value: "" },
+                right,
+              });
+            } else {
+              rows.push({ kind: "yaku2", left, right });
+            }
           }
         }
         // Han/fu summary or yakuman line, merged with the points
@@ -2560,10 +2711,56 @@ export class TableRenderer {
           (w) => w.uraDoraIndicators && w.uraDoraIndicators.length > 0
         )?.uraDoraIndicators ?? [];
       if (sharedUra.length > 0) {
-        const uraRow: (string | null)[] = Array.from({ length: 5 }, (_, i) =>
-          i < sharedUra.length ? (sharedUra[i] ?? null) : null
-        );
+        // Staged reveal: keep the indicators face-down until
+        // either the "Ura Dora" yaku (which we sort to last
+        // above) is revealed, or — when the hand didn't score
+        // any ura yaku — a one-second beat after the final yaku
+        // appears. With staged reveal disabled the indicators
+        // are always face-up (full panel).
+        const lastYakuRevealAtMs =
+          pageVisibleYakuTotal * YAKU_REVEAL_INTERVAL_MS;
+        const uraRevealAtMs = pageHasUraYaku
+          ? lastYakuRevealAtMs
+          : lastYakuRevealAtMs + URA_REVEAL_AFTER_LAST_YAKU_MS;
+        const uraRevealed =
+          !this.stagedRevealEnabled ||
+          (pageRevealedYakuCount >= pageVisibleYakuTotal &&
+            revealElapsedMs >= uraRevealAtMs);
+        const uraRow: (string | null)[] = uraRevealed
+          ? Array.from({ length: 5 }, (_, i) =>
+              i < sharedUra.length ? (sharedUra[i] ?? null) : null
+            )
+          : Array.from({ length: 5 }, () => null);
         rows.push({ kind: "tiles", tiles: uraRow });
+        // Fire a single `yaku-reveal` cue when the indicators
+        // flip face-up — but only when there's no "Ura Dora"
+        // yaku, since that yaku's own reveal already played a
+        // cue and the flip is synced to it (per spec).
+        if (
+          this.stagedRevealEnabled &&
+          uraRevealed &&
+          !this.winPageUraRevealSoundPlayed
+        ) {
+          if (!pageHasUraYaku) {
+            playGameSound("yaku-reveal");
+          }
+          this.winPageUraRevealSoundPlayed = true;
+        }
+        // Keep frames flowing while the reveal sequence has
+        // outstanding steps. Without this the next paint would
+        // only happen on the next store update (which may not
+        // arrive for several seconds during quiet phases), and
+        // the yaku list would never appear to animate.
+        if (this.stagedRevealEnabled && !uraRevealed) {
+          this.requestRender();
+        }
+      } else if (
+        this.stagedRevealEnabled &&
+        pageRevealedYakuCount < pageVisibleYakuTotal
+      ) {
+        // No ura indicators (no riichi) but yaku list is still
+        // mid-reveal — keep painting.
+        this.requestRender();
       }
     } else if (r.buuChombo) {
       // Buu Mahjong chombo: the engine emits a `buu_chombo`
@@ -2975,6 +3172,9 @@ export class TableRenderer {
           return;
         }
         this.currentWinPage = (this.currentWinPage + 1) % total;
+        // Restart the staged reveal sequence for the new page,
+        // matching the spec ("each page replays the reveal").
+        this.winPageRevealStartedAt = null;
         if (this.lastView) {
           this.render(this.lastView);
         }

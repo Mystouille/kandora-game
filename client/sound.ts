@@ -63,7 +63,8 @@ export type SoundKey =
   | "matchStart"
   | "timer-tick"
   | "game-start-tick"
-  | "call-prompt";
+  | "call-prompt"
+  | "yaku-reveal";
 
 /**
  * Per-cue file basename(s) under `app/game/client/sfx/`. A
@@ -83,6 +84,7 @@ const SOUND_FILES: Record<SoundKey, string | readonly string[]> = {
   "timer-tick": "timer_tick",
   "game-start-tick": "game_start_tick",
   "call-prompt": "call_prompt",
+  "yaku-reveal": "yaku_reveal",
 };
 
 const LS_ENABLED_KEY = "kandora.game.sound.enabled";
@@ -267,8 +269,9 @@ export function playSoundForEvent(
         case "shouminkan":
           playGameSound("kan");
           return;
+        default:
+          return;
       }
-      return;
     }
     case "win": {
       // `loser == null` ⇒ tsumo; otherwise ron.

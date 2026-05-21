@@ -260,3 +260,77 @@ describe("scoreHand — closed-hand wins", () => {
     expect(r.ten).toBe(8000);
   });
 });
+
+describe("riichi-lib penchan fu patch", () => {
+  // The riichi npm package (v1.2.0) miscomputes fu for penchan
+  // completions on either edge: the wait-fu branch compares chii
+  // edge tiles to a boolean instead of the win tile. We patch
+  // `calcFu` at module load — these tests pin the corrected
+  // behaviour for both edges.
+
+  it("upper-edge penchan ron (789p won on 7p) gets +2 fu", () => {
+    // Hand: 234p 4p5p6p 8p9p + 1m2m3m + 5m5m, riichi, ron 7p.
+    // Decomposition: 123m, 5m5m pair, 234p, 456p, 789p (penchan).
+    // Expected: 20 base + 10 menzen ron + 2 penchan = 32 → 40 fu,
+    // 1 han (riichi), dealer ron = 2000 points.
+    const r = scoreHand({
+      hand: tiles("12355m23445689p"),
+      winTile: "7p",
+      tsumo: false,
+      riichi: true,
+      roundWind: "E",
+      seatWind: "E",
+    });
+    expect(r.isAgari).toBe(true);
+    expect(r.han).toBe(1);
+    expect(r.fu).toBe(40);
+    expect(r.ten).toBe(2000);
+  });
+
+  it("lower-edge penchan ron (123m won on 3m) gets +2 fu", () => {
+    // Hand: 1m2m + 4m5m6m + 234p + 567p + 99s, riichi, ron 3m.
+    // Decomposition: 123m (penchan), 456m, 234p, 567p, 99s pair.
+    // Expected: 20 + 10 menzen ron + 2 penchan = 32 → 40 fu.
+    const r = scoreHand({
+      hand: tiles("12456m234567p99s"),
+      winTile: "3m",
+      tsumo: false,
+      riichi: true,
+      roundWind: "E",
+      seatWind: "S",
+    });
+    expect(r.isAgari).toBe(true);
+    expect(r.han).toBe(1);
+    expect(r.fu).toBe(40);
+  });
+});
+
+describe("no-yaku rejection (engine gate)", () => {
+  // The riichi lib reports `isAgari: true, han: 0, yaku: {}` for a
+  // winning shape with no scoring yaku (dora alone never qualifies).
+  // The engine's tsumo/ron handlers must reject these — pinned here
+  // at the score level so the contract is explicit.
+
+  it("open tsumo with only dora has han=0 and empty yaku", () => {
+    const r = scoreHand({
+      hand: tiles("99m23478p567s"),
+      winTile: "6p",
+      tsumo: true,
+      roundWind: "E",
+      seatWind: "S",
+      doraIndicators: ["8m"], // makes 9m dora; 99m = 2 dora
+      melds: [
+        {
+          type: "chi",
+          tiles: ["1m", "2m", "3m"],
+          claimedTile: "1m",
+          from: 3,
+        },
+      ],
+    });
+    expect(r.isAgari).toBe(true);
+    expect(r.han).toBe(0);
+    expect(r.yakumanCount).toBe(0);
+    expect(Object.keys(r.yaku)).toHaveLength(0);
+  });
+});

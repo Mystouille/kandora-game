@@ -667,6 +667,14 @@ function applyBuuWinSideEffects(
     delta: [number, number, number, number];
     winnerPreScore: number;
     score: ScoreResult;
+    /**
+     * `riichiSticks` count just before `applyWin` collected them
+     * into the winner's delta. Needed in the chombo branch to
+     * restore the table to its pre-win state before applying
+     * the per-declarer refund — otherwise the refund loop
+     * decrements from 0 and drives the count negative.
+     */
+    preWinRiichiSticks: number;
   }
 ):
   | {
@@ -721,6 +729,16 @@ function applyBuuWinSideEffects(
     for (let s = 0; s < 4; s++) {
       next.scores[s] -= args.delta[s];
     }
+    // `applyWin` already collected every stick on the table
+    // into the winner's delta and zeroed `riichiSticks`. The
+    // score revert above gave those points back to the payers,
+    // so the sticks logically belong on the table again —
+    // restore the count before refunding this-hand
+    // declarations below, otherwise the refund loop would
+    // drive `riichiSticks` negative (declared seats are a
+    // subset of `preWinRiichiSticks`, but starting from 0
+    // every decrement undershoots).
+    next.riichiSticks = args.preWinRiichiSticks;
     // Refund any riichi sticks declared THIS hand. Convention:
     // a chombo aborts the hand cleanly, so anyone who declared
     // riichi (including the offender) gets their bet back —
@@ -857,6 +875,12 @@ function applyWin(
   }
   // Carry over riichi sticks to the winner; reset. Stick value
   // is `ruleSet.riichiBetValue` (1000 standard, 100 Buu).
+  // Snapshot the pre-collection count so the Buu chombo path
+  // can restore sticks to the table when the win is invalidated
+  // (otherwise the refund loop in `applyBuuWinSideEffects`
+  // double-debits and drives `riichiSticks` negative, which
+  // crashes the next `hand_end`/`hand_start` schema validation).
+  const preWinRiichiSticks = next.riichiSticks;
   delta[winner] += next.riichiSticks * next.ruleSet.riichiBetValue;
   next.riichiSticks = 0;
   // Snapshot winner's pre-win sinking status for Buu legality.
@@ -871,6 +895,7 @@ function applyWin(
     delta,
     winnerPreScore,
     score,
+    preWinRiichiSticks,
   });
   if (buuOutcome.kind === "chombo") {
     // Emit the would-be `win` event first so the client renders
@@ -1444,7 +1469,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       // rinshan draw site and cleared by the next live-wall draw.
       rinshanOrChankan: state.lastDrawFromDeadWall,
     });
-    if (!score.isAgari) {
+    // Reject no-yaku wins. The riichi lib zeroes `han` when the
+    // hand has no scoring yaku (dora alone never qualifies), but
+    // still flags `isAgari: true` for the winning shape — so a
+    // shape-only check would let an open-tsumo with only dora
+    // through. Yakuman wins are always accepted via `yakumanCount`.
+    if (!score.isAgari || (score.han === 0 && score.yakumanCount === 0)) {
       return noop(state);
     }
     const next = clone(state);
@@ -1543,7 +1573,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         // `rinshanOrChankan` flag the riichi lib gates on).
         haiteiOrHoutei: !isChankan && state.liveWall.length === 0,
       });
-      if (!score.isAgari) {
+      // Reject no-yaku wins (see tsumo branch above for context).
+      if (!score.isAgari || (score.han === 0 && score.yakumanCount === 0)) {
         return noop(state);
       }
       scores.push(score);

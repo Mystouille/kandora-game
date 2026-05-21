@@ -382,4 +382,42 @@ describe("step — open-hand scoring (ron after pon)", () => {
     // (round wind E + seat wind E = 2). Hand is open so no riichi/pinfu.
     expect(winEv.score.han).toBeGreaterThanOrEqual(2);
   });
+
+  it("rejects open tsumo with no yaku (dora alone is not a yaku)", () => {
+    // Open hand with chi 123m. Concealed: 234p, 78p, 567s, 99m.
+    // Tsumo on 6p completes a winning shape, but the hand has no
+    // yaku at all (no tanyao — has 9m/1m terminals, no yakuhai —
+    // 99m is non-yakuhai, no sanshoku/ittsuu/honitsu/chanta).
+    // Even with a dora indicator hitting 9m (99m = 2 dora), the
+    // win must be rejected.
+    const seat0Concealed = tiles("99m23478p567s"); // 10 tiles
+    const winTile: Tile = "6p";
+    const state = craft({
+      hands: [[...seat0Concealed, winTile], FILLER, FILLER, FILLER],
+      turn: 0,
+      phase: "awaiting_discard",
+      dealer: 0,
+      lastDrawn: winTile,
+    });
+    const seeded: MatchState = {
+      ...state,
+      doraIndicators: ["8m"], // makes 9m dora; 99m would count as 2 dora
+      melds: [
+        [
+          {
+            type: "chi",
+            tiles: ["1m", "2m", "3m"],
+            claimedTile: "1m",
+            from: 3,
+          },
+        ],
+        [],
+        [],
+        [],
+      ],
+    };
+    const r = step(seeded, { type: "tsumo", seat: 0 });
+    expect(r.events).toEqual([]);
+    expect(r.state.phase).toBe("awaiting_discard");
+  });
 });

@@ -1036,6 +1036,11 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
         renderer.setResultPanelBoundsListener((rect) => {
           setResultPanelBounds(rect);
         });
+        // Replay playback should show the win-info panel fully
+        // revealed on every seek — the staged per-yaku reveal is
+        // only meaningful in live play, where the panel appears
+        // exactly once per hand.
+        renderer.setStagedRevealEnabled(false);
         void renderer.mount(container).then(() => {
           if (cancelled) {
             renderer.destroy();

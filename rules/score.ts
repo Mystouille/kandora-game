@@ -32,6 +32,89 @@ import type { Meld } from "./state";
 import Riichi from "riichi";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 
+// ---------------------------------------------------------------------------
+// Monkey-patch: fix penchan fu bug in `riichi` npm package (v1.2.0).
+//
+// The library's `calcFu` mistakenly compares chii edge tiles to a
+// boolean (`hasAgariFu`) instead of the win tile (`this.agari`),
+// so penchan completions on the lower edge (789 won on 7) and
+// upper edge (123 won on 3) miss the +2 wait fu. Kanchan/tanki
+// remain correct because they're matched on `v[1] === this.agari`.
+//
+// We replace `calcFu` once at module load with the corrected
+// version. Pinfu / chiitoitsu / yakuman branches are untouched.
+// ---------------------------------------------------------------------------
+{
+  const ceil10 = (n: number): number => Math.ceil(n / 10) * 10;
+  const is19 = (t: unknown): boolean =>
+    typeof t === "string" &&
+    t.length === 2 &&
+    (t.includes("1") || t.includes("9") || t.includes("z"));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (Riichi.prototype as any).calcFu = function calcFuPatched(this: any): void {
+    let fu = 0;
+    if (this.tmpResult.yaku["七対子"]) {
+      fu = 25;
+    } else if (this.tmpResult.yaku["平和"]) {
+      fu = this.isTsumo ? 20 : 30;
+    } else {
+      fu = 20;
+      let hasAgariFu = false;
+      if (!this.isTsumo && this.isMenzen()) {
+        fu += 10;
+      }
+      for (const v of this.currentPattern) {
+        if (typeof v === "string") {
+          if (v.includes("z")) {
+            for (const vv of [this.bakaze, this.jikaze, 5, 6, 7]) {
+              if (parseInt(v) === vv) {
+                fu += 2;
+              }
+            }
+          }
+          if (this.agari === v) {
+            hasAgariFu = true;
+          }
+        } else {
+          if (v.length === 4) {
+            fu += is19(v[0]) ? 16 : 8;
+          } else if (v.length === 2) {
+            fu += is19(v[0]) ? 32 : 16;
+          } else if (v.length === 1) {
+            fu += is19(v[0]) ? 8 : 4;
+          } else if (v.length === 3 && v[0] === v[1]) {
+            fu += is19(v[0]) ? 4 : 2;
+          } else if (!hasAgariFu) {
+            // Kanchan: win is the middle tile of a chii.
+            if (v[1] === this.agari) {
+              hasAgariFu = true;
+            }
+            // Penchan upper edge: chii 789, win = 7.
+            else if (v[0] === this.agari && parseInt(v[2]) === 9) {
+              hasAgariFu = true;
+            }
+            // Penchan lower edge: chii 123, win = 3.
+            else if (v[2] === this.agari && parseInt(v[0]) === 1) {
+              hasAgariFu = true;
+            }
+          }
+        }
+      }
+      if (hasAgariFu) {
+        fu += 2;
+      }
+      if (this.isTsumo) {
+        fu += 2;
+      }
+      fu = ceil10(fu);
+      if (fu < 30) {
+        fu = 30;
+      }
+    }
+    this.tmpResult.fu = fu;
+  };
+}
+
 export interface ScoreInput {
   /**
    * 13 concealed tiles (the hand before the win tile arrives).
