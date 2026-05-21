@@ -4169,6 +4169,16 @@ export class TableRenderer {
             if (event.button === 2) {
               return;
             }
+            // Clear the persistent hover tracker on click: the
+            // hand is about to mutate (discard / riichi-tile
+            // pick) and the slot under the cursor will likely
+            // hold a different tile after the rebuild. Without
+            // this clear the post-rebuild restore logic would
+            // momentarily stamp the red hover tint onto whatever
+            // tile ends up at the old raw index. A genuine new
+            // hover will re-fire `pointerover` when the cursor
+            // next moves over the rebuilt strip.
+            this.hoveredHandRawIdx = null;
             // The click semantics (riichi-tile-select vs
             // discard) are captured into a thunk and stashed
             // for the window-level pointerup handler to fire
