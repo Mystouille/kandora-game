@@ -466,6 +466,11 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           rendererRef.current.setAutoSort(next.autoSort);
         }
       }
+      if (next.autoWin !== prev.autoWin && rendererRef.current !== null) {
+        // Mirror to the renderer so the on-canvas ron/tsumo
+        // buttons disappear immediately when the toggle flips on.
+        rendererRef.current.setAutoWinEnabled(next.autoWin);
+      }
       return next;
     });
   }, []);
@@ -478,6 +483,16 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
   useEffect(() => {
     setLiveMenuFlags((prev) => resetEphemeralFlags(prev));
   }, [handKey]);
+  // Keep the renderer's autoWin mirror in sync with the live
+  // menu state — covers the per-hand ephemeral reset above as
+  // well as any other path that mutates `liveMenuFlags.autoWin`
+  // without going through `handleLiveMenuChange` (e.g. future
+  // bulk-reset buttons).
+  useEffect(() => {
+    if (rendererRef.current !== null) {
+      rendererRef.current.setAutoWinEnabled(liveMenuFlags.autoWin);
+    }
+  }, [liveMenuFlags.autoWin]);
   // Dedupe ref for auto-action dispatch: tracks the last
   // legal-action id we fired so the effect doesn't re-fire on
   // unrelated store mutations that arrive before the server's
@@ -553,7 +568,17 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
     //    ron window for another seat clearing this seat's legals).
     const mySeat = view.mySeat;
     const inRiichi = view.riichiDeclared[mySeat];
-    if ((liveMenuFlags.autoDiscard || inRiichi) && !hasWin) {
+    // Ankan stays interactive even on autopilot: in riichi the
+    // player can still close-kan a freshly-drawn tile (subject
+    // to wait-preservation rules the server enforces), and
+    // under the manual autoDiscard toggle a closed kan is a
+    // strategic choice we shouldn't swallow. So whenever an
+    // ankan legal action is offered we skip the auto-tsumogiri
+    // and let the player decide.
+    const hasAnkan = actions.some(
+      (a) => a.type === "kan" && a.kanKind === "ankan"
+    );
+    if ((liveMenuFlags.autoDiscard || inRiichi) && !hasWin && !hasAnkan) {
       if (view.freshlyDrawnSeat !== mySeat) {
         return;
       }
@@ -827,6 +852,7 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           // turned auto-sort off on a previous session keeps it
           // off here.
           renderer.setAutoSort(liveMenuFlags.autoSort);
+          renderer.setAutoWinEnabled(liveMenuFlags.autoWin);
           // Initial draw with whatever the store currently holds.
           const v0 = useMatchStore.getState();
           renderer.render(

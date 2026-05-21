@@ -337,6 +337,27 @@ export class TableRenderer {
    * can peek at the board state underneath the overlay. */
   private showHandResult = true;
   /**
+   * Mirrors the host route's live-play "Auto win" toggle. When
+   * true, the renderer suppresses the on-canvas ron/tsumo
+   * action buttons since the host effect will fire the win
+   * automatically — surfacing the button would let the player
+   * race the auto-action and is visually noisy in riichi where
+   * the button would otherwise flash in-and-out every draw.
+   */
+  private autoWinEnabled = false;
+  /**
+   * Raw-index of the focused-hand tile currently under the
+   * pointer (if any). Persisted across `render()` calls so the
+   * red hover tint doesn't blink off when an unrelated event
+   * (another seat's discard, a chip update, etc.) rebuilds the
+   * hand sprites while the cursor hasn't moved. Tracked by raw
+   * index — the stable identity of the tile in the source hand
+   * array — so post-sort/post-drag rebuilds re-apply the tint
+   * to the same physical tile rather than whatever happens to
+   * land in that slot.
+   */
+  private hoveredHandRawIdx: number | null = null;
+  /**
    * When non-null, the renderer paints the hand-result overlay
    * using this data instead of `view.lastHandResult`. Used by
    * the live match's "eye" button to re-show the previous hand's
@@ -984,6 +1005,20 @@ export class TableRenderer {
    * standings panel. Defaults to true. */
   setShowHandResult(flag: boolean): void {
     this.showHandResult = flag;
+  }
+
+  /**
+   * Mirror the host route's live-play "Auto win" flag. When
+   * enabled, ron/tsumo buttons are suppressed in
+   * {@link renderActionButtons} since the host effect
+   * auto-fires the win.
+   */
+  setAutoWinEnabled(flag: boolean): void {
+    if (this.autoWinEnabled === flag) {
+      return;
+    }
+    this.autoWinEnabled = flag;
+    this.requestRender();
   }
 
   /**
@@ -2396,11 +2431,13 @@ export class TableRenderer {
     // row (han/fu + total pts, side-by-side so they read like a
     // header strip), or a divider between winners.
     type Row =
-      | { kind: "yaku"; name: string; value: string }
+      | { kind: "yaku"; name: string; value: string; hidden?: boolean }
       | {
           kind: "yaku2";
           left: { name: string; value: string };
           right: { name: string; value: string } | null;
+          leftHidden?: boolean;
+          rightHidden?: boolean;
         }
       | { kind: "title"; text: string; size: number }
       | { kind: "label"; text: string; size: number; color?: number }
@@ -2542,7 +2579,6 @@ export class TableRenderer {
               )
             )
           : visibleYakuAll.length;
-        const visibleYaku = visibleYakuAll.slice(0, revealedCount);
         // Fire one `yaku-reveal` SFX per newly revealed yaku.
         // Idempotent across repeated `render()` calls within the
         // same reveal step thanks to `winPageYakuRevealSoundsPlayed`.
@@ -2567,33 +2603,37 @@ export class TableRenderer {
         // don't push the panel absurdly tall. We base the
         // column choice on the FULL list length so the layout
         // doesn't reflow mid-reveal as new yaku appear.
+        //
+        // We also push rows for the entire `visibleYakuAll`
+        // list every frame (flagging not-yet-revealed entries
+        // as `hidden`) so the panel reserves its final size
+        // from the first frame — the staged reveal animates
+        // text visibility, not panel geometry.
         if (visibleYakuAll.length <= 4) {
-          for (const y of visibleYaku) {
-            rows.push({ kind: "yaku", name: y.name, value: y.value });
-          }
+          visibleYakuAll.forEach((y, i) => {
+            rows.push({
+              kind: "yaku",
+              name: y.name,
+              value: y.value,
+              hidden: i >= revealedCount,
+            });
+          });
         } else {
           const half = Math.ceil(visibleYakuAll.length / 2);
           for (let i = 0; i < half; i++) {
-            const left = i < visibleYaku.length ? visibleYaku[i] : null;
+            const left = visibleYakuAll[i] ?? null;
             const rightIdx = i + half;
-            const right =
-              rightIdx < visibleYaku.length ? visibleYaku[rightIdx] : null;
+            const right = visibleYakuAll[rightIdx] ?? null;
             if (left === null && right === null) {
               continue;
             }
-            if (left === null) {
-              // No left entry yet but right has appeared (only
-              // possible once `revealedCount > half`). The yaku2
-              // row requires a left, so emit a placeholder via
-              // `yaku` row with empty strings to keep alignment.
-              rows.push({
-                kind: "yaku2",
-                left: { name: "", value: "" },
-                right,
-              });
-            } else {
-              rows.push({ kind: "yaku2", left, right });
-            }
+            rows.push({
+              kind: "yaku2",
+              left: left ?? { name: "", value: "" },
+              right,
+              leftHidden: left !== null && i >= revealedCount,
+              rightHidden: right !== null && rightIdx >= revealedCount,
+            });
           }
         }
         // Han/fu summary or yakuman line, merged with the points
@@ -2897,6 +2937,13 @@ export class TableRenderer {
         });
         maxYakuName = Math.max(maxYakuName, name.width);
         maxYakuValue = Math.max(maxYakuValue, value.width);
+        // Hide not-yet-revealed yaku — text width was already
+        // measured into the column-width maxes above so the
+        // panel reserves its final size from frame one.
+        if (row.hidden) {
+          name.visible = false;
+          value.visible = false;
+        }
         built.push({ kind: "yaku", name, value, h: yakuRowH });
       } else if (row.kind === "yaku2") {
         // Two-column yaku row: left and right pairs share the
@@ -2927,6 +2974,17 @@ export class TableRenderer {
           leftValue.width,
           rightValue?.width ?? 0
         );
+        // Same per-text visibility trick as the 1-column branch:
+        // measure widths from the real yaku text but hide the
+        // entries that haven't reached their reveal step yet.
+        if (row.leftHidden) {
+          leftName.visible = false;
+          leftValue.visible = false;
+        }
+        if (row.rightHidden && rightName && rightValue) {
+          rightName.visible = false;
+          rightValue.visible = false;
+        }
         built.push({
           kind: "yaku2",
           leftName,
@@ -4067,10 +4125,24 @@ export class TableRenderer {
           if ("tint" in tileSprite) {
             const tintable = tileSprite as unknown as { tint: number };
             const originalTint = tintable.tint;
+            const hoverRawIdx = rawIndices !== null ? rawIndices[i] : i;
+            // Re-apply the hover tint up-front if the cursor was
+            // already over this tile before the rebuild — Pixi
+            // won't re-fire `pointerover` against the new sprite
+            // unless the mouse moves, so without this the red
+            // highlight would blink off on every unrelated
+            // re-render (other-seat discards, score updates, …).
+            if (this.hoveredHandRawIdx === hoverRawIdx) {
+              tintable.tint = 0xffaaaa;
+            }
             tileSprite.on("pointerover", () => {
+              this.hoveredHandRawIdx = hoverRawIdx;
               tintable.tint = 0xffaaaa;
             });
             tileSprite.on("pointerout", () => {
+              if (this.hoveredHandRawIdx === hoverRawIdx) {
+                this.hoveredHandRawIdx = null;
+              }
               tintable.tint = originalTint;
             });
           }
@@ -5179,12 +5251,31 @@ export class TableRenderer {
     if (!this.root) {
       return;
     }
+    // Once a hand has ended (or the match is over) the action
+    // strip is meaningless — `legalActions` may still contain
+    // the just-fired win for a beat before the server's
+    // `hand_end` echo clears it, and we don't want the tsumo /
+    // ron button lingering on top of the win-info panel.
+    if (view.lastHandResult !== null || view.matchEnded) {
+      return;
+    }
     // Pull every non-discard legal action — these are the call /
     // riichi / win decisions that need explicit buttons. Discards
     // are tile-driven (click a tile in the hand).
-    const raw = view.legalActions.filter(
-      (a) => a.type !== "discard" && a.type !== "draw"
-    );
+    const raw = view.legalActions.filter((a) => {
+      if (a.type === "discard" || a.type === "draw") {
+        return false;
+      }
+      // With "Auto win" enabled the host effect fires ron /
+      // tsumo automatically; suppress the buttons so they don't
+      // flash in for the frames before the server echo clears
+      // `legalActions` (notably noticeable each draw while in
+      // riichi, where tsumo is the only surfaced button).
+      if (this.autoWinEnabled && (a.type === "ron" || a.type === "tsumo")) {
+        return false;
+      }
+      return true;
+    });
 
     // Group call-type actions (chi / pon / kan) so we can collapse
     // multiple tile-combination options behind a single chevron
