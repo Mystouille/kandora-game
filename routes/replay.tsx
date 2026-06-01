@@ -1400,6 +1400,14 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
               params.set("round", String(roundOrdinal));
             }
             params.set("event", String(index));
+            // Preserve the active review so the deeplink keeps
+            // surfacing the author's annotations. Without this
+            // the share button strips them and the recipient
+            // sees a clean replay even though the URL bar still
+            // shows `?review=…`.
+            if (review?.shortId) {
+              params.set("review", review.shortId);
+            }
             const base =
               typeof window !== "undefined"
                 ? `${window.location.origin}${window.location.pathname}`
@@ -1655,7 +1663,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
           draft.mode !== "text" && (
             <>
               {savedTextVisible ? (
-                <div className="absolute bottom-20 left-14 z-30 max-w-[min(820px,calc(100vw-72px))] rounded-lg shadow-lg overflow-hidden bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700">
+                <div className="absolute bottom-20 left-14 z-[46] max-w-[min(820px,calc(100vw-72px))] rounded-lg shadow-lg overflow-hidden bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700">
                   <div
                     className="px-5 py-4 text-base text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap rich-text-content"
                     style={{
@@ -1689,7 +1697,7 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
                   e.preventDefault();
                   setSavedTextVisible(false);
                 }}
-                className="absolute bottom-20 left-2 z-40 flex h-10 w-10 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
+                className="absolute bottom-20 left-2 z-[46] flex h-10 w-10 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
                 style={{
                   backgroundColor: "rgba(0, 0, 0, 0.8)",
                   color: "#a7f3d0",
