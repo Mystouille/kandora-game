@@ -2112,17 +2112,13 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         dealer = 0;
       }
     }
-    // Deal a fresh hand. The new seed mixes the original seed with
-    // round + honba so each hand is deterministic and distinct.
-    //
-    // On a chombo the dealer/round/honba are all unchanged, so the
-    // mix above would re-deal the *exact same* wall and starting
-    // hands as the aborted attempt. We rotate the base seed
-    // deterministically so the replay is a different game (and so
-    // every future hand also diverges from the original timeline).
-    const baseSeed = isChombo
-      ? (Math.imul(state.seed, 1664525) + 1013904223) >>> 0
-      : state.seed;
+    // Deal a fresh hand. Rotate the base seed deterministically on
+    // every hand transition so the new wall always differs from the
+    // previous one, even when neither `roundNumber` nor `honba`
+    // advances (dealer renchan in Buu mode, chombo replays, etc.).
+    // `roundNumber` / `honba` are still mixed in so the same seed
+    // can't accidentally repeat later via the LCG cycle.
+    const baseSeed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0;
     const handSeed =
       (baseSeed ^ (roundNumber * 1000003) ^ (honba * 7919)) >>> 0;
     const dealt = dealMatch(handSeed, {
@@ -2160,7 +2156,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.paoDaisangen = [null, null, null, null];
     next.paoDaisuushii = [null, null, null, null];
     return {
-      state: baseSeed === state.seed ? next : { ...next, seed: baseSeed },
+      state: { ...next, seed: baseSeed },
       events: [
         {
           type: "hand_start",

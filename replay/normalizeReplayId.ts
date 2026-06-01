@@ -37,3 +37,18 @@ export function normalizeReplayId(raw: string): string {
   }
   return id;
 }
+
+/**
+ * Extract the Riichi City `@<n>` viewer-suffix seat (0–3) from a
+ * raw replay id / share link, or `null` if absent. Mirrors the
+ * stripping logic in `normalizeReplayId` so callers can surface
+ * the seat as a `?seat=` deeplink param when forwarding the user
+ * to the in-app replay viewer.
+ */
+export function extractRiichiCitySeat(raw: string): number | null {
+  const match = /@([0-3])$/.exec(raw.trim());
+  if (!match) {
+    return null;
+  }
+  return Number(match[1]);
+}
