@@ -46,7 +46,6 @@ const TOGGLES: ToggleSpec[] = [
   { key: "showHands", label: "Show hands" },
   { key: "showWalls", label: "Show walls" },
   { key: "showNames", label: "Show names" },
-  { key: "showLayoutDebug", label: "Layout debug" },
 ];
 
 interface ReplayOverlayPanelProps {

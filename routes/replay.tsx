@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, redirect, useSearchParams } from "react-router";
+import {
+  redirect,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 import { adapter } from "~/game/portal-adapter";
 import type { TableRenderer } from "~/game/client/pixi/TableRenderer";
 import {
@@ -357,6 +362,16 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
   // Share button below rebuilds a fresh deeplink on demand from
   // the current state, so users can still copy a precise URL.
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const hasInAppHistory = location.key !== "default";
+  const handleClose = () => {
+    if (hasInAppHistory) {
+      navigate(-1);
+    } else {
+      navigate("/review");
+    }
+  };
 
   const clampSeat = (n: number): Seat => {
     if (n === 1 || n === 2 || n === 3) {
@@ -1436,14 +1451,15 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
               ? t.review.cartridge.shareCopied
               : t.review.cartridge.share}
         </button>
-        <Link
-          to="/review"
+        <button
+          type="button"
+          onClick={handleClose}
           aria-label="Close replay"
           className="absolute top-2 right-2 z-30 h-11 min-w-[5.5rem] px-4 inline-flex items-center justify-center gap-1 rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-base font-medium no-underline transition-colors"
           style={{ backgroundColor: "rgba(0, 0, 0, 0.7)", color: "#d1fae5" }}
         >
           ✕
-        </Link>
+        </button>
         {/* Right-side: seat / round selectors + nav buttons. */}
         <div className="absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base">
           {/* Row 1: seat selection, then round selection. */}
