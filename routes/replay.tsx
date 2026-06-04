@@ -326,6 +326,46 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   };
 }
 
+const SOURCE_LABEL: Record<ReplaySource, string> = {
+  ingame: "Kandora",
+  majsoul: "Mahjong Soul",
+  tenhou: "Tenhou",
+  riichicity: "Riichi City",
+};
+
+export function meta({ data }: Route.MetaArgs) {
+  if (!data?.log) {
+    return [{ title: "Replay — TNT Paris Mahjong" }];
+  }
+  const { log, review } = data;
+  const sourceLabel = SOURCE_LABEL[log.source] ?? "Replay";
+  const dateLabel = new Date(log.startedAt).toISOString().slice(0, 10);
+  const standings = [...log.seats]
+    .sort((a, b) => a.place - b.place)
+    .map((s) => `${s.place}. ${s.displayName} (${s.finalScore})`)
+    .join(" · ");
+  const titleBase = review
+    ? `${sourceLabel} replay review — ${dateLabel}`
+    : `${sourceLabel} replay — ${dateLabel}`;
+  const commentCount = review
+    ? review.edits.filter((e) => e.text.length > 0 || e.drawingBase64).length
+    : 0;
+  const description = review
+    ? `${commentCount} comment${commentCount === 1 ? "" : "s"} · ${standings}`
+    : standings;
+  return [
+    { title: `${titleBase} — TNT Paris Mahjong` },
+    { name: "description", content: description },
+    { property: "og:title", content: titleBase },
+    { property: "og:description", content: description },
+    { property: "og:type", content: "website" },
+    { property: "og:site_name", content: "TNT Paris Mahjong" },
+    { name: "twitter:card", content: "summary" },
+    { name: "twitter:title", content: titleBase },
+    { name: "twitter:description", content: description },
+  ];
+}
+
 export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
   const {
     log,
