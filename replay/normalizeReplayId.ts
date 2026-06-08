@@ -39,13 +39,19 @@ export function normalizeReplayId(raw: string): string {
 }
 
 /**
- * Extract the Riichi City `@<n>` viewer-suffix seat (0–3) from a
+/**
+ * Extract the Riichi City `@<n>` viewer-suffix value (0–3) from a
  * raw replay id / share link, or `null` if absent. Mirrors the
- * stripping logic in `normalizeReplayId` so callers can surface
- * the seat as a `?seat=` deeplink param when forwarding the user
- * to the in-app replay viewer.
+ * stripping logic in `normalizeReplayId` so callers can re-attach
+ * the suffix when forwarding the user to the in-app replay viewer.
+ *
+ * The returned number is NOT an absolute seat: RC encodes the
+ * round-1 wind position (0=E, 1=S, 2=W, 3=N), and the absolute
+ * seat depends on `dealer_pos` of round 1. The `/replays/:gameId`
+ * loader resolves the actual seat against the parsed log; callers
+ * shouldn't try to translate it themselves.
  */
-export function extractRiichiCitySeat(raw: string): number | null {
+export function extractRiichiCityWind(raw: string): number | null {
   const match = /@([0-3])$/.exec(raw.trim());
   if (!match) {
     return null;

@@ -191,9 +191,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   //     Majsoul stashes the per-seat `accountId` (as a string) on
   //     the `match_start` event's `seats[].userId`.
   //   - Riichi City appends `@<n>` (0–3) to a log id to mark which
-  //     seat that share link is from. We strip the suffix from the
-  //     id and surface the seat through the `?seat=` deeplink
-  //     param so the viewer opens with that player at the bottom.
+  //     seat that share link is from. The index is NOT the absolute
+  //     seat in the data — it's the round-1 dealer-relative wind
+  //     position (0=E, 1=S, 2=W, 3=N). RC's `position` field is
+  //     shaped by player-join order, so the same `@n` maps to a
+  //     different absolute seat per replay; we translate using the
+  //     loaded log's first `hand_start.dealer` and surface the
+  //     resolved absolute seat through the `?seat=` deeplink param.
   //
   // Either fixup issues a 302 to the canonical URL so the cleaned
   // form lands in the address bar and downstream caching keys
@@ -220,18 +224,30 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw redirect(`/replays/${cleanId}${qs ? `?${qs}` : ""}`);
   }
   const rcSuffix = /@([0-3])$/.exec(gameId);
-  if (rcSuffix) {
-    const seat = rcSuffix[1];
-    const cleanId = gameId.slice(0, rcSuffix.index);
+  const rcWind = rcSuffix ? Number(rcSuffix[1]) : null;
+  const cleanGameId = rcSuffix ? gameId.slice(0, rcSuffix.index) : gameId;
+
+  // Helper: translate the RC `@<n>` round-1 wind index to an
+  // absolute seat using the first `hand_start` event's dealer.
+  // Wind rotation around the table follows the absolute seat order
+  // (`(dealer + wind) % 4`) — verified empirically by tracing the
+  // first four `Draw` events of round 1, which always go E→S→W→N
+  // starting from `dealer_pos`.
+  const redirectToCanonicalRcUrl = (events: GameEvent[]): never => {
     const search = new URLSearchParams(url.searchParams);
-    if (!search.has("seat")) {
-      search.set("seat", seat);
+    if (rcWind !== null && !search.has("seat")) {
+      let seat = rcWind;
+      const handStart = events.find((e) => e.type === "hand_start");
+      if (handStart && "dealer" in handStart) {
+        seat = ((handStart as { dealer: number }).dealer + rcWind) % 4;
+      }
+      search.set("seat", String(seat));
     }
     const qs = search.toString();
-    throw redirect(`/replays/${cleanId}${qs ? `?${qs}` : ""}`);
-  }
+    throw redirect(`/replays/${cleanGameId}${qs ? `?${qs}` : ""}`);
+  };
 
-  const source = inferReplaySource(gameId);
+  const source = inferReplaySource(cleanGameId);
   await adapter.ensureDbConnected();
 
   // Optional ?review=<shortId>: load the review document so the
@@ -245,7 +261,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const reviewDoc = await ReplayReviewModel.findOne({
       shortId: reviewShortId,
     }).lean();
-    if (reviewDoc && reviewDoc.sourceGameId === gameId) {
+    if (reviewDoc && reviewDoc.sourceGameId === cleanGameId) {
       loadedReview = serializeReview(reviewDoc);
     }
   }
@@ -263,7 +279,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     /* anonymous viewer */
   }
 
-  const query: Record<string, string> = { sourceGameId: gameId };
+  const query: Record<string, string> = { sourceGameId: cleanGameId };
   if (source) {
     query.source = source;
   }
@@ -273,6 +289,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   // Cache hit: hand the persisted row straight to the component.
   if (doc) {
+    if (rcWind !== null) {
+      redirectToCanonicalRcUrl(doc.events as GameEvent[]);
+    }
     const log: ReplayLog = {
       source: doc.source as ReplaySource,
       sourceGameId: doc.sourceGameId,
@@ -301,18 +320,23 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       { status: 404 }
     );
   }
-  const fetched = await fetchOrphanReplayLog(source, gameId).catch((error) => {
-    console.error(
-      `[replay loader] connector fetch failed for ${source}/${gameId}`,
-      error
-    );
-    return null;
-  });
+  const fetched = await fetchOrphanReplayLog(source, cleanGameId).catch(
+    (error) => {
+      console.error(
+        `[replay loader] connector fetch failed for ${source}/${cleanGameId}`,
+        error
+      );
+      return null;
+    }
+  );
   if (!fetched) {
     throw new Response(
       "Replay not yet available; it will appear after the next hydration cycle.",
       { status: 404 }
     );
+  }
+  if (rcWind !== null) {
+    redirectToCanonicalRcUrl(fetched.events);
   }
   const annotatedLog = {
     ...fetched,
