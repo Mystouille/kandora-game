@@ -240,6 +240,26 @@ const WinEvent = z.object({
   /** Dora / ura indicators revealed at win time. */
   doraIndicators: z.array(TileSchema).optional(),
   uraDoraIndicators: z.array(TileSchema).optional(),
+  /**
+   * Structured han breakdown for statistics, sourced from the platform's fan
+   * list. These are COUNTS (han contributed), not indicator tiles, and exist
+   * so a stats projection doesn't have to recompute dora from `doraIndicators`
+   * + `hand` (which Riichi City can't even provide). Optional for back-compat
+   * with replay logs archived before they were added.
+   */
+  /** Regular dora han (excludes red fives and ura-dora). */
+  doraCount: z.number().int().nonnegative().optional(),
+  /** Red-five (akadora) han. */
+  akaDoraCount: z.number().int().nonnegative().optional(),
+  /** Ura-dora han (riichi wins only). */
+  uraDoraCount: z.number().int().nonnegative().optional(),
+  /**
+   * Yaku as platform-neutral `Han` enum ids (the same ids the per-platform
+   * stat parsers emit into `GameRecord.roundEvents[].yakus`). Kept alongside
+   * the display-oriented `yaku` record so a stats projection doesn't have to
+   * reverse romaji names back into ids.
+   */
+  yakuHan: z.array(z.number().int()).optional(),
   /** Placeholder retained for backward compatibility. */
   points: z.number().int().optional(),
 });

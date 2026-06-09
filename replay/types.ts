@@ -35,7 +35,7 @@ import type { GameEvent } from "~/game/protocol/messages";
  * the produced documents. Hydration re-parses logs whose
  * `schemaVersion` is older.
  */
-export const REPLAY_LOG_SCHEMA_VERSION = 1;
+export const REPLAY_LOG_SCHEMA_VERSION = 2;
 
 export type ReplaySource = "ingame" | "majsoul" | "tenhou" | "riichicity";
 
