@@ -3724,17 +3724,22 @@ export class TableRenderer {
             const hand = [...winForSeat.hand];
             // For a tsumo, the renderer's sort logic uses the
             // last element as the tsumo tile (kept separated by
-            // `TSUMO_GAP`). Adapters don't guarantee the hand is
-            // emitted with the agari tile last, so move the
-            // recorded `winTile` to the end ourselves — otherwise
-            // an arbitrary tile would be displayed as the tsumo.
+            // `TSUMO_GAP`). Sources disagree on whether the
+            // self-drawn tile is part of `hand`: the live server
+            // includes it, but platform adapters (notably Mahjong
+            // Soul) carry it only in `winTile` and leave it out of
+            // `hand`. Mirror the win-info panel's convention: drop
+            // one copy of the win tile if it's already there, then
+            // always re-append it as the separated drawn tile.
+            // Without the unconditional append the drawn tile would
+            // silently vanish on reveal for adapters that omit it.
             if (result.reason === "tsumo" && winForSeat.winTile) {
               const wt = winForSeat.winTile;
               const idx = hand.lastIndexOf(wt);
               if (idx >= 0) {
                 hand.splice(idx, 1);
-                hand.push(wt);
               }
+              hand.push(wt);
             }
             return { rawHand: hand, forceReveal: true };
           }
