@@ -42,6 +42,7 @@ import sideHandLUrl from "~/game/tenhouSprites/uprightSideHandL.png";
 import sideHandRUrl from "~/game/tenhouSprites/uprightSideHandR.png";
 import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
+import { splitWinningHandForDisplay } from "./winningHand";
 
 /**
  * Tile sprite sizing. There are three categories of tile sprites,
@@ -2695,20 +2696,11 @@ export class TableRenderer {
         // can see what the winner achieved (especially useful
         // for non-focused players).
         if (win.hand && win.hand.length > 0) {
-          const rawConcealed = [...win.hand];
-          // The agari tile is always shown after a small gap.
-          // For tsumo the server includes it in `win.hand`, so
-          // strip it out so it doesn't render twice; for ron the
-          // hand carries only the 13 pre-ron tiles and there's
-          // nothing to strip.
-          let agari: string | undefined;
-          if (win.winTile) {
-            agari = win.winTile;
-            const idx2 = rawConcealed.lastIndexOf(win.winTile);
-            if (idx2 >= 0) {
-              rawConcealed.splice(idx2, 1);
-            }
-          }
+          const { concealed: rawConcealed, agari } = splitWinningHandForDisplay(
+            win.hand,
+            win.winTile,
+            r.reason === "tsumo"
+          );
           // Sort the concealed portion so live wins render the
           // same canonically-ordered hand as replays. The winTile
           // is appended separately so it always sits on the
@@ -3722,24 +3714,16 @@ export class TableRenderer {
           const winForSeat = result.wins.find((w) => w.seat === seat);
           if (winForSeat?.hand && winForSeat.hand.length > 0) {
             const hand = [...winForSeat.hand];
-            // For a tsumo, the renderer's sort logic uses the
-            // last element as the tsumo tile (kept separated by
-            // `TSUMO_GAP`). Sources disagree on whether the
-            // self-drawn tile is part of `hand`: the live server
-            // includes it, but platform adapters (notably Mahjong
-            // Soul) carry it only in `winTile` and leave it out of
-            // `hand`. Mirror the win-info panel's convention: drop
-            // one copy of the win tile if it's already there, then
-            // always re-append it as the separated drawn tile.
-            // Without the unconditional append the drawn tile would
-            // silently vanish on reveal for adapters that omit it.
             if (result.reason === "tsumo" && winForSeat.winTile) {
-              const wt = winForSeat.winTile;
-              const idx = hand.lastIndexOf(wt);
-              if (idx >= 0) {
-                hand.splice(idx, 1);
-              }
-              hand.push(wt);
+              const { concealed, agari } = splitWinningHandForDisplay(
+                winForSeat.hand,
+                winForSeat.winTile,
+                true
+              );
+              return {
+                rawHand: agari ? [...concealed, agari] : concealed,
+                forceReveal: true,
+              };
             }
             return { rawHand: hand, forceReveal: true };
           }
