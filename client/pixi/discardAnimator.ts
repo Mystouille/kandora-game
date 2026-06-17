@@ -250,6 +250,13 @@ export class DiscardAnimator {
     const prev = this.prevView;
     const now = this.now();
 
+    // Promote the layouts recorded during the previous render so
+    // this frame's diff reads the hand exactly as it was last
+    // painted on screen. Reset the staging area before the new
+    // `renderSeat` calls repopulate it.
+    this.prevHandLayouts = this.currentHandLayouts;
+    this.currentHandLayouts = makeEmptyHandCache();
+
     // Hard reset on hand boundary or snapshot resync. Detect via
     // a backwards / cleared `totalDiscards` (hand_start resets to
     // 0) or a drop in any per-seat discard pile (snapshot replace).
@@ -270,6 +277,12 @@ export class DiscardAnimator {
     }
     if (hardReset) {
       this.anims.clear();
+      // A hard reset means the semantic hand/discard relation
+      // jumped discontinuously (call claimed a discard, hand_end,
+      // snapshot resync). The layouts we cached from the previous
+      // frame no longer describe the visible hand, so keep them
+      // from seeding the next discard snapshot.
+      this.prevHandLayouts = makeEmptyHandCache();
     }
 
     const snap = this.snapNextFlag || !this.enabled;
@@ -401,12 +414,6 @@ export class DiscardAnimator {
       }
     }
 
-    // Roll current frame's recorded layouts into prev, reset
-    // staging area. Done AFTER the diff above so the diff reads
-    // the *previous* frame's layouts (which is what we want for
-    // "what was rendered just before this discard event").
-    this.prevHandLayouts = this.currentHandLayouts;
-    this.currentHandLayouts = makeEmptyHandCache();
     this.prevView = view;
   }
 
