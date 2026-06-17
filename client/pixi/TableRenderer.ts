@@ -3802,7 +3802,7 @@ export class TableRenderer {
     // -----------------------------------------------------------------
     let rawIndices: number[] | null = null;
     let seat0Display: { rawIndices: number[]; freshGap: boolean } | null = null;
-    if (seat === 0) {
+    if (seat === 0 && !forceReveal) {
       const naturalIndices = naturalOrderRawIndices(
         rawHand,
         isFreshlyDrawnNatural,
@@ -3840,7 +3840,12 @@ export class TableRenderer {
     // captured snapshot is in the user's chosen layout.
     let baseHand: Array<string | null> = handNatural;
     let baseFreshlyDrawn = isFreshlyDrawnNatural;
-    if (seat === 0 && seat0Display && !this.handSorter.isSortFlagOn()) {
+    if (
+      seat === 0 &&
+      !forceReveal &&
+      seat0Display &&
+      !this.handSorter.isSortFlagOn()
+    ) {
       baseHand = seat0Display.rawIndices.map((idx) => rawHand[idx] ?? null);
       baseFreshlyDrawn = seat0Display.freshGap;
     }
@@ -3853,7 +3858,7 @@ export class TableRenderer {
     let hand: Array<string | null> = baseHand;
     let isFreshlyDrawn = baseFreshlyDrawn;
     let hiddenHandSlot: number | null = null;
-    if (seat === 0 && seat0Display) {
+    if (seat === 0 && !forceReveal && seat0Display) {
       rawIndices = seat0Display.rawIndices;
     }
     // Apply the phase-A hand snapshot through BOTH phases. While
