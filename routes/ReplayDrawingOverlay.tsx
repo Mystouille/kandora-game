@@ -5,6 +5,13 @@ import {
   DESIGN_H as TABLE_DESIGN_H,
 } from "~/game/client/pixi/tableLayout";
 
+/**
+ * Minimum spacing, in CSS pixels, between consecutive captured stroke
+ * points. Small enough to keep curves smooth and faithful to the
+ * pointer path, large enough to avoid storing redundant samples.
+ */
+const MIN_SAMPLE_CSS_PX = 1;
+
 interface ReplayDrawingOverlayProps {
   /** Strokes to render. Coordinates are in normalized [0..1] space. */
   strokes: Stroke[];
@@ -143,7 +150,11 @@ export function ReplayDrawingOverlay({
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = color;
-    ctx.lineWidth = width * dpr;
+    // Snap the device-space width to a whole pixel (min 1) so the
+    // stroke renders evenly on fractional-DPR displays (e.g. 1.5×),
+    // where `width * dpr` would otherwise land on a half pixel and
+    // read as a slightly soft, uneven line.
+    ctx.lineWidth = Math.max(1, Math.round(width * dpr));
     for (const stroke of strokesRef.current) {
       drawStroke(ctx, stroke, canvas.width, canvas.height);
     }
@@ -260,15 +271,22 @@ export function ReplayDrawingOverlay({
           : null;
       const events = coalesced && coalesced.length > 0 ? coalesced : [e];
       const points = draftStrokeRef.current.points;
-      const minSqDist = 1 / (256 * 256);
+      // Subsample using a CSS-pixel distance threshold so the captured
+      // point density stays consistent regardless of the canvas size.
+      // The v2 codec stores 16-bit coordinates, so this sub-pixel
+      // spacing survives encode/decode without quantization loss —
+      // unlike the old normalized 1/256 grid which both starved the
+      // curve of points and snapped them to a coarse lattice.
+      const rect = canvas.getBoundingClientRect();
+      const cssW = Math.max(1, rect.width);
+      const cssH = Math.max(1, rect.height);
+      const minCssDistSq = MIN_SAMPLE_CSS_PX * MIN_SAMPLE_CSS_PX;
       for (const ev of events) {
         const pt = toNormalized(ev.clientX, ev.clientY);
         const last = points[points.length - 1];
-        const dx = pt.x - last.x;
-        const dy = pt.y - last.y;
-        // Subsample below the codec's 256-grid resolution to keep
-        // the encoded blob compact without affecting visual quality.
-        if (dx * dx + dy * dy < minSqDist) {
+        const dxPx = (pt.x - last.x) * cssW;
+        const dyPx = (pt.y - last.y) * cssH;
+        if (dxPx * dxPx + dyPx * dyPx < minCssDistSq) {
           continue;
         }
         points.push(pt);

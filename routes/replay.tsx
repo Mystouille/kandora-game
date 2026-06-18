@@ -27,6 +27,7 @@ import {
   base64ToBytes,
   decodeDrawing,
   encodeDrawing,
+  smoothDrawingForDisplay,
   type Drawing,
   type Stroke,
 } from "~/game/replay/reviewDrawing";
@@ -723,13 +724,17 @@ export default function ReplayRoute({ loaderData }: Route.ComponentProps) {
     out.sort((a, b) => a - b);
     return out;
   }, [review, localEdits]);
-  // Decode the saved drawing once per (review,index) pair.
+  // Decode the saved drawing once per (review,index) pair. Legacy v1
+  // drawings are smoothed on the way out to round off their coarse
+  // quantization grid; dense high-precision drawings pass through
+  // `smoothDrawingForDisplay` untouched.
   const savedDrawing = useMemo<Drawing | null>(() => {
     if (!currentEdit?.drawingBase64) {
       return null;
     }
     try {
-      return decodeDrawing(base64ToBytes(currentEdit.drawingBase64));
+      const decoded = decodeDrawing(base64ToBytes(currentEdit.drawingBase64));
+      return smoothDrawingForDisplay(decoded);
     } catch {
       return null;
     }
