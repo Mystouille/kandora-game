@@ -19,8 +19,8 @@
  * consumer (replay log, in-game win-info panel, exporters) sees
  * the same order without re-sorting.
  */
-import { Han } from "~/api/majsoul/data/types/enums/Han";
-import { HAN_ROMAJI } from "~/i18n/hanRomaji";
+import { Han } from "~/db/types/Han";
+import { HAN_ROMAJI } from "~/db/i18n/hanRomaji";
 
 /** Display kanji emitted by the `riichi` npm package for the
  *  yaku referenced by the priority tables. Only entries needed
