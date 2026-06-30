@@ -17,5 +17,6 @@
       "~/db/*": ["../db/*"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx"]
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["routes/lobby.tsx", "routes/match.tsx", "routes/spectate.tsx"]
 }
