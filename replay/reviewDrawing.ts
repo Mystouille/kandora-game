@@ -40,6 +40,32 @@ export interface Drawing {
   strokes: Stroke[];
 }
 
+/**
+ * Per-reviewer color palette for the collaborative review overlay.
+ * A reviewer's index is their position in the review's ordered
+ * `reviewers` list (i.e. the order in which they first contributed a
+ * text note or drawing), so the 1st reviewer is always orange, the
+ * 2nd blue, etc. Applied to both the reviewer's freehand strokes and
+ * their bold name in the text bubble. Indices beyond the palette wrap
+ * around so we never run out of colors.
+ */
+export const REVIEWER_COLORS: readonly string[] = [
+  "#f97316", // orange
+  "#3b82f6", // blue
+  "#22c55e", // green
+  "#a855f7", // purple
+  "#ec4899", // pink
+  "#14b8a6", // teal
+];
+
+/** Resolve a reviewer's stroke / label color from their order index. */
+export function reviewerColor(index: number): string {
+  if (!Number.isFinite(index) || index < 0) {
+    return REVIEWER_COLORS[0];
+  }
+  return REVIEWER_COLORS[index % REVIEWER_COLORS.length];
+}
+
 /** Legacy 8-bit-per-axis format. Decoded for backward compatibility. */
 const VERSION_V1 = 1;
 /** Current 16-bit-per-axis format. All new drawings encode as v2. */

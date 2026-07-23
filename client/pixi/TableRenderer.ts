@@ -543,6 +543,20 @@ export class TableRenderer {
     | ((point: { x: number; y: number } | null) => void)
     | null = null;
   private lastPondCenter: { x: number; y: number } | null = null;
+  /** Callback invoked at the end of every `render()` with the
+   * canvas-pixel rect of the focused seat's (bottom) hand strip,
+   * or `null` when no view is mounted. The React layer uses it to
+   * lift the review comment bubble above the player's tiles so the
+   * two don't overlap. */
+  private bottomHandBoundsListener:
+    | ((rect: { x: number; y: number; w: number; h: number } | null) => void)
+    | null = null;
+  private lastBottomHandBounds: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null = null;
   /** Per-frame wait-tile set computed at the top of `render()` when
    * `showWaits` is on. Used by {@link tintIfWait} to colour every
    * matching tile (discards, walls, hands, melds) red. Normalized
@@ -1109,6 +1123,18 @@ export class TableRenderer {
     this.pondCenterListener = cb;
   }
 
+  /** Subscribe to focused-seat hand-strip bounds updates. The
+   * callback fires after every `render()` with the canvas-pixel
+   * rect of the bottom hand, or `null` when no view is mounted.
+   * Pass `null` to clear. */
+  setBottomHandBoundsListener(
+    cb:
+      | ((rect: { x: number; y: number; w: number; h: number } | null) => void)
+      | null
+  ): void {
+    this.bottomHandBoundsListener = cb;
+  }
+
   destroy(): void {
     if (this.resizeRafHandle !== null) {
       cancelAnimationFrame(this.resizeRafHandle);
@@ -1428,6 +1454,31 @@ export class TableRenderer {
       this.lastPondCenter = nextPond;
       if (this.pondCenterListener) {
         this.pondCenterListener(nextPond);
+      }
+    }
+
+    // Publish the focused seat's hand-strip bounds (canvas px) so
+    // the React layer can lift overlays (e.g. the review comment
+    // bubble) above the player's tiles instead of overlapping them.
+    // Same fit-transform mirror + dedupe as the listeners above.
+    const bottomHand = layout.hands[seat];
+    const nextHandBounds = {
+      x: bottomHand.x * sx2 + this.root.position.x,
+      y: bottomHand.y * sy2 + this.root.position.y,
+      w: bottomHand.w * sx2,
+      h: bottomHand.h * sy2,
+    };
+    const prevHand = this.lastBottomHandBounds;
+    if (
+      prevHand === null ||
+      prevHand.x !== nextHandBounds.x ||
+      prevHand.y !== nextHandBounds.y ||
+      prevHand.w !== nextHandBounds.w ||
+      prevHand.h !== nextHandBounds.h
+    ) {
+      this.lastBottomHandBounds = nextHandBounds;
+      if (this.bottomHandBoundsListener) {
+        this.bottomHandBoundsListener(nextHandBounds);
       }
     }
   }
