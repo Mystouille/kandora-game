@@ -279,8 +279,10 @@ export interface MatchView {
      * seats not in tenpai; absent when the source doesn't record
      * waits. Drives the renderer's `showWaits` overlay. */
     waits?: (Tile[] | null)[];
-    /** Per-seat concealed hands at exhaustive draw (length 4),
-     * populated only for tenpai seats; `null` otherwise. */
+    /** Per-seat concealed hands revealed at hand end (length 4):
+     * every tenpai seat at an exhaustive draw, or just the
+     * declaring seat at a kyuushuu kyuuhai abort; `null` for seats
+     * that don't reveal. */
     tenpaiHands?: (Tile[] | null)[];
     /**
      * One entry per winner. For tsumo or single ron this is a

@@ -145,8 +145,9 @@ export interface ReplayView {
      * record waits. Drives the `showWaits` overlay in the
      * renderer. */
     waits?: (Tile[] | null)[];
-    /** Per-seat concealed hands at exhaustive draw, populated
-     * only for tenpai seats; `null` otherwise. */
+    /** Per-seat concealed hands revealed at hand end: every tenpai
+     * seat at an exhaustive draw, or just the declaring seat at a
+     * kyuushuu kyuuhai abort. `null` for seats that don't reveal. */
     tenpaiHands?: (Tile[] | null)[];
     /** One entry per winner (multi-ron emits one `win` per
      * winner before the shared `hand_end`). */
@@ -644,7 +645,25 @@ export function applyReplayEvent(
                 const revealed = hand.filter((t): t is Tile => t !== null);
                 return revealed.length > 0 ? revealed : null;
               })
-            : undefined;
+            : // Kyuushuu kyuuhai: reveal only the declaring seat's
+              // concealed 14-tile hand (the ≥9 terminals/honors that
+              // justified the abort). The declarer is the seat that
+              // just drew and declared before discarding, so
+              // `freshlyDrawnSeat` points straight at it. Replay logs
+              // never carry `tenpaiHands` for aborts, so derive it here
+              // from the omniscient view.
+              event.reason === "abort" &&
+                event.abortKind === "kyuushuu" &&
+                view.freshlyDrawnSeat !== null
+              ? ([0, 1, 2, 3] as Seat[]).map((s) => {
+                  if (s !== view.freshlyDrawnSeat) {
+                    return null;
+                  }
+                  const hand = view.hands[s] ?? [];
+                  const revealed = hand.filter((t): t is Tile => t !== null);
+                  return revealed.length > 0 ? revealed : null;
+                })
+              : undefined;
       return {
         ...view,
         scores: (event.scores ?? view.scores) as [

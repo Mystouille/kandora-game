@@ -3752,7 +3752,9 @@ export class TableRenderer {
       // immediately alongside the win sound. Multi-ron reveals
       // each winner as their event fires. At exhaustive draw the
       // same reveal kicks in for each tenpai seat once
-      // `tenpaiHands` is available on `hand_end`.
+      // `tenpaiHands` is available on `hand_end`; a kyuushuu
+      // kyuuhai abort reuses the same channel to reveal just the
+      // declaring seat's hand.
       //
       // When the hand is sourced from a win/tenpaiHands override
       // we also flag `forceReveal` so the opponent-seat painters
@@ -3779,8 +3781,13 @@ export class TableRenderer {
             return { rawHand: hand, forceReveal: true };
           }
         }
+        // Exhaustive draw reveals every tenpai seat's hand; a
+        // kyuushuu kyuuhai abort reveals only the declaring seat's
+        // hand. Both arrive via `tenpaiHands` (null for seats that
+        // don't reveal), so one branch covers both.
         if (
-          result.reason === "exhaustive_draw" &&
+          (result.reason === "exhaustive_draw" ||
+            (result.reason === "abort" && result.abortKind === "kyuushuu")) &&
           result.tenpaiHands &&
           result.tenpaiHands[seat] &&
           result.tenpaiHands[seat]!.length > 0

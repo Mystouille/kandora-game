@@ -293,11 +293,14 @@ const HandEndEvent = z.object({
    */
   waits: z.array(z.array(TileSchema).nullable()).length(4).optional(),
   /**
-   * Per-seat full concealed hand at exhaustive draw (length 4).
-   * Populated only when `reason === "exhaustive_draw"` and the
-   * seat was tenpai; `null` for non-tenpai seats. Lets the
-   * result panel reveal the winning structure each tenpai
-   * player was waiting on.
+   * Per-seat full concealed hand revealed at hand end (length 4).
+   * Populated for every tenpai seat when
+   * `reason === "exhaustive_draw"`, or for just the declaring seat
+   * when `reason === "abort"` and `abortKind === "kyuushuu"`;
+   * `null` for seats that don't reveal. Lets the renderer flip the
+   * revealed hand(s) face-up at their seat band — the tenpai
+   * player's wait shape at a draw, or the ≥9 terminals/honors that
+   * justified a kyuushuu abort.
    */
   tenpaiHands: z.array(z.array(TileSchema).nullable()).length(4).optional(),
   /**

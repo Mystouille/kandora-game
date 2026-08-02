@@ -196,6 +196,36 @@ describe("replayReducer", () => {
     expect(view.riichiTileIdx[1]).toBe(0);
   });
 
+  it("kyuushuu abort reveals only the declaring seat's hand", () => {
+    // Seat 2 draws its 14th tile and declares kyuushuu kyuuhai
+    // without discarding, so `freshlyDrawnSeat` points at it. The
+    // reducer must reveal that seat's full 14-tile hand through
+    // `tenpaiHands` and leave every other seat null.
+    const events: GameEvent[] = [
+      { type: "match_start", seats: [], ruleSet: "tenhou-default" },
+      {
+        type: "hand_start",
+        round: 0,
+        dealer: 0,
+        roundWind: "E",
+        roundNumber: 1,
+        startingHands: STARTING,
+        doraIndicators: ["3m"],
+      },
+      { type: "draw", seat: 2, tile: "1m", wallRemaining: 69 },
+      { type: "hand_end", reason: "abort", abortKind: "kyuushuu" },
+    ];
+    const view = replayReducer(makeLog(events), 3);
+    expect(view.lastHandResult?.reason).toBe("abort");
+    expect(view.lastHandResult?.abortKind).toBe("kyuushuu");
+    const revealed = view.lastHandResult?.tenpaiHands;
+    expect(revealed).toBeDefined();
+    expect(revealed?.[2]).toEqual([...STARTING[2], "1m"]);
+    expect(revealed?.[0]).toBeNull();
+    expect(revealed?.[1]).toBeNull();
+    expect(revealed?.[3]).toBeNull();
+  });
+
   it("match_end populates `matchEnded.finalScores`", () => {
     const events: GameEvent[] = [
       { type: "match_start", seats: [], ruleSet: "tenhou-default" },
