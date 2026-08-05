@@ -72,6 +72,7 @@ const NAME_TO_HAN: ReadonlyMap<string, Han> = (() => {
 const YAKU_PRIORITY_FIRST: readonly (readonly Han[])[] = [
   [Han.Riichi, Han.Double_Riichi],
   [Han.Ippatsu],
+  [Han.Fully_Concealed_Hand],
   [Han.Robbing_a_Kan],
   [Han.After_a_Kan],
   [Han.Under_the_Sea, Han.Under_the_River],
