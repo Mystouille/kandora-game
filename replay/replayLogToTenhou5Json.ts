@@ -52,6 +52,8 @@
 
 import type { GameEvent, ReplayLog } from "~/game/replay/types";
 import type { Meld, Tile } from "~/game/protocol/messages";
+import { HAN_ROMAJI } from "~/db/i18n/hanRomaji";
+import { RIICHI_LIB_YAKU_TO_HAN } from "~/db/yaku/platformYakuMaps";
 
 // ---------------------------------------------------------------------------
 // Output shape — kept identical to the majsoul converter so both
@@ -101,6 +103,16 @@ function makeaka(t: number): number {
   return t;
 }
 
+/** Remove the single claimed copy while preserving identical owned copies. */
+function withoutClaimedTile(tiles: number[], claimed: number): number[] {
+  const own = tiles.slice();
+  const claimedIndex = own.indexOf(claimed);
+  if (claimedIndex >= 0) {
+    own.splice(claimedIndex, 1);
+  }
+  return own;
+}
+
 /** seat0 relative to seat1: 0 = kamicha (prev), 1 = toimen, 2 = shimocha (next). */
 function relativeSeating(self: number, other: number): number {
   return (self - other + 4 - 1) % 4;
@@ -112,6 +124,22 @@ function relativeSeating(self: number, other: number): number {
 
 const WINDS = [41, 42, 43, 44]; // 1z..4z
 const DRAGS = [45, 46, 47]; // 5z..7z (haku/hatsu/chun)
+const WIND_NAMES = ["東", "南", "西", "北"] as const;
+
+const TENHOU_YAKU_BY_ROMAJI = Object.entries(RIICHI_LIB_YAKU_TO_HAN).reduce<
+  Record<string, string>
+>((names, [japanese, han]) => {
+  names[HAN_ROMAJI[han]] = japanese;
+  return names;
+}, {});
+
+Object.assign(TENHOU_YAKU_BY_ROMAJI, {
+  Haku: "役牌 白",
+  Hatsu: "役牌 發",
+  Chun: "役牌 中",
+  "Ura Dora": "裏ドラ",
+  Kita: "北",
+});
 
 // ---------------------------------------------------------------------------
 // Per-round mutable state.
@@ -207,8 +235,9 @@ function initKyoku(
     const wind = ev.roundWind;
     chang = wind === "E" ? 0 : wind === "S" ? 1 : wind === "W" ? 2 : 3;
   }
-  const ju = ev.dealer ?? 0;
-  k.round = [4 * chang + ju, ev.honba ?? 0, ev.riichiSticks ?? 0];
+  const dealer = ev.dealer ?? 0;
+  const roundNumber = ev.roundNumber ?? dealer + 1;
+  k.round = [4 * chang + roundNumber - 1, ev.honba ?? 0, ev.riichiSticks ?? 0];
 
   const scores = ev.scores ?? [0, 0, 0, 0];
   k.initScores = [
@@ -232,12 +261,14 @@ function initKyoku(
     }
   }
 
-  // Dealer's 14th tile lives at the end of `haipais[dealer]`; promote it
-  // to the first draw so tenhou's "13-tile starting hand + first draw"
-  // contract holds.
-  const popped = k.haipais[ju].pop();
-  if (popped !== undefined) {
-    k.draws[ju].push(popped);
+  // Some adapters include the dealer's opening draw as a 14th haipai
+  // tile; promote it into the draw stream. Adapters that already emit
+  // an explicit opening draw provide 13 tiles and must remain untouched.
+  if (k.haipais[dealer].length >= 14) {
+    const openingDraw = k.haipais[dealer].pop();
+    if (openingDraw !== undefined) {
+      k.draws[dealer].push(openingDraw);
+    }
   }
 
   k.ldseat = -1;
@@ -264,26 +295,12 @@ function encodeCall(k: Kyoku, seat: number, meld: Meld): void {
     case "chi": {
       // Chi is only ever from kamicha; tenhou format always puts the
       // called tile first prefixed by 'c'.
-      const own = meldTiles.filter((t: number) => t !== claimed);
-      // Restore an "own" pair of two tiles (claimed could equal an own
-      // tile if encoder dedup'd — fall back to the original ordering).
-      while (own.length < 2 && meldTiles.length >= 3) {
-        // Best-effort: take from the original meldTiles minus the first
-        // occurrence of claimed.
-        const copy = meldTiles.slice();
-        const idx = copy.indexOf(claimed);
-        if (idx >= 0) {
-          copy.splice(idx, 1);
-        }
-        own.length = 0;
-        own.push(...copy);
-        break;
-      }
+      const own = withoutClaimedTile(meldTiles, claimed);
       k.draws[seat].push(`c${claimed}${own[0] ?? 0}${own[1] ?? 0}`);
       return;
     }
     case "pon": {
-      const own = meldTiles.filter((t: number) => t !== claimed);
+      const own = withoutClaimedTile(meldTiles, claimed);
       const idx =
         meld.from !== null && meld.from !== undefined
           ? relativeSeating(seat, meld.from)
@@ -295,7 +312,7 @@ function encodeCall(k: Kyoku, seat: number, meld: Meld): void {
       return;
     }
     case "daiminkan": {
-      const own = meldTiles.filter((t: number) => t !== claimed);
+      const own = withoutClaimedTile(meldTiles, claimed);
       const idx =
         meld.from !== null && meld.from !== undefined
           ? relativeSeating(seat, meld.from)
@@ -410,8 +427,14 @@ function buildAgariEntry(
   ];
   if (a.yaku) {
     for (const [name, han] of Object.entries(a.yaku)) {
+      let tenhouName = TENHOU_YAKU_BY_ROMAJI[name] ?? name;
+      if (name === "Jikaze") {
+        tenhouName = `自風 ${WIND_NAMES[(a.winner - dealerSeat + 4) % 4]}`;
+      } else if (name === "Bakaze") {
+        tenhouName = `場風 ${WIND_NAMES[Math.floor(k.round[0] / 4) % 4]}`;
+      }
       // han string is already "X飜" / "役満" — wrap in (han) for tenhou.
-      res.push(`${name}(${han})`);
+      res.push(`${tenhouName}(${han})`);
     }
   }
   return res;
