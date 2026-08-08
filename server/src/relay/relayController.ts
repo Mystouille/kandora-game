@@ -131,7 +131,10 @@ export class RelayController {
 
   private armIdle(session: RelaySession): void {
     this.cancelIdle(session);
-    session.idleTimer = setTimeout(() => this.teardown(session), this.idleGraceMs);
+    session.idleTimer = setTimeout(
+      () => this.teardown(session),
+      this.idleGraceMs
+    );
     session.idleTimer.unref?.();
   }
 

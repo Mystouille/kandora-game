@@ -119,7 +119,9 @@ describe("RelayController", () => {
     lastClient().handlers.onFrame(initFrame());
     const match = matches.get(matchId);
     expect(match).toBeDefined();
-    const types = match ? match.replaySpectatorBuffer(0).map((e) => e.event.type) : [];
+    const types = match
+      ? match.replaySpectatorBuffer(0).map((e) => e.event.type)
+      : [];
     expect(types).toContain("match_start");
     expect(types).toContain("hand_start");
     expect(types).toContain("draw");

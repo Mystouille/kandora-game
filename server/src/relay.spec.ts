@@ -61,7 +61,10 @@ function relayEvents(): GameEvent[] {
   ];
 }
 
-function makeSpectator(): { send: (m: ServerMessage) => void; events: GameEvent[] } {
+function makeSpectator(): {
+  send: (m: ServerMessage) => void;
+  events: GameEvent[];
+} {
   const events: GameEvent[] = [];
   return {
     send: (msg: ServerMessage): void => {
@@ -83,13 +86,21 @@ describe("MatchProcess relay", () => {
   });
 
   it("starts playing as a relay match", () => {
-    const match = MatchProcess.createRelayMatch("relay-1", "0E342071", "tenhou");
+    const match = MatchProcess.createRelayMatch(
+      "relay-1",
+      "0E342071",
+      "tenhou"
+    );
     expect(match.isRelay).toBe(true);
     expect(match.status).toBe("playing");
   });
 
   it("fans injected events out to a spectator, omnisciently", () => {
-    const match = MatchProcess.createRelayMatch("relay-2", "0E342071", "tenhou");
+    const match = MatchProcess.createRelayMatch(
+      "relay-2",
+      "0E342071",
+      "tenhou"
+    );
     const spec = makeSpectator();
     match.attachSpectator(spec.send);
     const events = relayEvents();
@@ -101,7 +112,9 @@ describe("MatchProcess relay", () => {
     const draw = spec.events.find((e) => e.type === "draw");
     expect(draw?.type === "draw" ? draw.tile : null).toBe("5m");
     const handStart = spec.events.find((e) => e.type === "hand_start");
-    expect(handStart?.type === "hand_start" ? handStart.startingHands?.length : 0).toBe(4);
+    expect(
+      handStart?.type === "hand_start" ? handStart.startingHands?.length : 0
+    ).toBe(4);
   });
 
   it("catches a late spectator up from the buffer", () => {
@@ -116,7 +129,11 @@ describe("MatchProcess relay", () => {
   });
 
   it("archives a tenhou ReplayLog on close", async () => {
-    const match = MatchProcess.createRelayMatch("relay-4", "0E342071", "tenhou");
+    const match = MatchProcess.createRelayMatch(
+      "relay-4",
+      "0E342071",
+      "tenhou"
+    );
     for (const event of relayEvents()) {
       match.injectRelayEvent(event);
     }
