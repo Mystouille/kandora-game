@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
-import type { TableRenderer } from "~/game/client/pixi/TableRenderer";
+import type {
+  TableRenderer,
+  SeatEnrichment,
+} from "~/game/client/pixi/TableRenderer";
 import { useMatchStore } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
 import {
@@ -129,6 +132,40 @@ function snapshotToReplayView(s: SnapshotState): ReplayView {
   };
 }
 
+/**
+ * Fire-and-forget spectator telemetry to the host app's `/api/telemetry`
+ * convention endpoint (same pattern as the session / enrichment fetches). Kept
+ * dependency-free so the shared viewer stays decoupled from any host app.
+ */
+function beaconTelemetry(event: string, meta: Record<string, unknown>): void {
+  try {
+    const bp = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+    const body = JSON.stringify({
+      events: [
+        {
+          type: "client",
+          event,
+          path: window.location.pathname,
+          meta,
+          ts: Date.now(),
+        },
+      ],
+    });
+    const blob = new Blob([body], { type: "application/json" });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(`${bp}/api/telemetry`, blob);
+    } else {
+      void fetch(`${bp}/api/telemetry`, {
+        method: "POST",
+        body: blob,
+        keepalive: true,
+      }).catch(() => undefined);
+    }
+  } catch {
+    // Telemetry is best-effort.
+  }
+}
+
 export default function GameSpectateRoute({
   loaderData,
 }: Route.ComponentProps) {
@@ -189,6 +226,8 @@ export default function GameSpectateRoute({
       return;
     }
     let cancelled = false;
+    const spectateOpenedAt = Date.now();
+    beaconTelemetry("spectate_open", { matchId });
 
     useMatchStore.getState().setMatch(matchId, null);
     // NOTE: we deliberately do not call `installGameSoundBindings()`
@@ -219,6 +258,47 @@ export default function GameSpectateRoute({
             return;
           }
           rendererRef.current = renderer;
+          // Host-app team enrichment for the nameplates (best-effort;
+          // a 404 / empty response just leaves nameplates un-enriched).
+          const bp = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+          void fetch(
+            `${bp}/api/game/enrichment?matchId=${encodeURIComponent(matchId)}`,
+            { credentials: "include" }
+          )
+            .then((res) => (res.ok ? res.json() : null))
+            .then(
+              (
+                data: {
+                  seats?: Array<{
+                    seat: number;
+                    teamName?: string | null;
+                    teamLogoUrl?: string | null;
+                  }>;
+                } | null
+              ) => {
+                if (cancelled || !data || !Array.isArray(data.seats)) {
+                  return;
+                }
+                const bySeat: (SeatEnrichment | null)[] = [
+                  null,
+                  null,
+                  null,
+                  null,
+                ];
+                for (const s of data.seats) {
+                  if (s.seat >= 0 && s.seat < 4) {
+                    bySeat[s.seat] = {
+                      teamName: s.teamName ?? null,
+                      teamLogoUrl: s.teamLogoUrl ?? null,
+                    };
+                  }
+                }
+                rendererRef.current?.setSeatEnrichment(bySeat);
+              }
+            )
+            .catch(() => {
+              // Enrichment is optional; ignore failures.
+            });
         });
       }
     );
@@ -306,6 +386,10 @@ export default function GameSpectateRoute({
 
     return () => {
       cancelled = true;
+      beaconTelemetry("spectate_leave", {
+        matchId,
+        durationMs: Date.now() - spectateOpenedAt,
+      });
       unsub();
       if (wsRef.current) {
         wsRef.current.close();

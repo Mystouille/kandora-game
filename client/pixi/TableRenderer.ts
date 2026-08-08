@@ -44,6 +44,12 @@ import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
 import { splitWinningHandForDisplay } from "./winningHand";
 
+/** Per-seat team enrichment drawn on spectator / replay nameplates. */
+export interface SeatEnrichment {
+  teamName?: string | null;
+  teamLogoUrl?: string | null;
+}
+
 /**
  * Tile sprite sizing. There are three categories of tile sprites,
  * each living in a different sheet with its own per-cell source
@@ -301,6 +307,14 @@ export class TableRenderer {
    * changes (e.g. riichi mode toggle) and a re-render is needed.
    * The host (match route) wires this to `renderer.render(state)`. */
   private onRenderRequest: (() => void) | null = null;
+  /** Per-seat team enrichment (name + logo URL) for spectator /
+   * replay nameplates. Set via {@link setSeatEnrichment}; empty by
+   * default so non-enriched views (in-app games) render unchanged. */
+  private seatEnrichment: (SeatEnrichment | null)[] = [null, null, null, null];
+  /** Cache of loaded team-logo textures, keyed by URL. */
+  private readonly teamLogoTextures = new Map<string, Texture>();
+  /** Team-logo URLs whose texture load is in flight (dedupe). */
+  private readonly teamLogoPending = new Set<string>();
   /**
    * When true, seat 0 has entered the "select riichi tile" UI mode
    * (toggled by the Riichi button). Only tiles backed by a
@@ -1123,6 +1137,42 @@ export class TableRenderer {
     this.pondCenterListener = cb;
   }
 
+  /** Set per-seat team enrichment (name + logo) for spectator /
+   * replay nameplates. Pass a 4-element array (index = seat); any
+   * slot may be null. Triggers a re-render; logos load lazily. */
+  setSeatEnrichment(list: (SeatEnrichment | null)[]): void {
+    this.seatEnrichment = [
+      list[0] ?? null,
+      list[1] ?? null,
+      list[2] ?? null,
+      list[3] ?? null,
+    ];
+    this.requestRender();
+  }
+
+  /** Returns the cached logo texture for `url`, kicking off a lazy
+   * load (and a re-render on completion) the first time. Returns
+   * null until the texture is available. */
+  private ensureTeamLogo(url: string): Texture | null {
+    const cached = this.teamLogoTextures.get(url);
+    if (cached) {
+      return cached;
+    }
+    if (!this.teamLogoPending.has(url)) {
+      this.teamLogoPending.add(url);
+      void Assets.load(url)
+        .then((tex) => {
+          this.teamLogoTextures.set(url, tex as Texture);
+          this.teamLogoPending.delete(url);
+          this.requestRender();
+        })
+        .catch(() => {
+          this.teamLogoPending.delete(url);
+        });
+    }
+    return null;
+  }
+
   /** Subscribe to focused-seat hand-strip bounds updates. The
    * callback fires after every `render()` with the canvas-pixel
    * rect of the bottom hand, or `null` when no view is mounted.
@@ -1678,13 +1728,20 @@ export class TableRenderer {
       seat: 0 | 1 | 2 | 3;
       nameText: Text;
       chipText: Text | null;
+      teamText: Text | null;
+      teamLogoTex: Texture | null;
       isDisconnected: boolean;
       hasDabuken: boolean;
     };
+    const TEAM_FONT = 11;
+    const TEAM_LOGO = 16;
+    const TEAM_LOGO_GAP = 4;
     const built: Built[] = [];
     let maxNameW = 0;
     let maxChipTextW = 0;
     let maxNameH = 0;
+    let maxTeamRowW = 0;
+    let maxTeamRowH = 0;
     for (let seat = 0; seat < 4; seat++) {
       const name = view.seatNames[seat];
       if (!name) {
@@ -1723,10 +1780,39 @@ export class TableRenderer {
         chipText.anchor.set(0.5, 0.5);
         maxChipTextW = Math.max(maxChipTextW, Math.ceil(chipText.width));
       }
+      let teamText: Text | null = null;
+      let teamLogoTex: Texture | null = null;
+      const enrich = this.seatEnrichment[seat];
+      if (enrich) {
+        if (enrich.teamName) {
+          teamText = new Text({
+            text: enrich.teamName,
+            style: new TextStyle({
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: TEAM_FONT,
+              fontWeight: "600",
+              fill: 0xcbd5e1,
+            }),
+          });
+          teamText.anchor.set(0.5, 0.5);
+        }
+        if (enrich.teamLogoUrl) {
+          teamLogoTex = this.ensureTeamLogo(enrich.teamLogoUrl);
+        }
+      }
+      if (teamText || teamLogoTex) {
+        const tW = teamText ? Math.ceil(teamText.width) : 0;
+        const tH = teamText ? Math.ceil(teamText.height) : 0;
+        const rowW = (teamLogoTex ? TEAM_LOGO + TEAM_LOGO_GAP : 0) + tW;
+        maxTeamRowW = Math.max(maxTeamRowW, rowW);
+        maxTeamRowH = Math.max(maxTeamRowH, tH, teamLogoTex ? TEAM_LOGO : 0);
+      }
       built.push({
         seat: seat as 0 | 1 | 2 | 3,
         nameText,
         chipText,
+        teamText,
+        teamLogoTex,
         isDisconnected,
         hasDabuken: buuMode && view.dabuken[seat] === true,
       });
@@ -1736,22 +1822,24 @@ export class TableRenderer {
     }
     // Row metrics.
     const nameRowH = maxNameH + padY * 2;
+    const teamRowH = maxTeamRowH > 0 ? maxTeamRowH + 4 : 0;
     const chipIconR = 14; // chip icon radius (px)
     const chipIconGap = 4; // gap between chip icon and count
     const chipRowH = buuMode ? Math.max(maxNameH, chipIconR * 2) + 4 : 0;
     const dabukenR = 26; // dabuken token radius (px) — 2× the chip icon
     const dabukenRowH = buuMode ? dabukenR * 2 + 4 : 0;
-    // Width: max of name, chip-line content, and dabuken token.
+    // Width: max of name, team row, chip-line content, and dabuken token.
     const chipLineW = buuMode ? chipIconR * 2 + chipIconGap + maxChipTextW : 0;
     const dabukenW = buuMode ? dabukenR * 2 : 0;
-    const contentW = Math.max(maxNameW, chipLineW, dabukenW);
+    const contentW = Math.max(maxNameW, maxTeamRowW, chipLineW, dabukenW);
     const w = contentW + padX * 2;
-    const h = nameRowH + chipRowH + dabukenRowH;
+    const h = nameRowH + teamRowH + chipRowH + dabukenRowH;
     // Row centre y positions inside the box (anchor at (0,0) =
     // box centre; +y down).
     const nameCY = -h / 2 + nameRowH / 2;
-    const chipCY = -h / 2 + nameRowH + chipRowH / 2;
-    const dabukenCY = -h / 2 + nameRowH + chipRowH + dabukenRowH / 2;
+    const teamCY = -h / 2 + nameRowH + teamRowH / 2;
+    const chipCY = -h / 2 + nameRowH + teamRowH + chipRowH / 2;
+    const dabukenCY = -h / 2 + nameRowH + teamRowH + chipRowH + dabukenRowH / 2;
     for (const b of built) {
       const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
       const rect = layout.discards[seat];
@@ -1765,6 +1853,24 @@ export class TableRenderer {
       container.addChild(bg);
       nameText.position.set(0, nameCY);
       container.addChild(nameText);
+      if (b.teamText || b.teamLogoTex) {
+        const tW = b.teamText ? Math.ceil(b.teamText.width) : 0;
+        const rowW = (b.teamLogoTex ? TEAM_LOGO + TEAM_LOGO_GAP : 0) + tW;
+        let tx = -rowW / 2;
+        if (b.teamLogoTex) {
+          const logo = new Sprite(b.teamLogoTex);
+          logo.anchor.set(0.5, 0.5);
+          logo.width = TEAM_LOGO;
+          logo.height = TEAM_LOGO;
+          logo.position.set(tx + TEAM_LOGO / 2, teamCY);
+          container.addChild(logo);
+          tx += TEAM_LOGO + TEAM_LOGO_GAP;
+        }
+        if (b.teamText) {
+          b.teamText.position.set(tx + tW / 2, teamCY);
+          container.addChild(b.teamText);
+        }
+      }
       if (buuMode && chipText) {
         // Chip icon: use the imported PNG when available; fall
         // back to a procedural two-tone disc when the texture
