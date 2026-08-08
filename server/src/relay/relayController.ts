@@ -188,7 +188,10 @@ export class RelayController {
       return;
     }
     session.closing = true;
-    this.log("teardown", { watchId: session.watchId, matchId: session.matchId });
+    this.log("teardown", {
+      watchId: session.watchId,
+      matchId: session.matchId,
+    });
     this.cancelIdle(session);
     try {
       session.client?.stop();
