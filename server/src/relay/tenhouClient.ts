@@ -32,6 +32,10 @@ export type TenhouClientFactory = (
 const TENHOU_WS_URL = process.env.TENHOU_WS_URL ?? "wss://b-ww.mjv.jp/";
 const TENHOU_ORIGIN = process.env.TENHOU_ORIGIN ?? "https://tenhou.net";
 const TENHOU_RELAY_ID = process.env.TENHOU_RELAY_ID ?? "";
+// Tenhou rejects Node's default User-Agent; use a browser-like one (matches
+// TenhouService / the lobby probe).
+const TENHOU_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const KEEPALIVE_MS = 10_000;
 const RECONNECT_MS = 3_000;
 
@@ -77,7 +81,9 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
   }
 
   private open(): void {
-    const ws = new WebSocket(TENHOU_WS_URL, { origin: TENHOU_ORIGIN });
+    const ws = new WebSocket(TENHOU_WS_URL, {
+      headers: { "User-Agent": TENHOU_USER_AGENT, Origin: TENHOU_ORIGIN },
+    });
     this.ws = ws;
     ws.on("open", () => {
       this.send({ tag: "HELO", name: TENHOU_RELAY_ID, sx: "M" });
