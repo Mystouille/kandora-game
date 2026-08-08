@@ -245,6 +245,9 @@ export default function GameSpectateRoute({
           return;
         }
         const renderer = new TableRenderer();
+        // Live spectator view: hide the draw wall and show only the
+        // dead wall (the relay carries no live/dead wall tiles).
+        renderer.setLiveSpectate(true);
         renderer.setOnRenderRequest(() => {
           const r = rendererRef.current;
           const args = latestRenderRef.current;

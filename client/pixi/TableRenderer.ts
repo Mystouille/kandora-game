@@ -346,6 +346,12 @@ export class TableRenderer {
   private showHands = false;
   private showWalls = false;
   private showNames = true;
+  /** Live-spectate mode. A relay feed carries no live-wall or
+   * omniscient dead-wall tiles, so this hides the draw (live) wall
+   * and renders only the dead wall at a fixed spot. Set by the live
+   * spectator host (`spectate.tsx`); replays and live play leave it
+   * false. */
+  private liveSpectate = false;
   /** When false, the post-hand win-info panel and the match-end
    * standings panel are skipped during `render()`. Used by the
    * "hide hand result" eye button next to the panel so reviewers
@@ -1025,6 +1031,19 @@ export class TableRenderer {
     this.showWalls = flag;
   }
 
+  /** Mark this renderer as a live spectator view: hides the draw
+   * (live) wall and shows only the dead wall (4 kan-replacement
+   * tiles, the dora indicator, and up to 4 kan-dora indicators)
+   * fixed at the left of the bottom wall, since a relay never
+   * broadcasts live/dead wall tiles. */
+  setLiveSpectate(flag: boolean): void {
+    if (this.liveSpectate === flag) {
+      return;
+    }
+    this.liveSpectate = flag;
+    this.requestRender();
+  }
+
   /** Render seat display names alongside the score chips. */
   setShowNames(flag: boolean): void {
     this.showNames = flag;
@@ -1394,7 +1413,10 @@ export class TableRenderer {
 
     // Per-seat score chips + dealer marker.
     this.renderScores(view, layout.center);
-    // Per-seat display names next to each discard pond.
+    // Per-seat display names next to each discard pond. Enriched
+    // nameplates set a high zIndex (root is sortableChildren) so they
+    // sit above the walls / hand strips; the result overlay (zIndex
+    // 1000) still draws over them.
     this.renderPlayerNames(view, layout);
     // Round / honba / sticks / wall-remaining centre block.
     this.renderRoundInfo(view, layout.center);
@@ -1728,20 +1750,14 @@ export class TableRenderer {
       seat: 0 | 1 | 2 | 3;
       nameText: Text;
       chipText: Text | null;
-      teamText: Text | null;
       teamLogoTex: Texture | null;
       isDisconnected: boolean;
       hasDabuken: boolean;
     };
-    const TEAM_FONT = 11;
-    const TEAM_LOGO = 16;
-    const TEAM_LOGO_GAP = 4;
     const built: Built[] = [];
     let maxNameW = 0;
     let maxChipTextW = 0;
     let maxNameH = 0;
-    let maxTeamRowW = 0;
-    let maxTeamRowH = 0;
     for (let seat = 0; seat < 4; seat++) {
       const name = view.seatNames[seat];
       if (!name) {
@@ -1780,38 +1796,15 @@ export class TableRenderer {
         chipText.anchor.set(0.5, 0.5);
         maxChipTextW = Math.max(maxChipTextW, Math.ceil(chipText.width));
       }
-      let teamText: Text | null = null;
       let teamLogoTex: Texture | null = null;
       const enrich = this.seatEnrichment[seat];
-      if (enrich) {
-        if (enrich.teamName) {
-          teamText = new Text({
-            text: enrich.teamName,
-            style: new TextStyle({
-              fontFamily: "Inter, system-ui, sans-serif",
-              fontSize: TEAM_FONT,
-              fontWeight: "600",
-              fill: 0xcbd5e1,
-            }),
-          });
-          teamText.anchor.set(0.5, 0.5);
-        }
-        if (enrich.teamLogoUrl) {
-          teamLogoTex = this.ensureTeamLogo(enrich.teamLogoUrl);
-        }
-      }
-      if (teamText || teamLogoTex) {
-        const tW = teamText ? Math.ceil(teamText.width) : 0;
-        const tH = teamText ? Math.ceil(teamText.height) : 0;
-        const rowW = (teamLogoTex ? TEAM_LOGO + TEAM_LOGO_GAP : 0) + tW;
-        maxTeamRowW = Math.max(maxTeamRowW, rowW);
-        maxTeamRowH = Math.max(maxTeamRowH, tH, teamLogoTex ? TEAM_LOGO : 0);
+      if (enrich?.teamLogoUrl) {
+        teamLogoTex = this.ensureTeamLogo(enrich.teamLogoUrl);
       }
       built.push({
         seat: seat as 0 | 1 | 2 | 3,
         nameText,
         chipText,
-        teamText,
         teamLogoTex,
         isDisconnected,
         hasDabuken: buuMode && view.dabuken[seat] === true,
@@ -1822,28 +1815,166 @@ export class TableRenderer {
     }
     // Row metrics.
     const nameRowH = maxNameH + padY * 2;
-    const teamRowH = maxTeamRowH > 0 ? maxTeamRowH + 4 : 0;
     const chipIconR = 14; // chip icon radius (px)
     const chipIconGap = 4; // gap between chip icon and count
     const chipRowH = buuMode ? Math.max(maxNameH, chipIconR * 2) + 4 : 0;
     const dabukenR = 26; // dabuken token radius (px) — 2× the chip icon
     const dabukenRowH = buuMode ? dabukenR * 2 + 4 : 0;
-    // Width: max of name, team row, chip-line content, and dabuken token.
+    // Width: max of name, chip-line content, and dabuken token.
     const chipLineW = buuMode ? chipIconR * 2 + chipIconGap + maxChipTextW : 0;
     const dabukenW = buuMode ? dabukenR * 2 : 0;
-    const contentW = Math.max(maxNameW, maxTeamRowW, chipLineW, dabukenW);
+    const contentW = Math.max(maxNameW, chipLineW, dabukenW);
     const w = contentW + padX * 2;
-    const h = nameRowH + teamRowH + chipRowH + dabukenRowH;
+    const h = nameRowH + chipRowH + dabukenRowH;
     // Row centre y positions inside the box (anchor at (0,0) =
     // box centre; +y down).
     const nameCY = -h / 2 + nameRowH / 2;
-    const teamCY = -h / 2 + nameRowH + teamRowH / 2;
-    const chipCY = -h / 2 + nameRowH + teamRowH + chipRowH / 2;
-    const dabukenCY = -h / 2 + nameRowH + teamRowH + chipRowH + dabukenRowH / 2;
+    const chipCY = -h / 2 + nameRowH + chipRowH / 2;
+    const dabukenCY = -h / 2 + nameRowH + chipRowH + dabukenRowH / 2;
     for (const b of built) {
       const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
       const rect = layout.discards[seat];
       const container = new Container();
+      // Enriched (team) nameplate: team logo as the box background with the
+      // player name on top, anchored to the player's hand (player-right end,
+      // reading upright for that seat).
+      if (b.teamLogoTex) {
+        // (a) Team-logo nameplate next to the player's discard, with the team
+        // name on a pill just below it (both read upright for the viewer).
+        const S = 104;
+        const logoMask = new Graphics()
+          .roundRect(-S / 2, -S / 2, S, S, 8)
+          .fill(0xffffff);
+        const logo = new Sprite(b.teamLogoTex);
+        logo.anchor.set(0.5, 0.5);
+        logo.width = S;
+        logo.height = S;
+        logo.mask = logoMask;
+        const logoBorder = new Graphics()
+          .roundRect(-S / 2, -S / 2, S, S, 8)
+          .stroke({ color: 0xffffff, width: 1, alpha: 0.5 });
+        container.addChild(logoMask, logo, logoBorder);
+
+        // Team name pill below the logo, in the player's reference frame
+        // (child of the rotated logo box → player-below, e.g. screen-right
+        // for the right seat).
+        const teamName = this.seatEnrichment[seat]?.teamName;
+        if (teamName) {
+          const tnText = new Text({
+            text: teamName,
+            style: new TextStyle({
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 14,
+              fontWeight: "600",
+              fill: 0xffffff,
+            }),
+          });
+          tnText.anchor.set(0.5, 0.5);
+          const tnw = Math.ceil(tnText.width) + 10;
+          const tnh = Math.ceil(tnText.height) + 4;
+          const tnBg = new Graphics()
+            .roundRect(-tnw / 2, -tnh / 2, tnw, tnh, 4)
+            .fill({ color: 0x000000, alpha: 0.6 })
+            .stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
+          const tnBox = new Container();
+          tnBox.addChild(tnBg, tnText);
+          tnBox.position.set(0, S / 2 + tnh / 2 + 3);
+          // The top seat's nameplate container is rotated π, which
+          // would leave the team name upside-down; counter-rotate so
+          // it reads upright for the viewer (matching the top player
+          // name), while keeping its player-below position.
+          if (seat === 2) {
+            tnBox.rotation = Math.PI;
+          }
+          container.addChild(tnBox);
+        }
+
+        const dShift = 10;
+        let cx = 0;
+        let cy = 0;
+        let rot = 0;
+        switch (seat) {
+          case 0:
+            rot = 0;
+            cx = rect.x + rect.w + gap + S / 2;
+            cy = rect.y + rect.h / 2 - centerShift + dShift;
+            break;
+          case 1:
+            rot = -Math.PI / 2;
+            cx = rect.x + rect.w / 2 - centerShift + dShift;
+            cy = rect.y - gap - S / 2;
+            break;
+          case 2:
+            rot = Math.PI;
+            cx = rect.x - gap - S / 2;
+            cy = rect.y + rect.h / 2 + centerShift - dShift;
+            break;
+          case 3:
+            rot = Math.PI / 2;
+            cx = rect.x + rect.w / 2 + centerShift - dShift;
+            cy = rect.y + rect.h + gap + S / 2;
+            break;
+        }
+        container.rotation = rot;
+        container.position.set(cx, cy);
+        // Root sorts by zIndex (walls up to 2, hands 10, strips 50).
+        // Lift the nameplate above them so it never hides behind the
+        // draw wall; stays under the result overlay (zIndex 1000).
+        container.zIndex = 100;
+        this.root.addChild(container);
+
+        // (b) Player name centred above the hand. Enlarged; the top seat is
+        // NOT rotated so it stays readable for the viewer.
+        const pName = new Text({
+          text: nameText.text,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 20,
+            fontWeight: "700",
+            fill: 0xffffff,
+          }),
+        });
+        pName.anchor.set(0.5, 0.5);
+        const nw = Math.ceil(pName.width) + padX * 2;
+        const nh = Math.ceil(pName.height) + padY * 2;
+        const nameBox = new Container();
+        const nameBg = new Graphics()
+          .roundRect(-nw / 2, -nh / 2, nw, nh, 6)
+          .fill({ color: 0x000000, alpha: 0.6 })
+          .stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
+        pName.position.set(0, 0);
+        nameBox.addChild(nameBg, pName);
+        const hand = layout.hands[seat];
+        const nhh = nh / 2;
+        const nameGap = 4;
+        switch (seat) {
+          case 0:
+            nameBox.rotation = 0;
+            nameBox.position.set(hand.x + hand.w / 2, hand.y - nhh - nameGap);
+            break;
+          case 1:
+            nameBox.rotation = -Math.PI / 2;
+            nameBox.position.set(hand.x - nhh - nameGap, hand.y + hand.h / 2);
+            break;
+          case 2:
+            nameBox.rotation = 0;
+            nameBox.position.set(
+              hand.x + hand.w / 2,
+              hand.y + hand.h + nhh + nameGap
+            );
+            break;
+          case 3:
+            nameBox.rotation = Math.PI / 2;
+            nameBox.position.set(
+              hand.x + hand.w + nhh + nameGap,
+              hand.y + hand.h / 2
+            );
+            break;
+        }
+        nameBox.zIndex = 100;
+        this.root.addChild(nameBox);
+        continue;
+      }
       const strokeColor = isDisconnected ? 0xf87171 : 0xffffff;
       const strokeAlpha = isDisconnected ? 0.9 : 0.25;
       const bg = new Graphics()
@@ -1853,24 +1984,6 @@ export class TableRenderer {
       container.addChild(bg);
       nameText.position.set(0, nameCY);
       container.addChild(nameText);
-      if (b.teamText || b.teamLogoTex) {
-        const tW = b.teamText ? Math.ceil(b.teamText.width) : 0;
-        const rowW = (b.teamLogoTex ? TEAM_LOGO + TEAM_LOGO_GAP : 0) + tW;
-        let tx = -rowW / 2;
-        if (b.teamLogoTex) {
-          const logo = new Sprite(b.teamLogoTex);
-          logo.anchor.set(0.5, 0.5);
-          logo.width = TEAM_LOGO;
-          logo.height = TEAM_LOGO;
-          logo.position.set(tx + TEAM_LOGO / 2, teamCY);
-          container.addChild(logo);
-          tx += TEAM_LOGO + TEAM_LOGO_GAP;
-        }
-        if (b.teamText) {
-          b.teamText.position.set(tx + tW / 2, teamCY);
-          container.addChild(b.teamText);
-        }
-      }
       if (buuMode && chipText) {
         // Chip icon: use the imported PNG when available; fall
         // back to a procedural two-tone disc when the texture
@@ -2023,6 +2136,12 @@ export class TableRenderer {
    */
   private renderWalls(view: MatchView, layout: TableLayout): void {
     if (!this.root) {
+      return;
+    }
+    // Live spectate: a relay feed carries no live/dead wall tiles, so
+    // draw only the dead wall (dora + kan tiles) at a fixed position.
+    if (this.liveSpectate) {
+      this.renderDeadWallOnly(view, layout);
       return;
     }
     // 16-px vertical (screen-y) offset of the upper stack tile
@@ -2491,6 +2610,70 @@ export class TableRenderer {
       this.root.sortableChildren = true;
       this.root.addChild(wallContainer);
     }
+  }
+
+  /**
+   * Live-spectate dead wall. A relay never broadcasts the live wall
+   * or the omniscient dead-wall snapshot, and can't detect kans from
+   * draw counts, so we render a fixed 7-stack dead-wall block at the
+   * LEFT of the bottom-wall band — independent of the dice break and
+   * the focused seat. Face-up reveals (dora + kan-dora indicators)
+   * come from the live-broadcast `doraIndicators`; everything else
+   * stays face-down.
+   */
+  private renderDeadWallOnly(view: MatchView, layout: TableLayout): void {
+    if (!this.root) {
+      return;
+    }
+    const ROW_OFFSET_Y = 16;
+    const band = layout.wall[0];
+    const tile = layout.tileHorizontal;
+    const screenTileW = tile.w;
+    const screenTileH = tile.h;
+    const stride = screenTileW + tile.gap;
+    const backSheet: SheetKey = "bottomSmall";
+    const faceSheet: SheetKey = "bottomSmall";
+
+    const container = new Container();
+    container.sortableChildren = true;
+    // 7 stacks × 2 rows, idxFromBreak 0..6 laid out left→right:
+    //   stacks 0,1        = the 4 kan-replacement (rinshan) tiles
+    //   stack 2 upper     = dora indicator, lower = ura-dora
+    //   stacks 3..6 upper = kan-dora indicators (shown once revealed)
+    for (let s = 0; s < 7; s++) {
+      for (let row = 0; row < 2; row++) {
+        let faceUpTile: string | null = null;
+        if (row === 1) {
+          const rank = s + 1;
+          if (rank === 3) {
+            faceUpTile = view.doraIndicators[0] ?? null;
+          } else if (rank >= 4 && rank <= 7) {
+            faceUpTile = view.doraIndicators[rank - 3] ?? null;
+          }
+        }
+        const tex = this.getTileTexture(
+          faceUpTile !== null ? faceSheet : backSheet,
+          faceUpTile
+        );
+        const sprite = new Sprite(tex);
+        sprite.anchor.set(0.5, 0.5);
+        sprite.width = screenTileW;
+        sprite.height = screenTileH;
+        sprite.position.set(screenTileW / 2, screenTileH / 2);
+        const child = new Container();
+        child.addChild(sprite);
+        child.position.set(
+          band.x + s * stride,
+          band.y + (row === 0 ? ROW_OFFSET_Y / 2 : -ROW_OFFSET_Y / 2)
+        );
+        // Upper stack tile (row 1) peeks over its lower partner.
+        child.zIndex = row;
+        container.addChild(child);
+      }
+    }
+    // Wall layer on the sortable root (below discards=5 / hands=10).
+    container.zIndex = 2;
+    this.root.addChild(container);
   }
 
   private renderHandResult(
