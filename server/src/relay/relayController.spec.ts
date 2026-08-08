@@ -11,7 +11,7 @@ vi.mock("../persist", () => ({
 }));
 
 import { MatchProcess } from "../match";
-import { RelayController } from "./relayController";
+import { RelayController, RelayCapacityError } from "./relayController";
 import type {
   TenhouClientFactory,
   TenhouClientHandlers,
@@ -157,5 +157,36 @@ describe("RelayController", () => {
     const { matchId } = controller.start("WATCH-5");
     expect(controller.managesMatch(matchId)).toBe(true);
     expect(controller.managesMatch("not-a-relay")).toBe(false);
+  });
+
+  it("caps concurrent relays and reports stats", () => {
+    const matches = new Map<string, MatchProcess>();
+    const controller = new RelayController({
+      matches,
+      closeSpectators: () => undefined,
+      createClient: (watchId, handlers) => new FakeClient(watchId, handlers),
+      maxConcurrent: 2,
+    });
+    controller.start("W-A");
+    controller.start("W-B");
+    expect(controller.stats()).toMatchObject({
+      activeRelays: 2,
+      maxConcurrent: 2,
+    });
+    expect(() => controller.start("W-C")).toThrow(RelayCapacityError);
+    expect(matches.size).toBe(2);
+    // Reusing an existing watch-id never trips the cap.
+    expect(() => controller.start("W-A")).not.toThrow();
+    // Freeing a slot lets a new relay in.
+    controller.stopByWatch("W-A");
+    expect(() => controller.start("W-C")).not.toThrow();
+  });
+
+  it("counts viewers in stats", () => {
+    const { controller } = harness();
+    const { matchId } = controller.start("W-V");
+    controller.onSpectatorAttached(matchId);
+    controller.onSpectatorAttached(matchId);
+    expect(controller.stats().totalViewers).toBe(2);
   });
 });

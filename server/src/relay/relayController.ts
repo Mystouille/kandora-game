@@ -12,6 +12,14 @@ import { MatchProcess } from "../match";
 import { TenhouSpectateDecoder } from "~/game/adapters/tenhou/spectateDecoder";
 import type { TenhouClientFactory, TenhouSpectateClient } from "./tenhouClient";
 
+/** Thrown by {@link RelayController.start} when the concurrent-relay cap is hit. */
+export class RelayCapacityError extends Error {
+  constructor(max: number) {
+    super(`relay capacity reached (max ${max})`);
+    this.name = "RelayCapacityError";
+  }
+}
+
 interface RelaySession {
   watchId: string;
   matchId: string;
@@ -31,15 +39,23 @@ export interface RelayControllerOptions {
   createClient: TenhouClientFactory;
   /** Grace period with zero spectators before a relay tears down. */
   idleGraceMs?: number;
+  /** Max concurrent live relays (upstream Tenhou connections). Default 20. */
+  maxConcurrent?: number;
+  /** Optional structured logger for relay lifecycle events. */
+  log?: (event: string, data: Record<string, unknown>) => void;
 }
 
 export class RelayController {
   private readonly byWatch = new Map<string, RelaySession>();
   private readonly byMatch = new Map<string, RelaySession>();
   private readonly idleGraceMs: number;
+  private readonly maxConcurrent: number;
+  private readonly log: (event: string, data: Record<string, unknown>) => void;
 
   constructor(private readonly opts: RelayControllerOptions) {
     this.idleGraceMs = opts.idleGraceMs ?? 60_000;
+    this.maxConcurrent = opts.maxConcurrent ?? 20;
+    this.log = opts.log ?? ((): void => undefined);
   }
 
   /** De-duplicated by watch-id: returns an existing relay's matchId or opens one. */
@@ -48,6 +64,10 @@ export class RelayController {
     if (existing && !existing.closing) {
       this.cancelIdle(existing);
       return { matchId: existing.matchId };
+    }
+    if (this.byMatch.size >= this.maxConcurrent) {
+      this.log("capacity_reached", { watchId, max: this.maxConcurrent });
+      throw new RelayCapacityError(this.maxConcurrent);
     }
     const matchId = nanoid(12);
     const match = MatchProcess.createRelayMatch(matchId, watchId);
@@ -71,6 +91,7 @@ export class RelayController {
     session.client.start();
     // No spectator yet — arm the idle timer so an abandoned start self-cleans.
     this.armIdle(session);
+    this.log("start", { watchId, matchId, active: this.byMatch.size });
     return { matchId };
   }
 
@@ -91,6 +112,23 @@ export class RelayController {
   /** True when the matchId belongs to a controller-managed relay. */
   managesMatch(matchId: string): boolean {
     return this.byMatch.has(matchId);
+  }
+
+  /** Snapshot for the metrics endpoint. */
+  stats(): {
+    activeRelays: number;
+    totalViewers: number;
+    maxConcurrent: number;
+  } {
+    let totalViewers = 0;
+    for (const session of this.byMatch.values()) {
+      totalViewers += session.viewers;
+    }
+    return {
+      activeRelays: this.byMatch.size,
+      totalViewers,
+      maxConcurrent: this.maxConcurrent,
+    };
   }
 
   onSpectatorAttached(matchId: string): void {
@@ -150,6 +188,7 @@ export class RelayController {
       return;
     }
     session.closing = true;
+    this.log("teardown", { watchId: session.watchId, matchId: session.matchId });
     this.cancelIdle(session);
     try {
       session.client?.stop();

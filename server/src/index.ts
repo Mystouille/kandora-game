@@ -47,7 +47,7 @@ import {
 import { MatchProcess, setReadyCheckMs } from "./match";
 import { connectGameDb } from "./db";
 import { getMatchStatus } from "./persist";
-import { RelayController } from "./relay/relayController";
+import { RelayController, RelayCapacityError } from "./relay/relayController";
 import { createWsTenhouClient } from "./relay/tenhouClient";
 
 // The host bootstrap (portal or standalone) injects the PortalAdapter via
@@ -133,10 +133,13 @@ function closeRelaySpectators(matchId: string): void {
 }
 
 // One live Tenhou connection per watched game, fanned out to spectators.
+const RELAY_MAX_CONCURRENT =
+  Number(process.env.RELAY_MAX_CONCURRENT ?? 20) || 20;
 const relayController = new RelayController({
   matches,
   closeSpectators: closeRelaySpectators,
   createClient: createWsTenhouClient,
+  maxConcurrent: RELAY_MAX_CONCURRENT,
 });
 
 /**
@@ -236,6 +239,10 @@ const server = http.createServer((req, res) => {
     res.statusCode = 200;
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
+  if (req.method === "GET" && req.url === "/relay/stats") {
+    handleRelayStats(req, res);
     return;
   }
   if (req.method === "POST" && req.url === "/relay/start") {
@@ -409,6 +416,25 @@ function handleListRooms(res: http.ServerResponse): void {
 }
 
 /**
+ * `GET /relay/stats` — relay metrics (active relays, total viewers, cap) for
+ * monitoring. Auth: `x-relay-secret`.
+ */
+function handleRelayStats(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): void {
+  if (!relayAuthorized(req)) {
+    res.statusCode = 401;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ error: "relay_unauthorized" }));
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify(relayController.stats()));
+}
+
+/**
  * `POST /relay/start` — start (or reuse) a live Tenhou relay for a watch-id.
  * De-duplicated: a second viewer of the same game reuses the existing relay.
  * Auth: `x-relay-secret`. Body: `{ watchId }`. Returns `{ matchId }`.
@@ -440,7 +466,15 @@ async function handleRelayStart(
     reply(400, { error: "missing_watchId" });
     return;
   }
-  reply(200, relayController.start(watchId));
+  try {
+    reply(200, relayController.start(watchId));
+  } catch (err) {
+    if (err instanceof RelayCapacityError) {
+      reply(503, { error: "relay_capacity" });
+      return;
+    }
+    throw err;
+  }
 }
 
 /**
