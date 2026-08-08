@@ -87,6 +87,10 @@ export async function archiveMatch(args: {
  */
 export async function archiveReplayLog(args: {
   matchId: string;
+  /** Replay source; defaults to "ingame" (engine matches). Relay matches pass e.g. "tenhou". */
+  source?: string;
+  /** Platform-native game id; defaults to `matchId`. */
+  sourceGameId?: string;
   startedAt: Date;
   endedAt: Date;
   ruleSet: string;
@@ -99,12 +103,14 @@ export async function archiveReplayLog(args: {
     place: 1 | 2 | 3 | 4;
   }>;
 }): Promise<void> {
+  const source = args.source ?? "ingame";
+  const sourceGameId = args.sourceGameId ?? args.matchId;
   await ReplayLogModel.updateOne(
-    { source: "ingame", sourceGameId: args.matchId },
+    { source, sourceGameId },
     {
       $set: {
-        source: "ingame",
-        sourceGameId: args.matchId,
+        source,
+        sourceGameId,
         ruleSet: args.ruleSet,
         ruleSetDetails: args.ruleSetDetails,
         startedAt: args.startedAt.getTime(),

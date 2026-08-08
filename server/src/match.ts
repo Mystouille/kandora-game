@@ -380,6 +380,22 @@ export class MatchProcess {
     return this.statusValue;
   }
 
+  /** True for a relay/virtual match fed by an external decoder (e.g. Tenhou
+   * live spectating) rather than the local rules engine. */
+  private relayMode = false;
+  get isRelay(): boolean {
+    return this.relayMode;
+  }
+  /** Relay archive metadata, set by `createRelayMatch` / `injectRelayEvent`. */
+  private relaySourceGameId: string | null = null;
+  private relayRuleSet = "tenhou-default";
+  private relaySeats: Array<{ seat: Seat; displayName: string }> | null = null;
+  private relayFinalScores: Array<{
+    seat: Seat;
+    score: number;
+    place: 1 | 2 | 3 | 4;
+  }> | null = null;
+
   /**
    * Lightweight projection of this match for the lobby's live-
    * rooms list. Safe to call in any status:
@@ -917,6 +933,32 @@ export class MatchProcess {
     for (let s = 0; s < 4; s++) {
       m.players.set(s as Seat, null);
     }
+    return m;
+  }
+
+  /**
+   * Factory for a relay/virtual match: no human seats, no rules engine.
+   * Events arrive from an external decoder via `injectRelayEvent` and fan out
+   * to spectators through the normal omniscient public projection. Starts in
+   * `playing` so the spectator handshake accepts it immediately.
+   */
+  static createRelayMatch(
+    matchId: string,
+    sourceGameId: string,
+    ruleSet = "tenhou-default"
+  ): MatchProcess {
+    const placeholders: MatchPlayerInit[] = [
+      { userId: "__relay__:0", displayName: "", isBot: true },
+      { userId: "__relay__:1", displayName: "", isBot: true },
+      { userId: "__relay__:2", displayName: "", isBot: true },
+      { userId: "__relay__:3", displayName: "", isBot: true },
+    ];
+    const m = new MatchProcess(matchId, 0, placeholders);
+    m.relayMode = true;
+    m.statusValue = "playing";
+    m.startedAt = new Date();
+    m.relaySourceGameId = sourceGameId;
+    m.relayRuleSet = ruleSet;
     return m;
   }
 
@@ -4175,6 +4217,86 @@ export class MatchProcess {
     // and spectator) reads from the same `eventLog`. No per-event
     // database writes in this path — see `persist.ts` for the
     // durability story.
+  }
+
+  /**
+   * Append an event from an external relay (e.g. Tenhou live spectating) and
+   * fan it out to spectators. Bypasses the rules engine, per-seat projection,
+   * timers, and bots. Events are expected to be pre-enriched (omniscient
+   * `hand_start`), so no `enrichForArchive` pass runs. No-op unless this is a
+   * relay match still in `playing` status.
+   */
+  injectRelayEvent(event: GameEvent): void {
+    if (!this.relayMode || this.statusValue !== "playing") {
+      return;
+    }
+    this.eventLog.push({
+      seq: this.nextSeq++,
+      event,
+      emittedAt: Date.now(),
+    });
+    if (event.type === "match_start") {
+      this.relaySeats = event.seats.map((s) => ({
+        seat: s.seat,
+        displayName: s.displayName,
+      }));
+      for (const s of event.seats) {
+        this.players.set(s.seat, {
+          userId: s.userId,
+          displayName: s.displayName,
+          isBot: false,
+        });
+      }
+    } else if (event.type === "match_end") {
+      this.relayFinalScores = event.finalScores.map((f) => ({
+        seat: f.seat,
+        score: f.score,
+        place: f.place as 1 | 2 | 3 | 4,
+      }));
+    }
+    this.sendToSpectators(event);
+    this.notifyDelayedSpectators();
+  }
+
+  /**
+   * Finalize a relay match: mark it `finished` and archive the collected event
+   * log as a cross-platform `ReplayLog` (best-effort; non-fatal on failure).
+   */
+  async closeRelay(): Promise<void> {
+    if (!this.relayMode || this.statusValue !== "playing") {
+      return;
+    }
+    this.statusValue = "finished";
+    const seats = ([0, 1, 2, 3] as Seat[]).map((seat) => {
+      const fs = this.relayFinalScores?.find((f) => f.seat === seat);
+      return {
+        seat,
+        displayName:
+          this.relaySeats?.find((r) => r.seat === seat)?.displayName ||
+          this.players.get(seat)?.displayName ||
+          `Seat ${seat}`,
+        finalScore: fs?.score ?? 0,
+        place: fs?.place ?? ((seat + 1) as 1 | 2 | 3 | 4),
+      };
+    });
+    try {
+      await archiveReplayLog({
+        matchId: this.matchId,
+        source: "tenhou",
+        sourceGameId: this.relaySourceGameId ?? this.matchId,
+        startedAt: this.startedAt ?? new Date(),
+        endedAt: new Date(),
+        ruleSet: this.relayRuleSet,
+        events: this.eventLog.map((e) => e.event),
+        seats,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[game-server] relay archiveReplayLog failed (non-fatal)",
+        err
+      );
+    }
   }
 
   /**

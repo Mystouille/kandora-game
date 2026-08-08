@@ -7,7 +7,10 @@
  * Per-connection lifecycle:
  *   1. Refuse the WS upgrade when `GAME_ENABLED=false`.
  *   2. On open, expect a `hello { token, matchId }` frame within
- *      a short window. Verify token via `PortalAdapter`.
+ *      a short window. Spectators (`spectate: true`) are read-only,
+ *      omniscient public viewers and are auth-exempt (no token/
+ *      profile required); players verify their token via
+ *      `PortalAdapter`.
  *   3. Find the resident `MatchProcess` for `matchId` (or create
  *      a fresh waiting room).
  *   4. Claim a seat for this user (random empty slot, or the
@@ -35,6 +38,7 @@ import {
 import {
   ClientMessageSchema,
   MatchDebugSchema,
+  GameEventSchema,
   type ClientMessage,
   type ServerMessage,
   type Seat,
@@ -43,6 +47,8 @@ import {
 import { MatchProcess, setReadyCheckMs } from "./match";
 import { connectGameDb } from "./db";
 import { getMatchStatus } from "./persist";
+import { RelayController } from "./relay/relayController";
+import { createWsTenhouClient } from "./relay/tenhouClient";
 
 // The host bootstrap (portal or standalone) injects the PortalAdapter via
 // `setAdapter(...)` before importing this module.
@@ -109,6 +115,29 @@ const matches = new Map<string, MatchProcess>();
 // to drop an abandoned match. The set is created lazily on first
 // attach and deleted in the close hook when it goes empty.
 const spectatorSockets = new Map<string, Set<WebSocket>>();
+
+// Force-close and drop all spectator sockets for a match (used when a relay
+// tears down).
+function closeRelaySpectators(matchId: string): void {
+  const specs = spectatorSockets.get(matchId);
+  if (specs) {
+    for (const ws of specs) {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+    }
+    spectatorSockets.delete(matchId);
+  }
+}
+
+// One live Tenhou connection per watched game, fanned out to spectators.
+const relayController = new RelayController({
+  matches,
+  closeSpectators: closeRelaySpectators,
+  createClient: createWsTenhouClient,
+});
 
 /**
  * Per-match grace timer that drops a freshly-created waiting
@@ -209,23 +238,54 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ status: "ok" }));
     return;
   }
+  if (req.method === "POST" && req.url === "/relay/start") {
+    void handleRelayStart(req, res);
+    return;
+  }
+  if (req.method === "POST" && req.url === "/relay/stop") {
+    void handleRelayStop(req, res);
+    return;
+  }
+  if (req.method === "POST" && req.url === "/relay/open") {
+    void handleRelayOpen(req, res);
+    return;
+  }
+  if (req.method === "POST" && req.url === "/relay/inject") {
+    void handleRelayInject(req, res);
+    return;
+  }
+  if (req.method === "POST" && req.url === "/relay/close") {
+    void handleRelayClose(req, res);
+    return;
+  }
   res.statusCode = 200;
   res.setHeader("content-type", "text/plain");
   res.end("kandora game-server\n");
 });
 
+// Shared secret gating the relay-control endpoints. Unset ⇒ relay disabled.
+const RELAY_SECRET = process.env.RELAY_SECRET ?? "";
+function relayAuthorized(req: http.IncomingMessage): boolean {
+  return (
+    RELAY_SECRET.length > 0 && req.headers["x-relay-secret"] === RELAY_SECRET
+  );
+}
+
 /**
- * Read the (small) JSON body of a request, capped at 4 KiB to
- * keep the create-room endpoint resilient against accidental
- * floods. Returns `null` on parse failure or oversize.
+ * Read the JSON body of a request, capped at `maxBytes` to keep the
+ * endpoints resilient against accidental floods. Returns `null` on
+ * parse failure or oversize.
  */
-async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+  req: http.IncomingMessage,
+  maxBytes = 4096
+): Promise<unknown> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
     const buf = chunk as Buffer;
     total += buf.length;
-    if (total > 4096) {
+    if (total > maxBytes) {
       return null;
     }
     chunks.push(buf);
@@ -348,6 +408,214 @@ function handleListRooms(res: http.ServerResponse): void {
   res.end(JSON.stringify({ rooms }));
 }
 
+/**
+ * `POST /relay/start` — start (or reuse) a live Tenhou relay for a watch-id.
+ * De-duplicated: a second viewer of the same game reuses the existing relay.
+ * Auth: `x-relay-secret`. Body: `{ watchId }`. Returns `{ matchId }`.
+ */
+async function handleRelayStart(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  const reply = (status: number, body: unknown): void => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(body));
+  };
+  if (!GAME_ENABLED) {
+    reply(404, { error: "game_disabled" });
+    return;
+  }
+  if (!relayAuthorized(req)) {
+    reply(401, { error: "relay_unauthorized" });
+    return;
+  }
+  const body = await readJsonBody(req);
+  if (body === null || typeof body !== "object") {
+    reply(400, { error: "invalid_body" });
+    return;
+  }
+  const { watchId } = body as { watchId?: unknown };
+  if (typeof watchId !== "string" || watchId.length === 0) {
+    reply(400, { error: "missing_watchId" });
+    return;
+  }
+  reply(200, relayController.start(watchId));
+}
+
+/**
+ * `POST /relay/stop` — stop a live Tenhou relay by watch-id (archives + drops
+ * the match). Auth: `x-relay-secret`. Body: `{ watchId }`.
+ */
+async function handleRelayStop(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  const reply = (status: number, body: unknown): void => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(body));
+  };
+  if (!relayAuthorized(req)) {
+    reply(401, { error: "relay_unauthorized" });
+    return;
+  }
+  const body = await readJsonBody(req);
+  if (body === null || typeof body !== "object") {
+    reply(400, { error: "invalid_body" });
+    return;
+  }
+  const { watchId } = body as { watchId?: unknown };
+  if (typeof watchId !== "string") {
+    reply(400, { error: "missing_watchId" });
+    return;
+  }
+  relayController.stopByWatch(watchId);
+  reply(200, { ok: true });
+}
+
+/**
+ * `POST /relay/open` — create a spectator-only relay match fed by an external
+ * decoder (Tenhou live). Auth: `x-relay-secret` header. Body:
+ * `{ sourceGameId, ruleSet? }`. Returns `{ matchId }`.
+ */
+async function handleRelayOpen(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  const reply = (status: number, body: unknown): void => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(body));
+  };
+  if (!GAME_ENABLED) {
+    reply(404, { error: "game_disabled" });
+    return;
+  }
+  if (!relayAuthorized(req)) {
+    reply(401, { error: "relay_unauthorized" });
+    return;
+  }
+  const body = await readJsonBody(req);
+  if (body === null || typeof body !== "object") {
+    reply(400, { error: "invalid_body" });
+    return;
+  }
+  const { sourceGameId, ruleSet } = body as {
+    sourceGameId?: unknown;
+    ruleSet?: unknown;
+  };
+  if (typeof sourceGameId !== "string" || sourceGameId.length === 0) {
+    reply(400, { error: "missing_sourceGameId" });
+    return;
+  }
+  const matchId = nanoid(12);
+  matches.set(
+    matchId,
+    MatchProcess.createRelayMatch(
+      matchId,
+      sourceGameId,
+      typeof ruleSet === "string" ? ruleSet : undefined
+    )
+  );
+  reply(200, { matchId });
+}
+
+/**
+ * `POST /relay/inject` — append one decoded `GameEvent` to a relay match; it
+ * fans out to attached spectators. Auth: `x-relay-secret`. Body:
+ * `{ matchId, event }`.
+ */
+async function handleRelayInject(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  const reply = (status: number, body: unknown): void => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(body));
+  };
+  if (!GAME_ENABLED) {
+    reply(404, { error: "game_disabled" });
+    return;
+  }
+  if (!relayAuthorized(req)) {
+    reply(401, { error: "relay_unauthorized" });
+    return;
+  }
+  const body = await readJsonBody(req, 65536);
+  if (body === null || typeof body !== "object") {
+    reply(400, { error: "invalid_body" });
+    return;
+  }
+  const { matchId, event } = body as { matchId?: unknown; event?: unknown };
+  if (typeof matchId !== "string") {
+    reply(400, { error: "missing_matchId" });
+    return;
+  }
+  const match = matches.get(matchId);
+  if (!match || !match.isRelay) {
+    reply(404, { error: "relay_not_found" });
+    return;
+  }
+  const parsed = GameEventSchema.safeParse(event);
+  if (!parsed.success) {
+    reply(400, { error: "invalid_event", detail: parsed.error.message });
+    return;
+  }
+  match.injectRelayEvent(parsed.data);
+  reply(202, { ok: true });
+}
+
+/**
+ * `POST /relay/close` — finalize a relay match (archive its ReplayLog and drop
+ * it from the registry, closing spectator sockets). Auth: `x-relay-secret`.
+ * Body: `{ matchId }`.
+ */
+async function handleRelayClose(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  const reply = (status: number, body: unknown): void => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(body));
+  };
+  if (!relayAuthorized(req)) {
+    reply(401, { error: "relay_unauthorized" });
+    return;
+  }
+  const body = await readJsonBody(req);
+  if (body === null || typeof body !== "object") {
+    reply(400, { error: "invalid_body" });
+    return;
+  }
+  const { matchId } = body as { matchId?: unknown };
+  if (typeof matchId !== "string") {
+    reply(400, { error: "missing_matchId" });
+    return;
+  }
+  const match = matches.get(matchId);
+  if (!match || !match.isRelay) {
+    reply(404, { error: "relay_not_found" });
+    return;
+  }
+  await match.closeRelay();
+  const specs = spectatorSockets.get(matchId);
+  if (specs) {
+    for (const ws of specs) {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+    }
+    spectatorSockets.delete(matchId);
+  }
+  matches.delete(matchId);
+  reply(200, { ok: true });
+}
+
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
@@ -394,25 +662,15 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     return;
   }
 
-  const verified = await adapter.verifyToken(hello.token);
-  if (!verified) {
-    sendError("auth_failed", "Invalid or expired token.");
-    ws.close();
-    return;
-  }
-  const profile = await adapter.getUserProfile(verified.userId);
-  if (!profile) {
-    sendError("user_not_found", "User profile not found.");
-    ws.close();
-    return;
-  }
-
-  // Spectator handshake: read-only public view of an in-progress
-  // match. No seat claim, no `act`/`ready`/`start_match`/
-  // `leave_seat` accepted. The match must already be `playing`
-  // in-memory — we don't currently support cross-instance
-  // spectating (matches are pinned to the instance that hosts
-  // them) nor watching `waiting` / `finished` rooms.
+  // Spectator handshake: read-only, omniscient public view of an
+  // in-progress match. No seat claim, no `act`/`ready`/`start_match`/
+  // `leave_seat` accepted — so spectators need NO token and NO user
+  // profile. This keeps live viewing public and lets any host app
+  // (portal, tournaments) embed the viewer without sharing a user
+  // store. The match must already be `playing` in-memory — we don't
+  // currently support cross-instance spectating (matches are pinned to
+  // the instance that hosts them) nor watching `waiting` / `finished`
+  // rooms. (Players below still require a verified, known user.)
   if (hello.spectate === true) {
     const match = matches.get(matchId);
     if (!match || match.status !== "playing") {
@@ -437,6 +695,20 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     } else {
       handleSpectatorConnection(ws, match, send, sendError);
     }
+    return;
+  }
+
+  // ---- Player path: requires a verified token + a known user. ----
+  const verified = await adapter.verifyToken(hello.token);
+  if (!verified) {
+    sendError("auth_failed", "Invalid or expired token.");
+    ws.close();
+    return;
+  }
+  const profile = await adapter.getUserProfile(verified.userId);
+  if (!profile) {
+    sendError("user_not_found", "User profile not found.");
+    ws.close();
     return;
   }
 
@@ -715,7 +987,21 @@ function handleSpectatorConnection(
   sendError: (code: string, message: string) => void
 ): void {
   match.attachSpectator(send);
-  send(match.buildSpectatorSnapshot());
+  if (match.isRelay) {
+    // Relay matches have no engine state; hydrate the spectator from the
+    // event buffer instead of an engine snapshot.
+    const buffered = match.replaySpectatorBuffer(0);
+    if (buffered.length > 0) {
+      send({
+        type: "event",
+        seq: buffered[buffered.length - 1].seq,
+        events: buffered.map((e) => e.event),
+        legalActions: [],
+      });
+    }
+  } else {
+    send(match.buildSpectatorSnapshot());
+  }
 
   let specSet = spectatorSockets.get(match.matchId);
   if (!specSet) {
@@ -723,6 +1009,7 @@ function handleSpectatorConnection(
     spectatorSockets.set(match.matchId, specSet);
   }
   specSet.add(ws);
+  relayController.onSpectatorAttached(match.matchId);
 
   ws.on("message", (raw) => {
     let data: unknown;
@@ -773,6 +1060,7 @@ function handleSpectatorConnection(
   });
   ws.on("close", () => {
     match.detachSpectator(send);
+    relayController.onSpectatorGone(match.matchId);
     const set = spectatorSockets.get(match.matchId);
     if (set) {
       set.delete(ws);
