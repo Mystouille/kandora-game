@@ -208,6 +208,14 @@ export default function GameSpectateRoute({
     "",
     "",
   ]);
+  const [seatEnrichment, setSeatEnrichment] = useState<
+    [
+      SeatEnrichment | null,
+      SeatEnrichment | null,
+      SeatEnrichment | null,
+      SeatEnrichment | null,
+    ]
+  >([null, null, null, null]);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [conn, setConn] = useState<string>("idle");
 
@@ -300,7 +308,12 @@ export default function GameSpectateRoute({
                   }
                 }
                 setSeatNames(names);
-                rendererRef.current?.setSeatEnrichment(bySeat);
+                setSeatEnrichment([
+                  bySeat[0],
+                  bySeat[1],
+                  bySeat[2],
+                  bySeat[3],
+                ]);
               }
             )
             .catch(() => {
@@ -475,6 +488,12 @@ export default function GameSpectateRoute({
     r.setShowHands(overlays.showHands);
     r.setShowWalls(overlays.showWalls);
     r.setShowNames(overlays.showNames);
+    r.setSeatEnrichment([
+      seatEnrichment[(0 + focusSeat) % 4],
+      seatEnrichment[(1 + focusSeat) % 4],
+      seatEnrichment[(2 + focusSeat) % 4],
+      seatEnrichment[(3 + focusSeat) % 4],
+    ]);
     const args = replayViewToMatchView(view, {
       index: playIndex,
       mySeat: focusSeat,
@@ -484,7 +503,16 @@ export default function GameSpectateRoute({
     });
     latestRenderRef.current = args;
     r.render(args);
-  }, [view, playIndex, focusSeat, overlays, matchId, seatNames, roomState]);
+  }, [
+    view,
+    playIndex,
+    focusSeat,
+    overlays,
+    matchId,
+    seatNames,
+    seatEnrichment,
+    roomState,
+  ]);
 
   // -----------------------------------------------------------------------
   // Navigation helpers

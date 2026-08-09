@@ -38,16 +38,54 @@ const TENHOU_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const KEEPALIVE_MS = 10_000;
 const RECONNECT_MS = 3_000;
+export const WGC_ACTION_SPACING_MS = 120;
+
+export interface TimedTenhouFrame {
+  delayMs: number;
+  frame: Record<string, unknown>;
+}
+
+/**
+ * Split a live WGC payload into renderable actions. The delay before the first
+ * node has already elapsed on the wire, while numeric values between nodes are
+ * presentation delays that still need to be preserved.
+ */
+export function splitTimedWgcFrame(
+  frame: Record<string, unknown>
+): TimedTenhouFrame[] {
+  const childNodes = frame.childNodes;
+  if (!Array.isArray(childNodes)) {
+    return [{ delayMs: 0, frame }];
+  }
+
+  const frames: TimedTenhouFrame[] = [];
+  let hasAction = false;
+  let pendingDelayMs = 0;
+  for (const child of childNodes) {
+    if (typeof child === "number" && Number.isFinite(child)) {
+      if (hasAction) {
+        pendingDelayMs += Math.max(0, child);
+      }
+      continue;
+    }
+    frames.push({
+      delayMs: hasAction
+        ? Math.max(WGC_ACTION_SPACING_MS, pendingDelayMs)
+        : 0,
+      frame: { ...frame, childNodes: [child] },
+    });
+    hasAction = true;
+    pendingDelayMs = 0;
+  }
+  return frames;
+}
 
 export class WsTenhouSpectateClient implements TenhouSpectateClient {
   private ws: WebSocket | null = null;
   private keepalive: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private frameTimer: NodeJS.Timeout | null = null;
-  private readonly frameQueue: Array<{
-    delayMs: number;
-    frame: Record<string, unknown>;
-  }> = [];
+  private readonly frameQueue: TimedTenhouFrame[] = [];
   private stopped = false;
 
   constructor(
@@ -157,33 +195,7 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
   }
 
   private enqueueTimedFrame(frame: Record<string, unknown>): void {
-    const childNodes = frame.childNodes;
-    if (!Array.isArray(childNodes)) {
-      this.handlers.onFrame(frame);
-      return;
-    }
-    let delayMs = 0;
-    let group: unknown[] = [];
-    const flush = (): void => {
-      if (group.length === 0) {
-        return;
-      }
-      this.frameQueue.push({
-        delayMs,
-        frame: { ...frame, childNodes: group },
-      });
-      delayMs = 0;
-      group = [];
-    };
-    for (const child of childNodes) {
-      if (typeof child === "number" && Number.isFinite(child)) {
-        flush();
-        delayMs += Math.max(0, child);
-      } else {
-        group.push(child);
-      }
-    }
-    flush();
+    this.frameQueue.push(...splitTimedWgcFrame(frame));
     this.pumpFrameQueue();
   }
 
