@@ -146,6 +146,7 @@ const PLAYER_PANEL_LINK_WIDTH = 28;
 const PLAYER_PANEL_ALPHA = 0.28;
 /** Above the identity panel (-10), below every root board tile layer (0+). */
 const PLAYER_PANEL_CONTENT_Z = -9;
+const RELATIVE_SCORE_DISPLAY_MS = 4_000;
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
  *  East, South, West, North. */
@@ -174,6 +175,18 @@ export function replayDiscardingSeat(
     }
   }
   return null;
+}
+
+export function formatTableScore(
+  score: number,
+  focusedScore: number,
+  relative: boolean
+): string {
+  if (!relative) {
+    return `${score}`;
+  }
+  const difference = score - focusedScore;
+  return difference > 0 ? `+${difference}` : `${difference}`;
 }
 
 /** Axis-aligned bounding box of a non-empty list of `Rect`s. */
@@ -361,6 +374,8 @@ export class TableRenderer {
   private showUndealtWall = false;
   private showWalls = false;
   private showNames = true;
+  private showRelativeScores = false;
+  private relativeScoresResetTimer: ReturnType<typeof setTimeout> | null = null;
   /** Live-spectate mode. A relay feed carries no live-wall or
    * omniscient dead-wall tiles, so this hides the draw (live) wall
    * and renders only the dead wall at a fixed spot. Set by the live
@@ -1561,6 +1576,10 @@ export class TableRenderer {
   }
 
   destroy(): void {
+    if (this.relativeScoresResetTimer !== null) {
+      clearTimeout(this.relativeScoresResetTimer);
+      this.relativeScoresResetTimer = null;
+    }
     if (this.resizeRafHandle !== null) {
       cancelAnimationFrame(this.resizeRafHandle);
       this.resizeRafHandle = null;
@@ -1783,6 +1802,7 @@ export class TableRenderer {
       this.renderSeat(view, seat, cx, cy, layout);
     }
 
+    this.renderCenterScoreToggle(layout.center);
     // Per-seat score chips + dealer marker.
     this.renderScores(view, layout.center);
     // Per-seat identity content next to each discard pond. It sits above
@@ -1928,6 +1948,41 @@ export class TableRenderer {
   // Score / round / result overlays
   // -------------------------------------------------------------------------
 
+  private renderCenterScoreToggle(center: Rect): void {
+    if (!this.root) {
+      return;
+    }
+    const hitArea = new Graphics()
+      .rect(center.x, center.y, center.w, center.h)
+      .fill({ color: 0x000000, alpha: 0.001 });
+    hitArea.eventMode = "static";
+    hitArea.cursor = "pointer";
+    hitArea.on("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.stopPropagation();
+      if (event.nativeEvent instanceof Event) {
+        event.nativeEvent.preventDefault();
+        event.nativeEvent.stopPropagation();
+      }
+      if (this.relativeScoresResetTimer !== null) {
+        clearTimeout(this.relativeScoresResetTimer);
+        this.relativeScoresResetTimer = null;
+      }
+      this.showRelativeScores = !this.showRelativeScores;
+      if (this.showRelativeScores) {
+        this.relativeScoresResetTimer = setTimeout(() => {
+          this.relativeScoresResetTimer = null;
+          this.showRelativeScores = false;
+          this.requestRender();
+        }, RELATIVE_SCORE_DISPLAY_MS);
+      }
+      this.requestRender();
+    });
+    this.root.addChild(hitArea);
+  }
+
   private renderScores(view: MatchView, center: Rect): void {
     if (!this.root) {
       return;
@@ -1963,7 +2018,11 @@ export class TableRenderer {
         .roundRect(-chipW / 2, -chipH / 2, chipW, chipH, 6)
         .fill({ color: 0x000000, alpha: 0.7 });
       const txt = new Text({
-        text: `${view.scores[seat]}`,
+        text: formatTableScore(
+          view.scores[seat],
+          view.scores[0],
+          this.showRelativeScores && seat !== 0
+        ),
         style: new TextStyle({
           fontFamily: "Inter, system-ui, sans-serif",
           fontSize: Math.max(12, Math.round(chipH * 0.6)),

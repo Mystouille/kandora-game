@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
-import { replayDiscardingSeat } from "./TableRenderer";
+import { formatTableScore, replayDiscardingSeat } from "./TableRenderer";
 
 type ReplayTurnView = Pick<
   MatchView,
@@ -40,5 +40,20 @@ describe("replayDiscardingSeat", () => {
 
   it("returns null after every seat has completed its turn", () => {
     expect(replayDiscardingSeat(turnView([13, 13, 13, 13]))).toBe(null);
+  });
+});
+
+describe("formatTableScore", () => {
+  it("keeps absolute scores unchanged", () => {
+    expect(formatTableScore(31500, 25000, false)).toBe("31500");
+  });
+
+  it("prefixes strictly positive relative scores with a plus", () => {
+    expect(formatTableScore(31500, 25000, true)).toBe("+6500");
+  });
+
+  it("does not prefix zero or negative relative scores", () => {
+    expect(formatTableScore(25000, 25000, true)).toBe("0");
+    expect(formatTableScore(18700, 25000, true)).toBe("-6300");
   });
 });
