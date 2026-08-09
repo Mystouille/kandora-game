@@ -342,6 +342,10 @@ export default function GameSpectateRoute({
               return;
             }
             if (msg.type === "event") {
+              // Relay matches have no engine snapshot. Their first payload is
+              // an event batch beginning with match_start / hand_start, so
+              // seed the replay reducer with its empty canonical baseline.
+              setBaseline((current) => current ?? initialView());
               setEvents((prev) => {
                 const next = [...prev, ...msg.events];
                 if (liveRef.current) {
