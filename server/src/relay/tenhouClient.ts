@@ -43,6 +43,11 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
   private ws: WebSocket | null = null;
   private keepalive: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private frameTimer: NodeJS.Timeout | null = null;
+  private readonly frameQueue: Array<{
+    delayMs: number;
+    frame: Record<string, unknown>;
+  }> = [];
   private stopped = false;
 
   constructor(
@@ -78,6 +83,11 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.frameTimer) {
+      clearTimeout(this.frameTimer);
+      this.frameTimer = null;
+    }
+    this.frameQueue.length = 0;
   }
 
   private open(): void {
@@ -98,6 +108,11 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
         clearInterval(this.keepalive);
         this.keepalive = null;
       }
+      if (this.frameTimer) {
+        clearTimeout(this.frameTimer);
+        this.frameTimer = null;
+      }
+      this.frameQueue.length = 0;
       this.ws = null;
       if (this.stopped) {
         return;
@@ -132,9 +147,65 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
       this.send({ tag: "GOK" });
       return;
     }
-    if (tag === "UN" || tag === "INITBYLOG" || tag === "WGC") {
+    if (tag === "WGC") {
+      this.enqueueTimedFrame(frame);
+      return;
+    }
+    if (tag === "UN" || tag === "INITBYLOG") {
       this.handlers.onFrame(frame);
     }
+  }
+
+  private enqueueTimedFrame(frame: Record<string, unknown>): void {
+    const childNodes = frame.childNodes;
+    if (!Array.isArray(childNodes)) {
+      this.handlers.onFrame(frame);
+      return;
+    }
+    let delayMs = 0;
+    let group: unknown[] = [];
+    const flush = (): void => {
+      if (group.length === 0) {
+        return;
+      }
+      this.frameQueue.push({
+        delayMs,
+        frame: { ...frame, childNodes: group },
+      });
+      delayMs = 0;
+      group = [];
+    };
+    for (const child of childNodes) {
+      if (typeof child === "number" && Number.isFinite(child)) {
+        flush();
+        delayMs += Math.max(0, child);
+      } else {
+        group.push(child);
+      }
+    }
+    flush();
+    this.pumpFrameQueue();
+  }
+
+  private pumpFrameQueue(): void {
+    if (this.frameTimer || this.frameQueue.length === 0) {
+      return;
+    }
+    const next = this.frameQueue.shift();
+    if (!next) {
+      return;
+    }
+    const dispatch = (): void => {
+      this.frameTimer = null;
+      this.handlers.onFrame(next.frame);
+      this.pumpFrameQueue();
+    };
+    if (next.delayMs === 0) {
+      dispatch();
+      return;
+    }
+    this.frameTimer = setTimeout(dispatch, next.delayMs);
+    this.frameTimer.unref?.();
   }
 
   private send(obj: unknown): void {

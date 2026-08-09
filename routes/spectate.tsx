@@ -274,6 +274,7 @@ export default function GameSpectateRoute({
                 data: {
                   seats?: Array<{
                     seat: number;
+                    playerName?: string | null;
                     teamName?: string | null;
                     teamLogoUrl?: string | null;
                   }>;
@@ -288,14 +289,17 @@ export default function GameSpectateRoute({
                   null,
                   null,
                 ];
+                const names: [string, string, string, string] = ["", "", "", ""];
                 for (const s of data.seats) {
                   if (s.seat >= 0 && s.seat < 4) {
+                    names[s.seat] = s.playerName ?? "";
                     bySeat[s.seat] = {
                       teamName: s.teamName ?? null,
                       teamLogoUrl: s.teamLogoUrl ?? null,
                     };
                   }
                 }
+                setSeatNames(names);
                 rendererRef.current?.setSeatEnrichment(bySeat);
               }
             )
