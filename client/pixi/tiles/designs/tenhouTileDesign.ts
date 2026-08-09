@@ -11,6 +11,9 @@ import leftSmallUrl from "~/game/tenhouSprites/leftSmall.png";
 import rightSmallUrl from "~/game/tenhouSprites/rightSmall.png";
 import sideHandLUrl from "~/game/tenhouSprites/uprightSideHandL.png";
 import sideHandRUrl from "~/game/tenhouSprites/uprightSideHandR.png";
+import ownShadowUrl from "~/game/tenhouSprites/ownShadow.png";
+import shadowTopBottomUrl from "~/game/tenhouSprites/shadowTopBottom.png";
+import shadowLeftRightUrl from "~/game/tenhouSprites/shadowLeftRight.png";
 import type { GridAtlas, TileDesign } from "../tileDesign";
 
 /** Small/side tiles render at half size, trimmed by 9.4% so the
@@ -48,6 +51,9 @@ export const tenhouTileDesign: TileDesign = {
     rightSmall: grid(rightSmallUrl),
     sideHandL: { kind: "single", url: sideHandLUrl },
     sideHandR: { kind: "single", url: sideHandRUrl },
+    ownShadow: { kind: "single", url: ownShadowUrl },
+    shadowTopBottom: { kind: "single", url: shadowTopBottomUrl },
+    shadowLeftRight: { kind: "single", url: shadowLeftRightUrl },
   },
   categories: {
     small: { source: { w: 86, h: 130 }, scale: SMALL_SIDE_SCALE },
@@ -95,5 +101,12 @@ export const tenhouTileDesign: TileDesign = {
     tsumogiriFreshTint: 0xc8c8c8,
     tsumogiriFreshWindow: 3,
     waitTint: 0xff5555,
+    shadow: {
+      small: "shadowTopBottom",
+      side: "shadowLeftRight",
+      big: "ownShadow",
+      offsetX: 4,
+      offsetY: 4,
+    },
   },
 };

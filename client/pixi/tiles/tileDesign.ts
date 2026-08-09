@@ -74,13 +74,27 @@ export interface TileCategories {
   big: TileArt;
 }
 
-/** Optional drop-shadow profile. Disabled when omitted. */
+/**
+ * Optional drop-shadow drawn behind every tile from single-image
+ * atlases, one per tile category (the shadow silhouette differs for
+ * upright small, side, and big art). The shadow shares the tile's
+ * on-screen footprint and is offset by a fixed screen delta
+ * (down-right by default) so it falls the same way for every seat
+ * regardless of the seat container's rotation. Disabled when omitted.
+ */
 export interface ShadowSpec {
-  color: number;
-  alpha: number;
+  /** Single-image shadow atlas for top/bottom small tiles. */
+  small: AtlasId;
+  /** Single-image shadow atlas for left/right side tiles. */
+  side: AtlasId;
+  /** Single-image shadow atlas for the focused player's big tiles. */
+  big: AtlasId;
+  /** Screen-space offset from the tile, in design px. Positive x is
+   * screen-right, positive y is screen-down. */
   offsetX: number;
   offsetY: number;
-  blur: number;
+  /** Opacity multiplier for the shadow sprite. Default 1. */
+  alpha?: number;
 }
 
 export interface TileEffects {
@@ -329,14 +343,18 @@ export function validateTileDesign(design: TileDesign): string[] {
   }
   const shadow = design.effects.shadow;
   if (shadow) {
-    if (!isRgb(shadow.color)) {
-      errors.push("effects.shadow.color must be a 0xRRGGBB value");
+    for (const cat of ["small", "side", "big"] as const) {
+      if (!atlasIds.has(shadow[cat])) {
+        errors.push(
+          `effects.shadow.${cat} references unknown atlas "${shadow[cat]}"`
+        );
+      }
     }
-    if (!(shadow.alpha >= 0 && shadow.alpha <= 1)) {
+    if (!Number.isFinite(shadow.offsetX) || !Number.isFinite(shadow.offsetY)) {
+      errors.push("effects.shadow offsets must be finite");
+    }
+    if (shadow.alpha !== undefined && !(shadow.alpha >= 0 && shadow.alpha <= 1)) {
       errors.push("effects.shadow.alpha must be within [0, 1]");
-    }
-    if (!(shadow.blur >= 0) || !Number.isFinite(shadow.blur)) {
-      errors.push("effects.shadow.blur must be finite and non-negative");
     }
   }
 

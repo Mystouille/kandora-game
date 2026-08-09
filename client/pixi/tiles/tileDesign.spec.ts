@@ -145,11 +145,12 @@ describe("tileDesign contract", () => {
     it("flags an out-of-range shadow alpha", () => {
       const bad = clone(tenhouTileDesign);
       bad.effects.shadow = {
-        color: 0x000000,
-        alpha: 2,
+        small: "bottomSmall",
+        side: "rightSmall",
+        big: "ownHand",
         offsetX: 1,
         offsetY: 1,
-        blur: 1,
+        alpha: 2,
       };
       expect(validateTileDesign(bad).some((e) => e.includes("alpha"))).toBe(
         true

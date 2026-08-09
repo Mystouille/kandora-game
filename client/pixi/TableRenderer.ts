@@ -122,6 +122,13 @@ const TSUMOGIRI_FRESH_TINT = 0xc8c8c8;
  * landed, the tint is removed. */
 const TSUMOGIRI_FRESH_WINDOW = 3;
 
+/** Clockwise rotation applied to each seat's tile-area container
+ * (discards / hands / melds). A tile's own sprite counter-rotates by
+ * the negative of this, so every tile nets to zero rotation on
+ * screen; the shadow offset is rotated back through this so it always
+ * falls screen-down-right. */
+const SEAT_CONTAINER_ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2] as const;
+
 const BG_COLOR: ColorSource = 0x2a2a2a;
 const FELT_COLOR: ColorSource = 0x0d4d2c;
 
@@ -973,6 +980,59 @@ export class TableRenderer {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Build the drop-shadow sprite that sits behind a tile, or null
+   * when the active design declares no shadow (or textures aren't
+   * loaded). The shadow shares the tile's footprint + local rotation
+   * and is offset by the design's fixed SCREEN delta — rotated back
+   * through `screenRotation` (the total wrap-local → screen rotation)
+   * so it falls the same way for every seat. Because every tile is
+   * net-zero rotation on screen, `sprite.width/height` are the actual
+   * on-screen footprint, so the silhouette follows the aspect
+   * (portrait → small, landscape → side) unless `big` is set (the
+   * focused hand). Callers place the returned sprite behind the tile.
+   */
+  private makeTileShadow(
+    sprite: {
+      width: number;
+      height: number;
+      rotation: number;
+      x: number;
+      y: number;
+    },
+    screenRotation: number,
+    opts?: { big?: boolean; anchor?: number }
+  ): Sprite | null {
+    const factory = this.spriteFactory;
+    const shadow = this.tileDesign.effects.shadow;
+    if (!factory || !shadow) {
+      return null;
+    }
+    const atlasId = opts?.big
+      ? shadow.big
+      : sprite.width > sprite.height
+        ? shadow.side
+        : shadow.small;
+    const s = factory.create({
+      atlasId,
+      tile: null,
+      width: sprite.width,
+      height: sprite.height,
+      rotation: sprite.rotation,
+      anchor: opts?.anchor ?? 0.5,
+    });
+    if (shadow.alpha !== undefined) {
+      s.alpha = shadow.alpha;
+    }
+    const cos = Math.cos(screenRotation);
+    const sin = Math.sin(screenRotation);
+    s.position.set(
+      sprite.x + shadow.offsetX * cos + shadow.offsetY * sin,
+      sprite.y - shadow.offsetX * sin + shadow.offsetY * cos
+    );
+    return s;
   }
 
   /** Render opponent hands face-up. In live play opponents are
@@ -2510,6 +2570,23 @@ export class TableRenderer {
           }
           const child = new Container();
           child.addChild(sprite);
+          // Lower wall tiles (row 0) cast a shadow; the upper peeking
+          // tile (row 1) does not.
+          if (row === 0) {
+            const shadow = this.makeTileShadow(
+              {
+                width: screenTileW,
+                height: screenTileH,
+                rotation: 0,
+                x: screenTileW / 2,
+                y: screenTileH / 2,
+              },
+              0
+            );
+            if (shadow) {
+              child.addChildAt(shadow, 0);
+            }
+          }
           child.position.set(x, y);
           // Z-order:
           //   - Within a stack, the upper-peeking tile (row 1) sits
@@ -2593,6 +2670,21 @@ export class TableRenderer {
         sprite.position.set(screenTileW / 2, screenTileH / 2);
         const child = new Container();
         child.addChild(sprite);
+        if (row === 0) {
+          const shadow = this.makeTileShadow(
+            {
+              width: screenTileW,
+              height: screenTileH,
+              rotation: 0,
+              x: screenTileW / 2,
+              y: screenTileH / 2,
+            },
+            0
+          );
+          if (shadow) {
+            child.addChildAt(shadow, 0);
+          }
+        }
         child.position.set(
           band.x + s * stride,
           band.y + (row === 0 ? ROW_OFFSET_Y / 2 : -ROW_OFFSET_Y / 2)
@@ -4268,6 +4360,13 @@ export class TableRenderer {
         this.tintIfWait(sprite, p.tile);
         const wrap = new Container();
         wrap.addChild(sprite);
+        const shadow = this.makeTileShadow(
+          p.sprite,
+          SEAT_CONTAINER_ROT[seat] + p.wrap.rotation
+        );
+        if (shadow) {
+          wrap.addChildAt(shadow, 0);
+        }
         wrap.position.set(p.wrap.x, p.wrap.y);
         wrap.zIndex = p.zIndex;
         handContainer.addChild(wrap);
@@ -4295,6 +4394,13 @@ export class TableRenderer {
         this.tintIfWait(sprite, p.tile);
         const wrap = new Container();
         wrap.addChild(sprite);
+        const shadow = this.makeTileShadow(
+          p.sprite,
+          SEAT_CONTAINER_ROT[seat] + p.wrap.rotation
+        );
+        if (shadow) {
+          wrap.addChildAt(shadow, 0);
+        }
         wrap.position.set(p.wrap.x, p.wrap.y);
         handContainer.addChild(wrap);
       }
@@ -4463,6 +4569,18 @@ export class TableRenderer {
               tileLongAxisLen: localSpriteW,
             });
           });
+        }
+        // Focused-hand drop shadow, behind the whole strip. Occlusion
+        // by the next tile is intended, so only the rightmost tile's
+        // shadow shows.
+        const handShadow = this.makeTileShadow(
+          { width: spriteW, height: spriteH, rotation: 0, x: posX, y: 0 },
+          0,
+          { big: true, anchor: 0 }
+        );
+        if (handShadow) {
+          handShadow.zIndex = -1;
+          handContainer.addChild(handShadow);
         }
         handContainer.addChild(tileSprite);
       });
@@ -4649,6 +4767,13 @@ export class TableRenderer {
       }
       const wrap = new Container();
       wrap.addChild(sprite);
+      const shadow = this.makeTileShadow(
+        placement.sprite,
+        SEAT_CONTAINER_ROT[seat] + placement.wrap.rotation
+      );
+      if (shadow) {
+        wrap.addChildAt(shadow, 0);
+      }
       wrap.zIndex = placement.zIndex;
       wrap.rotation = placement.wrap.rotation;
       let wrapX = placement.wrap.x;
@@ -4768,6 +4893,13 @@ export class TableRenderer {
       }
       const wrap = new Container();
       wrap.addChild(sprite);
+      const shadow = this.makeTileShadow(
+        animLastPlacement.sprite,
+        SEAT_CONTAINER_ROT[seat] + animLastPlacement.wrap.rotation
+      );
+      if (shadow) {
+        wrap.addChildAt(shadow, 0);
+      }
       wrap.position.set(posX, posY);
       wrap.rotation = animLastPlacement.wrap.rotation;
       // Match the z-order the static loop would have used for this
@@ -5764,6 +5896,22 @@ export class TableRenderer {
     sprite.rotation = -stripRot + (sheetOverride ? Math.PI / 2 : 0);
     sprite.position.set(dims.w / 2, dims.h / 2);
     c.addChild(sprite);
+    // Drop shadow behind the tile. A called/tilted tile (override
+    // sheet) is rotated a further -90° by the caller, so fold that
+    // into the screen rotation the offset is corrected for.
+    const shadow = this.makeTileShadow(
+      {
+        width: sprite.width,
+        height: sprite.height,
+        rotation: sprite.rotation,
+        x: dims.w / 2,
+        y: dims.h / 2,
+      },
+      stripRot + (sheetOverride ? -Math.PI / 2 : 0)
+    );
+    if (shadow) {
+      c.addChildAt(shadow, 0);
+    }
     return c;
   }
 
