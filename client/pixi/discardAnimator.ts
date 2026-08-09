@@ -38,6 +38,9 @@ const SEAT_COUNT = 4;
 /** Per-spec snappy timings (ms). */
 export const PHASE_A_DURATION_MS = 250;
 export const PHASE_B_DURATION_MS = 120;
+/** Draw-in slide: the freshly drawn tile enters as a face-down back
+ * sliding from the wall into the tsumo slot. */
+export const DRAW_SLIDE_MS = 200;
 
 /** Hidden hand slot for tedashi from a concealed (non-focused,
  * not-revealed) hand. Spec: "near the middle of the hand
@@ -136,6 +139,11 @@ type PrevHandCache = Array<{
 
 export class DiscardAnimator {
   private readonly anims = new Map<number, DiscardAnimation>();
+  /** Per-seat draw-in animation start times (ms). A fresh draw
+   * slides a face-down back into the tsumo slot; independent of the
+   * discard `anims` map (a seat never draws and discards in the same
+   * frame). */
+  private readonly drawAnims = new Map<number, number>();
   private readonly now: () => number;
   /** Last `view` we processed in {@link beginFrame}. Used to diff. */
   private prevView: MatchView | null = null;
@@ -174,6 +182,7 @@ export class DiscardAnimator {
     this.enabled = flag;
     if (!flag) {
       this.anims.clear();
+      this.drawAnims.clear();
     }
   }
 
@@ -197,12 +206,14 @@ export class DiscardAnimator {
   snapNext(): void {
     this.snapNextFlag = true;
     this.anims.clear();
+    this.drawAnims.clear();
   }
 
   /** Drop all in-flight animations and forget prev state.
    * Called on snapshot resync, hand boundaries, and unmount. */
   reset(): void {
     this.anims.clear();
+    this.drawAnims.clear();
     this.prevView = null;
     this.prevHandLayouts = makeEmptyHandCache();
     this.currentHandLayouts = makeEmptyHandCache();
@@ -276,6 +287,7 @@ export class DiscardAnimator {
     }
     if (hardReset) {
       this.anims.clear();
+      this.drawAnims.clear();
       // A hard reset means the semantic hand/discard relation
       // jumped discontinuously (call claimed a discard, hand_end,
       // snapshot resync). The layouts we cached from the previous
@@ -334,25 +346,22 @@ export class DiscardAnimator {
           });
         }
 
-        // --- (b) Phase A → Phase B after landing / next draw. ---
-        // Tenhou can hold the next draw in a later WGC batch. Do not
-        // leave the tile parked at +10/+10 throughout that network gap:
-        // settle automatically when phase A completes, or immediately
-        // when a next-draw event arrives first.
+        // --- (b) Phase A → Phase B when the discard stops being the
+        // freshest. The static renderer nudges the last discard by
+        // +10/+10 only while `freshlyDiscardedSeat === seat`; settling
+        // on that same transition keeps the animated tile and the
+        // static position in lockstep. Auto-settling earlier (e.g. when
+        // phase A elapses) lands the tile in its final slot and then
+        // snaps it back to the nudge the static renderer still draws.
         const wasFresh = prev.freshlyDiscardedSeat === seat;
         const isFresh = view.freshlyDiscardedSeat === seat;
-        const drewThisFrame =
-          view.freshlyDrawnSeat !== null &&
-          prev.freshlyDrawnSeat !== view.freshlyDrawnSeat;
         const existing = this.anims.get(seat);
-        const phaseALanded =
-          existing?.phase === "to-nudge" &&
-          now - existing.startMs >= PHASE_A_DURATION_MS;
         if (
           existing &&
           existing.phase === "to-nudge" &&
           currLen > 0 &&
-          (phaseALanded || (wasFresh && !isFresh && drewThisFrame))
+          wasFresh &&
+          !isFresh
         ) {
           // The static last-discard index might shift if a new
           // discard happens in the same frame (rare; would imply
@@ -370,6 +379,16 @@ export class DiscardAnimator {
             startMs: now,
             durationMs: PHASE_B_DURATION_MS,
           });
+        }
+
+        // --- (d) Fresh draw? Start the wall-slide draw animation. ---
+        // A seat draws at the start of its turn (freshlyDrawnSeat set)
+        // and discards at the end; the two never collide in one frame.
+        if (
+          view.freshlyDrawnSeat === seat &&
+          prev.freshlyDrawnSeat !== seat
+        ) {
+          this.drawAnims.set(seat, now);
         }
       }
     }
@@ -404,6 +423,13 @@ export class DiscardAnimator {
       }
     }
 
+    // Draw-in animations are pure overlays; drop them once elapsed.
+    for (const [seat, startMs] of this.drawAnims) {
+      if (now - startMs >= DRAW_SLIDE_MS) {
+        this.drawAnims.delete(seat);
+      }
+    }
+
     this.prevView = view;
   }
 
@@ -426,6 +452,11 @@ export class DiscardAnimator {
         return true;
       }
     }
+    for (const startMs of this.drawAnims.values()) {
+      if (now - startMs < DRAW_SLIDE_MS) {
+        return true;
+      }
+    }
     return false;
   }
 
@@ -444,6 +475,22 @@ export class DiscardAnimator {
       0,
       Math.min(1, (nowMs - anim.startMs) / anim.durationMs)
     );
+    return easeOutCubic(t);
+  }
+
+  /** True while the seat's draw-in slide is playing. */
+  isDrawing(seat: number, nowMs: number = this.now()): boolean {
+    const start = this.drawAnims.get(seat);
+    return start !== undefined && nowMs - start < DRAW_SLIDE_MS;
+  }
+
+  /** Normalized 0..1 progress of the seat's draw-in slide, eased. */
+  getDrawProgress(seat: number, nowMs: number = this.now()): number {
+    const start = this.drawAnims.get(seat);
+    if (start === undefined) {
+      return 1;
+    }
+    const t = Math.max(0, Math.min(1, (nowMs - start) / DRAW_SLIDE_MS));
     return easeOutCubic(t);
   }
 }

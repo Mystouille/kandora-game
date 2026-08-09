@@ -4567,6 +4567,19 @@ export class TableRenderer {
     // convention).
     const isSideHand = !isYou && seat % 2 === 1;
 
+    // Draw-in slide: while the freshly drawn tile arrives, render the
+    // real tsumo tile invisible and slide a face-down back into its
+    // slot (below). `isFreshlyDrawn` guarantees the reserved last-slot
+    // gap the back slides into.
+    const isDrawing =
+      view.freshlyDrawnSeat === seat &&
+      isFreshlyDrawn &&
+      this.animator.isDrawing(seat);
+    const drawProgress = isDrawing ? this.animator.getDrawProgress(seat) : 1;
+    // Wall-side offset (design px) the back travels along the hand's
+    // reading axis into the tsumo slot.
+    const DRAW_SLIDE_PX = 44;
+
     // Hand metrics. For the bottom/top hand we keep the existing
     // 14-tile gap (tsumo separation). Side hands don't expose the
     // tsumo separately. Bottom hand uses `tileSelf`; top hand uses
@@ -4651,6 +4664,8 @@ export class TableRenderer {
           hiddenSlot: hiddenHandSlot,
         }
       );
+      const lastSidePlacement =
+        sidePlacements[sidePlacements.length - 1] ?? null;
       for (const p of sidePlacements) {
         const sprite = factory.create({
           atlasId: p.atlasId,
@@ -4662,10 +4677,33 @@ export class TableRenderer {
         sprite.position.set(p.sprite.x, p.sprite.y);
         // Wait-tint; a no-op for the `null` back tiles.
         this.tintIfWait(sprite, p.tile);
+        // Hide the just-drawn tsumo tile while the draw-in back slides.
+        if (isDrawing && p === lastSidePlacement) {
+          sprite.alpha = 0;
+        }
         const wrap = new Container();
         wrap.addChild(sprite);
         wrap.position.set(p.wrap.x, p.wrap.y);
         wrap.zIndex = p.zIndex;
+        handContainer.addChild(wrap);
+      }
+      if (isDrawing && lastSidePlacement) {
+        const p = lastSidePlacement;
+        const back = factory.create({
+          atlasId: p.atlasId,
+          tile: null,
+          width: p.sprite.width,
+          height: p.sprite.height,
+          rotation: p.sprite.rotation,
+        });
+        back.position.set(p.sprite.x, p.sprite.y);
+        const wrap = new Container();
+        wrap.addChild(back);
+        wrap.zIndex = 1_000_000;
+        wrap.position.set(
+          p.wrap.x + DRAW_SLIDE_PX * (1 - drawProgress),
+          p.wrap.y
+        );
         handContainer.addChild(wrap);
       }
       {
@@ -4699,6 +4737,7 @@ export class TableRenderer {
         hiddenSlot: hiddenHandSlot,
       });
       handContainer.sortableChildren = true;
+      const lastTopPlacement = topPlacements[topPlacements.length - 1] ?? null;
       for (const p of topPlacements) {
         const sprite = factory.create({
           atlasId: p.atlasId,
@@ -4709,9 +4748,31 @@ export class TableRenderer {
         });
         sprite.position.set(p.sprite.x, p.sprite.y);
         this.tintIfWait(sprite, p.tile);
+        // Hide the just-drawn tsumo tile while the draw-in back slides.
+        if (isDrawing && p === lastTopPlacement) {
+          sprite.alpha = 0;
+        }
         const wrap = new Container();
         wrap.addChild(sprite);
         wrap.position.set(p.wrap.x, p.wrap.y);
+        handContainer.addChild(wrap);
+      }
+      if (isDrawing && lastTopPlacement) {
+        const p = lastTopPlacement;
+        const back = factory.create({
+          atlasId: p.atlasId,
+          tile: null,
+          width: p.sprite.width,
+          height: p.sprite.height,
+          rotation: p.sprite.rotation,
+        });
+        back.position.set(p.sprite.x, p.sprite.y);
+        const wrap = new Container();
+        wrap.addChild(back);
+        wrap.position.set(
+          p.wrap.x + DRAW_SLIDE_PX * (1 - drawProgress),
+          p.wrap.y
+        );
         handContainer.addChild(wrap);
       }
       {
@@ -4928,8 +4989,24 @@ export class TableRenderer {
             ownShadowSpec.big
           );
         }
+        // Hide the just-drawn tsumo tile while the draw-in back slides.
+        if (isDrawing && i === hand.length - 1) {
+          tileSprite.alpha = 0;
+        }
         handContainer.addChild(tileSprite);
       });
+      if (isDrawing) {
+        const slotX = (hand.length - 1) * (t.w + t.gap) + handGap;
+        const back = factory.create({
+          atlasId: this.tileDesign.sheets.wallBack[0],
+          tile: null,
+          width: spriteW,
+          height: spriteH,
+          anchor: 0,
+        });
+        back.position.set(slotX + DRAW_SLIDE_PX * (1 - drawProgress), 0);
+        handContainer.addChild(back);
+      }
       if (seat === 0) {
         // Drag-to-reorder: enable zIndex sorting so the
         // currently-dragged tile (zIndex 1_000_000, set in the

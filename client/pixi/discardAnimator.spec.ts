@@ -36,7 +36,7 @@ function recordLayouts(
 }
 
 describe("DiscardAnimator", () => {
-  it("settles a discard after phase A without waiting for another event", () => {
+  it("holds a discard at the nudge until it stops being the freshest", () => {
     let now = 0;
     const animator = new DiscardAnimator({ now: () => now });
     const before = makeView({
@@ -62,12 +62,30 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
+    // Phase A elapsing must NOT auto-settle: the tile stays at the
+    // nudge while it is still the freshest discard, matching the static
+    // renderer which keeps nudging it until `freshlyDiscardedSeat`
+    // clears. Auto-settling here would land the tile at its final slot
+    // and then snap it back to the nudge the static renderer redraws.
     now = 251;
     animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+
+    // The next player draws → the discard is no longer fresh → settle.
+    const nextDraw = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDrawnSeat: 1,
+      freshlyDiscardedSeat: null,
+    });
+    now = 300;
+    animator.beginFrame(nextDraw);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
 
-    now = 372;
-    animator.beginFrame(discarded);
+    now = 421;
+    animator.beginFrame(nextDraw);
     expect(animator.getAnim(0)).toBeNull();
   });
 
@@ -114,5 +132,29 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(callerDiscards);
 
     expect(animator.getAnim(0)?.phaseASnapshot?.hand).toEqual(["4m"]);
+  });
+
+  it("plays a draw-in slide when a seat freshly draws, then drops it", () => {
+    let now = 0;
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.beginFrame(makeView({}));
+
+    // Seat 1 draws.
+    animator.beginFrame(makeView({ freshlyDrawnSeat: 1 }));
+    expect(animator.isDrawing(1)).toBe(true);
+    expect(animator.getDrawProgress(1)).toBeLessThan(1);
+    expect(animator.hasActive()).toBe(true);
+
+    // A re-render on the same draw does not restart the slide.
+    now = 100;
+    animator.beginFrame(makeView({ freshlyDrawnSeat: 1 }));
+    expect(animator.getDrawProgress(1, 100)).toBeGreaterThan(0);
+
+    // Past the slide duration it settles and the entry is dropped.
+    now = 201;
+    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.getDrawProgress(1)).toBe(1);
+    animator.beginFrame(makeView({ freshlyDrawnSeat: 1 }));
+    expect(animator.hasActive()).toBe(false);
   });
 });

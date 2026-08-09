@@ -148,12 +148,13 @@ function prepareRenderedMatchView(view: MatchView): MatchView {
     debugPlayerNames || debugTeamLogos ? getDebugIdentityFixture() : null;
   const debugWallDice = getDebugWallDice(search);
   const debugWallDealerRaw = Number(search.get("debugWallDealer") ?? "0");
-  const debugWallDealer =
+  const debugWallDealer = (
     Number.isInteger(debugWallDealerRaw) &&
     debugWallDealerRaw >= 0 &&
     debugWallDealerRaw <= 3
       ? debugWallDealerRaw
-      : 0;
+      : 0
+  ) as 0 | 1 | 2 | 3;
   if (
     !debugFourKans &&
     !debugFullDiscards &&
