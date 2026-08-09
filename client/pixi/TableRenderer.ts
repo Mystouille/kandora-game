@@ -54,6 +54,7 @@ import {
 } from "./tileAreaLayout";
 import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
+import tenhouBgUrl from "~/game/tenhouSprites/tenhouBg.png";
 import { splitWinningHandForDisplay } from "./winningHand";
 
 /** Per-seat team enrichment drawn on spectator / replay nameplates. */
@@ -135,7 +136,10 @@ const SEAT_CONTAINER_ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2] as const;
 const SHADOW_LAYER_Z = -1_000_000;
 
 const BG_COLOR: ColorSource = 0x2a2a2a;
-const FELT_COLOR: ColorSource = 0x0d4d2c;
+const FELT_COLOR: ColorSource = 0x007f0e;
+/** Shared styling for darkened mats behind hands and discard ponds. */
+const HAND_PANEL_RADIUS = 4;
+const HAND_PANEL_ALPHA = 0.16;
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
  *  East, South, West, North. */
@@ -296,12 +300,17 @@ export class TableRenderer {
    * normal table (debug aid while migrating to the Tenhou-style
    * layout). Toggled via {@link setShowLayoutDebug}. */
   private showLayoutDebug = false;
+  /** Wall-only zone overlay for visually checking stack bounds. */
+  private showWallZonesDebug = false;
   /** Replay-viewer overlay toggles. The renderer is render-pure
    * (no internal animation loop), so toggles take effect on the
    * next `render()` call. Defaults match `defaultReplayOverlayState`
    * in `ReplayOverlayPanel`. */
   private showWaits = false;
   private showHands = false;
+  /** Development fixture mode: include the 52 tiles normally removed
+   * by the initial deal so all 136 physical wall tiles are visible. */
+  private showUndealtWall = false;
   private showWalls = false;
   private showNames = true;
   /** Live-spectate mode. A relay feed carries no live-wall or
@@ -569,6 +578,8 @@ export class TableRenderer {
   private chipIconTex: Texture | null = null;
   /** Dabuken token texture (Buu nameplate). Loaded in `mount()`. */
   private dabukenIconTex: Texture | null = null;
+  /** Radial felt-darkening vignette texture. Loaded in `mount()`. */
+  private feltMaskTex: Texture | null = null;
 
   constructor(opts?: {
     tileDesign?: TileDesign;
@@ -628,12 +639,14 @@ export class TableRenderer {
     // a failure leaves `*IconTex` null and the renderer falls back
     // to procedural Graphics so the table still paints.
     try {
-      const [chipTex, dabukenTex] = (await Promise.all([
+      const [chipTex, dabukenTex, feltMaskTex] = (await Promise.all([
         Assets.load(chipIconUrl),
         Assets.load(dabukenIconUrl),
-      ])) as [Texture, Texture];
+        Assets.load(tenhouBgUrl),
+      ])) as [Texture, Texture, Texture];
       this.chipIconTex = chipTex;
       this.dabukenIconTex = dabukenTex;
+      this.feltMaskTex = feltMaskTex;
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("[TableRenderer] failed to load nameplate icons", err);
@@ -950,6 +963,11 @@ export class TableRenderer {
     this.showLayoutDebug = flag;
   }
 
+  /** Toggle a translucent overlay for only the four wall zones. */
+  setShowWallZonesDebug(flag: boolean): void {
+    this.showWallZonesDebug = flag;
+  }
+
   /** Render each tenpai seat's wait tiles. Driven by
    * `view.lastHandResult.waits` (populated by the replay reducer
    * from the archived `hand_end` event); has no effect in live
@@ -1078,12 +1096,12 @@ export class TableRenderer {
   /**
    * Continuous drop shadow down a COLUMN of tiles, on the column's
    * right edge and below every tile ({@link SHADOW_LAYER_Z}). The
-   * design's `long` strip (authored vertical: dark left edge, feather
-   * right, rounded top) is 3-sliced along its length — fixed end caps,
-   * stretched middle — so one band spans the column without per-tile
-   * shadows overlapping and darkening. `x` is the column's right edge
-   * (the strip's dark side sits here, against the tiles), `y` the
-   * column top, `length` its height down the container-local +y.
+   * design's `long` strip is 3-sliced: fixed soft caps at both ends
+   * (regions 1-3 and 7-9) with the solid middle repeated to fill the
+   * column, so one band spans it without per-tile shadows overlapping
+   * and neither end is clipped. `x`
+   * is the column's right edge (the strip's dark side sits here,
+   * against the tiles), `y` the column top, `length` down +y.
    */
   private placeLineShadow(
     area: Container,
@@ -1097,27 +1115,20 @@ export class TableRenderer {
       return;
     }
     const tex = store.getTexture(shadow.long, null);
-    // The strip is authored with a rounded TOP and a near-flat bottom.
-    // Fix the top as a cap so the dome never stretches, but keep the
-    // bottom cap thin, and clamp both to the strip length. An equal
-    // top/bottom cap (the old behaviour) summed to more than a short
-    // column's height, so Pixi compressed the caps, dropped the
-    // uniform middle, and the rounded ends made fused columns read
-    // thinner than a standalone tile's shadow.
-    const bottomCap = Math.min(tex.height * 0.06, length * 0.25);
-    const topCap = Math.min(
-      tex.height * shadow.cap,
-      Math.max(0, length - bottomCap - 0.5)
-    );
+    // Pure 9-slice: fixed native caps (the shadow's soft ends) with the
+    // middle repeated. `shadow.cap` is sized to fit both caps in the
+    // shortest real column; the min() only guards a degenerate one
+    // from overlapping, it isn't a per-length shrink.
+    const cap = Math.min(tex.height * shadow.cap, length / 2);
     const ns = new NineSliceSprite({
       texture: tex,
       leftWidth: 0,
-      topHeight: topCap,
+      topHeight: cap,
       rightWidth: 0,
-      bottomHeight: bottomCap,
+      bottomHeight: cap,
     });
     ns.width = shadow.depth; // texture u → +x depth (dark edge → feather right)
-    ns.height = length; // texture v → +y column length (middle stretched)
+    ns.height = length; // texture v → +y column length (middle repeated)
     ns.position.set(x + shadow.offsetX, y + shadow.offsetY);
     ns.zIndex = SHADOW_LAYER_Z;
     if (shadow.alpha !== undefined) {
@@ -1204,15 +1215,18 @@ export class TableRenderer {
   }
 
   /**
-   * Group screen-aligned tile boxes into screen-vertical columns
-   * (bucketed by centre x) and draw one shadow per column on its
-   * screen-right edge: a 3-sliced strip for runs of 2+ tiles, or a
-   * single basic shadow for a lone tile. `boxes` carry each tile's
-   * screen-aligned centre (`ax,ay`) and on-screen footprint (`w,h`).
+   * Group screen-aligned tile boxes into screen-vertical columns and
+   * draw one shadow per column on its screen-right edge: a 3-sliced
+   * strip for runs of 2+ tiles, or a single basic shadow for a lone
+   * tile. `boxes` carry each tile's screen-aligned centre (`ax,ay`)
+   * and on-screen footprint (`w,h`). Columns bucket by centre x, or by
+   * the screen-right edge when `bucketByRightEdge` is set (discards, so
+   * a flush-aligned sideways riichi tile merges into its row's strip).
    */
   private placeColumnShadows(
     layer: Container,
-    boxes: ReadonlyArray<{ ax: number; ay: number; w: number; h: number }>
+    boxes: ReadonlyArray<{ ax: number; ay: number; w: number; h: number }>,
+    bucketByRightEdge = false
   ): void {
     const shadow = this.tileDesign.effects.shadow;
     if (!shadow) {
@@ -1223,7 +1237,7 @@ export class TableRenderer {
       Array<{ ax: number; ay: number; w: number; h: number }>
     >();
     for (const b of boxes) {
-      const key = Math.round(b.ax);
+      const key = Math.round(bucketByRightEdge ? b.ax + b.w / 2 : b.ax);
       const list = cols.get(key);
       if (list) {
         list.push(b);
@@ -1308,6 +1322,11 @@ export class TableRenderer {
    * dora indicators remain face-down. */
   setShowWalls(flag: boolean): void {
     this.showWalls = flag;
+  }
+
+  /** Include the initial 52 dealt tiles in the wall visualization. */
+  setShowUndealtWall(flag: boolean): void {
+    this.showUndealtWall = flag;
   }
 
   /** Mark this renderer as a live spectator view: hides the draw
@@ -1654,11 +1673,27 @@ export class TableRenderer {
     // neutral dark gray.
     const feltBox = boundingBox([...layout.wall, ...layout.hands]);
     this.feltBoxDesign = feltBox;
-    root.addChild(
-      new Graphics().rect(feltBox.x, feltBox.y, feltBox.w, feltBox.h).fill({
-        color: FELT_COLOR,
-      })
-    );
+    const felt = new Graphics()
+      .rect(feltBox.x, feltBox.y, feltBox.w, feltBox.h)
+      .fill({ color: FELT_COLOR });
+    felt.zIndex = -30;
+    root.addChild(felt);
+    // Radial vignette darkening the felt toward its edges. Sits above
+    // the felt fill but below the hand panels and every tile, so the
+    // multiply only shades the green play area.
+    if (this.feltMaskTex) {
+      const feltMask = new Sprite(this.feltMaskTex);
+      feltMask.position.set(feltBox.x, feltBox.y);
+      feltMask.width = feltBox.w;
+      feltMask.height = feltBox.h;
+      feltMask.blendMode = "multiply";
+      feltMask.zIndex = -20;
+      root.addChild(feltMask);
+    }
+    // Static darkened mats framing each seat's hand + meld band and
+    // the maximum 6×3 footprint of each discard pond.
+    this.renderHandPanels(layout);
+    this.renderDiscardPanels(layout);
     // Stash the felt's bottom-right in screen coords so the timer
     // HUD (which lives on `app.stage`, not `root`) can hug it.
     this.timerAnchor = {
@@ -1673,6 +1708,9 @@ export class TableRenderer {
 
     if (this.showLayoutDebug) {
       this.renderLayoutDebug(layout);
+    }
+    if (this.showWallZonesDebug) {
+      this.renderWallZonesDebug(layout);
     }
 
     // Seat 0 (bottom — `you`), 1 (right), 2 (top), 3 (left).
@@ -1700,12 +1738,11 @@ export class TableRenderer {
     this.renderWalls(view, layout);
 
     // HUD — only meaningful on live matches; suppressed for replays
-    // (no WS, no seq, no meaningful conn status). Wall count is
-    // inferred from `liveDrawsTaken` (draws off the live wall,
-    // excluding rinshan) rather than the server's authoritative
-    // `wallRemaining` field.
+    // (no WS, no seq, no meaningful conn status). Count every draw,
+    // including rinshan replacements, because each one reduces the
+    // number of drawable wall tiles.
     const conn = view.conn;
-    const wall = Math.max(0, 70 - view.liveDrawsTaken);
+    const wall = Math.max(0, 70 - view.drawsTaken);
     const seq = view.lastSeq;
     if (conn === "replay") {
       this.hudText.text = "";
@@ -1953,11 +1990,10 @@ export class TableRenderer {
     // riichi sticks, and wall remaining. Stacked vertically.
     const lineSize = Math.max(10, Math.round(center.h * 0.085));
     const lineGap = Math.round(lineSize * 0.25);
-    // Wall count is inferred from `liveDrawsTaken` (draws off
-    // the live wall, excluding rinshan replacement draws) rather
-    // than reading the server's authoritative `wallRemaining`
-    // field — the live wall starts at 70 tiles after the deal.
-    const wallRemaining = Math.max(0, 70 - view.liveDrawsTaken);
+    // The drawable wall starts at 70 after the deal. Rinshan draws
+    // count too: each replacement moves one live-wall tail tile into
+    // the dead wall, reducing the number of future draws by one.
+    const wallRemaining = Math.max(0, 70 - view.drawsTaken);
     // Buu Mahjong has no repeat counter, so omit the honba line
     // entirely in that mode rather than rendering a stale "Repeat: 0".
     const lineSpecs: Array<{ text: string; color: number }> = [
@@ -2507,7 +2543,7 @@ export class TableRenderer {
     // counts post-deal live-wall draws only (excludes rinshan), so
     // we pre-offset here. Falls back to `drawsTaken` for live
     // snapshots that don't distinguish rinshan draws.
-    const INITIAL_DEAL_TILES = 52;
+    const INITIAL_DEAL_TILES = this.showUndealtWall ? 0 : 52;
     const liveDrawsConsumed = view.liveDrawsTaken ?? view.drawsTaken;
     const drawsTaken = liveDrawsConsumed + INITIAL_DEAL_TILES;
     // Number of kans declared this hand = total draws minus
@@ -2515,10 +2551,9 @@ export class TableRenderer {
     // draws). Each kan removes one rinshan tile from the dead
     // wall and shifts one tile from the rinshan end of the live
     // wall into the dead wall to preserve its 14-tile count.
-    const kanCount = Math.max(
-      0,
-      Math.min(4, view.drawsTaken - liveDrawsConsumed)
-    );
+    const kanCount = this.showUndealtWall
+      ? 0
+      : Math.max(0, Math.min(4, view.drawsTaken - liveDrawsConsumed));
 
     for (let seat = 0; seat < 4; seat++) {
       const band = layout.wall[seat];
@@ -2531,9 +2566,8 @@ export class TableRenderer {
       const baseStride = isHoriz
         ? screenTileW
         : screenTileH - SIDE_TILE_OVERLAP;
-      // Half-tile gap inserted at any dead↔live boundary within a
-      // single band.
-      const gapSize = tileLongDim / 2;
+      // Uniform gap at any dead↔live boundary within a single band.
+      const gapSize = 6;
 
       // Compute the long-axis offset (from the player-right anchor,
       // measured toward player-left) of each stack k=0..16. Insert
@@ -2680,7 +2714,7 @@ export class TableRenderer {
             faceUpTile === null
           ) {
             const tileDrawIdx = role.drawStackIdx * 2 + (row === 1 ? 0 : 1);
-            const liveIdx = tileDrawIdx - 52;
+            const liveIdx = tileDrawIdx - INITIAL_DEAL_TILES;
             if (liveIdx >= 0 && liveIdx < view.liveWall.length) {
               faceUpTile = view.liveWall[liveIdx];
               // Highlight in green every wall tile the focused
@@ -2705,12 +2739,6 @@ export class TableRenderer {
           // Long axis (toward player-left, increasing k) goes:
           //   seat 0: -x   seat 1: -y   seat 2: +x   seat 3: +y
           //
-          // Visual nudge: when the dead wall ends up on the right
-          // wall (seat 1) it visually reads as sitting too high
-          // because the rinshan-side stacks pile near the top of
-          // the band. Drop those tiles 20 px so the dead-wall
-          // section sits closer to mid-screen.
-          const deadRightShiftY = seat === 1 && role.kind === "dead" ? 30 : 0;
           // Two layouts are supported here:
           //
           //   (1) Default Tenhou-style perspective (showWalls off):
@@ -2753,13 +2781,7 @@ export class TableRenderer {
               y = band.y + outerOffset;
             } else if (seat === 1) {
               x = band.x + outerOffset;
-              y =
-                band.y +
-                band.h -
-                tileLongDim -
-                longOffset +
-                sideLift +
-                deadRightShiftY;
+              y = band.y + band.h - tileLongDim - longOffset + sideLift;
             } else if (seat === 2) {
               x = band.x + band.w - tileLongDim - longOffset;
               y = band.y + bandCross - tileCrossDim - outerOffset;
@@ -2776,17 +2798,17 @@ export class TableRenderer {
             x = band.x + longOffset;
             y =
               band.y +
+              16 +
               crossInset +
               (row === 0 ? ROW_OFFSET_Y / 2 : -ROW_OFFSET_Y / 2);
           } else if (seat === 1) {
-            x = band.x + crossInset;
+            x = band.x + crossInset + 8;
             y =
               band.y +
               band.h -
               tileLongDim -
               longOffset -
-              (row === 1 ? ROW_OFFSET_Y : 0) +
-              deadRightShiftY;
+              (row === 1 ? ROW_OFFSET_Y : 0);
           } else if (seat === 2) {
             // +k goes player-RIGHT = -x (west) across the top
             // wall. k=0 anchors at the band's right edge so the
@@ -4308,6 +4330,20 @@ export class TableRenderer {
     root.addChild(fill(layout.center, 0xa855f7));
   }
 
+  /** Paint only the wall-zone rectangles above the rendered table. */
+  private renderWallZonesDebug(layout: TableLayout): void {
+    if (!this.root) {
+      return;
+    }
+    for (const rect of layout.wall) {
+      const zone = new Graphics()
+        .rect(rect.x, rect.y, rect.w, rect.h)
+        .fill({ color: 0xeab308, alpha: 0.35 });
+      zone.zIndex = 900;
+      this.root.addChild(zone);
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Drawing primitives
   // -------------------------------------------------------------------------
@@ -4914,6 +4950,9 @@ export class TableRenderer {
     // strip's *inner* edge (facing the centre of the table).
     const handRect = layout.hands[seat];
     const longAxisLen = seat % 2 === 0 ? handRect.w : handRect.h;
+    const sideHandScreenWidth = sideHandRevealed
+      ? SIDE_TILE_W
+      : layout.tileSide.w;
     // The hand is left-aligned in the band (player's POV): the
     // leftmost tile sits at the band's player-left edge. The meld
     // strip is right-aligned at the band's player-right edge (see
@@ -4935,11 +4974,12 @@ export class TableRenderer {
       case 1: {
         // right — rotate -90° (counter-clockwise on screen) so the
         // hand reads from bottom→top after rotation. Container's
-        // origin lands at the rect's bottom-left; -90° pivots the
-        // strip up along the inner edge.
+        // origin is inset from the rect's right edge by the upright
+        // tile width, so the strip is flush with the hand zone's
+        // screen-right edge.
         handContainer.rotation = -Math.PI / 2;
         handContainer.position.set(
-          handRect.x,
+          handRect.x + handRect.w - sideHandScreenWidth,
           handRect.y + handRect.h - longAxisOffset
         );
         break;
@@ -4956,10 +4996,11 @@ export class TableRenderer {
       }
       case 3: {
         // left — rotate 90° (clockwise). Origin at rect's
-        // top-right; reads top→bottom.
+        // left edge plus the upright tile width; the rotated tile
+        // extends left from there and sits flush with the zone edge.
         handContainer.rotation = Math.PI / 2;
         handContainer.position.set(
-          handRect.x + handRect.w,
+          handRect.x + sideHandScreenWidth,
           handRect.y + longAxisOffset
         );
         break;
@@ -5116,15 +5157,31 @@ export class TableRenderer {
               p.index === lastIdx && view.freshlyDiscardedSeat === seat
                 ? 10
                 : 0;
-            const lx = p.wrap.x + p.sprite.x + nudge;
-            const ly = p.wrap.y + p.sprite.y + nudge;
+            // Resolve the tile's true screen-space centre and
+            // footprint. The sprite offset passes through the wrap's
+            // own rotation (non-zero for the sideways riichi tile),
+            // and the footprint uses the tile's total on-screen
+            // rotation — so a tilted tile buckets into the same
+            // screen-column as its row instead of punching a hole
+            // that ruptures the continuous strip.
+            const wr = p.wrap.rotation;
+            const wc = Math.cos(wr);
+            const ws = Math.sin(wr);
+            const lx = p.wrap.x + nudge + (p.sprite.x * wc - p.sprite.y * ws);
+            const ly = p.wrap.y + nudge + (p.sprite.x * ws + p.sprite.y * wc);
+            const theta = rot + wr + p.sprite.rotation;
+            const tc = Math.abs(Math.cos(theta));
+            const ts = Math.abs(Math.sin(theta));
+            const fw = p.sprite.width * tc + p.sprite.height * ts;
+            const fh = p.sprite.width * ts + p.sprite.height * tc;
             return {
               ax: lx * cos - ly * sin,
               ay: lx * sin + ly * cos,
-              w: p.sprite.width,
-              h: p.sprite.height,
+              w: fw,
+              h: fh,
             };
-          })
+          }),
+        true
       );
     }
     // Position the discard container inside `layout.discards[seat]`.
@@ -5365,6 +5422,72 @@ export class TableRenderer {
     }
     const global = handContainer.toGlobal({ x: lx, y: ly });
     return discardContainer.toLocal(global);
+  }
+
+  /**
+   * Static darkened rounded "mats" behind each seat's hand + meld
+   * band, the way Tenhou frames each hand. Fixed to the layout — they
+   * never depend on hand contents, so toggling "show hands" can't make
+   * them vanish — and drawn just above the felt + vignette, below
+   * every tile and tile shadow.
+   */
+  private renderHandPanels(layout: TableLayout): void {
+    if (!this.root) {
+      return;
+    }
+    for (let seat = 0; seat < 4; seat++) {
+      const hb = layout.hands[seat];
+      const panelRect =
+        seat === 0
+          ? {
+              x: hb.x,
+              y: hb.y + BIG_TILE_H - layout.hands[2].h,
+              w: hb.w,
+              h: layout.hands[2].h,
+            }
+          : hb;
+      const panel = new Graphics()
+        .roundRect(
+          panelRect.x,
+          panelRect.y,
+          panelRect.w,
+          panelRect.h,
+          HAND_PANEL_RADIUS
+        )
+        .fill({ color: 0x000000, alpha: HAND_PANEL_ALPHA });
+      panel.zIndex = -10;
+      this.root.addChild(panel);
+    }
+  }
+
+  /**
+   * Static darkened mats behind the four 6×3 discard ponds. Each mat
+   * keeps its zone's side and bottom edges, while its screen-top edge
+   * is inset by one tile-overlap distance so it hugs the visible
+   * stacked footprint rather than filling the whole layout zone.
+   */
+  private renderDiscardPanels(layout: TableLayout): void {
+    if (!this.root) {
+      return;
+    }
+    for (let seat = 0; seat < 4; seat++) {
+      const pond = layout.discards[seat];
+      const topInset =
+        seat % 2 === 0
+          ? this.tileDesign.spacing.discardRowVert
+          : this.tileDesign.spacing.discardRowHoriz;
+      const panel = new Graphics()
+        .roundRect(
+          pond.x,
+          pond.y + topInset,
+          pond.w,
+          pond.h - topInset,
+          HAND_PANEL_RADIUS
+        )
+        .fill({ color: 0x000000, alpha: HAND_PANEL_ALPHA });
+      panel.zIndex = -10;
+      this.root.addChild(panel);
+    }
   }
 
   /**

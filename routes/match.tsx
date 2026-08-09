@@ -16,7 +16,7 @@ import {
 } from "~/game/client/LivePlayMenu";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
 import { rotateMatchView } from "~/game/replay/player";
-import type { RoomState } from "~/game/protocol/messages";
+import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
 import chipIconUrl from "~/game/client/icons/chips.png";
 import type { Route } from "./+types/match";
@@ -30,6 +30,140 @@ import type { Route } from "./+types/match";
  * seat (auto-played or otherwise) shares the same cadence.
  */
 const DRAW_TO_DISCARD_DELAY_MS = 700;
+
+function getDebugWallDice(search: URLSearchParams): [number, number] | null {
+  const values = search.get("debugWallDice")?.split(",");
+  if (!values || values.length !== 2) {
+    return null;
+  }
+  const dice = values.map(Number);
+  if (
+    dice.some((value) => !Number.isInteger(value) || value < 1 || value > 6)
+  ) {
+    return null;
+  }
+  return [dice[0], dice[1]];
+}
+
+function hasDebugWallFixture(): boolean {
+  if (!import.meta.env.DEV || typeof window === "undefined") {
+    return false;
+  }
+  return getDebugWallDice(new URLSearchParams(window.location.search)) !== null;
+}
+
+function prepareRenderedMatchView(view: MatchView): MatchView {
+  const rotated =
+    view.mySeat != null && view.mySeat !== 0
+      ? rotateMatchView(view, view.mySeat)
+      : view;
+  if (!import.meta.env.DEV || typeof window === "undefined") {
+    return rotated;
+  }
+
+  const search = new URLSearchParams(window.location.search);
+  const debugFourKans = search.get("debugFourKans") === "1";
+  const debugFullDiscards = search.get("debugFullDiscards") === "1";
+  const debugWallDice = getDebugWallDice(search);
+  const debugWallDealerRaw = Number(search.get("debugWallDealer") ?? "0");
+  const debugWallDealer =
+    Number.isInteger(debugWallDealerRaw) &&
+    debugWallDealerRaw >= 0 &&
+    debugWallDealerRaw <= 3
+      ? debugWallDealerRaw
+      : 0;
+  if (!debugFourKans && !debugFullDiscards && !debugWallDice) {
+    return rotated;
+  }
+
+  const kanTiles = ["1m", "2p", "3s", "4z"];
+  const melds: Meld[][] = Array.from({ length: 4 }, (_, seat) =>
+    kanTiles.map((tile, index) => ({
+      type: "daiminkan",
+      tiles: [tile, tile, tile, tile],
+      claimedTile: tile,
+      from: ((seat + index + 1) % 4) as 0 | 1 | 2 | 3,
+    }))
+  );
+  const discardTiles: MatchView["discards"][number] = [
+    "1m",
+    "2m",
+    "3m",
+    "4m",
+    "5m",
+    "6m",
+    "7m",
+    "8m",
+    "9m",
+    "1p",
+    "2p",
+    "3p",
+    "4p",
+    "5p",
+    "6p",
+    "7p",
+    "8p",
+    "9p",
+    "1s",
+    "2s",
+  ];
+  const discards = Array.from({ length: 4 }, () => [...discardTiles]);
+  const discardTsumogiri = Array.from({ length: 4 }, () =>
+    discardTiles.map(() => false)
+  );
+  const discardOrdinals = Array.from({ length: 4 }, (_, seat) =>
+    discardTiles.map((_, index) => seat * discardTiles.length + index)
+  );
+  const wallTiles: MatchView["liveWall"] = Array.from(
+    { length: 122 },
+    (_, index) => `${(index % 9) + 1}${["m", "p", "s"][index % 3]}` as never
+  );
+  const deadWall: NonNullable<MatchView["deadWall"]> = [
+    "1z",
+    "2z",
+    "3z",
+    "4z",
+    "5z",
+    "6z",
+    "7z",
+    "1m",
+    "2m",
+    "3m",
+    "4m",
+    "5m",
+    "6m",
+    "7m",
+  ];
+  const debugKanCount = debugFourKans ? 4 : 0;
+  const debugDoraIndicators = [5, 7, 9, 11, 13].map((index) => deadWall[index]);
+
+  return {
+    ...rotated,
+    ...(debugFourKans && {
+      hands: [["5m"], [null], [null], [null]],
+      melds,
+      freshlyDrawnSeat: null,
+    }),
+    ...(debugFullDiscards && {
+      discards,
+      discardTsumogiri,
+      discardOrdinals,
+      totalDiscards: discardTiles.length * 4,
+      riichiTileIdx: [null, null, null, null],
+      freshlyDiscardedSeat: null,
+    }),
+    ...(debugWallDice && {
+      dealer: debugWallDealer,
+      dice: debugWallDice,
+      liveWall: wallTiles,
+      deadWall,
+      doraIndicators: debugDoraIndicators.slice(0, debugKanCount + 1),
+      drawsTaken: debugKanCount,
+      liveDrawsTaken: 0,
+      wallRemaining: 70 - debugKanCount,
+    }),
+  };
+}
 
 /**
  * Mobile-shell prep, scoped to the match route only:
@@ -826,11 +960,7 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
             // need an explicit re-render — store state hasn't changed,
             // so the subscribe-driven loop won't fire.
             const v = useMatchStore.getState();
-            renderer.render(
-              v.mySeat != null && v.mySeat !== 0
-                ? rotateMatchView(v, v.mySeat)
-                : v
-            );
+            renderer.render(prepareRenderedMatchView(v));
           });
           // Sync live-play menu's "Auto sort" preference into
           // the renderer at mount, and listen for engine-driven
@@ -853,13 +983,21 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           // off here.
           renderer.setAutoSort(liveMenuFlags.autoSort);
           renderer.setAutoWinEnabled(liveMenuFlags.autoWin);
+          renderer.setShowWallZonesDebug(
+            new URLSearchParams(window.location.search).get(
+              "debugWallZones"
+            ) === "1"
+          );
+          renderer.setShowWalls(
+            hasDebugWallFixture() &&
+              new URLSearchParams(window.location.search).get(
+                "debugWallReveal"
+              ) === "1"
+          );
+          renderer.setShowUndealtWall(hasDebugWallFixture());
           // Initial draw with whatever the store currently holds.
           const v0 = useMatchStore.getState();
-          renderer.render(
-            v0.mySeat != null && v0.mySeat !== 0
-              ? rotateMatchView(v0, v0.mySeat)
-              : v0
-          );
+          renderer.render(prepareRenderedMatchView(v0));
         });
       }
     );
@@ -999,11 +1137,7 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
       // seat 0 at the bottom. Rotate the live view so the
       // human's actual seat lands there (replays already do the
       // same in their projector).
-      const rendered =
-        view.mySeat != null && view.mySeat !== 0
-          ? rotateMatchView(view, view.mySeat)
-          : view;
-      rendererRef.current.render(rendered);
+      rendererRef.current.render(prepareRenderedMatchView(view));
     }
   }, [view, eyeHeld, livePressed, stashedResult, t]);
 

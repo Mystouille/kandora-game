@@ -127,7 +127,7 @@ export const tenhouTileDesign: TileDesign = {
       uprightSmall: "uprightSmall",
       long: "shadowLong",
       depth: 14,
-      cap: 0.28,
+      cap: 0.15,
       uprightScale: 0.34,
       offsetX: -3,
       offsetY: -3,

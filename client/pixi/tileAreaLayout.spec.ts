@@ -54,6 +54,16 @@ describe("layoutDiscards", () => {
     it("keeps row-0 tiles at zIndex 0 (row-based stacking)", () => {
       expect(p.slice(0, 6).map((t) => t.zIndex)).toEqual([0, 0, 0, 0, 0, 0]);
     });
+
+    it("keeps overflow tiles on the third row", () => {
+      const full = layoutDiscards(D, 0, seq(20), null);
+      expect(full[18].wrap.x).toBeCloseTo(6 * vLocalW, 10);
+      expect(full[18].wrap.y).toBeCloseTo(2 * vRowStride, 10);
+      expect(full[19].wrap.x).toBeCloseTo(7 * vLocalW, 10);
+      expect(full[19].wrap.y).toBeCloseTo(2 * vRowStride, 10);
+      expect(full[18].zIndex).toBe(2000);
+      expect(full[19].zIndex).toBe(2000);
+    });
   });
 
   describe("seat 1 (right, horizontal art)", () => {

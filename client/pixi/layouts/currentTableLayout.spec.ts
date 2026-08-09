@@ -30,6 +30,33 @@ describe("currentTableLayout", () => {
     expect(currentTableLayout.zones.playerInfo).toEqual(legacy.playerInfo);
   });
 
+  it("insets the top hand left edge without moving its right edge", () => {
+    const topHand = currentTableLayout.zones.hands[2];
+    expect(topHand.x).toBe(61);
+    expect(topHand.w).toBe(729);
+    expect(topHand.x + topHand.w).toBe(790);
+  });
+
+  it("insets the focused hand left edge without moving its right edge", () => {
+    const focusedHand = currentTableLayout.zones.hands[0];
+    expect(focusedHand.x).toBe(80);
+    expect(focusedHand.w).toBe(920);
+    expect(focusedHand.x + focusedHand.w).toBe(1000);
+  });
+
+  it("extends the side hands toward the bottom edge", () => {
+    const rightHand = currentTableLayout.zones.hands[1];
+    const leftHand = currentTableLayout.zones.hands[3];
+    expect(rightHand.h).toBe(669);
+    expect(leftHand.h).toBe(647);
+  });
+
+  it("shifts the left wall 10 design pixels left", () => {
+    const leftWall = currentTableLayout.zones.walls[3];
+    expect(leftWall.x).toBe(46);
+    expect(leftWall.w).toBe(135);
+  });
+
   it("derives felt as the bounding box of walls + hands", () => {
     const legacy = computeTableLayout();
     expect(resolveFelt(currentTableLayout)).toEqual(
@@ -67,8 +94,8 @@ describe("currentTableLayout", () => {
   it("rejects a zone with non-positive size", () => {
     const bad = clone(currentTableLayout);
     bad.zones.hands[0] = { x: 0, y: 0, w: 0, h: 10 };
-    expect(validateTableLayoutConfig(bad).some((e) => e.includes("hands[0]"))).toBe(
-      true
-    );
+    expect(
+      validateTableLayoutConfig(bad).some((e) => e.includes("hands[0]"))
+    ).toBe(true);
   });
 });

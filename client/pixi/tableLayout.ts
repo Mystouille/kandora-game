@@ -115,14 +115,21 @@ export const DEFAULT_WALL_TILE: TileDims = TILE_VERTICAL;
 // Zone sizes (design-space pixels).
 const HAND_BOTTOM_W = 1000;
 const HAND_BOTTOM_H = 138;
+const HAND_BOTTOM_LEFT_INSET = 80;
 const HAND_TOP_W = 912;
 const HAND_TOP_H = 65;
+// Calibrated from overlap measurements at a 2060 px-wide board
+// (2.06 screen px per design px).
+const HAND_TOP_LEFT_INSET = 103;
 const HAND_SIDE_W = 56;
 const HAND_SIDE_H = 700;
+const HAND_LEFT_PLAYER_RIGHT_CUT = 53;
+const HAND_RIGHT_PLAYER_LEFT_CUT = 31;
 const WALL_HORIZ_W = 710;
 const WALL_HORIZ_H = 102;
 const WALL_VERT_W = 135;
 const WALL_VERT_H = 621;
+const WALL_LEFT_SHIFT = 10;
 const DISCARD_HORIZ_W = 250;
 const DISCARD_HORIZ_H = 150;
 const DISCARD_VERT_W = 168;
@@ -154,18 +161,21 @@ export function computeTableLayout(
   // hand sits at y=0; the 19 px vertical slack lives between the
   // top hand and the top wall.
   const handBottom: Rect = {
-    x: 0,
+    x: HAND_BOTTOM_LEFT_INSET,
     y: DESIGN_H - HAND_BOTTOM_H,
-    w: HAND_BOTTOM_W,
+    w: HAND_BOTTOM_W - HAND_BOTTOM_LEFT_INSET,
     h: HAND_BOTTOM_H,
   };
   const handTop: Rect = {
-    // Shorten the top band by 40 design px on its screen-left end,
-    // then shift the whole band 3 tile widths to the screen-left.
-    x: (DESIGN_W - HAND_TOP_W) / 2 + 40 - 3 * TILE_VERTICAL.w,
+    // Inset the screen-left edge while preserving the existing
+    // screen-right edge. The top meld strip follows this edge.
+    x:
+      (DESIGN_W - HAND_TOP_W) / 2 +
+      40 -
+      3 * TILE_VERTICAL.w +
+      HAND_TOP_LEFT_INSET,
     y: 0,
-    // Shorten the top band by 40 design px on its screen-right end.
-    w: HAND_TOP_W - 40 - 40,
+    w: HAND_TOP_W - 40 - 40 - HAND_TOP_LEFT_INSET,
     h: HAND_TOP_H,
   };
   // Side hands — centred vertically on the design's midline.
@@ -174,18 +184,18 @@ export function computeTableLayout(
     x: 0,
     y: designMidY - HAND_SIDE_H / 2,
     w: HAND_SIDE_W,
-    // Shorten the left band by 140 design px on its player-right end
+    // Shorten the left band on its player-right end
     // (screen bottom; +x in container-local space for seat 3).
-    h: HAND_SIDE_H - 140,
+    h: HAND_SIDE_H - HAND_LEFT_PLAYER_RIGHT_CUT,
   };
   const handRight: Rect = {
     x: DESIGN_W - HAND_SIDE_W,
     y: designMidY - HAND_SIDE_H / 2,
     w: HAND_SIDE_W,
-    // Shorten the right band by 80 design px on its player-left end
+    // Shorten the right band on its player-left end
     // (screen bottom; +x in container-local space for seat 1 runs
     // bottom→top, so cutting the bottom shortens the player-left end).
-    h: HAND_SIDE_H - 80,
+    h: HAND_SIDE_H - HAND_RIGHT_PLAYER_LEFT_CUT,
   };
 
   // Walls form a pinwheel. The bottom wall sticks to the left
@@ -236,7 +246,7 @@ export function computeTableLayout(
   // Side zones — centred vertically on the centre rect's midline.
   const centerMidY = center.y + center.h / 2;
   const wallLeft: Rect = {
-    x: handLeft.x + handLeft.w,
+    x: handLeft.x + handLeft.w - WALL_LEFT_SHIFT,
     y: handBottom.y - WALL_VERT_H,
     w: WALL_VERT_W,
     h: WALL_VERT_H,
@@ -393,9 +403,7 @@ function isFiniteRect(r: Rect): boolean {
  * preset has `DISCARD_HORIZ_W === CENTER_W`), so only the
  * tile-bearing zones are required to have positive area.
  */
-export function validateTableLayoutConfig(
-  config: TableLayoutConfig
-): string[] {
+export function validateTableLayoutConfig(config: TableLayoutConfig): string[] {
   const errors: string[] = [];
   if (!(config.viewport.w > 0) || !(config.viewport.h > 0)) {
     errors.push("viewport must have positive dimensions");

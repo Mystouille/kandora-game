@@ -90,7 +90,7 @@ export function layoutDiscards(
   let cursorX = 0;
   let cursorRow = 0;
   discards.forEach((tile, i) => {
-    const row = Math.floor(i / DISCARD_COLS);
+    const row = Math.min(2, Math.floor(i / DISCARD_COLS));
     if (row !== cursorRow) {
       cursorRow = row;
       cursorX = 0;
@@ -112,7 +112,16 @@ export function layoutDiscards(
         x: tileLocalH / 2,
         y: small.h / 2,
       };
-      wrap = { x: cursorX + small.h, y: rowY, rotation: Math.PI / 2 };
+      // Nudge the sideways tile toward the shadow-side (outer) edge so
+      // its outer edge sits flush with the upright neighbours' (cross
+      // footprint small.w vs the upright tileLocalH). Sign flips per
+      // side: screen-right maps to +local-y (seat 1) / -local-y (seat 3).
+      const outerShift = ((tileLocalH - small.w) / 2) * (seat === 1 ? 1 : -1);
+      wrap = {
+        x: cursorX + small.h,
+        y: rowY + outerShift,
+        rotation: Math.PI / 2,
+      };
       cursorX += riichiStride;
     } else if (isRiichi) {
       sprite = {
