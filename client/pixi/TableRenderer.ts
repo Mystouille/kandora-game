@@ -20,6 +20,7 @@ import {
   Assets,
   Container,
   Graphics,
+  NineSliceSprite,
   Sprite,
   Text,
   Texture,
@@ -1022,11 +1023,11 @@ export class TableRenderer {
       : footprint.width > footprint.height
         ? shadow.side
         : shadow.small;
-    // Keep the strip's natural aspect at the tile height so it reads
-    // as a shadow rather than a stretched tile.
-    const tex = store.getTexture(atlasId, null);
+    // Match the settled column/basic shadow exactly: fixed `depth`
+    // thickness (not the texture's natural aspect) so the flying
+    // tile's shadow doesn't read thicker than where it lands.
     const h = footprint.height;
-    const w = tex.height > 0 ? (h * tex.width) / tex.height : h;
+    const w = shadow.depth;
     const s = factory.create({
       atlasId,
       tile: null,
@@ -1072,6 +1073,223 @@ export class TableRenderer {
     sw.rotation = wrapRotation;
     sw.zIndex = SHADOW_LAYER_Z;
     area.addChild(sw);
+  }
+
+  /**
+   * Continuous drop shadow down a COLUMN of tiles, on the column's
+   * right edge and below every tile ({@link SHADOW_LAYER_Z}). The
+   * design's `long` strip (authored vertical: dark left edge, feather
+   * right, rounded top) is 3-sliced along its length — fixed end caps,
+   * stretched middle — so one band spans the column without per-tile
+   * shadows overlapping and darkening. `x` is the column's right edge
+   * (the strip's dark side sits here, against the tiles), `y` the
+   * column top, `length` its height down the container-local +y.
+   */
+  private placeLineShadow(
+    area: Container,
+    x: number,
+    y: number,
+    length: number
+  ): void {
+    const store = this.textureStore;
+    const shadow = this.tileDesign.effects.shadow;
+    if (!store || !shadow || length <= 0) {
+      return;
+    }
+    const tex = store.getTexture(shadow.long, null);
+    // The strip is authored with a rounded TOP and a near-flat bottom.
+    // Fix the top as a cap so the dome never stretches, but keep the
+    // bottom cap thin, and clamp both to the strip length. An equal
+    // top/bottom cap (the old behaviour) summed to more than a short
+    // column's height, so Pixi compressed the caps, dropped the
+    // uniform middle, and the rounded ends made fused columns read
+    // thinner than a standalone tile's shadow.
+    const bottomCap = Math.min(tex.height * 0.06, length * 0.25);
+    const topCap = Math.min(
+      tex.height * shadow.cap,
+      Math.max(0, length - bottomCap - 0.5)
+    );
+    const ns = new NineSliceSprite({
+      texture: tex,
+      leftWidth: 0,
+      topHeight: topCap,
+      rightWidth: 0,
+      bottomHeight: bottomCap,
+    });
+    ns.width = shadow.depth; // texture u → +x depth (dark edge → feather right)
+    ns.height = length; // texture v → +y column length (middle stretched)
+    ns.position.set(x + shadow.offsetX, y + shadow.offsetY);
+    ns.zIndex = SHADOW_LAYER_Z;
+    if (shadow.alpha !== undefined) {
+      ns.alpha = shadow.alpha;
+    }
+    area.addChild(ns);
+  }
+
+  /**
+   * A screen-aligned child layer (counter-rotated by the area's
+   * rotation so its axes match the screen), below every tile. Line
+   * shadows placed here fall screen-right whatever the seat rotation.
+   */
+  private screenShadowLayer(container: Container, rotation: number): Container {
+    const layer = new Container();
+    layer.rotation = -rotation;
+    layer.zIndex = SHADOW_LAYER_Z;
+    container.addChild(layer);
+    return layer;
+  }
+
+  /**
+   * Single-tile drop shadow on a tile's screen-right edge (the basic
+   * per-orientation atlas), for screen-columns of one tile where the
+   * long strip's end caps would overflow. `xRight,ay` is the tile's
+   * right-edge midpoint in the screen-aligned layer.
+   */
+  private placeBasicShadow(
+    layer: Container,
+    xRight: number,
+    ay: number,
+    h: number,
+    atlas: string
+  ): void {
+    const store = this.textureStore;
+    const shadow = this.tileDesign.effects.shadow;
+    if (!store || !shadow) {
+      return;
+    }
+    const s = new Sprite(store.getTexture(atlas, null));
+    s.anchor.set(0, 0.5);
+    s.width = shadow.depth;
+    s.height = h;
+    s.position.set(xRight + shadow.offsetX, ay + shadow.offsetY);
+    s.zIndex = SHADOW_LAYER_Z;
+    if (shadow.alpha !== undefined) {
+      s.alpha = shadow.alpha;
+    }
+    layer.addChild(s);
+  }
+
+  /**
+   * Drop shadow for a single UPRIGHT (standing) tile — the focused
+   * hand and the face-down top hand. The sprite is a soft blob, so it
+   * keeps its natural aspect (fit to the tile height, uniform scale)
+   * and sits flush against the tile's BOTTOM-RIGHT corner rather than
+   * being stretched into a thin band. These hands never stack tiles,
+   * so no gap-filling is needed. `xRight,yBottom` is the tile's
+   * bottom-right corner in the screen-aligned layer.
+   */
+  private placeUprightShadow(
+    layer: Container,
+    xRight: number,
+    yBottom: number,
+    tileH: number,
+    atlas: string
+  ): void {
+    const store = this.textureStore;
+    const shadow = this.tileDesign.effects.shadow;
+    if (!store || !shadow) {
+      return;
+    }
+    const tex = store.getTexture(atlas, null);
+    const s = new Sprite(tex);
+    s.anchor.set(0, 1);
+    const fit = tex.height > 0 ? tileH / tex.height : 1;
+    s.scale.set(fit * (shadow.uprightScale ?? 1));
+    s.position.set(xRight + shadow.offsetX, yBottom + shadow.offsetY);
+    s.zIndex = SHADOW_LAYER_Z;
+    if (shadow.alpha !== undefined) {
+      s.alpha = shadow.alpha;
+    }
+    layer.addChild(s);
+  }
+
+  /**
+   * Group screen-aligned tile boxes into screen-vertical columns
+   * (bucketed by centre x) and draw one shadow per column on its
+   * screen-right edge: a 3-sliced strip for runs of 2+ tiles, or a
+   * single basic shadow for a lone tile. `boxes` carry each tile's
+   * screen-aligned centre (`ax,ay`) and on-screen footprint (`w,h`).
+   */
+  private placeColumnShadows(
+    layer: Container,
+    boxes: ReadonlyArray<{ ax: number; ay: number; w: number; h: number }>
+  ): void {
+    const shadow = this.tileDesign.effects.shadow;
+    if (!shadow) {
+      return;
+    }
+    const cols = new Map<
+      number,
+      Array<{ ax: number; ay: number; w: number; h: number }>
+    >();
+    for (const b of boxes) {
+      const key = Math.round(b.ax);
+      const list = cols.get(key);
+      if (list) {
+        list.push(b);
+      } else {
+        cols.set(key, [b]);
+      }
+    }
+    for (const list of cols.values()) {
+      // Sort top→bottom, then split into contiguous runs so a real gap
+      // in the column (e.g. the half-tile dead-wall/live-wall split)
+      // breaks the strip instead of being bridged by one continuous
+      // shadow. A gap is a centre-to-centre jump well above the
+      // column's normal tile pitch.
+      list.sort((a, b) => a.ay - b.ay);
+      const emitRun = (
+        run: Array<{ ax: number; ay: number; w: number; h: number }>
+      ): void => {
+        if (run.length === 0) {
+          return;
+        }
+        if (run.length === 1) {
+          const b = run[0];
+          this.placeBasicShadow(
+            layer,
+            b.ax + b.w / 2,
+            b.ay,
+            b.h,
+            b.w > b.h ? shadow.side : shadow.small
+          );
+          return;
+        }
+        let right = -Infinity;
+        let top = Infinity;
+        let bottom = -Infinity;
+        for (const b of run) {
+          right = Math.max(right, b.ax + b.w / 2);
+          top = Math.min(top, b.ay - b.h / 2);
+          bottom = Math.max(bottom, b.ay + b.h / 2);
+        }
+        this.placeLineShadow(layer, right, top, bottom - top);
+      };
+      // Normal pitch = median consecutive spacing, robust to a single
+      // large gap and to the freshly-discarded tile's +10/+10 nudge.
+      const gaps: number[] = [];
+      for (let i = 1; i < list.length; i++) {
+        gaps.push(list[i].ay - list[i - 1].ay);
+      }
+      const sortedGaps = [...gaps].sort((a, b) => a - b);
+      const pitch =
+        sortedGaps.length > 0
+          ? sortedGaps[Math.floor(sortedGaps.length / 2)]
+          : 0;
+      let run: Array<{ ax: number; ay: number; w: number; h: number }> = [];
+      for (let i = 0; i < list.length; i++) {
+        if (
+          i > 0 &&
+          pitch > 0 &&
+          list[i].ay - list[i - 1].ay > pitch * 1.4 + 1
+        ) {
+          emitRun(run);
+          run = [];
+        }
+        run.push(list[i]);
+      }
+      emitRun(run);
+    }
   }
 
   /** Render opponent hands face-up. In live play opponents are
@@ -2354,6 +2572,12 @@ export class TableRenderer {
       const faceSheet = this.tileDesign.sheets.wallFace[
         seat as Seat
       ] as SheetKey;
+      const wallShadowBoxes: Array<{
+        ax: number;
+        ay: number;
+        w: number;
+        h: number;
+      }> = [];
 
       for (let k = 0; k < 17; k++) {
         const g = gposOf(seat, k);
@@ -2640,22 +2864,21 @@ export class TableRenderer {
           // Lower wall tiles (row 0) cast a shadow below every tile;
           // the upper peeking tile (row 1) does not.
           if (row === 0) {
-            const shadow = this.makeTileShadow(
-              {
-                width: screenTileW,
-                height: screenTileH,
-                rotation: 0,
-                cx: screenTileW / 2,
-                cy: screenTileH / 2,
-              },
-              0
-            );
-            if (shadow) {
-              this.placeTileShadow(wallContainer, shadow, x, y, 0);
-            }
+            wallShadowBoxes.push({
+              ax: x + screenTileW / 2,
+              ay: y + screenTileH / 2,
+              w: screenTileW,
+              h: screenTileH,
+            });
           }
         }
       }
+      // Screen-right column shadow per wall column, below the tiles
+      // (the wall container is unrotated → already screen-aligned).
+      this.placeColumnShadows(
+        this.screenShadowLayer(wallContainer, 0),
+        wallShadowBoxes
+      );
 
       wallContainer.zIndex = seat === 0 ? 2 : seat === 2 ? 0 : 1;
       this.root.sortableChildren = true;
@@ -2687,6 +2910,12 @@ export class TableRenderer {
 
     const container = new Container();
     container.sortableChildren = true;
+    const wallShadowBoxes: Array<{
+      ax: number;
+      ay: number;
+      w: number;
+      h: number;
+    }> = [];
     // 7 stacks × 2 rows, idxFromBreak 0..6 laid out left→right:
     //   stacks 0,1        = the 4 kan-replacement (rinshan) tiles
     //   stack 2 upper     = dora indicator, lower = ura-dora
@@ -2721,22 +2950,19 @@ export class TableRenderer {
         child.zIndex = row;
         container.addChild(child);
         if (row === 0) {
-          const shadow = this.makeTileShadow(
-            {
-              width: screenTileW,
-              height: screenTileH,
-              rotation: 0,
-              cx: screenTileW / 2,
-              cy: screenTileH / 2,
-            },
-            0
-          );
-          if (shadow) {
-            this.placeTileShadow(container, shadow, childX, childY, 0);
-          }
+          wallShadowBoxes.push({
+            ax: childX + screenTileW / 2,
+            ay: childY + screenTileH / 2,
+            w: screenTileW,
+            h: screenTileH,
+          });
         }
       }
     }
+    this.placeColumnShadows(
+      this.screenShadowLayer(container, 0),
+      wallShadowBoxes
+    );
     // Wall layer on the sortable root (below discards=5 / hands=10).
     container.zIndex = 2;
     this.root.addChild(container);
@@ -3399,11 +3625,8 @@ export class TableRenderer {
         const mt = meldTileDims(this.tileDesign, 0);
         let dx = 0;
         for (const tile of row.tiles) {
-          const { node: sprite, shadow } = this.drawMeldTile(tile, 0);
+          const { node: sprite } = this.drawMeldTile(tile, 0);
           sprite.position.set(dx, 0);
-          if (shadow) {
-            sprite.addChildAt(shadow, 0);
-          }
           tileContainer.addChild(sprite);
           dx += mt.w;
         }
@@ -3424,21 +3647,15 @@ export class TableRenderer {
         const meldGap = 18;
         let dx = 0;
         for (const tile of row.concealed) {
-          const { node: sprite, shadow } = this.drawMeldTile(tile, 0);
+          const { node: sprite } = this.drawMeldTile(tile, 0);
           sprite.position.set(dx, 0);
-          if (shadow) {
-            sprite.addChildAt(shadow, 0);
-          }
           handContainer.addChild(sprite);
           dx += mt.w;
         }
         if (row.winTile) {
           dx += agariGap;
-          const { node: sprite, shadow } = this.drawMeldTile(row.winTile, 0);
+          const { node: sprite } = this.drawMeldTile(row.winTile, 0);
           sprite.position.set(dx, 0);
-          if (shadow) {
-            sprite.addChildAt(shadow, 0);
-          }
           handContainer.addChild(sprite);
           dx += mt.w;
         }
@@ -4412,28 +4629,28 @@ export class TableRenderer {
         this.tintIfWait(sprite, p.tile);
         const wrap = new Container();
         wrap.addChild(sprite);
-        const shadow = this.makeTileShadow(
-          {
-            width: p.sprite.width,
-            height: p.sprite.height,
-            rotation: p.sprite.rotation,
-            cx: p.sprite.x,
-            cy: p.sprite.y,
-          },
-          SEAT_CONTAINER_ROT[seat] + p.wrap.rotation
-        );
         wrap.position.set(p.wrap.x, p.wrap.y);
         wrap.zIndex = p.zIndex;
         handContainer.addChild(wrap);
-        if (shadow) {
-          this.placeTileShadow(
-            handContainer,
-            shadow,
-            p.wrap.x,
-            p.wrap.y,
-            p.wrap.rotation
-          );
-        }
+      }
+      {
+        const rot = SEAT_CONTAINER_ROT[seat];
+        const cos = Math.cos(rot);
+        const sin = Math.sin(rot);
+        const layer = this.screenShadowLayer(handContainer, rot);
+        this.placeColumnShadows(
+          layer,
+          sidePlacements.map((p) => {
+            const lx = p.wrap.x + p.sprite.x;
+            const ly = p.wrap.y + p.sprite.y;
+            return {
+              ax: lx * cos - ly * sin,
+              ay: lx * sin + ly * cos,
+              w: p.sprite.width,
+              h: p.sprite.height,
+            };
+          })
+        );
       }
     } else if (seat === 2) {
       // Top hand (opponent across): face-down `topSmall` backs
@@ -4459,26 +4676,41 @@ export class TableRenderer {
         this.tintIfWait(sprite, p.tile);
         const wrap = new Container();
         wrap.addChild(sprite);
-        const shadow = this.makeTileShadow(
-          {
-            width: p.sprite.width,
-            height: p.sprite.height,
-            rotation: p.sprite.rotation,
-            cx: p.sprite.x,
-            cy: p.sprite.y,
-          },
-          SEAT_CONTAINER_ROT[seat] + p.wrap.rotation
-        );
         wrap.position.set(p.wrap.x, p.wrap.y);
         handContainer.addChild(wrap);
-        if (shadow) {
-          this.placeTileShadow(
-            handContainer,
-            shadow,
-            p.wrap.x,
-            p.wrap.y,
-            p.wrap.rotation
-          );
+      }
+      {
+        const rot = SEAT_CONTAINER_ROT[seat];
+        const cos = Math.cos(rot);
+        const sin = Math.sin(rot);
+        const layer = this.screenShadowLayer(handContainer, rot);
+        const eff = this.tileDesign.effects.shadow;
+        if (eff) {
+          for (const p of topPlacements) {
+            const lx = p.wrap.x + p.sprite.x;
+            const ly = p.wrap.y + p.sprite.y;
+            const ax = lx * cos - ly * sin;
+            const ay = lx * sin + ly * cos;
+            // Face-down top tiles stand upright → dedicated upright
+            // shadow, sprite preserved; revealed faces read flat.
+            if (p.tile === null) {
+              this.placeUprightShadow(
+                layer,
+                ax + p.sprite.width / 2,
+                ay + p.sprite.height / 2,
+                p.sprite.height,
+                eff.uprightSmall
+              );
+            } else {
+              this.placeBasicShadow(
+                layer,
+                ax + p.sprite.width / 2,
+                ay,
+                p.sprite.height,
+                eff.small
+              );
+            }
+          }
         }
       }
     } else {
@@ -4490,6 +4722,8 @@ export class TableRenderer {
       const spriteH = BIG_TILE_H;
       const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
+      const ownShadowSpec = this.tileDesign.effects.shadow;
+      const ownShadowLayer = this.screenShadowLayer(handContainer, 0);
       hand.forEach((tile, i) => {
         // Phase-A: leave the discarded slot blank so the animated
         // discard sprite reads as having "come from" this slot.
@@ -4647,22 +4881,17 @@ export class TableRenderer {
             });
           });
         }
-        // Focused-hand drop shadow, behind the whole strip. Occlusion
-        // by the next tile is intended, so only the rightmost tile's
-        // shadow shows.
-        const handShadow = this.makeTileShadow(
-          {
-            width: spriteW,
-            height: spriteH,
-            rotation: 0,
-            cx: posX + spriteW / 2,
-            cy: spriteH / 2,
-          },
-          0,
-          { big: true }
-        );
-        if (handShadow) {
-          this.placeTileShadow(handContainer, handShadow, 0, 0, 0);
+        // Focused-hand drop shadow: a basic ownShadow on each tile's
+        // right edge (below all tiles). Occlusion by the next tile is
+        // intended, so only the rightmost tile's shadow shows.
+        if (ownShadowSpec) {
+          this.placeUprightShadow(
+            ownShadowLayer,
+            posX + spriteW,
+            spriteH,
+            spriteH,
+            ownShadowSpec.big
+          );
         }
         handContainer.addChild(tileSprite);
       });
@@ -4849,16 +5078,6 @@ export class TableRenderer {
       }
       const wrap = new Container();
       wrap.addChild(sprite);
-      const shadow = this.makeTileShadow(
-        {
-          width: placement.sprite.width,
-          height: placement.sprite.height,
-          rotation: placement.sprite.rotation,
-          cx: placement.sprite.x,
-          cy: placement.sprite.y,
-        },
-        SEAT_CONTAINER_ROT[seat] + placement.wrap.rotation
-      );
       wrap.zIndex = placement.zIndex;
       wrap.rotation = placement.wrap.rotation;
       let wrapX = placement.wrap.x;
@@ -4871,15 +5090,42 @@ export class TableRenderer {
       }
       wrap.position.set(wrapX, wrapY);
       discardContainer.addChild(wrap);
-      if (shadow) {
-        this.placeTileShadow(
-          discardContainer,
-          shadow,
-          wrapX,
-          wrapY,
-          placement.wrap.rotation
-        );
-      }
+    }
+    // Continuous drop shadow that always falls SCREEN-right: bucket
+    // tiles into screen-vertical columns and shadow each on its
+    // screen-right edge, below all tiles. Per-column for top/bottom
+    // seats, per-row for left/right seats — handled automatically.
+    {
+      const rot = SEAT_CONTAINER_ROT[seat];
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      const layer = this.screenShadowLayer(discardContainer, rot);
+      this.placeColumnShadows(
+        layer,
+        discardPlacements
+          // The in-flight last discard paints its own moving shadow in
+          // the animated overlay below; skip its settled shadow so it
+          // doesn't appear at the destination before the tile lands.
+          .filter((p) => !(lastIsAnimating && p.index === lastIdx))
+          .map((p) => {
+            // A freshly-discarded (not animating) last tile is drawn
+            // at the +10/+10 "not-yet-settled" nudge; move its shadow
+            // with it so stepping back in replay doesn't leave the
+            // shadow at the settled spot while the tile hovers.
+            const nudge =
+              p.index === lastIdx && view.freshlyDiscardedSeat === seat
+                ? 10
+                : 0;
+            const lx = p.wrap.x + p.sprite.x + nudge;
+            const ly = p.wrap.y + p.sprite.y + nudge;
+            return {
+              ax: lx * cos - ly * sin,
+              ay: lx * sin + ly * cos,
+              w: p.sprite.width,
+              h: p.sprite.height,
+            };
+          })
+      );
     }
     // Position the discard container inside `layout.discards[seat]`.
     // The container's local axes have tile 0 at (0, 0), +x along
@@ -5162,9 +5408,27 @@ export class TableRenderer {
     let cursor = 0;
     const meldWidths: number[] = [];
     let loopIter = 0;
+    const stripRot = SEAT_CONTAINER_ROT[seat];
+    const scos = Math.cos(stripRot);
+    const ssin = Math.sin(stripRot);
+    const shadowBoxes: Array<{
+      ax: number;
+      ay: number;
+      w: number;
+      h: number;
+    }> = [];
     for (let i = melds.length - 1; i >= 0; i--) {
-      const { node, width } = this.drawMeld(melds[i], seat);
+      const { node, width, boxes } = this.drawMeld(melds[i], seat);
       node.position.set(cursor, 0);
+      for (const b of boxes) {
+        const sx = cursor + b.cx;
+        shadowBoxes.push({
+          ax: sx * scos - b.cy * ssin,
+          ay: sx * ssin + b.cy * scos,
+          w: b.w,
+          h: b.h,
+        });
+      }
       // Z-order between adjacent overlapping melds must match the
       // within-meld convention used in `drawMeld` (tile lower on
       // screen sits on top):
@@ -5238,6 +5502,13 @@ export class TableRenderer {
         break;
       }
     }
+    // One shadow pass for the whole strip: bucket every meld tile into
+    // screen-vertical columns so aligned tiles share a continuous
+    // strip and each tilted called tile gets its own shadow.
+    this.placeColumnShadows(
+      this.screenShadowLayer(strip, stripRot),
+      shadowBoxes
+    );
     this.root.addChild(strip);
   }
 
@@ -5262,9 +5533,14 @@ export class TableRenderer {
   private drawMeld(
     meld: Meld,
     seat: number
-  ): { node: Container; width: number } {
+  ): {
+    node: Container;
+    width: number;
+    boxes: Array<{ cx: number; cy: number; w: number; h: number }>;
+  } {
     const c = new Container();
     c.sortableChildren = true;
+    const boxes: Array<{ cx: number; cy: number; w: number; h: number }> = [];
     // Side-seat melds overlap consecutive tiles by 16 design pixels
     // along the row direction, matching the discard pond. Bottom/top
     // seats butt their tiles flush with no gap.
@@ -5290,26 +5566,24 @@ export class TableRenderer {
       const mt = meldTileDims(this.tileDesign, seat);
       tiles.forEach((tile, i) => {
         const faceUp = !(i === 0 || i === tiles.length - 1);
-        const { node: sprite, shadow } = faceUp
+        const { node: sprite, offX, offY, footW, footH } = faceUp
           ? this.drawMeldTile(tile, seat)
           : this.drawMeldTile(null, seat);
         sprite.position.set(ax, 0);
         sprite.zIndex = tileZ(i);
         ax += mt.w - meldOverlap;
         c.addChild(sprite);
-        if (shadow) {
-          this.placeTileShadow(
-            c,
-            shadow,
-            sprite.position.x,
-            sprite.position.y,
-            sprite.rotation
-          );
-        }
+        boxes.push({
+          cx: sprite.position.x + offX,
+          cy: sprite.position.y + offY,
+          w: footW,
+          h: footH,
+        });
       });
       return {
         node: c,
         width: tiles.length * mt.w - (tiles.length - 1) * meldOverlap,
+        boxes,
       };
     }
     if (meld.claimedTile === null || meld.from === null) {
@@ -5318,24 +5592,25 @@ export class TableRenderer {
       let dx = 0;
       const mt = meldTileDims(this.tileDesign, seat);
       meld.tiles.forEach((tile, i) => {
-        const { node: sprite, shadow } = this.drawMeldTile(tile, seat);
+        const { node: sprite, offX, offY, footW, footH } = this.drawMeldTile(
+          tile,
+          seat
+        );
         sprite.position.set(dx, 0);
         sprite.zIndex = tileZ(i);
         dx += mt.w - meldOverlap;
         c.addChild(sprite);
-        if (shadow) {
-          this.placeTileShadow(
-            c,
-            shadow,
-            sprite.position.x,
-            sprite.position.y,
-            sprite.rotation
-          );
-        }
+        boxes.push({
+          cx: sprite.position.x + offX,
+          cy: sprite.position.y + offY,
+          w: footW,
+          h: footH,
+        });
       });
       return {
         node: c,
         width: meld.tiles.length * mt.w - (meld.tiles.length - 1) * meldOverlap,
+        boxes,
       };
     }
 
@@ -5418,7 +5693,7 @@ export class TableRenderer {
     const tiltedSeat = (seat + 1) % 4;
     const tilted = meldTileDims(this.tileDesign, tiltedSeat);
     slots.forEach((slot, i) => {
-      const { node: sprite, shadow } = slot.rotated
+      const { node: sprite, offX, offY, footW, footH } = slot.rotated
         ? this.drawMeldTile(slot.tile, seat, tiltedSheet)
         : this.drawMeldTile(slot.tile, seat);
       sprite.zIndex = tileZ(i);
@@ -5436,22 +5711,21 @@ export class TableRenderer {
         xCursor += mt.w - meldOverlap;
       }
       c.addChild(sprite);
-      if (shadow) {
-        this.placeTileShadow(
-          c,
-          shadow,
-          sprite.position.x,
-          sprite.position.y,
-          sprite.rotation
-        );
-      }
+      boxes.push({
+        cx: sprite.position.x + offX,
+        cy: sprite.position.y + offY,
+        w: footW,
+        h: footH,
+      });
     });
     if (stackTile !== null) {
-      const { node: stack, shadow: stackShadow } = this.drawMeldTile(
-        stackTile,
-        seat,
-        tiltedSheet
-      );
+      const {
+        node: stack,
+        offX: stackOffX,
+        offY: stackOffY,
+        footW: stackFootW,
+        footH: stackFootH,
+      } = this.drawMeldTile(stackTile, seat, tiltedSheet);
       stack.rotation = -Math.PI / 2;
       // Z-order:
       //   - Bottom seat (0): stack renders UNDER the called tile so
@@ -5484,20 +5758,17 @@ export class TableRenderer {
         seat === 1 || seat === 3 ? 0 : DISCARD_ROW_OVERLAP_HORIZ;
       stack.position.set(calledX, mt.h - tilted.w + stackOverlap);
       c.addChild(stack);
-      if (stackShadow) {
-        this.placeTileShadow(
-          c,
-          stackShadow,
-          stack.position.x,
-          stack.position.y,
-          stack.rotation
-        );
-      }
+      boxes.push({
+        cx: stack.position.x + stackOffX,
+        cy: stack.position.y + stackOffY,
+        w: stackFootW,
+        h: stackFootH,
+      });
     }
     // Total footprint width = xCursor (sum of strides) + the last
     // tile's full width restored (each stride subtracted `meldOverlap`,
     // but there is no next tile to overlap with the last one).
-    return { node: c, width: xCursor + meldOverlap };
+    return { node: c, width: xCursor + meldOverlap, boxes };
   }
 
   /**
@@ -5990,7 +6261,13 @@ export class TableRenderer {
     tile: string | null,
     seat: number,
     sheetOverride?: SheetKey
-  ): { node: Container; shadow: Sprite | null } {
+  ): {
+    node: Container;
+    offX: number;
+    offY: number;
+    footW: number;
+    footH: number;
+  } {
     // When using an override sheet (tilted called tile), size the
     // tile to match the override-seat's discard dimensions so the
     // sprite preserves its source proportions.
@@ -6042,22 +6319,19 @@ export class TableRenderer {
     sprite.rotation = -stripRot + (sheetOverride ? Math.PI / 2 : 0);
     sprite.position.set(dims.w / 2, dims.h / 2);
     c.addChild(sprite);
-    // Drop shadow behind the tile. A called/tilted tile (override
-    // sheet) is rotated a further -90° by the caller, so fold that
-    // into the screen rotation the offset is corrected for. Returned
-    // separately so the caller can lift it into the meld's shadow
-    // layer, below every meld tile.
-    const shadow = this.makeTileShadow(
-      {
-        width: sprite.width,
-        height: sprite.height,
-        rotation: sprite.rotation,
-        cx: dims.w / 2,
-        cy: dims.h / 2,
-      },
-      stripRot + (sheetOverride ? -Math.PI / 2 : 0)
-    );
-    return { node: c, shadow };
+    // Screen footprint + tile-centre offset (folding in the caller's
+    // -90° tilt for called tiles) so the meld can bucket its tiles
+    // into screen-columns for the shadow pass.
+    const tiltRot = sheetOverride ? -Math.PI / 2 : 0;
+    const tc = Math.cos(tiltRot);
+    const tsin = Math.sin(tiltRot);
+    return {
+      node: c,
+      offX: (dims.w / 2) * tc - (dims.h / 2) * tsin,
+      offY: (dims.w / 2) * tsin + (dims.h / 2) * tc,
+      footW: sprite.width,
+      footH: sprite.height,
+    };
   }
 
   /**

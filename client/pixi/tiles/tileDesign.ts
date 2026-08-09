@@ -83,12 +83,25 @@ export interface TileCategories {
  * seat container's rotation. Disabled when omitted.
  */
 export interface ShadowSpec {
-  /** Single-image shadow atlas for top/bottom small tiles. */
+  /** Single-image shadow atlas for a single top/bottom small tile. */
   small: AtlasId;
-  /** Single-image shadow atlas for left/right side tiles. */
+  /** Single-image shadow atlas for a single left/right side tile. */
   side: AtlasId;
   /** Single-image shadow atlas for the focused player's big tiles. */
   big: AtlasId;
+  /** Single-image shadow atlas for face-down upright small tiles (the
+   * top opponent's concealed hand). */
+  uprightSmall: AtlasId;
+  /** Repeatable strip 3-sliced along a line of tiles (shared by both
+   * orientations, rotated to the line direction). */
+  long: AtlasId;
+  /** Shadow thickness (depth) of the line strip, in design px. */
+  depth: number;
+  /** Each end cap of the strip as a fraction (0–0.5) of its long axis. */
+  cap: number;
+  /** Uniform scale for the upright blob shadows (focused hand + the
+   * face-down top hand), relative to the tile height. Default 1. */
+  uprightScale?: number;
   /** Extra screen-space nudge from the flush right-edge position, in
    * design px. Positive x is screen-right, positive y is screen-down. */
   offsetX: number;
@@ -343,7 +356,7 @@ export function validateTileDesign(design: TileDesign): string[] {
   }
   const shadow = design.effects.shadow;
   if (shadow) {
-    for (const cat of ["small", "side", "big"] as const) {
+    for (const cat of ["small", "side", "big", "uprightSmall", "long"] as const) {
       if (!atlasIds.has(shadow[cat])) {
         errors.push(
           `effects.shadow.${cat} references unknown atlas "${shadow[cat]}"`
@@ -352,6 +365,15 @@ export function validateTileDesign(design: TileDesign): string[] {
     }
     if (!Number.isFinite(shadow.offsetX) || !Number.isFinite(shadow.offsetY)) {
       errors.push("effects.shadow offsets must be finite");
+    }
+    if (!(shadow.depth > 0) || !Number.isFinite(shadow.depth)) {
+      errors.push("effects.shadow.depth must be a positive number");
+    }
+    if (!(shadow.cap > 0 && shadow.cap <= 0.5)) {
+      errors.push("effects.shadow.cap must be within (0, 0.5]");
+    }
+    if (shadow.uprightScale !== undefined && !(shadow.uprightScale > 0)) {
+      errors.push("effects.shadow.uprightScale must be a positive number");
     }
     if (shadow.alpha !== undefined && !(shadow.alpha >= 0 && shadow.alpha <= 1)) {
       errors.push("effects.shadow.alpha must be within [0, 1]");

@@ -11,9 +11,11 @@ import leftSmallUrl from "~/game/tenhouSprites/leftSmall.png";
 import rightSmallUrl from "~/game/tenhouSprites/rightSmall.png";
 import sideHandLUrl from "~/game/tenhouSprites/uprightSideHandL.png";
 import sideHandRUrl from "~/game/tenhouSprites/uprightSideHandR.png";
-import ownShadowUrl from "~/game/tenhouSprites/ownShadow.png";
-import shadowTopBottomUrl from "~/game/tenhouSprites/shadowTopBottom.png";
-import shadowLeftRightUrl from "~/game/tenhouSprites/shadowLeftRight.png";
+import uprightBigUrl from "~/game/tenhouSprites/shadowTenhouUprightBig.png";
+import uprightSmallUrl from "~/game/tenhouSprites/shadowTenhouUprightSmall.png";
+import shadowTopBottomUrl from "~/game/tenhouSprites/shadowTenhouTopBottom.png";
+import shadowLeftRightUrl from "~/game/tenhouSprites/shadowTenhouLeftRight.png";
+import shadowLongUrl from "~/game/tenhouSprites/shadowTenhouLong.png";
 import type { GridAtlas, TileDesign } from "../tileDesign";
 
 /** Small/side tiles render at half size, trimmed by 9.4% so the
@@ -51,9 +53,11 @@ export const tenhouTileDesign: TileDesign = {
     rightSmall: grid(rightSmallUrl),
     sideHandL: { kind: "single", url: sideHandLUrl },
     sideHandR: { kind: "single", url: sideHandRUrl },
-    ownShadow: { kind: "single", url: ownShadowUrl },
+    uprightBig: { kind: "single", url: uprightBigUrl },
+    uprightSmall: { kind: "single", url: uprightSmallUrl },
     shadowTopBottom: { kind: "single", url: shadowTopBottomUrl },
     shadowLeftRight: { kind: "single", url: shadowLeftRightUrl },
+    shadowLong: { kind: "single", url: shadowLongUrl },
   },
   categories: {
     small: { source: { w: 86, h: 130 }, scale: SMALL_SIDE_SCALE },
@@ -104,9 +108,14 @@ export const tenhouTileDesign: TileDesign = {
     shadow: {
       small: "shadowTopBottom",
       side: "shadowLeftRight",
-      big: "ownShadow",
-      offsetX: 0,
-      offsetY: 0,
+      big: "uprightBig",
+      uprightSmall: "uprightSmall",
+      long: "shadowLong",
+      depth: 14,
+      cap: 0.28,
+      uprightScale: 0.34,
+      offsetX: -3,
+      offsetY: -3,
     },
   },
 };
