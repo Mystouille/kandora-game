@@ -63,6 +63,12 @@ const MAX_BACKOFF_MS = 3_000;
  */
 const STALL_THRESHOLD_MS = 60_000;
 const STALL_CHECK_INTERVAL_MS = 5_000;
+const TERMINAL_SPECTATOR_ERRORS = new Set([
+  "hello_timeout",
+  "matchid_mismatch",
+  "spectate_unavailable",
+  "spectate_delay_too_large",
+]);
 
 export class GameWS {
   private ws: WebSocket | null = null;
@@ -383,6 +389,9 @@ export class GameWS {
         return;
       }
       case "error": {
+        if (this.opts.spectate && TERMINAL_SPECTATOR_ERRORS.has(msg.code)) {
+          this.intentionallyClosed = true;
+        }
         this.reportError(msg.code, msg.message);
         return;
       }
