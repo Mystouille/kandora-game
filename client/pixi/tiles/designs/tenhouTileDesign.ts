@@ -69,15 +69,30 @@ export const tenhouTileDesign: TileDesign = {
     topHand: "topSmall",
     sideHandBack: { 1: "sideHandR", 3: "sideHandL" },
     sideHandFace: { 1: "rightSmall", 3: "leftSmall" },
-    discard: { 0: "bottomSmall", 1: "rightSmall", 2: "topSmall", 3: "leftSmall" },
+    discard: {
+      0: "bottomSmall",
+      1: "rightSmall",
+      2: "topSmall",
+      3: "leftSmall",
+    },
     riichiDiscard: {
       0: "leftSmall",
       1: "bottomSmall",
       2: "leftSmall",
       3: "topSmall",
     },
-    wallBack: { 0: "bottomSmall", 1: "rightSmall", 2: "bottomSmall", 3: "rightSmall" },
-    wallFace: { 0: "bottomSmall", 1: "rightSmall", 2: "topSmall", 3: "leftSmall" },
+    wallBack: {
+      0: "bottomSmall",
+      1: "rightSmall",
+      2: "bottomSmall",
+      3: "rightSmall",
+    },
+    wallFace: {
+      0: "bottomSmall",
+      1: "rightSmall",
+      2: "topSmall",
+      3: "leftSmall",
+    },
     meld: { 0: "bottomSmall", 1: "rightSmall", 2: "topSmall", 3: "leftSmall" },
     meldFaceDown: {
       0: "bottomSmall",

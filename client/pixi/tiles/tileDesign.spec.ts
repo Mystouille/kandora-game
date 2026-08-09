@@ -83,7 +83,9 @@ describe("tileDesign contract", () => {
     });
 
     it("returns null for single-image atlases", () => {
-      expect(resolveTileFrame(tenhouTileDesign.atlases.sideHandL, "1m")).toBeNull();
+      expect(
+        resolveTileFrame(tenhouTileDesign.atlases.sideHandL, "1m")
+      ).toBeNull();
     });
   });
 
@@ -96,9 +98,9 @@ describe("tileDesign contract", () => {
     });
 
     it("uses the whole texture for single-image atlases", () => {
-      expect(atlasCellSize(tenhouTileDesign.atlases.sideHandR, 116, 107)).toEqual(
-        { w: 116, h: 107 }
-      );
+      expect(
+        atlasCellSize(tenhouTileDesign.atlases.sideHandR, 116, 107)
+      ).toEqual({ w: 116, h: 107 });
     });
 
     it("insets the frame rect on every side", () => {
@@ -139,7 +141,9 @@ describe("tileDesign contract", () => {
       if (atlas.kind === "grid") {
         delete (atlas.suitRows as Record<string, number>).z;
       }
-      expect(validateTileDesign(bad).some((e) => e.includes("suit"))).toBe(true);
+      expect(validateTileDesign(bad).some((e) => e.includes("suit"))).toBe(
+        true
+      );
     });
 
     it("flags an out-of-range shadow alpha", () => {

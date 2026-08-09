@@ -185,7 +185,8 @@ export interface TileDesign {
   effects: TileEffects;
 }
 
-export const smallScreen = (d: TileDesign): Size => artScreen(d.categories.small);
+export const smallScreen = (d: TileDesign): Size =>
+  artScreen(d.categories.small);
 export const sideScreen = (d: TileDesign): Size => artScreen(d.categories.side);
 export const bigScreen = (d: TileDesign): Size => artScreen(d.categories.big);
 
@@ -326,7 +327,10 @@ export function validateTileDesign(design: TileDesign): string[] {
     }
   }
 
-  if (design.metrics.sideHandBack.w <= 0 || design.metrics.sideHandBack.h <= 0) {
+  if (
+    design.metrics.sideHandBack.w <= 0 ||
+    design.metrics.sideHandBack.h <= 0
+  ) {
     errors.push("metrics.sideHandBack has non-positive dimensions");
   }
   if (design.metrics.topHand.w <= 0 || design.metrics.topHand.h <= 0) {
@@ -356,7 +360,13 @@ export function validateTileDesign(design: TileDesign): string[] {
   }
   const shadow = design.effects.shadow;
   if (shadow) {
-    for (const cat of ["small", "side", "big", "uprightSmall", "long"] as const) {
+    for (const cat of [
+      "small",
+      "side",
+      "big",
+      "uprightSmall",
+      "long",
+    ] as const) {
       if (!atlasIds.has(shadow[cat])) {
         errors.push(
           `effects.shadow.${cat} references unknown atlas "${shadow[cat]}"`
@@ -375,7 +385,10 @@ export function validateTileDesign(design: TileDesign): string[] {
     if (shadow.uprightScale !== undefined && !(shadow.uprightScale > 0)) {
       errors.push("effects.shadow.uprightScale must be a positive number");
     }
-    if (shadow.alpha !== undefined && !(shadow.alpha >= 0 && shadow.alpha <= 1)) {
+    if (
+      shadow.alpha !== undefined &&
+      !(shadow.alpha >= 0 && shadow.alpha <= 1)
+    ) {
       errors.push("effects.shadow.alpha must be within [0, 1]");
     }
   }

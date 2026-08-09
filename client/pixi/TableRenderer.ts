@@ -5566,7 +5566,13 @@ export class TableRenderer {
       const mt = meldTileDims(this.tileDesign, seat);
       tiles.forEach((tile, i) => {
         const faceUp = !(i === 0 || i === tiles.length - 1);
-        const { node: sprite, offX, offY, footW, footH } = faceUp
+        const {
+          node: sprite,
+          offX,
+          offY,
+          footW,
+          footH,
+        } = faceUp
           ? this.drawMeldTile(tile, seat)
           : this.drawMeldTile(null, seat);
         sprite.position.set(ax, 0);
@@ -5592,10 +5598,13 @@ export class TableRenderer {
       let dx = 0;
       const mt = meldTileDims(this.tileDesign, seat);
       meld.tiles.forEach((tile, i) => {
-        const { node: sprite, offX, offY, footW, footH } = this.drawMeldTile(
-          tile,
-          seat
-        );
+        const {
+          node: sprite,
+          offX,
+          offY,
+          footW,
+          footH,
+        } = this.drawMeldTile(tile, seat);
         sprite.position.set(dx, 0);
         sprite.zIndex = tileZ(i);
         dx += mt.w - meldOverlap;
@@ -5693,7 +5702,13 @@ export class TableRenderer {
     const tiltedSeat = (seat + 1) % 4;
     const tilted = meldTileDims(this.tileDesign, tiltedSeat);
     slots.forEach((slot, i) => {
-      const { node: sprite, offX, offY, footW, footH } = slot.rotated
+      const {
+        node: sprite,
+        offX,
+        offY,
+        footW,
+        footH,
+      } = slot.rotated
         ? this.drawMeldTile(slot.tile, seat, tiltedSheet)
         : this.drawMeldTile(slot.tile, seat);
       sprite.zIndex = tileZ(i);
