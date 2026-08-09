@@ -14,6 +14,8 @@ export interface HarWebSocketMessage {
 interface MutableSpectateSession {
   watchId: string | null;
   startedAtMs: number;
+  firstGameElementIndex: number | null;
+  initialFeedDelayMs: number;
   elements: TenhouReplayElement[];
   timings: TenhouSpectateTiming[];
 }
@@ -27,6 +29,8 @@ export interface TenhouSpectateTiming {
 export interface TenhouHarSpectateSession {
   watchId: string | null;
   startedAtMs: number;
+  /** Wall-clock wait from GO until the first INITBYLOG/WGC game payload. */
+  initialFeedDelayMs: number;
   complete: boolean;
   elementCount: number;
   timings: TenhouSpectateTiming[];
@@ -50,6 +54,14 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function harMessageTimeMs(value: unknown): number {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp)) {
+    return 0;
+  }
+  return timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
 }
 
 export function normalizeElement(
@@ -144,9 +156,16 @@ function emittedEventCount(
 function projectEventDelays(
   elements: TenhouReplayElement[],
   timings: TenhouSpectateTiming[],
-  eventCount: number
+  eventCount: number,
+  initialFeedDelay?: TenhouSpectateTiming
 ): number[] {
   const delayByElement = new Map<number, number>();
+  if (initialFeedDelay) {
+    delayByElement.set(
+      initialFeedDelay.elementIndex,
+      initialFeedDelay.delayMs
+    );
+  }
   for (const timing of timings) {
     delayByElement.set(
       timing.elementIndex,
@@ -209,7 +228,9 @@ export function parseTenhouSpectateHar(
     if (payload.tag === "GO") {
       current = {
         watchId: pendingWatchId,
-        startedAtMs: Number(message.time),
+        startedAtMs: harMessageTimeMs(message.time),
+        firstGameElementIndex: null,
+        initialFeedDelayMs: 0,
         elements: [],
         timings: [],
       };
@@ -232,6 +253,17 @@ export function parseTenhouSpectateHar(
       !Array.isArray(payload.childNodes)
     ) {
       continue;
+    }
+
+    if (
+      current.firstGameElementIndex === null &&
+      payload.childNodes.length > 0
+    ) {
+      current.firstGameElementIndex = current.elements.length;
+      current.initialFeedDelayMs = Math.max(
+        0,
+        harMessageTimeMs(message.time) - current.startedAtMs
+      );
     }
 
     for (const child of payload.childNodes) {
@@ -268,11 +300,18 @@ export function parseTenhouSpectateHar(
       const eventDelaysMs = projectEventDelays(
         session.elements,
         session.timings,
-        replay.events.length
+        replay.events.length,
+        session.firstGameElementIndex === null
+          ? undefined
+          : {
+              elementIndex: session.firstGameElementIndex,
+              delayMs: session.initialFeedDelayMs,
+            }
       );
       return {
         watchId: session.watchId,
         startedAtMs: session.startedAtMs,
+        initialFeedDelayMs: session.initialFeedDelayMs,
         complete,
         elementCount: session.elements.length,
         timings: session.timings,
