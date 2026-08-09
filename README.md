@@ -58,6 +58,12 @@ The ESLint `no-restricted-imports` rule scoped to `app/game/**` and
 `game-server/**` enforces these boundaries with severity `error`. Do not
 weaken the rule to land a feature — refactor through the adapter instead.
 
+## Platform adapters
+
+- [Tenhou live spectating](./adapters/tenhou/README.md) describes the upstream
+  spectator protocol, stateful decoder, relay lifecycle, delayed startup,
+  tournament integration, fixture tests, and current limitations.
+
 ## Layout (planned)
 
 ```
