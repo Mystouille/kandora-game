@@ -259,9 +259,10 @@ export default function GameSpectateRoute({
           return;
         }
         const renderer = new TableRenderer();
-        // Live spectator view: hide the draw wall and show only the
-        // dead wall (the relay carries no live/dead wall tiles).
-        renderer.setLiveSpectate(true);
+        // Show the full wall (face-down): the relay carries no tile
+        // faces, but the draw count is tracked so the wall shrinks
+        // correctly. `showWalls` (off here) is what reveals faces.
+        renderer.setLiveSpectate(false);
         renderer.setOnRenderRequest(() => {
           const r = rendererRef.current;
           const args = latestRenderRef.current;
@@ -303,7 +304,12 @@ export default function GameSpectateRoute({
                   null,
                   null,
                 ];
-                const names: [string, string, string, string] = ["", "", "", ""];
+                const names: [string, string, string, string] = [
+                  "",
+                  "",
+                  "",
+                  "",
+                ];
                 for (const s of data.seats) {
                   if (s.seat >= 0 && s.seat < 4) {
                     names[s.seat] = s.playerName ?? "";
@@ -314,12 +320,7 @@ export default function GameSpectateRoute({
                   }
                 }
                 setSeatNames(names);
-                setSeatEnrichment([
-                  bySeat[0],
-                  bySeat[1],
-                  bySeat[2],
-                  bySeat[3],
-                ]);
+                setSeatEnrichment([bySeat[0], bySeat[1], bySeat[2], bySeat[3]]);
               }
             )
             .catch(() => {

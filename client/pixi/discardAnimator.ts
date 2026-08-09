@@ -35,12 +35,15 @@ import type { MatchView } from "../store";
 /** Number of seats. Matches the rest of the renderer. */
 const SEAT_COUNT = 4;
 
-/** Per-spec snappy timings (ms). */
-export const PHASE_A_DURATION_MS = 250;
-export const PHASE_B_DURATION_MS = 120;
+/** Discard slide timings (ms). Fixed and self-contained: phase A slides
+ * hand → nudge, phase B settles nudge → final right after, so the whole
+ * discard always animates for the same duration regardless of the wait
+ * before the next player acts. */
+export const PHASE_A_DURATION_MS = 350;
+export const PHASE_B_DURATION_MS = 150;
 /** Draw-in slide: the freshly drawn tile enters as a face-down back
- * sliding from the wall into the tsumo slot. */
-export const DRAW_SLIDE_MS = 200;
+ * sliding from the wall into the tsumo slot. Always a fixed 0.5s. */
+export const DRAW_SLIDE_MS = 500;
 
 /** Hidden hand slot for tedashi from a concealed (non-focused,
  * not-revealed) hand. Spec: "near the middle of the hand
@@ -346,22 +349,20 @@ export class DiscardAnimator {
           });
         }
 
-        // --- (b) Phase A → Phase B when the discard stops being the
-        // freshest. The static renderer nudges the last discard by
-        // +10/+10 only while `freshlyDiscardedSeat === seat`; settling
-        // on that same transition keeps the animated tile and the
-        // static position in lockstep. Auto-settling earlier (e.g. when
-        // phase A elapses) lands the tile in its final slot and then
-        // snaps it back to the nudge the static renderer still draws.
-        const wasFresh = prev.freshlyDiscardedSeat === seat;
-        const isFresh = view.freshlyDiscardedSeat === seat;
+        // --- (b) Phase A → Phase B once phase A elapses. The discard
+        // is self-contained: it always slides hand → nudge → final over
+        // a fixed duration, independent of when the next player acts.
+        // (The static renderer no longer nudges the fresh discard, so
+        // settling straight to `final` here causes no snap-back.)
         const existing = this.anims.get(seat);
+        const phaseALanded =
+          existing?.phase === "to-nudge" &&
+          now - existing.startMs >= PHASE_A_DURATION_MS;
         if (
           existing &&
           existing.phase === "to-nudge" &&
           currLen > 0 &&
-          wasFresh &&
-          !isFresh
+          phaseALanded
         ) {
           // The static last-discard index might shift if a new
           // discard happens in the same frame (rare; would imply
@@ -384,10 +385,7 @@ export class DiscardAnimator {
         // --- (d) Fresh draw? Start the wall-slide draw animation. ---
         // A seat draws at the start of its turn (freshlyDrawnSeat set)
         // and discards at the end; the two never collide in one frame.
-        if (
-          view.freshlyDrawnSeat === seat &&
-          prev.freshlyDrawnSeat !== seat
-        ) {
+        if (view.freshlyDrawnSeat === seat && prev.freshlyDrawnSeat !== seat) {
           this.drawAnims.set(seat, now);
         }
       }

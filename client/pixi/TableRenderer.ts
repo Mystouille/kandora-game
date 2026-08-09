@@ -5197,15 +5197,7 @@ export class TableRenderer {
       wrap.addChild(sprite);
       wrap.zIndex = placement.zIndex;
       wrap.rotation = placement.wrap.rotation;
-      let wrapX = placement.wrap.x;
-      let wrapY = placement.wrap.y;
-      // Freshly-discarded tile: nudge +10/+10 so it reads as
-      // not-yet-settled until the next draw / call / hand boundary.
-      if (i === lastIdx && view.freshlyDiscardedSeat === seat) {
-        wrapX += 10;
-        wrapY += 10;
-      }
-      wrap.position.set(wrapX, wrapY);
+      wrap.position.set(placement.wrap.x, placement.wrap.y);
       discardContainer.addChild(wrap);
     }
     // Continuous drop shadow that always falls SCREEN-right: bucket
@@ -5225,14 +5217,6 @@ export class TableRenderer {
           // doesn't appear at the destination before the tile lands.
           .filter((p) => !(lastIsAnimating && p.index === lastIdx))
           .map((p) => {
-            // A freshly-discarded (not animating) last tile is drawn
-            // at the +10/+10 "not-yet-settled" nudge; move its shadow
-            // with it so stepping back in replay doesn't leave the
-            // shadow at the settled spot while the tile hovers.
-            const nudge =
-              p.index === lastIdx && view.freshlyDiscardedSeat === seat
-                ? 10
-                : 0;
             // Resolve the tile's true screen-space centre and
             // footprint. The sprite offset passes through the wrap's
             // own rotation (non-zero for the sideways riichi tile),
@@ -5243,8 +5227,8 @@ export class TableRenderer {
             const wr = p.wrap.rotation;
             const wc = Math.cos(wr);
             const ws = Math.sin(wr);
-            const lx = p.wrap.x + nudge + (p.sprite.x * wc - p.sprite.y * ws);
-            const ly = p.wrap.y + nudge + (p.sprite.x * ws + p.sprite.y * wc);
+            const lx = p.wrap.x + (p.sprite.x * wc - p.sprite.y * ws);
+            const ly = p.wrap.y + (p.sprite.x * ws + p.sprite.y * wc);
             const theta = rot + wr + p.sprite.rotation;
             const tc = Math.abs(Math.cos(theta));
             const ts = Math.abs(Math.sin(theta));

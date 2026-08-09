@@ -36,7 +36,7 @@ function recordLayouts(
 }
 
 describe("DiscardAnimator", () => {
-  it("holds a discard at the nudge until it stops being the freshest", () => {
+  it("auto-settles a discard from nudge to final after phase A, then drops it", () => {
     let now = 0;
     const animator = new DiscardAnimator({ now: () => now });
     const before = makeView({
@@ -62,30 +62,20 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
-    // Phase A elapsing must NOT auto-settle: the tile stays at the
-    // nudge while it is still the freshest discard, matching the static
-    // renderer which keeps nudging it until `freshlyDiscardedSeat`
-    // clears. Auto-settling here would land the tile at its final slot
-    // and then snap it back to the nudge the static renderer redraws.
-    now = 251;
+    // Before phase A elapses (350ms) the tile is still sliding out.
+    now = 300;
     animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
-    // The next player draws → the discard is no longer fresh → settle.
-    const nextDraw = makeView({
-      hands: [[], [], [], []],
-      discards: [["1m"], [], [], []],
-      discardTsumogiri: [[false], [], [], []],
-      totalDiscards: 1,
-      freshlyDrawnSeat: 1,
-      freshlyDiscardedSeat: null,
-    });
-    now = 300;
-    animator.beginFrame(nextDraw);
+    // Self-contained: once phase A elapses it settles to final on its
+    // own, regardless of whether another player has acted yet.
+    now = 351;
+    animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
 
-    now = 421;
-    animator.beginFrame(nextDraw);
+    // After phase B elapses the entry is dropped (tile parked at final).
+    now = 502;
+    animator.beginFrame(discarded);
     expect(animator.getAnim(0)).toBeNull();
   });
 
@@ -150,8 +140,8 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(makeView({ freshlyDrawnSeat: 1 }));
     expect(animator.getDrawProgress(1, 100)).toBeGreaterThan(0);
 
-    // Past the slide duration it settles and the entry is dropped.
-    now = 201;
+    // Past the 0.5s slide duration it settles and the entry is dropped.
+    now = 501;
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.getDrawProgress(1)).toBe(1);
     animator.beginFrame(makeView({ freshlyDrawnSeat: 1 }));
