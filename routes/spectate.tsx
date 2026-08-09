@@ -218,6 +218,7 @@ export default function GameSpectateRoute({
   >([null, null, null, null]);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [conn, setConn] = useState<string>("idle");
+  const lastRelaySeqRef = useRef(-1);
 
   // Refs for stale-closure-safe access inside the WS callback.
   const liveRef = useRef<boolean>(live);
@@ -352,6 +353,7 @@ export default function GameSpectateRoute({
           ...(delayMs > 0 ? { delayMs } : {}),
           onMessage: (msg: ServerMessage) => {
             if (msg.type === "snapshot") {
+              lastRelaySeqRef.current = msg.seq;
               setBaseline(snapshotToReplayView(msg.state));
               setEvents([]);
               setPlayIndex(-1);
@@ -359,12 +361,43 @@ export default function GameSpectateRoute({
               return;
             }
             if (msg.type === "event") {
-              // Relay matches have no engine snapshot. Their first payload is
-              // an event batch beginning with match_start / hand_start, so
-              // seed the replay reducer with its empty canonical baseline.
+              const startSeq = msg.seq - msg.events.length + 1;
+              if (msg.seq <= lastRelaySeqRef.current) {
+                return;
+              }
+
+              // Relay attach/reconnect sends the complete event history as a
+              // seq-0 batch. It is an authoritative state baseline, not new
+              // playback: animating it would rapidly replay the whole match.
+              // The following resync response overlaps this batch, so the seq
+              // guard above also prevents duplicate catch-up events.
+              if (startSeq === 0 && msg.events.length > 1) {
+                let hydrated = initialView();
+                for (const event of msg.events) {
+                  hydrated = applyReplayEvent(hydrated, event);
+                }
+                lastRelaySeqRef.current = msg.seq;
+                setBaseline(hydrated);
+                setEvents([]);
+                setPlayIndex(-1);
+                setLive(true);
+                return;
+              }
+
+              const unseenOffset = Math.max(
+                0,
+                lastRelaySeqRef.current - startSeq + 1
+              );
+              const incoming = msg.events.slice(unseenOffset);
+              if (incoming.length === 0) {
+                return;
+              }
+              lastRelaySeqRef.current = msg.seq;
+              // Relay matches have no engine snapshot. If no history batch
+              // preceded this event, seed the reducer with its empty baseline.
               setBaseline((current) => current ?? initialView());
               setEvents((prev) => {
-                const next = [...prev, ...msg.events];
+                const next = [...prev, ...incoming];
                 if (liveRef.current) {
                   // Snap playhead to the last event in the new buffer.
                   // Use a setTimeout-free direct call: `setPlayIndex`

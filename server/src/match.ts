@@ -1706,9 +1706,12 @@ export class MatchProcess {
           // A seat counts as "connected" only when the WS is
           // attached AND the user hasn't self-reported AFK.
           // Network-disconnected seats set `disconnected=true`
-          // in `detachHuman` so the badge flips immediately.
+          // in `detachHuman` so the badge flips immediately. Relay
+          // players are connected to the external platform, not this
+          // game server, so their socket state is intentionally unknown.
           connected:
-            this.humanSockets[seat] !== null && !this.disconnected[seat],
+            this.relayMode ||
+            (this.humanSockets[seat] !== null && !this.disconnected[seat]),
         };
       }
       seats.push({ seat, occupant });

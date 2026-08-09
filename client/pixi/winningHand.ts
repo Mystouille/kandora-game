@@ -1,7 +1,6 @@
 export function splitWinningHandForDisplay(
   hand: string[],
-  winTile: string | undefined,
-  isTsumo: boolean
+  winTile: string | undefined
 ): { concealed: string[]; agari?: string } {
   const concealed = [...hand];
 
@@ -9,11 +8,10 @@ export function splitWinningHandForDisplay(
     return { concealed };
   }
 
-  // Tsumo payloads are inconsistent across sources: some include the
-  // drawn agari tile in `hand`, others expose it only via `winTile`.
-  // Only strip a matching tile when the concealed length proves the
-  // full self-drawn tile is already present.
-  const handIncludesAgari = isTsumo && concealed.length % 3 === 2;
+  // Platform payloads are inconsistent: some include the agari tile in
+  // `hand`, others expose it only via `winTile`. A complete concealed
+  // portion has length 2 mod 3 even when open melds reduce its size.
+  const handIncludesAgari = concealed.length % 3 === 2;
   if (handIncludesAgari) {
     const idx = concealed.lastIndexOf(winTile);
     if (idx >= 0) {

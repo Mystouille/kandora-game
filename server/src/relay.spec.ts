@@ -117,6 +117,23 @@ describe("MatchProcess relay", () => {
     ).toBe(4);
   });
 
+  it("does not mark external players disconnected in room state", () => {
+    const match = MatchProcess.createRelayMatch(
+      "relay-room-state",
+      "0E342071",
+      "tenhou"
+    );
+    match.injectRelayEvent(relayEvents()[0]);
+
+    const room = match.buildRoomState(null);
+    for (const { occupant } of room.seats) {
+      expect(occupant.kind).toBe("human");
+      if (occupant.kind === "human") {
+        expect(occupant.connected).toBe(true);
+      }
+    }
+  });
+
   it("catches a late spectator up from the buffer", () => {
     const match = MatchProcess.createRelayMatch("relay-3", "0E342071");
     for (const event of relayEvents()) {

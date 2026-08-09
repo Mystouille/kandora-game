@@ -3354,8 +3354,7 @@ export class TableRenderer {
         if (win.hand && win.hand.length > 0) {
           const { concealed: rawConcealed, agari } = splitWinningHandForDisplay(
             win.hand,
-            win.winTile,
-            r.reason === "tsumo"
+            win.winTile
           );
           // Sort the concealed portion so live wins render the
           // same canonically-ordered hand as replays. The winTile
@@ -4389,19 +4388,17 @@ export class TableRenderer {
         if (result.wins) {
           const winForSeat = result.wins.find((w) => w.seat === seat);
           if (winForSeat?.hand && winForSeat.hand.length > 0) {
-            const hand = [...winForSeat.hand];
-            if (result.reason === "tsumo" && winForSeat.winTile) {
-              const { concealed, agari } = splitWinningHandForDisplay(
-                winForSeat.hand,
-                winForSeat.winTile,
-                true
-              );
-              return {
-                rawHand: agari ? [...concealed, agari] : concealed,
-                forceReveal: true,
-              };
-            }
-            return { rawHand: hand, forceReveal: true };
+            const { concealed, agari } = splitWinningHandForDisplay(
+              winForSeat.hand,
+              winForSeat.winTile
+            );
+            return {
+              rawHand:
+                result.reason === "tsumo" && agari
+                  ? [...concealed, agari]
+                  : concealed,
+              forceReveal: true,
+            };
           }
         }
         // Exhaustive draw reveals every tenpai seat's hand; a
