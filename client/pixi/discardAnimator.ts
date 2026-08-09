@@ -9,8 +9,7 @@
  *     the duration), and slides to the +10/+10 "nudged" pond
  *     position the static renderer normally draws.
  *
- *   Phase B ("to-final", on the next `draw` / `call` / `win`
- *     that clears `freshlyDiscardedSeat`):
+ *   Phase B ("to-final", after phase A lands or on the next `draw`):
  *     The same tile slides from the nudged position to its
  *     final, flush-with-the-row position.
  *
@@ -335,34 +334,25 @@ export class DiscardAnimator {
           });
         }
 
-        // --- (b) Phase A → Phase B on next *draw* event. -------
-        //
-        // We deliberately ignore other transitions that clear
-        // `freshlyDiscardedSeat` (e.g. an in-flight call prompt
-        // that ends with a `call` event, or a `hand_end`):
-        //   - `call` shrinks the discarder's pile, which the
-        //     hard-reset block above catches and clears.
-        //   - `hand_end` zeroes `totalDiscards`, same.
-        //   - A pure pass (everyone declines the call prompt)
-        //     resolves into a `draw` for the next seat, which
-        //     is exactly what we trigger phase B on.
-        // The upshot: between a discard and the next draw the
-        // hand keeps its gap and the discard tile stays parked
-        // at the +10/+10 nudged position, which is what users
-        // expect while a call window is still open.
+        // --- (b) Phase A → Phase B after landing / next draw. ---
+        // Tenhou can hold the next draw in a later WGC batch. Do not
+        // leave the tile parked at +10/+10 throughout that network gap:
+        // settle automatically when phase A completes, or immediately
+        // when a next-draw event arrives first.
         const wasFresh = prev.freshlyDiscardedSeat === seat;
         const isFresh = view.freshlyDiscardedSeat === seat;
         const drewThisFrame =
           view.freshlyDrawnSeat !== null &&
           prev.freshlyDrawnSeat !== view.freshlyDrawnSeat;
         const existing = this.anims.get(seat);
+        const phaseALanded =
+          existing?.phase === "to-nudge" &&
+          now - existing.startMs >= PHASE_A_DURATION_MS;
         if (
-          wasFresh &&
-          !isFresh &&
-          drewThisFrame &&
           existing &&
           existing.phase === "to-nudge" &&
-          currLen > 0
+          currLen > 0 &&
+          (phaseALanded || (wasFresh && !isFresh && drewThisFrame))
         ) {
           // The static last-discard index might shift if a new
           // discard happens in the same frame (rare; would imply

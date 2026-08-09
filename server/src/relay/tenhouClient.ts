@@ -46,10 +46,9 @@ export interface TimedTenhouFrame {
 }
 
 /**
- * Split a live WGC payload into renderable actions. Numeric delays describe
- * time that elapsed before Tenhou delivered the batch, so replaying them here
- * creates an ever-growing queue. Drain received actions at a short fixed
- * cadence instead, giving React and Pixi one render opportunity per action.
+ * Split a live WGC payload into individual actions. Numeric nodes describe
+ * time that already elapsed between live WGC deliveries, so sleeping for them
+ * here would count the same player think time twice.
  */
 export function splitTimedWgcFrame(
   frame: Record<string, unknown>
@@ -204,10 +203,9 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
       this.handlers.onFrame(next.frame);
       this.pumpFrameQueue();
     };
-    if (next.delayMs === 0) {
-      dispatch();
-      return;
-    }
+    // Even zero-delay neighbours (normally discard → next draw) get their own
+    // event-loop turn so WebSocket delivery and React rendering cannot batch
+    // them into one visible state transition.
     this.frameTimer = setTimeout(dispatch, next.delayMs);
     this.frameTimer.unref?.();
   }

@@ -36,6 +36,41 @@ function recordLayouts(
 }
 
 describe("DiscardAnimator", () => {
+  it("settles a discard after phase A without waiting for another event", () => {
+    let now = 0;
+    const animator = new DiscardAnimator({ now: () => now });
+    const before = makeView({
+      hands: [["1m"], [], [], []],
+      discards: [[], [], [], []],
+      discardTsumogiri: [[], [], [], []],
+    });
+    animator.beginFrame(before);
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    const discarded = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+    });
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+
+    now = 251;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-final");
+
+    now = 372;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)).toBeNull();
+  });
+
   it("does not reuse a pre-call hand snapshot for the caller's next discard", () => {
     const animator = new DiscardAnimator({ now: () => 0 });
 

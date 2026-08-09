@@ -5,7 +5,7 @@ import {
 } from "./tenhouClient";
 
 describe("splitTimedWgcFrame", () => {
-  it("does not wait a leading delay that already elapsed on the wire", () => {
+  it("does not replay a leading interval that elapsed before delivery", () => {
     const frames = splitTimedWgcFrame({
       tag: "WGC",
       childNodes: [6563, { tag: "D4" }, { tag: "U93" }],
@@ -21,7 +21,7 @@ describe("splitTimedWgcFrame", () => {
     ]);
   });
 
-  it("ignores historical delays and separates every received action", () => {
+  it("does not replay an embedded elapsed interval", () => {
     const frames = splitTimedWgcFrame({
       tag: "WGC",
       childNodes: [
@@ -37,6 +37,18 @@ describe("splitTimedWgcFrame", () => {
       0,
       WGC_ACTION_SPACING_MS,
       WGC_ACTION_SPACING_MS,
+      WGC_ACTION_SPACING_MS,
+    ]);
+  });
+
+  it("leaves observed think time to the live WGC delivery cadence", () => {
+    const frames = splitTimedWgcFrame({
+      tag: "WGC",
+      childNodes: [5031, { tag: "G110" }, { tag: "T46" }],
+    });
+
+    expect(frames.map((entry) => entry.delayMs)).toEqual([
+      0,
       WGC_ACTION_SPACING_MS,
     ]);
   });
