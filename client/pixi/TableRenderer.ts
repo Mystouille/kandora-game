@@ -983,54 +983,67 @@ export class TableRenderer {
   }
 
   /**
-   * Build the drop-shadow sprite that sits behind a tile, or null
-   * when the active design declares no shadow (or textures aren't
-   * loaded). The shadow shares the tile's footprint + local rotation
-   * and is offset by the design's fixed SCREEN delta — rotated back
-   * through `screenRotation` (the total wrap-local → screen rotation)
-   * so it falls the same way for every seat. Because every tile is
-   * net-zero rotation on screen, `sprite.width/height` are the actual
-   * on-screen footprint, so the silhouette follows the aspect
-   * (portrait → small, landscape → side) unless `big` is set (the
-   * focused hand). Callers place the returned sprite behind the tile.
+   * Build the drop-shadow sprite for a tile, or null when the active
+   * design declares no shadow (or textures aren't loaded). The shadow
+   * keeps its art's natural aspect, is sized to the tile height, and
+   * is stuck to the tile's RIGHT edge — then nudged by the design
+   * offset. All placement is SCREEN-space, rotated back through
+   * `screenRotation` (the total wrap-local → screen rotation) so it
+   * lands the same way for every seat. Because every tile is net-zero
+   * rotation on screen, the footprint w/h are the on-screen dims, so
+   * the silhouette follows the aspect (portrait → small, landscape →
+   * side) unless `big` is set (the focused hand). `cx`/`cy` are the
+   * tile's CENTRE in the wrap-local frame; callers place the returned
+   * sprite behind the tile.
    */
   private makeTileShadow(
-    sprite: {
+    footprint: {
       width: number;
       height: number;
       rotation: number;
-      x: number;
-      y: number;
+      cx: number;
+      cy: number;
     },
     screenRotation: number,
-    opts?: { big?: boolean; anchor?: number }
+    opts?: { big?: boolean }
   ): Sprite | null {
     const factory = this.spriteFactory;
+    const store = this.textureStore;
     const shadow = this.tileDesign.effects.shadow;
-    if (!factory || !shadow) {
+    if (!factory || !store || !shadow) {
       return null;
     }
     const atlasId = opts?.big
       ? shadow.big
-      : sprite.width > sprite.height
+      : footprint.width > footprint.height
         ? shadow.side
         : shadow.small;
+    // Keep the strip's natural aspect at the tile height so it reads
+    // as a shadow rather than a stretched tile.
+    const tex = store.getTexture(atlasId, null);
+    const h = footprint.height;
+    const w = tex.height > 0 ? (h * tex.width) / tex.height : h;
     const s = factory.create({
       atlasId,
       tile: null,
-      width: sprite.width,
-      height: sprite.height,
-      rotation: sprite.rotation,
-      anchor: opts?.anchor ?? 0.5,
+      width: w,
+      height: h,
+      rotation: footprint.rotation,
+      anchor: 0.5,
     });
     if (shadow.alpha !== undefined) {
       s.alpha = shadow.alpha;
     }
+    // Stick the shadow's left edge to the tile's right edge, then
+    // nudge by the design offset — in screen space, rotated back
+    // through the container/wrap rotation.
+    const screenDx = footprint.width / 2 + w / 2 + shadow.offsetX;
+    const screenDy = shadow.offsetY;
     const cos = Math.cos(screenRotation);
     const sin = Math.sin(screenRotation);
     s.position.set(
-      sprite.x + shadow.offsetX * cos + shadow.offsetY * sin,
-      sprite.y - shadow.offsetX * sin + shadow.offsetY * cos
+      footprint.cx + screenDx * cos + screenDy * sin,
+      footprint.cy - screenDx * sin + screenDy * cos
     );
     return s;
   }
@@ -2578,8 +2591,8 @@ export class TableRenderer {
                 width: screenTileW,
                 height: screenTileH,
                 rotation: 0,
-                x: screenTileW / 2,
-                y: screenTileH / 2,
+                cx: screenTileW / 2,
+                cy: screenTileH / 2,
               },
               0
             );
@@ -2676,8 +2689,8 @@ export class TableRenderer {
               width: screenTileW,
               height: screenTileH,
               rotation: 0,
-              x: screenTileW / 2,
-              y: screenTileH / 2,
+              cx: screenTileW / 2,
+              cy: screenTileH / 2,
             },
             0
           );
@@ -4361,7 +4374,13 @@ export class TableRenderer {
         const wrap = new Container();
         wrap.addChild(sprite);
         const shadow = this.makeTileShadow(
-          p.sprite,
+          {
+            width: p.sprite.width,
+            height: p.sprite.height,
+            rotation: p.sprite.rotation,
+            cx: p.sprite.x,
+            cy: p.sprite.y,
+          },
           SEAT_CONTAINER_ROT[seat] + p.wrap.rotation
         );
         if (shadow) {
@@ -4395,7 +4414,13 @@ export class TableRenderer {
         const wrap = new Container();
         wrap.addChild(sprite);
         const shadow = this.makeTileShadow(
-          p.sprite,
+          {
+            width: p.sprite.width,
+            height: p.sprite.height,
+            rotation: p.sprite.rotation,
+            cx: p.sprite.x,
+            cy: p.sprite.y,
+          },
           SEAT_CONTAINER_ROT[seat] + p.wrap.rotation
         );
         if (shadow) {
@@ -4574,9 +4599,15 @@ export class TableRenderer {
         // by the next tile is intended, so only the rightmost tile's
         // shadow shows.
         const handShadow = this.makeTileShadow(
-          { width: spriteW, height: spriteH, rotation: 0, x: posX, y: 0 },
+          {
+            width: spriteW,
+            height: spriteH,
+            rotation: 0,
+            cx: posX + spriteW / 2,
+            cy: spriteH / 2,
+          },
           0,
-          { big: true, anchor: 0 }
+          { big: true }
         );
         if (handShadow) {
           handShadow.zIndex = -1;
@@ -4768,7 +4799,13 @@ export class TableRenderer {
       const wrap = new Container();
       wrap.addChild(sprite);
       const shadow = this.makeTileShadow(
-        placement.sprite,
+        {
+          width: placement.sprite.width,
+          height: placement.sprite.height,
+          rotation: placement.sprite.rotation,
+          cx: placement.sprite.x,
+          cy: placement.sprite.y,
+        },
         SEAT_CONTAINER_ROT[seat] + placement.wrap.rotation
       );
       if (shadow) {
@@ -4894,7 +4931,13 @@ export class TableRenderer {
       const wrap = new Container();
       wrap.addChild(sprite);
       const shadow = this.makeTileShadow(
-        animLastPlacement.sprite,
+        {
+          width: animLastPlacement.sprite.width,
+          height: animLastPlacement.sprite.height,
+          rotation: animLastPlacement.sprite.rotation,
+          cx: animLastPlacement.sprite.x,
+          cy: animLastPlacement.sprite.y,
+        },
         SEAT_CONTAINER_ROT[seat] + animLastPlacement.wrap.rotation
       );
       if (shadow) {
@@ -5904,8 +5947,8 @@ export class TableRenderer {
         width: sprite.width,
         height: sprite.height,
         rotation: sprite.rotation,
-        x: dims.w / 2,
-        y: dims.h / 2,
+        cx: dims.w / 2,
+        cy: dims.h / 2,
       },
       stripRot + (sheetOverride ? -Math.PI / 2 : 0)
     );

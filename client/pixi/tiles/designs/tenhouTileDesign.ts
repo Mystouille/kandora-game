@@ -105,8 +105,8 @@ export const tenhouTileDesign: TileDesign = {
       small: "shadowTopBottom",
       side: "shadowLeftRight",
       big: "ownShadow",
-      offsetX: 4,
-      offsetY: 4,
+      offsetX: 0,
+      offsetY: 0,
     },
   },
 };

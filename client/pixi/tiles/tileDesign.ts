@@ -75,12 +75,12 @@ export interface TileCategories {
 }
 
 /**
- * Optional drop-shadow drawn behind every tile from single-image
- * atlases, one per tile category (the shadow silhouette differs for
- * upright small, side, and big art). The shadow shares the tile's
- * on-screen footprint and is offset by a fixed screen delta
- * (down-right by default) so it falls the same way for every seat
- * regardless of the seat container's rotation. Disabled when omitted.
+ * Optional drop-shadow stuck to the RIGHT edge of every tile, from
+ * single-image atlases (one per tile category — the silhouette
+ * differs for upright small, side, and big art). The shadow keeps its
+ * art's natural aspect at the tile's height and is nudged by a fixed
+ * screen delta, applied the same way for every seat regardless of the
+ * seat container's rotation. Disabled when omitted.
  */
 export interface ShadowSpec {
   /** Single-image shadow atlas for top/bottom small tiles. */
@@ -89,8 +89,8 @@ export interface ShadowSpec {
   side: AtlasId;
   /** Single-image shadow atlas for the focused player's big tiles. */
   big: AtlasId;
-  /** Screen-space offset from the tile, in design px. Positive x is
-   * screen-right, positive y is screen-down. */
+  /** Extra screen-space nudge from the flush right-edge position, in
+   * design px. Positive x is screen-right, positive y is screen-down. */
   offsetX: number;
   offsetY: number;
   /** Opacity multiplier for the shadow sprite. Default 1. */
