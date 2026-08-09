@@ -5633,6 +5633,7 @@ export class TableRenderer {
       ay: number;
       w: number;
       h: number;
+      isolated?: boolean;
     }> = [];
     for (let i = melds.length - 1; i >= 0; i--) {
       const { node, width, boxes } = this.drawMeld(melds[i], seat);
@@ -5644,6 +5645,7 @@ export class TableRenderer {
           ay: sx * ssin + b.cy * scos,
           w: b.w,
           h: b.h,
+          isolated: b.isolated,
         });
       }
       // Z-order between adjacent overlapping melds must match the
@@ -5719,13 +5721,18 @@ export class TableRenderer {
         break;
       }
     }
-    // One shadow pass for the whole strip: bucket every meld tile into
-    // screen-vertical columns so aligned tiles share a continuous
-    // strip and each tilted called tile gets its own shadow.
+    // Upright meld tiles may share a continuous screen-column shadow.
+    // Tilted called tiles must remain isolated: for a left-seat call from
+    // the right their centre can align with the upright column, causing the
+    // sideways shadow to be incorrectly merged into the long strip.
+    const shadowLayer = this.screenShadowLayer(strip, stripRot);
     this.placeColumnShadows(
-      this.screenShadowLayer(strip, stripRot),
-      shadowBoxes
+      shadowLayer,
+      shadowBoxes.filter((box) => !box.isolated)
     );
+    for (const box of shadowBoxes.filter((candidate) => candidate.isolated)) {
+      this.placeColumnShadows(shadowLayer, [box]);
+    }
     this.root.addChild(strip);
   }
 
@@ -5753,11 +5760,23 @@ export class TableRenderer {
   ): {
     node: Container;
     width: number;
-    boxes: Array<{ cx: number; cy: number; w: number; h: number }>;
+    boxes: Array<{
+      cx: number;
+      cy: number;
+      w: number;
+      h: number;
+      isolated?: boolean;
+    }>;
   } {
     const c = new Container();
     c.sortableChildren = true;
-    const boxes: Array<{ cx: number; cy: number; w: number; h: number }> = [];
+    const boxes: Array<{
+      cx: number;
+      cy: number;
+      w: number;
+      h: number;
+      isolated?: boolean;
+    }> = [];
     // Side-seat melds overlap consecutive tiles by 16 design pixels
     // along the row direction, matching the discard pond. Bottom/top
     // seats butt their tiles flush with no gap.
@@ -5948,6 +5967,7 @@ export class TableRenderer {
         cy: sprite.position.y + offY,
         w: footW,
         h: footH,
+        isolated: slot.rotated,
       });
     });
     if (stackTile !== null) {
@@ -5995,6 +6015,7 @@ export class TableRenderer {
         cy: stack.position.y + stackOffY,
         w: stackFootW,
         h: stackFootH,
+        isolated: true,
       });
     }
     // Total footprint width = xCursor (sum of strides) + the last
