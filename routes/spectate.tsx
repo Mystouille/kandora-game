@@ -172,6 +172,11 @@ export default function GameSpectateRoute({
   const { matchId } = loaderData;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const requestedReturnPath = searchParams.get("returnTo");
+  const returnPath =
+    requestedReturnPath?.startsWith("/online-tournaments/") === true
+      ? requestedReturnPath
+      : "/online-tournaments";
   // `?delay=<ms>` — non-negative integer. Defaults to 0 (live).
   // The server caps this at 30 min.
   const delayMs = Math.max(0, Number(searchParams.get("delay") ?? 0)) | 0;
@@ -749,7 +754,7 @@ export default function GameSpectateRoute({
         <button
           type="button"
           onClick={() => {
-            void navigate("/lobby");
+            void navigate(returnPath);
           }}
           className="ml-2 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-xs"
         >
