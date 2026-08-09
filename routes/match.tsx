@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { EyeOutlined } from "@ant-design/icons";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
-import type { TableRenderer } from "~/game/client/pixi/TableRenderer";
+import type {
+  SeatEnrichment,
+  TableRenderer,
+} from "~/game/client/pixi/TableRenderer";
 import { useMatchStore, type MatchView } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
@@ -19,6 +22,9 @@ import { rotateMatchView } from "~/game/replay/player";
 import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
 import chipIconUrl from "~/game/client/icons/chips.png";
+import dabukenIconUrl from "~/game/client/icons/dabuken.png";
+import tntLogoBlackUrl from "~/banner/TNT_logo-BLACK.png";
+import tntLogoWhiteUrl from "~/banner/TNT_logo-WHITE.png";
 import type { Route } from "./+types/match";
 
 /**
@@ -30,6 +36,78 @@ import type { Route } from "./+types/match";
  * seat (auto-played or otherwise) shares the same cadence.
  */
 const DRAW_TO_DISCARD_DELAY_MS = 700;
+
+const DEBUG_PLAYER_NAME_POOL = [
+  "Akari",
+  "BambooFox",
+  "Chihiro",
+  "DoraNova",
+  "Emi",
+  "HakuStorm",
+  "Junpei",
+  "Kokoro",
+  "Mika",
+  "RiichiRonin",
+  "Sora",
+  "Yuzu",
+];
+const DEBUG_TEAM_NAME_POOL = [
+  "Crimson Winds",
+  "Jade Dragons",
+  "Moon Rabbits",
+  "Golden Tiles",
+  "White Flowers",
+  "North Stars",
+];
+const DEBUG_TEAM_LOGOS = [
+  tntLogoBlackUrl,
+  tntLogoWhiteUrl,
+  chipIconUrl,
+  dabukenIconUrl,
+];
+
+interface DebugIdentityFixture {
+  seatNames: [string, string, string, string];
+  seatEnrichment: [
+    SeatEnrichment,
+    SeatEnrichment,
+    SeatEnrichment,
+    SeatEnrichment,
+  ];
+}
+
+let cachedDebugIdentityFixture: DebugIdentityFixture | null = null;
+
+function shuffled<T>(values: readonly T[]): T[] {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+  }
+  return result;
+}
+
+function getDebugIdentityFixture(): DebugIdentityFixture {
+  if (cachedDebugIdentityFixture) {
+    return cachedDebugIdentityFixture;
+  }
+  const names = shuffled(DEBUG_PLAYER_NAME_POOL).slice(0, 4) as [
+    string,
+    string,
+    string,
+    string,
+  ];
+  const teams = shuffled(DEBUG_TEAM_NAME_POOL).slice(0, 4);
+  const logos = shuffled(DEBUG_TEAM_LOGOS);
+  cachedDebugIdentityFixture = {
+    seatNames: names,
+    seatEnrichment: names.map((_, seat) => ({
+      teamName: teams[seat],
+      teamLogoUrl: logos[seat],
+    })) as DebugIdentityFixture["seatEnrichment"],
+  };
+  return cachedDebugIdentityFixture;
+}
 
 function getDebugWallDice(search: URLSearchParams): [number, number] | null {
   const values = search.get("debugWallDice")?.split(",");
@@ -64,6 +142,10 @@ function prepareRenderedMatchView(view: MatchView): MatchView {
   const search = new URLSearchParams(window.location.search);
   const debugFourKans = search.get("debugFourKans") === "1";
   const debugFullDiscards = search.get("debugFullDiscards") === "1";
+  const debugPlayerNames = search.get("debugPlayerNames") === "1";
+  const debugTeamLogos = search.get("debugTeamLogos") === "1";
+  const debugIdentity =
+    debugPlayerNames || debugTeamLogos ? getDebugIdentityFixture() : null;
   const debugWallDice = getDebugWallDice(search);
   const debugWallDealerRaw = Number(search.get("debugWallDealer") ?? "0");
   const debugWallDealer =
@@ -72,7 +154,12 @@ function prepareRenderedMatchView(view: MatchView): MatchView {
     debugWallDealerRaw <= 3
       ? debugWallDealerRaw
       : 0;
-  if (!debugFourKans && !debugFullDiscards && !debugWallDice) {
+  if (
+    !debugFourKans &&
+    !debugFullDiscards &&
+    !debugIdentity &&
+    !debugWallDice
+  ) {
     return rotated;
   }
 
@@ -139,6 +226,7 @@ function prepareRenderedMatchView(view: MatchView): MatchView {
 
   return {
     ...rotated,
+    ...(debugIdentity && { seatNames: debugIdentity.seatNames }),
     ...(debugFourKans && {
       hands: [["5m"], [null], [null], [null]],
       melds,
@@ -983,16 +1071,17 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
           // off here.
           renderer.setAutoSort(liveMenuFlags.autoSort);
           renderer.setAutoWinEnabled(liveMenuFlags.autoWin);
+          const debugSearch = new URLSearchParams(window.location.search);
+          renderer.setSeatEnrichment(
+            import.meta.env.DEV && debugSearch.get("debugTeamLogos") === "1"
+              ? getDebugIdentityFixture().seatEnrichment
+              : []
+          );
           renderer.setShowWallZonesDebug(
-            new URLSearchParams(window.location.search).get(
-              "debugWallZones"
-            ) === "1"
+            debugSearch.get("debugWallZones") === "1"
           );
           renderer.setShowWalls(
-            hasDebugWallFixture() &&
-              new URLSearchParams(window.location.search).get(
-                "debugWallReveal"
-              ) === "1"
+            hasDebugWallFixture() && debugSearch.get("debugWallReveal") === "1"
           );
           renderer.setShowUndealtWall(hasDebugWallFixture());
           // Initial draw with whatever the store currently holds.

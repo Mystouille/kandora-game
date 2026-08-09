@@ -140,10 +140,41 @@ const FELT_COLOR: ColorSource = 0x007f0e;
 /** Shared styling for darkened mats behind hands and discard ponds. */
 const HAND_PANEL_RADIUS = 4;
 const HAND_PANEL_ALPHA = 0.16;
+const PLAYER_PANEL_SIZE = 120;
+const PLAYER_PANEL_GAP = 26;
+const PLAYER_PANEL_LINK_WIDTH = 28;
+const PLAYER_PANEL_ALPHA = 0.28;
+/** Above the identity panel (-10), below every root board tile layer (0+). */
+const PLAYER_PANEL_CONTENT_Z = -9;
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
  *  East, South, West, North. */
 const WIND_KANJI = ["東", "南", "西", "北"] as const;
+const ROUND_WIND_KANJI: Record<MatchView["roundWind"], string> = {
+  E: "東",
+  S: "南",
+  W: "西",
+  N: "北",
+};
+const KANJI_FONT_FAMILY =
+  '"Yuji Syuku", "Yu Mincho", "Hiragino Mincho ProN", serif';
+
+/** In an omniscient replay, identify the seat whose hand must discard. */
+export function replayDiscardingSeat(
+  view: Pick<MatchView, "hands" | "melds" | "lastHandResult" | "matchEnded">
+): Seat | null {
+  if (view.lastHandResult || view.matchEnded) {
+    return null;
+  }
+  for (let seat = 0; seat < 4; seat++) {
+    const structuralHandSize =
+      (view.hands[seat]?.length ?? 0) + (view.melds[seat]?.length ?? 0) * 3;
+    if (structuralHandSize === 14) {
+      return seat as Seat;
+    }
+  }
+  return null;
+}
 
 /** Axis-aligned bounding box of a non-empty list of `Rect`s. */
 function boundingBox(rects: readonly Rect[]): Rect {
@@ -152,6 +183,23 @@ function boundingBox(rects: readonly Rect[]): Rect {
   const x1 = Math.max(...rects.map((r) => r.x + r.w));
   const y1 = Math.max(...rects.map((r) => r.y + r.h));
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function scoreCartridgeMetrics(center: Rect): {
+  width: number;
+  height: number;
+  inset: number;
+  bottomTop: number;
+} {
+  const width = Math.round(center.w * 0.5);
+  const height = Math.round(center.h * 0.16);
+  const inset = Math.round(center.h * 0.08);
+  return {
+    width,
+    height,
+    inset,
+    bottomTop: center.y + center.h - inset - height,
+  };
 }
 
 const hudStyle = new TextStyle({
@@ -634,6 +682,16 @@ export class TableRenderer {
     this.textureStore = new TileTextureStore(this.tileDesign);
     await this.textureStore.load();
     this.spriteFactory = new TileSpriteFactory(this.textureStore);
+
+    // Pixi rasterizes text into canvas textures, so ensure the Japanese
+    // brush face is ready before any seat-wind labels are constructed.
+    // Keep mounting if external font delivery fails; the style has local
+    // Mincho fallbacks for that case.
+    try {
+      await document.fonts.load('400 16px "Yuji Syuku"', WIND_KANJI.join(""));
+    } catch {
+      // Best-effort visual enhancement only.
+    }
 
     // Load the Buu nameplate icons (chip + dabuken). Best-effort:
     // a failure leaves `*IconTex` null and the renderer falls back
@@ -1727,10 +1785,8 @@ export class TableRenderer {
 
     // Per-seat score chips + dealer marker.
     this.renderScores(view, layout.center);
-    // Per-seat display names next to each discard pond. Enriched
-    // nameplates set a high zIndex (root is sortableChildren) so they
-    // sit above the walls / hand strips; the result overlay (zIndex
-    // 1000) still draws over them.
+    // Per-seat identity content next to each discard pond. It sits above
+    // the identity panel background but below every board tile layer.
     this.renderPlayerNames(view, layout);
     // Round / honba / sticks / wall-remaining centre block.
     this.renderRoundInfo(view, layout.center);
@@ -1882,9 +1938,13 @@ export class TableRenderer {
     // face its seat: seat 0 (bottom) reads upright, seat 1 (right)
     // reads from the right, etc. Chip dimensions are scaled off the
     // centre rect so they shrink/grow with the table.
-    const chipW = Math.round(center.w * 0.5);
-    const chipH = Math.round(center.h * 0.16);
-    const inset = Math.round(center.h * 0.08);
+    const {
+      width: chipW,
+      height: chipH,
+      inset,
+    } = scoreCartridgeMetrics(center);
+    const indicatorSeat =
+      view.conn === "replay" ? replayDiscardingSeat(view) : view.mySeat;
     type ChipSpec = { x: number; y: number; rotation: number };
     const specs: ChipSpec[] = [
       { x: cx, y: center.y + center.h - inset - chipH / 2, rotation: 0 },
@@ -1913,24 +1973,26 @@ export class TableRenderer {
           fill: view.sinking[seat] ? 0xff6b6b : 0xffffff,
         }),
       });
-      txt.anchor.set(0.5, 0.5);
+      const horizontalPadding = Math.round(chipH * 0.35);
+      txt.anchor.set(1, 0.5);
+      txt.position.set(chipW / 2 - horizontalPadding, 0);
       // Seat wind kanji, anchored to the left edge of the chip.
-      // East is highlighted in red (the dealer wind in riichi
-      // convention); the other three winds use the same white as
-      // the score text.
+      // The focused player's wind is red; otherwise East is white
+      // and the remaining winds are muted grey.
       const wind = WIND_KANJI[(seat - view.dealer + 4) % 4];
       const isEast = wind === "東";
+      const isActiveSeat = indicatorSeat === seat;
       const windTxt = new Text({
         text: wind,
         style: new TextStyle({
-          fontFamily: "Noto Sans JP, Inter, system-ui, sans-serif",
-          fontSize: Math.max(12, Math.round(chipH * 0.6)),
-          fontWeight: "700",
-          fill: isEast ? 0xff6b6b : 0xffffff,
+          fontFamily: KANJI_FONT_FAMILY,
+          fontSize: Math.max(16, chipH),
+          fontWeight: "400",
+          fill: isActiveSeat ? 0xff4d4f : isEast ? 0xffffff : 0x9ca3af,
         }),
       });
       windTxt.anchor.set(0, 0.5);
-      windTxt.position.set(-chipW / 2 + Math.round(chipH * 0.35), 0);
+      windTxt.position.set(-chipW / 2 + horizontalPadding, 0);
       chip.addChild(bg, windTxt, txt);
       // Seat display names are rendered separately by
       // `renderPlayerNames` next to each discard pond.
@@ -1974,14 +2036,14 @@ export class TableRenderer {
     }
     const cx = center.x + center.w / 2;
     const cy = center.y + center.h / 2;
-    const label = `${view.roundWind}${view.roundNumber}`;
-    const fontSize = Math.max(14, Math.round(center.h * 0.13));
+    const label = `${ROUND_WIND_KANJI[view.roundWind]} - ${view.roundNumber}`;
+    const fontSize = Math.max(22, Math.round(center.h * 0.13 * 1.6));
     const heading = new Text({
       text: label,
       style: new TextStyle({
-        fontFamily: "Inter, system-ui, sans-serif",
+        fontFamily: KANJI_FONT_FAMILY,
         fontSize,
-        fontWeight: "700",
+        fontWeight: "400",
         fill: 0xffffff,
       }),
     });
@@ -1996,46 +2058,65 @@ export class TableRenderer {
     const wallRemaining = Math.max(0, 70 - view.drawsTaken);
     // Buu Mahjong has no repeat counter, so omit the honba line
     // entirely in that mode rather than rendering a stale "Repeat: 0".
-    const lineSpecs: Array<{ text: string; color: number }> = [
+    const lineSpecs: Array<{ label: string; value: string; color: number }> = [
       ...(view.buuMode === true
         ? []
         : [
             {
-              text: `${this.centerLabels.repeat}: ${view.honba}`,
+              label: this.centerLabels.repeat,
+              value: String(view.honba),
               color: 0xfde68a,
             },
           ]),
       {
-        text: `${this.centerLabels.riichi}: ${view.riichiSticks}`,
+        label: this.centerLabels.riichi,
+        value: String(view.riichiSticks),
         color: 0xfca5a5,
       },
-      { text: `${this.centerLabels.tiles}: ${wallRemaining}`, color: 0xd1d5db },
+      {
+        label: this.centerLabels.tiles,
+        value: String(wallRemaining),
+        color: 0xd1d5db,
+      },
     ];
-    // Vertically centre the whole block (heading + 3 lines + gaps)
-    // on the centre rect.
+    // Preserve the established heading placement independently from the
+    // status rows, with a further 2 px drop to clear the top cartridge.
     const linesBlockH =
       lineSpecs.length * lineSize + (lineSpecs.length - 1) * lineGap;
     const headingGap = Math.round(lineSize * 0.6);
     const totalH = fontSize + headingGap + linesBlockH;
-    const topY = cy - totalH / 2;
-    heading.position.set(cx, topY + fontSize / 2);
+    const topY = cy - totalH / 2 + 3;
+    heading.position.set(cx, topY + fontSize / 2 + 2);
     this.root.addChild(heading);
-    let lineY = topY + fontSize + headingGap + lineSize / 2;
+
+    // Keep the status rows as a separate visual block immediately above
+    // the bottom score cartridge. The block's bottom edge is the anchor;
+    // its colon axis is offset slightly right for visual balance.
+    const statusBlock = new Container();
+    const { bottomTop } = scoreCartridgeMetrics(center);
+    statusBlock.position.set(cx + 10, bottomTop - linesBlockH);
+    let lineY = lineSize / 2;
     for (const spec of lineSpecs) {
-      const t = new Text({
-        text: spec.text,
-        style: new TextStyle({
-          fontFamily: "Inter, system-ui, sans-serif",
-          fontSize: lineSize,
-          fontWeight: "600",
-          fill: spec.color,
-        }),
+      const style = new TextStyle({
+        fontFamily: "Inter, system-ui, sans-serif",
+        fontSize: lineSize,
+        fontWeight: "600",
+        fill: spec.color,
       });
-      t.anchor.set(0.5, 0.5);
-      t.position.set(cx, lineY);
-      this.root.addChild(t);
+      const labelText = new Text({ text: spec.label, style });
+      const colonText = new Text({ text: ":", style });
+      const valueText = new Text({ text: spec.value, style });
+      const valueGap = Math.round(lineSize * 0.3);
+      labelText.anchor.set(1, 0.5);
+      colonText.anchor.set(0.5, 0.5);
+      valueText.anchor.set(0, 0.5);
+      labelText.position.set(-colonText.width / 2, lineY);
+      colonText.position.set(0, lineY);
+      valueText.position.set(colonText.width / 2 + valueGap, lineY);
+      statusBlock.addChild(labelText, colonText, valueText);
       lineY += lineSize + lineGap;
     }
+    this.root.addChild(statusBlock);
   }
 
   /**
@@ -2049,12 +2130,7 @@ export class TableRenderer {
       return;
     }
     const fontSize = 14;
-    const padX = 8;
     const padY = 4;
-    const gap = 26;
-    // Shift each label toward the table centre along the seat's
-    // player-up axis (screen-up for seat 0, etc.).
-    const centerShift = 15;
     const buuMode = view.buuMode === true;
     // Build all per-seat sub-objects first so we can pick a single
     // uniform box size for every seat (user requirement).
@@ -2067,7 +2143,6 @@ export class TableRenderer {
       hasDabuken: boolean;
     };
     const built: Built[] = [];
-    let maxNameW = 0;
     let maxChipTextW = 0;
     let maxNameH = 0;
     for (let seat = 0; seat < 4; seat++) {
@@ -2081,18 +2156,21 @@ export class TableRenderer {
         occ !== null &&
         occ.kind === "human" &&
         occ.connected === false;
-      const nameFill = isDisconnected ? 0xf87171 : 0xffffff;
       const nameText = new Text({
         text: name,
         style: new TextStyle({
           fontFamily: "Inter, system-ui, sans-serif",
           fontSize,
-          fontWeight: "600",
-          fill: nameFill,
+          fontWeight: "700",
+          fill: 0xffffff,
+          stroke: { color: 0x000000, width: 4, join: "round" },
         }),
       });
       nameText.anchor.set(0.5, 0.5);
-      maxNameW = Math.max(maxNameW, Math.ceil(nameText.width));
+      const maxNameWidth = PLAYER_PANEL_SIZE - 16;
+      if (nameText.width > maxNameWidth) {
+        nameText.scale.set(maxNameWidth / nameText.width);
+      }
       maxNameH = Math.max(maxNameH, Math.ceil(nameText.height));
       let chipText: Text | null = null;
       if (buuMode) {
@@ -2134,9 +2212,6 @@ export class TableRenderer {
     const dabukenRowH = buuMode ? dabukenR * 2 + 4 : 0;
     // Width: max of name, chip-line content, and dabuken token.
     const chipLineW = buuMode ? chipIconR * 2 + chipIconGap + maxChipTextW : 0;
-    const dabukenW = buuMode ? dabukenR * 2 : 0;
-    const contentW = Math.max(maxNameW, chipLineW, dabukenW);
-    const w = contentW + padX * 2;
     const h = nameRowH + chipRowH + dabukenRowH;
     // Row centre y positions inside the box (anchor at (0,0) =
     // box centre; +y down).
@@ -2146,6 +2221,10 @@ export class TableRenderer {
     for (const b of built) {
       const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
       const rect = layout.discards[seat];
+      const identityCenter = this.playerPanelCenter(
+        this.discardPanelRect(rect, seat),
+        seat
+      );
       const container = new Container();
       // Enriched (team) nameplate: team logo as the box background with the
       // player name on top, anchored to the player's hand (player-right end,
@@ -2153,23 +2232,25 @@ export class TableRenderer {
       if (b.teamLogoTex) {
         // (a) Team-logo nameplate next to the player's discard, with the team
         // name on a pill just below it (both read upright for the viewer).
-        const S = 104;
+        const S = PLAYER_PANEL_SIZE;
         const logoMask = new Graphics()
           .roundRect(-S / 2, -S / 2, S, S, 8)
           .fill(0xffffff);
         const logo = new Sprite(b.teamLogoTex);
         logo.anchor.set(0.5, 0.5);
-        logo.width = S;
-        logo.height = S;
+        const logoScale = Math.min(
+          S / b.teamLogoTex.width,
+          S / b.teamLogoTex.height
+        );
+        logo.width = b.teamLogoTex.width * logoScale;
+        logo.height = b.teamLogoTex.height * logoScale;
         logo.mask = logoMask;
-        const logoBorder = new Graphics()
-          .roundRect(-S / 2, -S / 2, S, S, 8)
-          .stroke({ color: 0xffffff, width: 1, alpha: 0.5 });
-        container.addChild(logoMask, logo, logoBorder);
+        container.addChild(logoMask, logo);
 
-        // Team name pill below the logo, in the player's reference frame
-        // (child of the rotated logo box → player-below, e.g. screen-right
-        // for the right seat).
+        nameText.position.set(0, S / 2 - nameText.height / 2 - 8);
+        container.addChild(nameText);
+
+        // Keep the team name inside the logo area as a compact top label.
         const teamName = this.seatEnrichment[seat]?.teamName;
         if (teamName) {
           const tnText = new Text({
@@ -2190,111 +2271,17 @@ export class TableRenderer {
             .stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
           const tnBox = new Container();
           tnBox.addChild(tnBg, tnText);
-          tnBox.position.set(0, S / 2 + tnh / 2 + 3);
-          // The top seat's nameplate container is rotated π, which
-          // would leave the team name upside-down; counter-rotate so
-          // it reads upright for the viewer (matching the top player
-          // name), while keeping its player-below position.
-          if (seat === 2) {
-            tnBox.rotation = Math.PI;
-          }
+          tnBox.position.set(0, -S / 2 + tnh / 2 + 4);
           container.addChild(tnBox);
         }
 
-        const dShift = 10;
-        let cx = 0;
-        let cy = 0;
-        let rot = 0;
-        switch (seat) {
-          case 0:
-            rot = 0;
-            cx = rect.x + rect.w + gap + S / 2;
-            cy = rect.y + rect.h / 2 - centerShift + dShift;
-            break;
-          case 1:
-            rot = -Math.PI / 2;
-            cx = rect.x + rect.w / 2 - centerShift + dShift;
-            cy = rect.y - gap - S / 2;
-            break;
-          case 2:
-            rot = Math.PI;
-            cx = rect.x - gap - S / 2;
-            cy = rect.y + rect.h / 2 + centerShift - dShift;
-            break;
-          case 3:
-            rot = Math.PI / 2;
-            cx = rect.x + rect.w / 2 + centerShift - dShift;
-            cy = rect.y + rect.h + gap + S / 2;
-            break;
-        }
-        container.rotation = rot;
-        container.position.set(cx, cy);
-        // Root sorts by zIndex (walls up to 2, hands 10, strips 50).
-        // Lift the nameplate above them so it never hides behind the
-        // draw wall; stays under the result overlay (zIndex 1000).
-        container.zIndex = 100;
+        container.rotation = SEAT_CONTAINER_ROT[seat];
+        container.position.set(identityCenter.x, identityCenter.y);
+        container.zIndex = PLAYER_PANEL_CONTENT_Z;
         this.root.addChild(container);
-
-        // (b) Player name centred above the hand. Enlarged; the top seat is
-        // NOT rotated so it stays readable for the viewer.
-        const pName = new Text({
-          text: nameText.text,
-          style: new TextStyle({
-            fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 20,
-            fontWeight: "700",
-            fill: 0xffffff,
-          }),
-        });
-        pName.anchor.set(0.5, 0.5);
-        const nw = Math.ceil(pName.width) + padX * 2;
-        const nh = Math.ceil(pName.height) + padY * 2;
-        const nameBox = new Container();
-        const nameBg = new Graphics()
-          .roundRect(-nw / 2, -nh / 2, nw, nh, 6)
-          .fill({ color: 0x000000, alpha: 0.6 })
-          .stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
-        pName.position.set(0, 0);
-        nameBox.addChild(nameBg, pName);
-        const hand = layout.hands[seat];
-        const nhh = nh / 2;
-        const nameGap = 4;
-        switch (seat) {
-          case 0:
-            nameBox.rotation = 0;
-            nameBox.position.set(hand.x + hand.w / 2, hand.y - nhh - nameGap);
-            break;
-          case 1:
-            nameBox.rotation = -Math.PI / 2;
-            nameBox.position.set(hand.x - nhh - nameGap, hand.y + hand.h / 2);
-            break;
-          case 2:
-            nameBox.rotation = 0;
-            nameBox.position.set(
-              hand.x + hand.w / 2,
-              hand.y + hand.h + nhh + nameGap
-            );
-            break;
-          case 3:
-            nameBox.rotation = Math.PI / 2;
-            nameBox.position.set(
-              hand.x + hand.w + nhh + nameGap,
-              hand.y + hand.h / 2
-            );
-            break;
-        }
-        nameBox.zIndex = 100;
-        this.root.addChild(nameBox);
         continue;
       }
-      const strokeColor = isDisconnected ? 0xf87171 : 0xffffff;
-      const strokeAlpha = isDisconnected ? 0.9 : 0.25;
-      const bg = new Graphics()
-        .roundRect(-w / 2, -h / 2, w, h, 6)
-        .fill({ color: 0x000000, alpha: 0.65 })
-        .stroke({ color: strokeColor, width: 1, alpha: strokeAlpha });
-      container.addChild(bg);
-      nameText.position.set(0, nameCY);
+      nameText.position.set(0, buuMode ? nameCY : 0);
       container.addChild(nameText);
       if (buuMode && chipText) {
         // Chip icon: use the imported PNG when available; fall
@@ -2385,53 +2372,9 @@ export class TableRenderer {
         badge.position.set(0, h / 2 + bh / 2 + 2);
         container.addChild(badge);
       }
-      // Place the box adjacent to the discard rect on the
-      // player's right-hand side. Discard local +x points to the
-      // player's right; the seat's screen-side mapping is:
-      //   seat 0 (bottom, no rotation) → right edge of rect
-      //   seat 1 (right, -90°)         → top edge of rect
-      //   seat 2 (top, 180°)           → left edge of rect
-      //   seat 3 (left, +90°)          → bottom edge of rect
-      // `lowerShift` nudges the box along the seat's
-      // player-down axis (relative to the discard's orientation,
-      // i.e. away from the table centre toward the player) so
-      // it sits a touch lower than the centre of the discard
-      // pond's long edge.
-      const lowerShift = 10;
-      switch (seat) {
-        case 0: {
-          container.rotation = 0;
-          container.position.set(
-            rect.x + rect.w + gap + w / 2,
-            rect.y + rect.h / 2 - centerShift + lowerShift
-          );
-          break;
-        }
-        case 1: {
-          container.rotation = -Math.PI / 2;
-          container.position.set(
-            rect.x + rect.w / 2 - centerShift + lowerShift,
-            rect.y - gap - w / 2
-          );
-          break;
-        }
-        case 2: {
-          container.rotation = Math.PI;
-          container.position.set(
-            rect.x - gap - w / 2,
-            rect.y + rect.h / 2 + centerShift - lowerShift
-          );
-          break;
-        }
-        case 3: {
-          container.rotation = Math.PI / 2;
-          container.position.set(
-            rect.x + rect.w / 2 + centerShift - lowerShift,
-            rect.y + rect.h + gap + w / 2
-          );
-          break;
-        }
-      }
+      container.rotation = SEAT_CONTAINER_ROT[seat];
+      container.position.set(identityCenter.x, identityCenter.y);
+      container.zIndex = PLAYER_PANEL_CONTENT_Z;
       this.root.addChild(container);
     }
   }
@@ -5462,9 +5405,10 @@ export class TableRenderer {
 
   /**
    * Static darkened mats behind the four 6×3 discard ponds. Each mat
-   * keeps its zone's side and bottom edges, while its screen-top edge
-   * is inset by one tile-overlap distance so it hugs the visible
-   * stacked footprint rather than filling the whole layout zone.
+   * extends 4 design pixels past each horizontal edge and each edge
+   * of its inset vertical footprint. The screen-top edge starts from
+   * a one-tile-overlap inset so the mat hugs the visible stacked
+   * footprint rather than filling the whole layout zone.
    */
   private renderDiscardPanels(layout: TableLayout): void {
     if (!this.root) {
@@ -5472,22 +5416,113 @@ export class TableRenderer {
     }
     for (let seat = 0; seat < 4; seat++) {
       const pond = layout.discards[seat];
-      const topInset =
-        seat % 2 === 0
-          ? this.tileDesign.spacing.discardRowVert
-          : this.tileDesign.spacing.discardRowHoriz;
+      const panelRect = this.discardPanelRect(pond, seat);
       const panel = new Graphics()
         .roundRect(
-          pond.x,
-          pond.y + topInset,
-          pond.w,
-          pond.h - topInset,
+          panelRect.x,
+          panelRect.y,
+          panelRect.w,
+          panelRect.h,
           HAND_PANEL_RADIUS
         )
         .fill({ color: 0x000000, alpha: HAND_PANEL_ALPHA });
       panel.zIndex = -10;
       this.root.addChild(panel);
+
+      const identityCenter = this.playerPanelCenter(panelRect, seat);
+      const playerPanelX = identityCenter.x - PLAYER_PANEL_SIZE / 2;
+      const playerPanelY = identityCenter.y - PLAYER_PANEL_SIZE / 2;
+      let linkX = 0;
+      let linkY = 0;
+      let linkW = 0;
+      let linkH = 0;
+      if (seat === 0) {
+        linkX = panelRect.x + panelRect.w;
+        linkY = identityCenter.y - PLAYER_PANEL_LINK_WIDTH / 2;
+        linkW = PLAYER_PANEL_GAP;
+        linkH = PLAYER_PANEL_LINK_WIDTH;
+      } else if (seat === 1) {
+        linkX = identityCenter.x - PLAYER_PANEL_LINK_WIDTH / 2;
+        linkY = panelRect.y - PLAYER_PANEL_GAP;
+        linkW = PLAYER_PANEL_LINK_WIDTH;
+        linkH = PLAYER_PANEL_GAP;
+      } else if (seat === 2) {
+        linkX = panelRect.x - PLAYER_PANEL_GAP;
+        linkY = identityCenter.y - PLAYER_PANEL_LINK_WIDTH / 2;
+        linkW = PLAYER_PANEL_GAP;
+        linkH = PLAYER_PANEL_LINK_WIDTH;
+      } else {
+        linkX = identityCenter.x - PLAYER_PANEL_LINK_WIDTH / 2;
+        linkY = panelRect.y + panelRect.h;
+        linkW = PLAYER_PANEL_LINK_WIDTH;
+        linkH = PLAYER_PANEL_GAP;
+      }
+      const playerPanel = new Graphics()
+        .rect(linkX, linkY, linkW, linkH)
+        .fill({ color: 0x000000, alpha: PLAYER_PANEL_ALPHA })
+        .roundRect(
+          playerPanelX,
+          playerPanelY,
+          PLAYER_PANEL_SIZE,
+          PLAYER_PANEL_SIZE,
+          8
+        )
+        .fill({ color: 0x000000, alpha: PLAYER_PANEL_ALPHA });
+      playerPanel.zIndex = -10;
+      this.root.addChild(playerPanel);
     }
+  }
+
+  private discardPanelRect(pond: Rect, seat: number): Rect {
+    const topInset =
+      seat % 2 === 0
+        ? this.tileDesign.spacing.discardRowVert
+        : this.tileDesign.spacing.discardRowHoriz;
+    return {
+      x: pond.x - 4,
+      y: pond.y + topInset - 4,
+      w: pond.w + 8,
+      h: pond.h - topInset + 8,
+    };
+  }
+
+  private playerPanelCenter(
+    discardPanel: Rect,
+    seat: number
+  ): { x: number; y: number } {
+    // Align the identity square's player-relative bottom edge with
+    // the discard mat's: screen bottom/right/top/left for seats
+    // 0/1/2/3 respectively.
+    if (seat === 0) {
+      return {
+        x:
+          discardPanel.x +
+          discardPanel.w +
+          PLAYER_PANEL_GAP +
+          PLAYER_PANEL_SIZE / 2,
+        y: discardPanel.y + discardPanel.h - PLAYER_PANEL_SIZE / 2,
+      };
+    }
+    if (seat === 1) {
+      return {
+        x: discardPanel.x + discardPanel.w - PLAYER_PANEL_SIZE / 2,
+        y: discardPanel.y - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
+      };
+    }
+    if (seat === 2) {
+      return {
+        x: discardPanel.x - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
+        y: discardPanel.y + PLAYER_PANEL_SIZE / 2,
+      };
+    }
+    return {
+      x: discardPanel.x + PLAYER_PANEL_SIZE / 2,
+      y:
+        discardPanel.y +
+        discardPanel.h +
+        PLAYER_PANEL_GAP +
+        PLAYER_PANEL_SIZE / 2,
+    };
   }
 
   /**
