@@ -20,7 +20,6 @@ import {
   Assets,
   Container,
   Graphics,
-  Rectangle,
   Sprite,
   Text,
   Texture,
@@ -30,16 +29,28 @@ import {
 import type { MatchView } from "../store";
 import type { LegalAction, Meld } from "~/game/protocol/messages";
 import { playGameSound } from "../sound";
-import { computeTableLayout, type TableLayout, type Rect } from "./tableLayout";
+import {
+  tableLayoutFromConfig,
+  validateTableLayoutConfig,
+  type TableLayout,
+  type TableLayoutConfig,
+  type Rect,
+} from "./tableLayout";
+import type { Seat } from "./tableGeometry";
 import { DiscardAnimator } from "./discardAnimator";
 import { HandSorter, naturalOrderRawIndices } from "./handSorter";
-import ownHandUrl from "~/game/tenhouSprites/ownHand.png";
-import bottomSmallUrl from "~/game/tenhouSprites/bottomSmall.png";
-import topSmallUrl from "~/game/tenhouSprites/topSmall.png";
-import leftSmallUrl from "~/game/tenhouSprites/leftSmall.png";
-import rightSmallUrl from "~/game/tenhouSprites/rightSmall.png";
-import sideHandLUrl from "~/game/tenhouSprites/uprightSideHandL.png";
-import sideHandRUrl from "~/game/tenhouSprites/uprightSideHandR.png";
+import { ACTIVE_TILE_DESIGN } from "./tiles/activeTileDesign";
+import { ACTIVE_TABLE_LAYOUT } from "./layouts/activeTableLayout";
+import type { TileDesign } from "./tiles/tileDesign";
+import { TileTextureStore } from "./tiles/tileTextureStore";
+import { TileSpriteFactory } from "./tiles/tileSpriteFactory";
+import {
+  layoutDiscards,
+  layoutSideHand,
+  layoutTopHand,
+  meldTileDims,
+  type TilePlacement,
+} from "./tileAreaLayout";
 import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
 import { splitWinningHandForDisplay } from "./winningHand";
@@ -94,15 +105,6 @@ const BIG_TILE_H = BIG_TILE_SRC.h * BIG_TILE_SCALE;
 // hand) by the side-hand layout so a flipped-up opponent hand strides
 // identically to that seat's discard row.
 const DISCARD_ROW_OVERLAP_HORIZ = 14.5;
-const DISCARD_ROW_OVERLAP_VERT = 15;
-/**
- * Distance from the table center to the inner edge of each discard
- * pile. Bumped up so the four piles don't crowd / overlap in the
- * middle of the table. (Original 80 left tiles of seats 0/2 kissing
- * the side rows of seats 1/3.)
- */
-const DESIGN_W = 1280;
-const DESIGN_H = 800;
 
 /** Visual separation in design pixels between the just-drawn 14th
  * tile and the sorted 13-tile run. 0.8% of the 1000 px design
@@ -186,62 +188,6 @@ type SheetKey =
   | "rightSmall"
   | "sideHandL"
   | "sideHandR";
-
-const SHEET_URLS: Record<SheetKey, string> = {
-  ownHand: ownHandUrl,
-  bottomSmall: bottomSmallUrl,
-  topSmall: topSmallUrl,
-  leftSmall: leftSmallUrl,
-  rightSmall: rightSmallUrl,
-  sideHandL: sideHandLUrl,
-  sideHandR: sideHandRUrl,
-};
-
-const MULTI_TILE_SHEET_COLS = 10;
-const MULTI_TILE_SHEET_ROWS = 4;
-
-/** Which sheets are multi-tile grids vs single-tile images. */
-const IS_MULTI_TILE: Record<SheetKey, boolean> = {
-  ownHand: true,
-  bottomSmall: true,
-  topSmall: true,
-  leftSmall: true,
-  rightSmall: true,
-  sideHandL: false,
-  sideHandR: false,
-};
-
-/**
- * Locate a tile in a 10×4 sheet. Returns `(row, col)` in cell
- * coordinates.
- *
- *   row 0 = manzu (col 0 = 0m / aka 5m)
- *   row 1 = pinzu
- *   row 2 = souzu
- *   row 3 = honors (col 0 = back, 1–7 = 1z–7z)
- *
- * Returns `(3, 0)` for `null` (face-down) or unknown tiles.
- */
-function tileSheetCell(tile: string | null): { row: number; col: number } {
-  if (tile === null) {
-    return { row: 3, col: 0 };
-  }
-  const suit = tile[tile.length - 1];
-  const n = Number(tile.slice(0, -1));
-  if (suit === "m") {
-    return { row: 0, col: n };
-  }
-  if (suit === "p") {
-    return { row: 1, col: n };
-  }
-  if (suit === "s") {
-    return { row: 2, col: n };
-  }
-  if (suit === "z") {
-    return { row: 3, col: n };
-  }
-  return { row: 3, col: 0 };
-}
 
 export interface TileClick {
   seat: number;
@@ -597,25 +543,34 @@ export class TableRenderer {
    * without coalescing every event triggers a full table re-render.
    * Cleared in `destroy`. */
   private renderRequestRafHandle: number | null = null;
-  /** Per-sheet loaded textures, keyed by sheet name. Populated in
-   * `mount()`. */
-  private sheets = new Map<
-    SheetKey,
-    { texture: Texture; cellW: number; cellH: number }
-  >();
-  /** Per-tile sub-textures, keyed by `"sheet:row:col"`. Lazily
-   * built by `getTileTexture`. */
-  private tileTextures = new Map<string, Texture>();
+  /** Active tile design (artwork + metrics). Injectable; defaults to
+   * the current production selection. */
+  private tileDesign: TileDesign;
+  /** Active board layout (zone geometry + layers). Injectable and
+   * swappable at runtime via {@link setLayoutConfig}. */
+  private layoutConfig: TableLayoutConfig;
+  /** Loads atlases and hands out framed textures for {@link tileDesign}. */
+  private textureStore: TileTextureStore | null = null;
+  /** Materializes tile sprites from the active design. */
+  private spriteFactory: TileSpriteFactory | null = null;
   /** Chip icon texture (Buu nameplate). Loaded in `mount()`. */
   private chipIconTex: Texture | null = null;
   /** Dabuken token texture (Buu nameplate). Loaded in `mount()`. */
   private dabukenIconTex: Texture | null = null;
 
+  constructor(opts?: {
+    tileDesign?: TileDesign;
+    layoutConfig?: TableLayoutConfig;
+  }) {
+    this.tileDesign = opts?.tileDesign ?? ACTIVE_TILE_DESIGN;
+    this.layoutConfig = opts?.layoutConfig ?? ACTIVE_TABLE_LAYOUT;
+  }
+
   async mount(container: HTMLElement): Promise<void> {
     const app = new Application();
     await app.init({
-      width: DESIGN_W,
-      height: DESIGN_H,
+      width: this.layoutConfig.viewport.w,
+      height: this.layoutConfig.viewport.h,
       background: BG_COLOR,
       antialias: true,
       roundPixels: true,
@@ -649,23 +604,13 @@ export class TableRenderer {
       app.canvas.removeEventListener("mousedown", onCanvasMouseDown);
     };
 
-    // Load every tile spritesheet in parallel. Each multi-tile
-    // sheet's cell dimensions are derived from its natural size;
-    // single-tile sheets store the full image dims so callers can
-    // size sprites uniformly.
-    const keys = Object.keys(SHEET_URLS) as SheetKey[];
-    const loaded = await Promise.all(
-      keys.map(async (key) => {
-        const tex = (await Assets.load(SHEET_URLS[key])) as Texture;
-        return [key, tex] as const;
-      })
-    );
-    for (const [key, tex] of loaded) {
-      const isMulti = IS_MULTI_TILE[key];
-      const cellW = isMulti ? tex.width / MULTI_TILE_SHEET_COLS : tex.width;
-      const cellH = isMulti ? tex.height / MULTI_TILE_SHEET_ROWS : tex.height;
-      this.sheets.set(key, { texture: tex, cellW, cellH });
-    }
+    // Load the active design's atlases through the texture store,
+    // then expose the sprite factory both build on. Atlas ids match
+    // the legacy sheet keys, so `getTileTexture` and every render
+    // pass keep working unchanged.
+    this.textureStore = new TileTextureStore(this.tileDesign);
+    await this.textureStore.load();
+    this.spriteFactory = new TileSpriteFactory(this.textureStore);
 
     // Load the Buu nameplate icons (chip + dabuken). Best-effort:
     // a failure leaves `*IconTex` null and the renderer falls back
@@ -833,6 +778,23 @@ export class TableRenderer {
 
   setOnTileClick(handler: (click: TileClick) => void): void {
     this.onTileClick = handler;
+  }
+
+  /** Swap the board layout at runtime (e.g. a responsive preset) and
+   * re-render from the latest view. Textures are untouched. Warns on
+   * an invalid config rather than throwing so a bad preset can't
+   * blank the table in production. */
+  setLayoutConfig(config: TableLayoutConfig): void {
+    const errors = validateTableLayoutConfig(config);
+    if (errors.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[TableRenderer] invalid layout config "${config.id}":`,
+        errors
+      );
+    }
+    this.layoutConfig = config;
+    this.requestRender();
   }
 
   setOnActionClick(handler: (click: ActionClick) => void): void {
@@ -1221,6 +1183,11 @@ export class TableRenderer {
       this.rightClickCleanup();
       this.rightClickCleanup = null;
     }
+    // Free the framed sub-textures the store created; base atlas
+    // sources stay in the Pixi asset cache (see the note below).
+    this.textureStore?.destroy();
+    this.textureStore = null;
+    this.spriteFactory = null;
     if (this.app) {
       if (this.timerTickHandler) {
         this.app.ticker.remove(this.timerTickHandler);
@@ -1332,22 +1299,16 @@ export class TableRenderer {
     ) {
       this.riichiMode = false;
     }
-    // Scale the design-space root (DESIGN_W × DESIGN_H) so it fits
-    // inside the current canvas while preserving aspect ratio. The
-    // root is centered within whichever axis has slack. `resizeTo:
-    // container` keeps the canvas sized to its parent, so this
-    // effectively makes every asset scale with the window.
+    // Scale the design-space root to fit inside the current canvas
+    // while preserving aspect ratio, centred within whichever axis
+    // has slack. `resizeTo: container` keeps the canvas sized to its
+    // parent, so this makes every asset scale with the window.
     const screenW = this.app.screen.width;
     const screenH = this.app.screen.height;
 
-    // Compute the Tenhou-style layout. Its natural footprint is
-    // square; we scale it to fit the canvas. Step 1 of the layout
-    // migration: scaling uses the layout's `table` rect; the legacy
-    // DESIGN_W / DESIGN_H constants are still consumed by the
-    // not-yet-migrated render passes (renderSeat / renderScores /
-    // etc.), so the on-screen positions there don't shift yet. The
-    // colored debug overlay sits on top and paints the new regions.
-    const layout = computeTableLayout(DESIGN_W, DESIGN_H);
+    // Board geometry comes from the active layout config; the
+    // renderer scales this design-space table to fit the canvas.
+    const layout = tableLayoutFromConfig(this.layoutConfig);
     const scale = Math.min(screenW / layout.table.w, screenH / layout.table.h);
     this.root.scale.set(scale);
     this.root.position.set(
@@ -1388,10 +1349,8 @@ export class TableRenderer {
       y: root.position.y + (feltBox.y + feltBox.h) * scale,
     };
 
-    // Legacy render passes anchor on DESIGN_W/2, DESIGN_H/2. The
-    // layout's centre may not coincide with that point, so passes
-    // not yet migrated will be visually off-centre relative to the
-    // new regions — expected during the step-by-step migration.
+    // Centre of the table, used by overlays anchored to the middle
+    // (scores, round info, result panels).
     const cx = layout.center.x + layout.center.w / 2;
     const cy = layout.center.y + layout.center.h / 2;
 
@@ -2151,42 +2110,15 @@ export class TableRenderer {
     // each upper-stack tile peeking out 16 px above its lower-stack
     // partner).
     const ROW_OFFSET_Y = 16;
-    // 16-px overlap between consecutive tiles along the long axis,
-    // applied only on vertical (left/right) walls.
-    const SIDE_TILE_OVERLAP = 16;
+    // Long-axis overlap between consecutive side-wall tiles.
+    const SIDE_TILE_OVERLAP = this.tileDesign.spacing.wallSide;
     // Cross-axis overlap between the two visible rows of a stack
-    // when the `showWalls` overlay flattens the wall (both rows
-    // fully drawn, stacked along the cross axis with this much
-    // overlap). Matches `SIDE_TILE_OVERLAP` so the reveal layout
-    // reads consistently with the long-axis stack overlap.
+    // when the `showWalls` overlay flattens the wall.
     const WALL_REVEAL_ROW_OVERLAP = 16;
-    const SIDE_WALL_SCREEN_W = 57;
-    const SIDE_WALL_ASPECT = 107 / 116;
-
-    // Per-seat sheet for the wall back-tile (matches the discard
-    // sheet for each seat). Seat 2 reuses `bottomSmall` so the
-    // top wall keeps the same lighting as the bottom wall.
-    // Seat 3 uses `rightSmall` because `leftSmall` doesn't have a
-    // back-tile cell at (row 3, col 0); the artwork is the same
-    // shape (the sprite is rotated below as needed).
-    const wallBackSheets: Record<number, SheetKey> = {
-      0: "bottomSmall",
-      1: "rightSmall",
-      2: "bottomSmall",
-      3: "rightSmall",
-    };
-    // Per-seat sheet for face-up wall tiles. Mirrors the discard
-    // sheet map: each seat uses its own pre-rotated artwork so a
-    // revealed wall tile reads from the seat's natural viewing
-    // direction (upside-down on the top wall, sideways on left /
-    // right walls). Used when `showWalls` reveals a live tile or
-    // when a dora indicator is exposed on the dead wall.
-    const wallFaceSheets: Record<number, SheetKey> = {
-      0: "bottomSmall",
-      1: "rightSmall",
-      2: "topSmall",
-      3: "leftSmall",
-    };
+    // Wall tile footprints + per-seat sheets come from the design.
+    const wallUpright = this.tileDesign.metrics.wallUpright;
+    const SIDE_WALL_SCREEN_W = this.tileDesign.metrics.wallSide.screenW;
+    const SIDE_WALL_ASPECT = this.tileDesign.metrics.wallSide.aspect;
 
     // ---------------------------------------------------------------
     // Wall topology
@@ -2274,14 +2206,13 @@ export class TableRenderer {
     for (let seat = 0; seat < 4; seat++) {
       const band = layout.wall[seat];
       const isHoriz = seat % 2 === 0;
-      const tile = isHoriz ? layout.tileHorizontal : layout.tileVertical;
-      const screenTileW = isHoriz ? tile.w : SIDE_WALL_SCREEN_W;
+      const screenTileW = isHoriz ? wallUpright.w : SIDE_WALL_SCREEN_W;
       const screenTileH = isHoriz
-        ? tile.h
+        ? wallUpright.h
         : SIDE_WALL_SCREEN_W * SIDE_WALL_ASPECT;
       const tileLongDim = isHoriz ? screenTileW : screenTileH;
       const baseStride = isHoriz
-        ? screenTileW + tile.gap
+        ? screenTileW
         : screenTileH - SIDE_TILE_OVERLAP;
       // Half-tile gap inserted at any dead↔live boundary within a
       // single band.
@@ -2318,8 +2249,8 @@ export class TableRenderer {
 
       const wallContainer = new Container();
       wallContainer.sortableChildren = true;
-      const backSheet = wallBackSheets[seat];
-      const faceSheet = wallFaceSheets[seat];
+      const backSheet = this.tileDesign.sheets.wallBack[seat as Seat] as SheetKey;
+      const faceSheet = this.tileDesign.sheets.wallFace[seat as Seat] as SheetKey;
 
       for (let k = 0; k < 17; k++) {
         const g = gposOf(seat, k);
@@ -2627,12 +2558,12 @@ export class TableRenderer {
     }
     const ROW_OFFSET_Y = 16;
     const band = layout.wall[0];
-    const tile = layout.tileHorizontal;
-    const screenTileW = tile.w;
-    const screenTileH = tile.h;
-    const stride = screenTileW + tile.gap;
-    const backSheet: SheetKey = "bottomSmall";
-    const faceSheet: SheetKey = "bottomSmall";
+    const wallUpright = this.tileDesign.metrics.wallUpright;
+    const screenTileW = wallUpright.w;
+    const screenTileH = wallUpright.h;
+    const stride = screenTileW;
+    const backSheet = this.tileDesign.sheets.wallBack[0] as SheetKey;
+    const faceSheet = this.tileDesign.sheets.wallFace[0] as SheetKey;
 
     const container = new Container();
     container.sortableChildren = true;
@@ -3330,7 +3261,7 @@ export class TableRenderer {
         // `null` slots render as face-down backs (used for
         // unrevealed dora indicator slots).
         const tileContainer = new Container();
-        const mt = meldTileDims(0);
+        const mt = meldTileDims(this.tileDesign, 0);
         let dx = 0;
         for (const tile of row.tiles) {
           const sprite = this.drawMeldTile(tile, 0);
@@ -3350,7 +3281,7 @@ export class TableRenderer {
         // matches the seat-relative orientation it had at the
         // table).
         const handContainer = new Container();
-        const mt = meldTileDims(0);
+        const mt = meldTileDims(this.tileDesign, 0);
         const agariGap = 14;
         const meldGap = 18;
         let dx = 0;
@@ -4030,6 +3961,10 @@ export class TableRenderer {
     if (!this.root) {
       return;
     }
+    const factory = this.spriteFactory;
+    if (!factory) {
+      return;
+    }
     const { rawHand, forceReveal } = ((): {
       rawHand: (string | null)[];
       forceReveal: boolean;
@@ -4310,122 +4245,83 @@ export class TableRenderer {
       // they appear upright on screen after the seat's container
       // rotation cancels out.
       handContainer.sortableChildren = true;
-      const ts = layout.tileSide;
-      // Pick stride based on whether the strip is being shown
-      // face-up. Revealed tiles use the side-discard footprint
-      // (see `sideHandRevealed` block above) so successive tiles
-      // stride by `SIDE_TILE_H - DISCARD_ROW_OVERLAP_HORIZ` —
-      // identical to a side seat's discard row.
-      const stride = sideHandRevealed
-        ? SIDE_TILE_H - DISCARD_ROW_OVERLAP_HORIZ
-        : ts.h - layout.tileSideOverlap;
-      const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
-      const zSign = seat === 1 ? -1 : 1;
-      // Face-down sheet by default; with `showHands` and a real
-      // tile string we swap to the seat's face-up discard sheet
-      // (`rightSmall`/`leftSmall`) which already contains the
-      // per-tile artwork pre-rotated for that seat.
-      const backSheet: SheetKey = seat === 1 ? "sideHandR" : "sideHandL";
-      const faceSheet: SheetKey = seat === 1 ? "rightSmall" : "leftSmall";
-      const localRot = seat === 1 ? Math.PI / 2 : -Math.PI / 2;
-      hand.forEach((tile, i) => {
-        // Phase-A: leave the discarded slot blank in the strip so
-        // the animated discard sprite (added below in the discard
-        // pond) reads as having "come from" this slot.
-        if (i === hiddenHandSlot) {
-          return;
+      const sidePlacements = layoutSideHand(
+        this.tileDesign,
+        seat as 1 | 3,
+        hand,
+        {
+          canReveal: this.showHands || forceReveal,
+          isFreshlyDrawn,
+          hiddenSlot: hiddenHandSlot,
         }
+      );
+      for (const p of sidePlacements) {
+        const sprite = factory.create({
+          atlasId: p.atlasId,
+          tile: p.tile,
+          width: p.sprite.width,
+          height: p.sprite.height,
+          rotation: p.sprite.rotation,
+        });
+        sprite.position.set(p.sprite.x, p.sprite.y);
+        // Wait-tint; a no-op for the `null` back tiles.
+        this.tintIfWait(sprite, p.tile);
         const wrap = new Container();
-        const extraGap = handGap > 0 && i === hand.length - 1 ? handGap : 0;
-        wrap.position.set(i * stride + extraGap, 0);
-        wrap.zIndex = zSign * i;
-        const reveal = (this.showHands || forceReveal) && tile !== null;
-        const tex = this.getTileTexture(
-          reveal ? faceSheet : backSheet,
-          reveal ? tile : null
-        );
-        const sprite = new Sprite(tex);
-        sprite.anchor.set(0.5, 0.5);
-        if (reveal) {
-          this.tintIfWait(sprite, tile);
-          // Discard-style rendering: the `rightSmall`/`leftSmall`
-          // sheets store the tile artwork already pre-rotated for
-          // the seat's view, sized as SIDE_TILE_W × SIDE_TILE_H
-          // (landscape source). We counter-rotate by `-localRot`
-          // so the sprite's screen-AABB after the handContainer's
-          // ±π/2 rotation matches a side discard tile exactly,
-          // then add π so the tile face points "down" toward the
-          // table center (an opponent's revealed hand should read
-          // upright from our perspective, not from theirs).
-          sprite.width = SIDE_TILE_W;
-          sprite.height = SIDE_TILE_H;
-          sprite.rotation = -localRot + Math.PI;
-          sprite.position.set(SIDE_TILE_H / 2, SIDE_TILE_W / 2);
-        } else {
-          // Face-down `sideHandL/R`: portrait source artwork sized
-          // (ts.w × ts.h). After `localRot` of ±π/2, the sprite's
-          // screen-AABB in local space becomes (ts.h × ts.w) —
-          // exactly the cell we want to fill.
-          sprite.width = ts.w;
-          sprite.height = ts.h;
-          sprite.rotation = localRot;
-          sprite.position.set(ts.h / 2, ts.w / 2);
-        }
         wrap.addChild(sprite);
+        wrap.position.set(p.wrap.x, p.wrap.y);
+        wrap.zIndex = p.zIndex;
         handContainer.addChild(wrap);
+      }
+    } else if (seat === 2) {
+      // Top hand (opponent across): face-down `topSmall` backs
+      // rotated 180°, or the face cell when revealed. No interaction.
+      const topHand = this.tileDesign.metrics.topHand;
+      const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
+      handWidth = hand.length * topHand.w + handGap;
+      const topPlacements = layoutTopHand(this.tileDesign, hand, {
+        canReveal: this.showHands || forceReveal,
+        isFreshlyDrawn,
+        hiddenSlot: hiddenHandSlot,
       });
+      for (const p of topPlacements) {
+        const sprite = factory.create({
+          atlasId: p.atlasId,
+          tile: p.tile,
+          width: p.sprite.width,
+          height: p.sprite.height,
+          rotation: p.sprite.rotation,
+        });
+        sprite.position.set(p.sprite.x, p.sprite.y);
+        this.tintIfWait(sprite, p.tile);
+        const wrap = new Container();
+        wrap.addChild(sprite);
+        wrap.position.set(p.wrap.x, p.wrap.y);
+        handContainer.addChild(wrap);
+      }
     } else {
-      // Bottom hand (seat 0) uses BIG tile sprites from the
-      // `ownHand` spritesheet; top hand (seat 2) uses SMALL back
-      // tiles from the `topSmall` sheet. Stride along the hand's
-      // long axis uses the layout's tile dims so the run fits the
-      // designed hand zone.
-      const t = seat === 0 ? layout.tileSelf : layout.tileHorizontal;
-      const spriteW = seat === 0 ? BIG_TILE_W : t.w;
-      const spriteH = seat === 0 ? BIG_TILE_H : t.h;
+      // Bottom hand (seat 0, focused): BIG face-up tiles from the
+      // `ownHand` sheet, positioned by the HandSorter and wired for
+      // drag / click / hover below.
+      const t = layout.tileSelf;
+      const spriteW = BIG_TILE_W;
+      const spriteH = BIG_TILE_H;
       const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
       hand.forEach((tile, i) => {
-        // Phase-A: leave the discarded slot blank in the strip so
-        // the animated discard sprite (added below in the discard
-        // pond) reads as having "come from" this slot.
+        // Phase-A: leave the discarded slot blank so the animated
+        // discard sprite reads as having "come from" this slot.
         if (i === hiddenHandSlot) {
           return;
         }
-        let tileSprite: Container;
-        if (seat === 0) {
-          // Face-up from the focused-hand sheet; sprite is sized
-          // to BIG_TILE_W × BIG_TILE_H (source × scale).
-          const tex = this.getTileTexture("ownHand", tile);
-          const sprite = new Sprite(tex);
-          sprite.width = spriteW;
-          sprite.height = spriteH;
-          this.tintIfWait(sprite, tile);
-          tileSprite = sprite;
-        } else {
-          // Top hand (seat 2) — face-down back tile from the
-          // `topSmall` sheet. The sheet is drawn upright, but the
-          // seat-2 `handContainer` is rotated 180°; counter-rotate
-          // the sprite so the tile reads right-side-up on screen.
-          //
-          // With `showHands` and a real tile, swap to the face-up
-          // cell of the same sheet (same orientation, just a
-          // different sub-frame).
-          const reveal = (this.showHands || forceReveal) && tile !== null;
-          const tex = this.getTileTexture("topSmall", reveal ? tile : null);
-          const sprite = new Sprite(tex);
-          sprite.anchor.set(0.5, 0.5);
-          sprite.width = spriteW;
-          sprite.height = spriteH;
-          sprite.rotation = Math.PI;
-          sprite.position.set(spriteW / 2, spriteH / 2);
-          if (reveal) {
-            this.tintIfWait(sprite, tile);
-          }
-          const wrap = new Container();
-          wrap.addChild(sprite);
-          tileSprite = wrap;
-        }
+        // Anchor top-left so hover tint reads directly off the sprite.
+        const tileSprite = factory.create({
+          atlasId: "ownHand",
+          tile,
+          width: spriteW,
+          height: spriteH,
+          anchor: 0,
+        });
+        this.tintIfWait(tileSprite, tile);
         const extraGap = handGap > 0 && i === hand.length - 1 ? handGap : 0;
         const slotX = i * (t.w + t.gap) + extraGap;
         // Seat 0: ask the HandSorter for the smoothly-eased x
@@ -4698,62 +4594,12 @@ export class TableRenderer {
     // by the extra width so they don't overlap.
     const discardContainer = new Container();
     discardContainer.sortableChildren = true;
-    const discardCols = 6;
-    // Per-orientation row overlap (in design pixels along the
-    // row-stacking axis):
-    //   - vertical tiles (bottom/top seats): rows nest visually so
-    //     successive rows overlap their predecessor.
-    //   - horizontal tiles (side seats): rows stack edge-to-edge.
-    // (Overlap constants are hoisted to module scope so the side-hand
-    // reveal path can reuse `DISCARD_ROW_OVERLAP_HORIZ`.)
-    // Each seat uses its own pre-rotated sheet, with the sprite
-    // counter-rotated so the source artwork displays in its
-    // natural source orientation in screen space (cancelling the
-    // discard container's per-seat rotation).
-    const discardSheets: Record<number, SheetKey> = {
-      0: "bottomSmall",
-      1: "rightSmall",
-      2: "topSmall",
-      3: "leftSmall",
-    };
-    const discardSheet = discardSheets[seat];
-    const containerRotations = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
-    const spriteCounterRot = -containerRotations[seat];
-    const isHorizontalDiscardSheet = seat === 1 || seat === 3;
-    // Side-seat (horizontal-artwork) discards use SIDE_TILE_*
-    // for screen-space dims; bottom/top use SMALL_TILE_* (bumped
-    // by +3 design px in width, height scaled to preserve the
-    // vertical-tile aspect).
-    //   screen W = local H across rows (since container rotates
-    //              local +x into screen ±y)
-    //   screen H = local W along row direction
-    const tileLocalW = isHorizontalDiscardSheet
-      ? SIDE_TILE_H
-      : SMALL_TILE_W + 3;
-    const tileLocalH = isHorizontalDiscardSheet
-      ? SIDE_TILE_W
-      : ((SMALL_TILE_W + 3) * SMALL_TILE_H) / SMALL_TILE_W;
-    // Row stride: vertical seats overlap their rows by
-    // DISCARD_ROW_OVERLAP_VERT (so successive rows nest); side
-    // seats stack rows with no overlap (the side-by-side overlap
-    // for side seats happens within a row, see `tileStride`).
-    const rowStride =
-      tileLocalH - (isHorizontalDiscardSheet ? 0 : DISCARD_ROW_OVERLAP_VERT);
     const riichiIdx = view.riichiTileIdx[seat];
-    let cursorX = 0;
-    let cursorRow = 0;
     // -----------------------------------------------------------------
-    // Discard slide animation hookup. When this seat has an
-    // active phase-A or phase-B animation targeting the very
-    // last discard, we skip painting its static wrap inside the
-    // forEach and snapshot the base (pre-nudge) position +
-    // tile-local dimensions for the overlay below the loop.
-    //
-    // Riichi-declaration tiles use a different sheet, rotation,
-    // and stride than regular discards; rather than thread that
-    // pipeline through the animation overlay we just snap the
-    // riichi tile statically (animation is suppressed via
-    // `!isRiichi` on the animator side and mirrored here).
+    // Discard slide animation hookup. When this seat has an active
+    // phase-A/B animation targeting the very last discard, we skip
+    // painting its static wrap and reuse its placement for the overlay
+    // below. Riichi tiles are never animated.
     // -----------------------------------------------------------------
     const lastIdx = discards.length - 1;
     const lastIsAnimating =
@@ -4761,76 +4607,38 @@ export class TableRenderer {
       lastIdx >= 0 &&
       seatDiscardAnim.discardIndex === lastIdx &&
       !(lastIdx === riichiIdx);
-    // Walls live on `this.root` with zIndex 0..2. While the
-    // last discard is slide-animating, lift the whole discard
-    // container above the walls so the flying tile passes *over*
-    // the wall in front of seat 0 instead of behind it. Reverts
-    // to the default (0) on the next frame once the animation
-    // finishes, restoring the resting wall-over-pond stacking.
+    // Lift the pond above the walls (zIndex 0..2) while a tile flies.
     if (lastIsAnimating) {
       discardContainer.zIndex = 5;
     }
-    let animLastCursorX = 0;
-    let animLastRowY = 0;
-    let animLastTileLocalW = tileLocalW;
-    let animLastTileLocalH = tileLocalH;
-    discards.forEach((tile, i) => {
-      const row = Math.floor(i / discardCols);
-      if (row !== cursorRow) {
-        cursorRow = row;
-        cursorX = 0;
+    // Pure container-local geometry per tile. Tint and the last-tile
+    // fresh-nudge / animation remain renderer-owned below.
+    const discardPlacements = layoutDiscards(
+      this.tileDesign,
+      seat as Seat,
+      discards,
+      riichiIdx
+    );
+    let animLastPlacement: TilePlacement | null = null;
+    for (const placement of discardPlacements) {
+      const i = placement.index;
+      if (lastIsAnimating && i === lastIdx) {
+        animLastPlacement = placement;
+        continue;
       }
-      const isRiichi = i === riichiIdx;
-      // Outer wrap: handles the existing container-local
-      // positioning (and the riichi +π/2 rotation).
-      const wrap = new Container();
-      // Within-row z-order for side seats: the tile lower on
-      // screen sits on top.
-      //   Seat 1 (right, container rot -π/2): cursor +x → screen
-      //     -y, so smaller i (smaller cursorX) is lower on screen
-      //     → smaller i on top → zIndex = -i.
-      //   Seat 3 (left, container rot +π/2): cursor +x → screen
-      //     +y, so larger i is lower on screen → larger i on top
-      //     → zIndex = i.
-      let withinRowZ = 0;
-      if (seat === 1) {
-        withinRowZ = -i;
-      } else if (seat === 3) {
-        withinRowZ = i;
-      }
-      wrap.zIndex = (seat === 2 ? -row : row) * 1000 + withinRowZ;
-      // The riichi tile is rotated +π/2 inside the wrap (see below).
-      // The regular discard sheet's artwork orientation produces
-      // wrong-oriented art when rotated by an extra π/2, so each
-      // seat's riichi tile reads from a sheet whose source
-      // orientation is perpendicular to the regular sheet:
-      //   - seat 0 (bottom, regular vertical art) → `leftSmall`
-      //   - seat 1 (right,  regular horizontal art) → `bottomSmall`
-      //   - seat 2 (top,    regular vertical art) → `leftSmall`
-      //   - seat 3 (left,   regular horizontal art) → `topSmall`
-      // After the wrap +π/2 and container rotation, the riichi tile
-      // reads upright (and with lighting matching the side it sits
-      // on, for seats 1/3).
-      const riichiSheetBySeat: Record<number, SheetKey> = {
-        0: "leftSmall",
-        1: "bottomSmall",
-        2: "leftSmall",
-        3: "topSmall",
-      };
-      const riichiSheet: SheetKey = riichiSheetBySeat[seat];
-      const sheetToUse = isRiichi ? riichiSheet : discardSheet;
-      const tex = this.getTileTexture(sheetToUse, tile);
-      const sprite = new Sprite(tex);
-      sprite.anchor.set(0.5, 0.5);
-      const tinted = this.tintIfWait(sprite, tile);
-      // Fresh-tsumogiri darken cue: very slight tint applied to a
-      // tile that was discarded immediately after being drawn,
-      // aged out after `TSUMOGIRI_FRESH_WINDOW` discards (counting
-      // the tsumogiri itself). Suppressed when the tile is
-      // already wait-tinted so the stronger red cue stays
-      // legible. Parallel-array lookups are defensive (?.) so
-      // older snapshots without per-discard flags fall through
-      // cleanly to no tint.
+      const sprite = factory.create({
+        atlasId: placement.atlasId,
+        tile: placement.tile,
+        width: placement.sprite.width,
+        height: placement.sprite.height,
+        rotation: placement.sprite.rotation,
+      });
+      sprite.position.set(placement.sprite.x, placement.sprite.y);
+      // Wait-tint + fresh-tsumogiri darken cue: the pure layout
+      // carries no tint. Tsumogiri is suppressed when already
+      // wait-tinted so the red cue stays legible; parallel-array
+      // lookups are defensive for older snapshots.
+      const tinted = this.tintIfWait(sprite, placement.tile);
       const wasTsumogiri = view.discardTsumogiri[seat]?.[i] ?? false;
       const discardOrdinal = view.discardOrdinals[seat]?.[i] ?? 0;
       const isFreshTsumogiri =
@@ -4839,112 +4647,21 @@ export class TableRenderer {
       if (!tinted && isFreshTsumogiri) {
         sprite.tint = TSUMOGIRI_FRESH_TINT;
       }
-      // Pre-rotation sprite dims chosen so that after sprite
-      // rotation (and container rotation) the on-screen bounds
-      // are tileLocalH × tileLocalW.
-      if (isRiichi && isHorizontalDiscardSheet) {
-        // Side-seat riichi (seats 1/3): vertical-art sheet,
-        // wrap +π/2 produces the tilted on-screen look. Pre-
-        // rotation dims = screen dims for a tilted side tile
-        // (long edge along wrap-local x = tileLocalH; short
-        // edge along wrap-local y = tileLocalW).
-        //
-        // Seat 3 (left) additionally needs +π so the riichi
-        // tile points outward like seat 1 does naturally.
-        sprite.width = SMALL_TILE_W;
-        sprite.height = SMALL_TILE_H;
-        sprite.rotation = seat === 3 ? Math.PI : 0;
-      } else if (isRiichi) {
-        // Bottom/top seat riichi (seats 0/2): horizontal-art
-        // sheet (leftSmall). Source aspect is 116:107, so we
-        // size to SIDE_TILE_W × SIDE_TILE_H (preserving aspect)
-        // rather than to the vertical-tile footprint. No wrap
-        // rotation; the sprite sits landscape in the row.
-        sprite.width = SIDE_TILE_W;
-        sprite.height = SIDE_TILE_H;
-        sprite.rotation = spriteCounterRot;
-      } else if (isHorizontalDiscardSheet) {
-        sprite.width = tileLocalH;
-        sprite.height = tileLocalW;
-        sprite.rotation = spriteCounterRot;
-      } else {
-        sprite.width = tileLocalW;
-        sprite.height = tileLocalH;
-        sprite.rotation = spriteCounterRot;
-      }
-      if (isRiichi && isHorizontalDiscardSheet) {
-        // Side-seat riichi: position the sprite within the wrap
-        // so that after the wrap +π/2 rotation (applied below),
-        // its container-x range is exactly [cursorX, cursorX +
-        // SMALL_TILE_H] and its container-y is centred on rowY +
-        // tileLocalH/2 (aligning with the row's regular tiles).
-        sprite.position.set(tileLocalH / 2, SMALL_TILE_H / 2);
-      } else if (isRiichi) {
-        // Bottom/top seat riichi: SIDE_TILE_W × SIDE_TILE_H
-        // footprint, vertically centred within the row's
-        // cross-axis band (tileLocalH).
-        sprite.position.set(SIDE_TILE_W / 2, tileLocalH / 2);
-      } else {
-        sprite.position.set(tileLocalW / 2, tileLocalH / 2);
-      }
+      const wrap = new Container();
       wrap.addChild(sprite);
-      const rowY = row * rowStride;
-      // Horizontal stride along the row direction. Vertical seats
-      // butt their tiles flush; side seats overlap consecutive
-      // tiles in a row by DISCARD_ROW_OVERLAP_HORIZ.
-      const tileStride =
-        tileLocalW - (isHorizontalDiscardSheet ? DISCARD_ROW_OVERLAP_HORIZ : 0);
-      // Riichi stride = the riichi tile's screen extent along the
-      // row direction. Side seats subtract DISCARD_ROW_OVERLAP_HORIZ
-      // so the next tile overlaps the riichi the same way regular
-      // tiles overlap each other; bottom/top seats advance by the
-      // riichi tile's landscape width (SIDE_TILE_W).
-      const riichiStride = isHorizontalDiscardSheet
-        ? SMALL_TILE_H - DISCARD_ROW_OVERLAP_HORIZ
-        : SIDE_TILE_W;
-      if (isRiichi) {
-        if (isHorizontalDiscardSheet) {
-          // Side seats: wrap +π/2 produces the tilted look. The
-          // wrap origin compensates so the sprite's container-x
-          // left edge lands exactly at cursorX.
-          wrap.rotation = Math.PI / 2;
-          wrap.position.set(cursorX + SMALL_TILE_H, rowY);
-        } else {
-          // Bottom/top seats: source is already landscape, no
-          // wrap rotation. Sprite sits at (cursorX, rowY) with
-          // its short edge (tileLocalW) along container +y.
-          wrap.rotation = 0;
-          wrap.position.set(cursorX, rowY);
-        }
-        cursorX += riichiStride;
-      } else {
-        wrap.position.set(cursorX, rowY);
-        cursorX += tileStride;
+      wrap.zIndex = placement.zIndex;
+      wrap.rotation = placement.wrap.rotation;
+      let wrapX = placement.wrap.x;
+      let wrapY = placement.wrap.y;
+      // Freshly-discarded tile: nudge +10/+10 so it reads as
+      // not-yet-settled until the next draw / call / hand boundary.
+      if (i === lastIdx && view.freshlyDiscardedSeat === seat) {
+        wrapX += 10;
+        wrapY += 10;
       }
-      // Freshly-discarded tile: nudge the last tile by +10 design
-      // px along the row (+x, "right" in the seat's frame) and
-      // across rows (+y, "bottom" / away from center) so it reads
-      // as not-yet-settled. Settled flush by the next draw / call
-      // / hand boundary via the store clearing `freshlyDiscardedSeat`.
-      //
-      // When the last discard is being slide-animated, we drop
-      // its static wrap entirely and let the post-loop overlay
-      // below draw a single interpolated copy. The base position
-      // (cursorX, rowY) and tile-local dims are snapshotted here
-      // so the overlay knows the phase-A→nudged and phase-B→final
-      // endpoints in discard-container-local coordinates.
-      if (lastIsAnimating && i === discards.length - 1) {
-        animLastCursorX = wrap.position.x;
-        animLastRowY = wrap.position.y;
-        animLastTileLocalW = tileLocalW;
-        animLastTileLocalH = tileLocalH;
-        return;
-      }
-      if (i === discards.length - 1 && view.freshlyDiscardedSeat === seat) {
-        wrap.position.set(wrap.position.x + 10, wrap.position.y + 10);
-      }
+      wrap.position.set(wrapX, wrapY);
       discardContainer.addChild(wrap);
-    });
+    }
     // Position the discard container inside `layout.discards[seat]`.
     // The container's local axes have tile 0 at (0, 0), +x along
     // the row direction, +y across rows. After rotation, the
@@ -5003,10 +4720,10 @@ export class TableRenderer {
     // Phase B ("to-final"): interpolate from the +10/+10 nudged
     // position back to the flush row position.
     // -----------------------------------------------------------------
-    if (lastIsAnimating && seatDiscardAnim) {
+    if (lastIsAnimating && seatDiscardAnim && animLastPlacement) {
       const progress = this.animator.getProgress(seat);
-      const finalX = animLastCursorX;
-      const finalY = animLastRowY;
+      const finalX = animLastPlacement.wrap.x;
+      const finalY = animLastPlacement.wrap.y;
       const nudgedX = finalX + 10;
       const nudgedY = finalY + 10;
       let posX: number;
@@ -5030,44 +4747,33 @@ export class TableRenderer {
         posX = source.x + (nudgedX - source.x) * progress;
         posY = source.y + (nudgedY - source.y) * progress;
       }
-      const wrap = new Container();
-      const tex = this.getTileTexture(discardSheet, seatDiscardAnim.tile);
-      const sprite = new Sprite(tex);
-      sprite.anchor.set(0.5, 0.5);
-      // Tsumogiri fresh-tint: keep the animated tile consistent
-      // with how the static last-discard would have looked.
+      // Reuse the skipped last placement so the flying tile matches
+      // exactly what the static loop would have drawn; only the tile
+      // string comes from the animator.
+      const sprite = factory.create({
+        atlasId: animLastPlacement.atlasId,
+        tile: seatDiscardAnim.tile,
+        width: animLastPlacement.sprite.width,
+        height: animLastPlacement.sprite.height,
+        rotation: animLastPlacement.sprite.rotation,
+      });
+      sprite.position.set(
+        animLastPlacement.sprite.x,
+        animLastPlacement.sprite.y
+      );
+      // Tsumogiri fresh-tint: keep the animated tile consistent with
+      // how the static last-discard would have looked.
       if (seatDiscardAnim.isTsumogiri) {
         sprite.tint = TSUMOGIRI_FRESH_TINT;
       }
-      if (isHorizontalDiscardSheet) {
-        sprite.width = animLastTileLocalH;
-        sprite.height = animLastTileLocalW;
-      } else {
-        sprite.width = animLastTileLocalW;
-        sprite.height = animLastTileLocalH;
-      }
-      sprite.rotation = spriteCounterRot;
-      sprite.position.set(animLastTileLocalW / 2, animLastTileLocalH / 2);
+      const wrap = new Container();
       wrap.addChild(sprite);
       wrap.position.set(posX, posY);
-      // Match the z-ordering the static loop would have used for
-      // this same (last) tile: seat 2's rows stack the other way
-      // (earlier row on top, since the container is rotated π
-      // and later rows end up higher on screen), and side seats
-      // also have a within-row ordering so neighbours overlap
-      // with the lower-on-screen tile on top. Forcing zIndex to
-      // a flat very-high value put the animated tile in front of
-      // the previous row (top seat) or in front of its same-row
-      // neighbour (right seat), breaking the pond perspective.
-      const lastIdx = discards.length - 1;
-      const lastRow = Math.floor(lastIdx / discardCols);
-      let lastWithinRowZ = 0;
-      if (seat === 1) {
-        lastWithinRowZ = -lastIdx;
-      } else if (seat === 3) {
-        lastWithinRowZ = lastIdx;
-      }
-      wrap.zIndex = (seat === 2 ? -lastRow : lastRow) * 1000 + lastWithinRowZ;
+      wrap.rotation = animLastPlacement.wrap.rotation;
+      // Match the z-order the static loop would have used for this
+      // same (last) tile so it doesn't jump in front of its row
+      // neighbour (side seats) or the previous row (top seat).
+      wrap.zIndex = animLastPlacement.zIndex;
       discardContainer.addChild(wrap);
     }
 
@@ -5343,7 +5049,7 @@ export class TableRenderer {
     if (meld.type === "ankan") {
       const tiles = meld.tiles;
       let ax = 0;
-      const mt = meldTileDims(seat);
+      const mt = meldTileDims(this.tileDesign, seat);
       tiles.forEach((tile, i) => {
         const faceUp = !(i === 0 || i === tiles.length - 1);
         const sprite = faceUp
@@ -5363,7 +5069,7 @@ export class TableRenderer {
       // Shouldn't happen for chi/pon/kan, but render defensively as a
       // plain row.
       let dx = 0;
-      const mt = meldTileDims(seat);
+      const mt = meldTileDims(this.tileDesign, seat);
       meld.tiles.forEach((tile, i) => {
         const sprite = this.drawMeldTile(tile, seat);
         sprite.position.set(dx, 0);
@@ -5444,21 +5150,17 @@ export class TableRenderer {
     }
     let xCursor = 0;
     let calledX = 0;
-    const mt = meldTileDims(seat);
+    const mt = meldTileDims(this.tileDesign, seat);
     // Tilted called tile uses the NEXT-CLOCKWISE seat's sheet so it
     // visually points outward toward the player from whom the tile
     // was claimed (Tenhou convention). Its size matches that
     // seat's discard dims (which may differ from the strip seat's
     // dims for side strips).
-    const nextSheets: Record<number, SheetKey> = {
-      0: "rightSmall",
-      1: "topSmall",
-      2: "leftSmall",
-      3: "bottomSmall",
-    };
-    const tiltedSheet = nextSheets[seat];
+    const tiltedSheet = this.tileDesign.sheets.meld[
+      ((seat + 1) % 4) as Seat
+    ] as SheetKey;
     const tiltedSeat = (seat + 1) % 4;
-    const tilted = meldTileDims(tiltedSeat);
+    const tilted = meldTileDims(this.tileDesign, tiltedSeat);
     slots.forEach((slot, i) => {
       const sprite = slot.rotated
         ? this.drawMeldTile(slot.tile, seat, tiltedSheet)
@@ -5698,8 +5400,11 @@ export class TableRenderer {
     const BTN_H = 64;
     const BTN_GAP = 14;
     const felt = this.feltBoxDesign;
-    const RIGHT_EDGE = felt ? felt.x + felt.w - 16 : DESIGN_W - 140;
-    const BASE_Y = felt ? felt.y + felt.h - 240 : DESIGN_H - 220;
+    if (!felt) {
+      return;
+    }
+    const RIGHT_EDGE = felt.x + felt.w - 16;
+    const BASE_Y = felt.y + felt.h - 240;
 
     const strip = new Container();
     // Walls set `wallContainer.zIndex` up to 2 via the root's
@@ -6021,28 +5726,15 @@ export class TableRenderer {
       sideHandR: 1,
     };
     const dimsSeat = sheetOverride ? sheetSeatBySheet[sheetOverride] : seat;
-    const dims = meldTileDims(dimsSeat);
-    const seatSheets: Record<number, SheetKey> = {
-      0: "bottomSmall",
-      1: "rightSmall",
-      2: "topSmall",
-      3: "leftSmall",
-    };
-    // For face-down tiles (ankan outer slots), seats 2 and 3 fall
-    // back to the seat-0 / seat-1 sheets — matching the wall's
-    // back-tile sheet map. `topSmall` / `leftSmall` don't carry a
-    // back-tile cell at (row 3, col 0); the back artwork is the
-    // same regardless of seat orientation since it's rotationally
-    // symmetric.
-    const faceDownSeatSheets: Record<number, SheetKey> = {
-      0: "bottomSmall",
-      1: "rightSmall",
-      2: "bottomSmall",
-      3: "rightSmall",
-    };
+    const dims = meldTileDims(this.tileDesign, dimsSeat);
+    // Sheets come from the active design; face-down (ankan outer)
+    // tiles read the back-sheet map. Casts are safe: the design's
+    // atlas ids are exactly the legacy sheet keys.
     const sheet =
       sheetOverride ??
-      (tile === null ? faceDownSeatSheets[seat] : seatSheets[seat]);
+      ((tile === null
+        ? this.tileDesign.sheets.meldFaceDown[seat as Seat]
+        : this.tileDesign.sheets.meld[seat as Seat]) as SheetKey);
     const tex = this.getTileTexture(sheet, tile);
     const c = new Container();
     const sprite = new Sprite(tex);
@@ -6078,63 +5770,17 @@ export class TableRenderer {
   /**
    * Build (or fetch from cache) the sub-texture for a single tile
    * on a given sheet. For single-tile sheets the `tile` argument
-   * is ignored. Returns `null` if the sheet hasn't loaded yet.
+   * is ignored. Delegates to the texture store; atlas ids match the
+   * legacy sheet keys.
    */
   private getTileTexture(sheet: SheetKey, tile: string | null): Texture {
-    const entry = this.sheets.get(sheet);
-    if (!entry) {
-      // mount() awaits all sheet loads before this.root is created,
-      // so any render after mount must find every sheet present.
-      throw new Error(`TableRenderer: sheet ${sheet} not loaded`);
+    if (!this.textureStore) {
+      // mount() loads the store before this.root is created, so any
+      // render after mount must find it present.
+      throw new Error("TableRenderer: texture store not loaded");
     }
-    if (!IS_MULTI_TILE[sheet]) {
-      return entry.texture;
-    }
-    const cell = tileSheetCell(tile);
-    const key = `${sheet}:${cell.row}:${cell.col}`;
-    const cached = this.tileTextures.get(key);
-    if (cached) {
-      return cached;
-    }
-    // Inset the frame by 0.5 px on each side to prevent neighboring
-    // cells from bleeding into the sampled texels when the sprite
-    // is downscaled with antialiasing.
-    const inset = 0.5;
-    const frame = new Rectangle(
-      cell.col * entry.cellW + inset,
-      cell.row * entry.cellH + inset,
-      entry.cellW - inset * 2,
-      entry.cellH - inset * 2
-    );
-    const tex = new Texture({ source: entry.texture.source, frame });
-    this.tileTextures.set(key, tex);
-    return tex;
+    return this.textureStore.getTexture(sheet, tile);
   }
-}
-
-/**
- * Local-space tile dimensions for a meld in the given seat's
- * strip. Local +x is the strip's reading direction. After the
- * meld container's per-seat rotation, on-screen tile size matches
- * the seat's discard tile size:
- *   - bottom/top (0/2): screen W=SMALL_TILE_W, screen H=SMALL_TILE_H
- *   - side (1/3):       screen W=SIDE_TILE_W, screen H=SIDE_TILE_H
- *
- * The local +x dimension equals the long-axis stride (the
- * direction tiles advance along), so for side seats the local
- * "width" is actually the short side-screen-height (53.x), and
- * the local "height" (cross axis) is the long side-screen-width
- * (58).
- */
-function meldTileDims(seat: number): { w: number; h: number } {
-  const isSide = seat === 1 || seat === 3;
-  if (!isSide) {
-    return { w: SMALL_TILE_W, h: SMALL_TILE_H };
-  }
-  // Container rotation ±π/2 swaps width/height between local and
-  // screen. Local +x maps to screen ∓y, so local width = screen
-  // height and local height = screen width.
-  return { w: SIDE_TILE_H, h: SIDE_TILE_W };
 }
 
 const SUIT_ORDER: Record<string, number> = { m: 0, p: 1, s: 2, z: 3 }; /**

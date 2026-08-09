@@ -38,12 +38,9 @@
  *      seat 0 (bottom / you)
  */
 
-export interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+import { boundingBox, type Rect, type Size } from "./tableGeometry";
+
+export type { Rect };
 
 export interface TileDims {
   /** Short edge of a face-up tile. */
@@ -307,6 +304,158 @@ export function computeTableLayout(
     playerInfo: [piBR, piTR, piTL, piBL],
     wall: [wallBottom, wallRight, wallTop, wallLeft],
     hands: [handBottom, handRight, handTop, handLeft],
+    tile: TILE_VERTICAL,
+    wallTile: TILE_VERTICAL,
+    tileVertical: TILE_VERTICAL,
+    tileHorizontal: TILE_HORIZONTAL,
+    tileSelf: TILE_SELF,
+    tileSide: TILE_SIDE,
+    tileSideOverlap: TILE_SIDE_OVERLAP,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Switchable layout config (Phase 4)
+//
+// A `TableLayoutConfig` owns only *where* the semantic zones sit and
+// how the overlay stack is ordered. Tile artwork/metrics live in the
+// tile design; how tiles fit inside a zone is decided at area-layout
+// time. Zone IDs, seat mapping, and layer names are invariant across
+// presets; rectangle geometry and viewport may vary.
+// ---------------------------------------------------------------------------
+
+/** The invariant semantic zones, per seat where applicable. */
+export interface TableZones {
+  center: Rect;
+  hands: [Rect, Rect, Rect, Rect];
+  discards: [Rect, Rect, Rect, Rect];
+  walls: [Rect, Rect, Rect, Rect];
+  playerInfo: [Rect, Rect, Rect, Rect];
+}
+
+/** Semantic z-index tiers shared across presets. Values are the
+ * legacy renderer's; a preset may override where a different
+ * stacking is required. */
+export interface LayerTiers {
+  discardLift: number;
+  handFocused: number;
+  actionButtons: number;
+  nameplate: number;
+  resultOverlay: number;
+  draggedTile: number;
+}
+
+export const DEFAULT_LAYER_TIERS: LayerTiers = {
+  discardLift: 5,
+  handFocused: 10,
+  actionButtons: 50,
+  nameplate: 100,
+  resultOverlay: 1000,
+  draggedTile: 1_000_000,
+};
+
+export interface TableLayoutConfig {
+  id: string;
+  displayName: string;
+  /** Design-space viewport the zones are expressed in. */
+  viewport: Size;
+  zones: TableZones;
+  /** Explicit felt rect; when omitted it is derived (see below). */
+  felt?: Rect;
+  layers: LayerTiers;
+}
+
+/** Felt/background rect: explicit when set, else the bounding box of
+ * every wall band and hand strip (matches the legacy renderer, which
+ * derived the felt from `boundingBox([...wall, ...hands])`). */
+export function resolveFelt(config: TableLayoutConfig): Rect {
+  if (config.felt) {
+    return config.felt;
+  }
+  return boundingBox([...config.zones.walls, ...config.zones.hands]);
+}
+
+function isFiniteRect(r: Rect): boolean {
+  return (
+    Number.isFinite(r.x) &&
+    Number.isFinite(r.y) &&
+    Number.isFinite(r.w) &&
+    Number.isFinite(r.h)
+  );
+}
+
+/**
+ * Validate a layout config, returning human-readable errors (empty
+ * when valid). Note: zones may legitimately extend outside the
+ * viewport (the current top-hand band starts at negative x), so
+ * viewport containment is intentionally not enforced here. The
+ * `playerInfo` corner pockets may collapse to zero size (the current
+ * preset has `DISCARD_HORIZ_W === CENTER_W`), so only the
+ * tile-bearing zones are required to have positive area.
+ */
+export function validateTableLayoutConfig(
+  config: TableLayoutConfig
+): string[] {
+  const errors: string[] = [];
+  if (!(config.viewport.w > 0) || !(config.viewport.h > 0)) {
+    errors.push("viewport must have positive dimensions");
+  }
+  const positiveZones: Array<[string, Rect]> = [
+    ["center", config.zones.center],
+  ];
+  const tileBearingKeys = ["hands", "discards", "walls"] as const;
+  for (const k of tileBearingKeys) {
+    config.zones[k].forEach((r, i) => positiveZones.push([`${k}[${i}]`, r]));
+  }
+  const finiteOnlyZones: Array<[string, Rect]> = config.zones.playerInfo.map(
+    (r, i) => [`playerInfo[${i}]`, r]
+  );
+  for (const [name, r] of [...positiveZones, ...finiteOnlyZones]) {
+    if (!isFiniteRect(r)) {
+      errors.push(`zone ${name} has non-finite coordinates`);
+    }
+  }
+  for (const [name, r] of positiveZones) {
+    if (!(r.w > 0) || !(r.h > 0)) {
+      errors.push(`zone ${name} has non-positive size`);
+    }
+  }
+  for (const [name, v] of Object.entries(config.layers)) {
+    if (!Number.isFinite(v)) {
+      errors.push(`layer tier ${name} must be finite`);
+    }
+  }
+  return errors;
+}
+
+/** Throwing wrapper around {@link validateTableLayoutConfig}. */
+export function assertValidTableLayoutConfig(
+  config: TableLayoutConfig
+): TableLayoutConfig {
+  const errors = validateTableLayoutConfig(config);
+  if (errors.length > 0) {
+    throw new Error(
+      `Invalid table layout "${config.id}":\n- ${errors.join("\n- ")}`
+    );
+  }
+  return config;
+}
+
+/**
+ * Build the render-time `TableLayout` from a layout config: the
+ * config supplies the viewport + zone rects, while tile metrics are
+ * the fixed design-space values (not yet part of the switchable
+ * config). For the current preset this is byte-identical to
+ * `computeTableLayout()`.
+ */
+export function tableLayoutFromConfig(config: TableLayoutConfig): TableLayout {
+  return {
+    table: { x: 0, y: 0, w: config.viewport.w, h: config.viewport.h },
+    center: config.zones.center,
+    discards: config.zones.discards,
+    playerInfo: config.zones.playerInfo,
+    wall: config.zones.walls,
+    hands: config.zones.hands,
     tile: TILE_VERTICAL,
     wallTile: TILE_VERTICAL,
     tileVertical: TILE_VERTICAL,

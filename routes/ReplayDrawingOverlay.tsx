@@ -1,9 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Stroke } from "~/game/replay/reviewDrawing";
-import {
-  DESIGN_W as TABLE_DESIGN_W,
-  DESIGN_H as TABLE_DESIGN_H,
-} from "~/game/client/pixi/tableLayout";
+import { ACTIVE_TABLE_LAYOUT } from "~/game/client/pixi/layouts/activeTableLayout";
 
 /**
  * Minimum spacing, in CSS pixels, between consecutive captured stroke
@@ -11,6 +8,11 @@ import {
  * pointer path, large enough to avoid storing redundant samples.
  */
 const MIN_SAMPLE_CSS_PX = 1;
+
+/** Default drawable aspect = the active table layout's viewport, so
+ * strokes stay locked to the table through window resizes. */
+const TABLE_ASPECT =
+  ACTIVE_TABLE_LAYOUT.viewport.w / ACTIVE_TABLE_LAYOUT.viewport.h;
 
 interface ReplayDrawingOverlayProps {
   /** Strokes to render. Coordinates are in normalized [0..1] space. */
@@ -28,8 +30,7 @@ interface ReplayDrawingOverlayProps {
   /**
    * Aspect ratio (width / height) the drawable area should be
    * letterboxed to within the parent container. Defaults to the
-   * Pixi table's design aspect (`tableLayout.DESIGN_W /
-   * DESIGN_H`, ≈ 1.08 — close to a square) so the strokes stay
+   * active table layout's viewport aspect so the strokes stay
    * locked to the table when the window resizes. Stored stroke
    * coordinates are normalized against this letterboxed area,
    * not the raw container, so the artwork follows the table
@@ -60,7 +61,7 @@ export function ReplayDrawingOverlay({
   drawing,
   color = "#ff3b3b",
   width = 3,
-  aspectRatio = TABLE_DESIGN_W / TABLE_DESIGN_H,
+  aspectRatio = TABLE_ASPECT,
   onStrokesChange,
 }: ReplayDrawingOverlayProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
