@@ -38,7 +38,6 @@ const TENHOU_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const KEEPALIVE_MS = 10_000;
 const RECONNECT_MS = 3_000;
-export const WGC_ACTION_SPACING_MS = 180;
 
 export interface TimedTenhouFrame {
   delayMs: number;
@@ -46,9 +45,9 @@ export interface TimedTenhouFrame {
 }
 
 /**
- * Split a live WGC payload into individual actions. Numeric nodes describe
- * time that already elapsed between live WGC deliveries, so sleeping for them
- * here would count the same player think time twice.
+ * Split a live WGC payload into individual actions. Numeric nodes are delays
+ * before the following action. Tenhou sends enough buffered playback in each
+ * WGC group to keep its spectator timeline behind the live game.
  */
 export function splitTimedWgcFrame(
   frame: Record<string, unknown>
@@ -59,14 +58,17 @@ export function splitTimedWgcFrame(
   }
 
   const frames: TimedTenhouFrame[] = [];
+  let pendingDelayMs = 0;
   for (const child of childNodes) {
     if (typeof child === "number" && Number.isFinite(child)) {
+      pendingDelayMs += Math.max(0, child);
       continue;
     }
     frames.push({
-      delayMs: frames.length === 0 ? 0 : WGC_ACTION_SPACING_MS,
+      delayMs: pendingDelayMs,
       frame: { ...frame, childNodes: [child] },
     });
+    pendingDelayMs = 0;
   }
   return frames;
 }

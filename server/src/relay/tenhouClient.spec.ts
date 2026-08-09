@@ -1,27 +1,21 @@
 import { describe, expect, it } from "vitest";
-import {
-  splitTimedWgcFrame,
-  WGC_ACTION_SPACING_MS,
-} from "./tenhouClient";
+import { splitTimedWgcFrame } from "./tenhouClient";
 
 describe("splitTimedWgcFrame", () => {
-  it("does not replay a leading interval that elapsed before delivery", () => {
+  it("applies a leading delay before the first action", () => {
     const frames = splitTimedWgcFrame({
       tag: "WGC",
       childNodes: [6563, { tag: "D4" }, { tag: "U93" }],
     });
 
-    expect(frames.map((entry) => entry.delayMs)).toEqual([
-      0,
-      WGC_ACTION_SPACING_MS,
-    ]);
+    expect(frames.map((entry) => entry.delayMs)).toEqual([6563, 0]);
     expect(frames.map((entry) => entry.frame.childNodes)).toEqual([
       [{ tag: "D4" }],
       [{ tag: "U93" }],
     ]);
   });
 
-  it("does not replay an embedded elapsed interval", () => {
+  it("applies each embedded delay before the following action", () => {
     const frames = splitTimedWgcFrame({
       tag: "WGC",
       childNodes: [
@@ -33,23 +27,15 @@ describe("splitTimedWgcFrame", () => {
       ],
     });
 
-    expect(frames.map((entry) => entry.delayMs)).toEqual([
-      0,
-      WGC_ACTION_SPACING_MS,
-      WGC_ACTION_SPACING_MS,
-      WGC_ACTION_SPACING_MS,
-    ]);
+    expect(frames.map((entry) => entry.delayMs)).toEqual([0, 0, 1531, 0]);
   });
 
-  it("leaves observed think time to the live WGC delivery cadence", () => {
+  it("preserves the observed delay before Jordan discards", () => {
     const frames = splitTimedWgcFrame({
       tag: "WGC",
       childNodes: [5031, { tag: "G110" }, { tag: "T46" }],
     });
 
-    expect(frames.map((entry) => entry.delayMs)).toEqual([
-      0,
-      WGC_ACTION_SPACING_MS,
-    ]);
+    expect(frames.map((entry) => entry.delayMs)).toEqual([5031, 0]);
   });
 });
