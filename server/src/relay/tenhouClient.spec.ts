@@ -21,7 +21,7 @@ describe("splitTimedWgcFrame", () => {
     ]);
   });
 
-  it("preserves delays between actions and separates adjacent actions", () => {
+  it("ignores historical delays and separates every received action", () => {
     const frames = splitTimedWgcFrame({
       tag: "WGC",
       childNodes: [
@@ -36,7 +36,7 @@ describe("splitTimedWgcFrame", () => {
     expect(frames.map((entry) => entry.delayMs)).toEqual([
       0,
       WGC_ACTION_SPACING_MS,
-      1531,
+      WGC_ACTION_SPACING_MS,
       WGC_ACTION_SPACING_MS,
     ]);
   });

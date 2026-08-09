@@ -38,7 +38,7 @@ const TENHOU_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const KEEPALIVE_MS = 10_000;
 const RECONNECT_MS = 3_000;
-export const WGC_ACTION_SPACING_MS = 120;
+export const WGC_ACTION_SPACING_MS = 180;
 
 export interface TimedTenhouFrame {
   delayMs: number;
@@ -46,9 +46,10 @@ export interface TimedTenhouFrame {
 }
 
 /**
- * Split a live WGC payload into renderable actions. The delay before the first
- * node has already elapsed on the wire, while numeric values between nodes are
- * presentation delays that still need to be preserved.
+ * Split a live WGC payload into renderable actions. Numeric delays describe
+ * time that elapsed before Tenhou delivered the batch, so replaying them here
+ * creates an ever-growing queue. Drain received actions at a short fixed
+ * cadence instead, giving React and Pixi one render opportunity per action.
  */
 export function splitTimedWgcFrame(
   frame: Record<string, unknown>
@@ -59,23 +60,14 @@ export function splitTimedWgcFrame(
   }
 
   const frames: TimedTenhouFrame[] = [];
-  let hasAction = false;
-  let pendingDelayMs = 0;
   for (const child of childNodes) {
     if (typeof child === "number" && Number.isFinite(child)) {
-      if (hasAction) {
-        pendingDelayMs += Math.max(0, child);
-      }
       continue;
     }
     frames.push({
-      delayMs: hasAction
-        ? Math.max(WGC_ACTION_SPACING_MS, pendingDelayMs)
-        : 0,
+      delayMs: frames.length === 0 ? 0 : WGC_ACTION_SPACING_MS,
       frame: { ...frame, childNodes: [child] },
     });
-    hasAction = true;
-    pendingDelayMs = 0;
   }
   return frames;
 }
