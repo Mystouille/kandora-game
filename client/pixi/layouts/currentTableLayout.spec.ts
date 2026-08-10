@@ -21,10 +21,12 @@ describe("currentTableLayout", () => {
     expect(currentTableLayout.viewport).toEqual({ w: 1000, h: 926 });
   });
 
-  it("reproduces every legacy zone rect", () => {
+  it("reproduces the legacy zone rects except the focused hand offset", () => {
     const legacy = computeTableLayout();
     expect(currentTableLayout.zones.center).toEqual(legacy.center);
-    expect(currentTableLayout.zones.hands).toEqual(legacy.hands);
+    expect(currentTableLayout.zones.hands.slice(1)).toEqual(
+      legacy.hands.slice(1)
+    );
     expect(currentTableLayout.zones.discards).toEqual(legacy.discards);
     expect(currentTableLayout.zones.walls).toEqual(legacy.wall);
     expect(currentTableLayout.zones.playerInfo).toEqual(legacy.playerInfo);
@@ -37,11 +39,11 @@ describe("currentTableLayout", () => {
     expect(topHand.x + topHand.w).toBe(790);
   });
 
-  it("insets the focused hand left edge without moving its right edge", () => {
+  it("shifts the whole focused hand zone 35 design pixels left", () => {
     const focusedHand = currentTableLayout.zones.hands[0];
-    expect(focusedHand.x).toBe(80);
+    expect(focusedHand.x).toBe(45);
     expect(focusedHand.w).toBe(920);
-    expect(focusedHand.x + focusedHand.w).toBe(1000);
+    expect(focusedHand.x + focusedHand.w).toBe(965);
   });
 
   it("extends the side hands toward the bottom edge", () => {
@@ -68,10 +70,13 @@ describe("currentTableLayout", () => {
     expect(ACTIVE_TABLE_LAYOUT).toBe(currentTableLayout);
   });
 
-  it("rebuilds a TableLayout byte-identical to computeTableLayout", () => {
-    expect(tableLayoutFromConfig(currentTableLayout)).toEqual(
-      computeTableLayout()
-    );
+  it("rebuilds a TableLayout with the focused hand offset", () => {
+    const layout = tableLayoutFromConfig(currentTableLayout);
+    const legacy = computeTableLayout();
+    expect(layout).toEqual({
+      ...legacy,
+      hands: currentTableLayout.zones.hands,
+    });
   });
 
   it("switches viewport and zones for an alternate preset", () => {

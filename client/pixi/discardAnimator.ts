@@ -9,7 +9,7 @@
  *     the duration), and slides to the +10/+10 "nudged" pond
  *     position the static renderer normally draws.
  *
- *   Phase B ("to-final", after phase A lands or on the next `draw`):
+ *   Phase B ("to-final", on the next `draw`):
  *     The same tile slides from the nudged position to its
  *     final, flush-with-the-row position.
  *
@@ -35,10 +35,9 @@ import type { MatchView } from "../store";
 /** Number of seats. Matches the rest of the renderer. */
 const SEAT_COUNT = 4;
 
-/** Discard slide timings (ms). Fixed and self-contained: phase A slides
- * hand → nudge, phase B settles nudge → final right after, so the whole
- * discard always animates for the same duration regardless of the wait
- * before the next player acts. */
+/** Discard slide timings (ms). Phase A slides hand → nudge and remains
+ * there until the next draw proves the tile was not called. Phase B then
+ * settles nudge → final. */
 export const PHASE_A_DURATION_MS = 350;
 export const PHASE_B_DURATION_MS = 150;
 /** Draw-in slide: the freshly drawn tile enters sliding from the wall
@@ -251,8 +250,9 @@ export class DiscardAnimator {
    * Enable / disable the live-spectator "sequenced" timeline. When
    * on, discards hold at a hover and the following draw is delayed
    * so the two never animate on top of each other (see the
-   * module-level {@link SEQ_SLIDE_MS} doc). Off (default) keeps the
-   * self-contained discard used by live play and replay.
+   * module-level {@link SEQ_SLIDE_MS} doc). Off (default) starts the
+   * following draw immediately; in both modes that draw triggers the
+   * discard's move from hover to its final position.
    */
   setSequenced(flag: boolean): void {
     if (this.sequenced === flag) {
@@ -409,6 +409,7 @@ export class DiscardAnimator {
 
     // Drop completed animations (we still scan them below to
     // decide phase transitions, so we drop *after* the diff).
+    let nonSequencedDrawStarted = false;
     if (!snap && prev) {
       for (let seat = 0; seat < SEAT_COUNT; seat++) {
         const prevDiscards = prev.discards[seat] ?? [];
@@ -460,43 +461,11 @@ export class DiscardAnimator {
           });
         }
 
-        // --- (b) Phase A → Phase B. Non-sequenced modes settle on a
-        // fixed timer once the slide elapses (self-contained discard).
-        // Sequenced mode instead waits for the next draw to begin — see
-        // the settle pass after this loop — so a tile that gets called
-        // never nudges to its flush slot first. The static renderer no
-        // longer nudges the fresh discard, so settling to `final` here
-        // causes no snap-back.
-        const existing = this.anims.get(seat);
-        if (
-          !this.sequenced &&
-          existing &&
-          existing.phase === "to-nudge" &&
-          currLen > 0 &&
-          now - existing.startMs >= PHASE_A_DURATION_MS
-        ) {
-          // The static last-discard index might shift if a new
-          // discard happens in the same frame (rare; would imply
-          // two discards per frame, which the wire protocol
-          // doesn't produce). Re-anchor to the current last index.
-          //
-          // We keep `phaseASnapshot` populated through phase B
-          // so the hand stays gapped while the discard tile
-          // slides to its flush position; the gap closes only
-          // once the animation is dropped after phase B elapses.
-          this.anims.set(seat, {
-            ...existing,
-            discardIndex: currLen - 1,
-            phase: "to-final",
-            startMs: now,
-            durationMs: PHASE_B_DURATION_MS,
-          });
-        }
-
         // --- (d) Fresh draw? Start the wall-slide draw animation. ---
         // A seat draws at the start of its turn (freshlyDrawnSeat set)
         // and discards at the end; the two never collide in one frame.
         if (view.freshlyDrawnSeat === seat && prev.freshlyDrawnSeat !== seat) {
+          nonSequencedDrawStarted = !this.sequenced;
           // Sequenced mode delays the slide until the preceding discard
           // has slid + hovered (serial clock), holding the drawn tile
           // hidden until then; otherwise it slides immediately.
@@ -512,21 +481,24 @@ export class DiscardAnimator {
       }
     }
 
-    // Sequenced: a hovering discard settles to its flush slot ONLY once
-    // the following draw actually begins — proof nobody called it. A
-    // called tile is claimed straight from the hover (hard reset); a
-    // hand's last discard clears at `hand_end`. Neither nudges home
-    // first. Runs after the loop so this frame's draws are scheduled.
-    if (this.sequenced && !snap) {
+    // A hovering discard settles to its flush slot ONLY once the following
+    // draw begins, proving nobody called it. In sequenced mode that means
+    // the scheduled draw slide has actually started; otherwise the draw
+    // event itself is the trigger. A called tile is claimed straight from
+    // hover by the hard reset above. Runs after the loop so this frame's
+    // draw animation is available.
+    if (!snap) {
       for (const [seat, anim] of this.anims) {
         if (anim.phase !== "to-nudge") {
           continue;
         }
-        let nextDrawBegun = false;
-        for (const d of this.drawAnims.values()) {
-          if (d.startMs > anim.startMs && now >= d.startMs) {
-            nextDrawBegun = true;
-            break;
+        let nextDrawBegun = nonSequencedDrawStarted;
+        if (this.sequenced) {
+          for (const d of this.drawAnims.values()) {
+            if (d.startMs > anim.startMs && now >= d.startMs) {
+              nextDrawBegun = true;
+              break;
+            }
           }
         }
         if (nextDrawBegun) {
@@ -613,16 +585,6 @@ export class DiscardAnimator {
         return true;
       }
       if (anim.phase === "to-nudge" && anim.phaseASnapshot !== null) {
-        return true;
-      }
-      // Sequenced: keep pumping through the hover so the deterministic
-      // +1s settle still fires when no draw follows (e.g. the last
-      // discard of a hand). Covers a pending discard's future start.
-      if (
-        this.sequenced &&
-        anim.phase === "to-nudge" &&
-        now - anim.startMs < SEQ_SLIDE_MS + SEQ_HOVER_MS + PHASE_B_DURATION_MS
-      ) {
         return true;
       }
     }

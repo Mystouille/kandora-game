@@ -10,6 +10,7 @@ import { useMatchStore, type MatchView } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
+import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   LivePlayMenu,
   buildInitialLivePlayMenuFlags,
@@ -665,11 +666,6 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
     number | null
   >(null);
   const [eyeHeld, setEyeHeld] = useState(false);
-  // While the live win-info panel is showing
-  // (`view.lastHandResult` non-null), pressing anywhere on the
-  // canvas hides it; releasing brings it back. Mirrors the
-  // replay route's annotation-overlay press-to-hide pattern.
-  const [livePressed, setLivePressed] = useState(false);
   // Live-play options menu state. `autoSort` is persisted to
   // `localStorage` and reloaded on every fresh mount; the other
   // three "auto play" flags (autoWin / noCall / autoDiscard)
@@ -909,7 +905,7 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
       setStashDiscardBaseline(current);
       return;
     }
-    if (current - stashDiscardBaseline >= 2) {
+    if (current - stashDiscardBaseline >= POST_HAND_PEEK_DISCARD_LIMIT) {
       setStashedResult(null);
       setStashDiscardBaseline(null);
     }
@@ -1201,13 +1197,6 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
   // Re-render the canvas whenever the projected view changes.
   useEffect(() => {
     if (rendererRef.current) {
-      // Live press-to-hide: while the win-info panel is on screen
-      // and the user is holding the canvas down, suppress the
-      // panel; otherwise either show the live result, the
-      // peek-override, or nothing.
-      const liveActive = !!view.lastHandResult && !view.matchEnded;
-      const suppressLive = liveActive && livePressed;
-      rendererRef.current.setShowHandResult(!suppressLive);
       rendererRef.current.setHandResultOverride(
         eyeHeld && !view.lastHandResult ? stashedResult : null
       );
@@ -1229,24 +1218,7 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
       // same in their projector).
       rendererRef.current.render(prepareRenderedMatchView(view));
     }
-  }, [view, eyeHeld, livePressed, stashedResult, t]);
-
-  // Global mouseup / touchend so the press-to-hide gesture
-  // releases even if the cursor leaves the canvas mid-press.
-  useEffect(() => {
-    if (!livePressed) {
-      return;
-    }
-    const release = () => {
-      setLivePressed(false);
-    };
-    window.addEventListener("mouseup", release);
-    window.addEventListener("touchend", release);
-    return () => {
-      window.removeEventListener("mouseup", release);
-      window.removeEventListener("touchend", release);
-    };
-  }, [livePressed]);
+  }, [view, eyeHeld, stashedResult, t]);
 
   return (
     <div
@@ -1271,20 +1243,6 @@ export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
         // gestures — critical for tile clicks on touch devices.
         className="relative flex-1 w-full bg-emerald-900 overflow-hidden"
         style={{ touchAction: "none" }}
-        onMouseDown={() => {
-          // Live press-to-hide: only engage while a win-info
-          // panel is actually on screen, so normal clicks (tile
-          // discards, action buttons) aren't affected outside
-          // the result phase.
-          if (view.lastHandResult && !view.matchEnded) {
-            setLivePressed(true);
-          }
-        }}
-        onTouchStart={() => {
-          if (view.lastHandResult && !view.matchEnded) {
-            setLivePressed(true);
-          }
-        }}
       >
         {/* Match id pinned above the Pixi debug HUD (which renders
             at design-pixel (16,16) inside the canvas). DOM overlay

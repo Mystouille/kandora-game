@@ -4,6 +4,7 @@ import {
   DiscardAnimator,
   SEQ_SLIDE_MS,
   SEQ_HOVER_MS,
+  PHASE_A_DURATION_MS,
   PHASE_B_DURATION_MS,
   DRAW_SLIDE_MS,
 } from "./discardAnimator";
@@ -42,7 +43,7 @@ function recordLayouts(
 }
 
 describe("DiscardAnimator", () => {
-  it("auto-settles a discard from nudge to final after phase A, then drops it", () => {
+  it("holds a discard at hover until the next draw starts", () => {
     let now = 0;
     const animator = new DiscardAnimator({ now: () => now });
     const before = makeView({
@@ -73,15 +74,62 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
-    // Self-contained: once phase A elapses it settles to final on its
-    // own, regardless of whether another player has acted yet.
-    now = 351;
+    // Once phase A elapses, the tile remains hovering while the call
+    // window is open rather than settling on a timer.
+    now = PHASE_A_DURATION_MS + 1;
     animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+
+    now = 2_000;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+
+    const drew = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDrawnSeat: 1,
+    });
+    animator.beginFrame(drew);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
 
     // After phase B elapses the entry is dropped (tile parked at final).
-    now = 502;
+    now += PHASE_B_DURATION_MS + 1;
+    animator.beginFrame(drew);
+    expect(animator.getAnim(0)).toBeNull();
+  });
+
+  it("removes a called discard directly from its hovering position", () => {
+    let now = 0;
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    const discarded = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+    });
     animator.beginFrame(discarded);
+    now = PHASE_A_DURATION_MS + 1;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+
+    const called = makeView({
+      hands: [[], [], [], []],
+      discards: [[], [], [], []],
+      discardTsumogiri: [[], [], [], []],
+      totalDiscards: 0,
+    });
+    animator.beginFrame(called);
     expect(animator.getAnim(0)).toBeNull();
   });
 

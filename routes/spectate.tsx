@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { EyeOutlined } from "@ant-design/icons";
 import { useNavigate, useSearchParams } from "react-router";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
 import type {
@@ -7,6 +8,7 @@ import type {
 } from "~/game/client/pixi/TableRenderer";
 import { useMatchStore } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
+import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   applyReplayEvent,
   initialView,
@@ -227,6 +229,11 @@ export default function GameSpectateRoute({
   const [playIndex, setPlayIndex] = useState<number>(-1);
   const [live, setLive] = useState<boolean>(true);
   const [focusSeat, setFocusSeat] = useState<Seat>(0);
+  const [eyeHeld, setEyeHeld] = useState(false);
+  const [pondCenter, setPondCenter] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   const [overlays, setOverlays] = useState<ReplayOverlayState>(
     defaultReplayOverlayState
   );
@@ -302,6 +309,9 @@ export default function GameSpectateRoute({
           if (r && args) {
             r.render(args);
           }
+        });
+        renderer.setPondCenterListener((point) => {
+          setPondCenter(point);
         });
         void renderer.mount(container).then(() => {
           if (cancelled) {
@@ -522,17 +532,58 @@ export default function GameSpectateRoute({
   // -----------------------------------------------------------------------
   // Derived view + renderer dispatch
   // -----------------------------------------------------------------------
-  const view = useMemo<ReplayView | null>(() => {
+  const { view, postHandPeekResult } = useMemo<{
+    view: ReplayView | null;
+    postHandPeekResult: NonNullable<ReplayView["lastHandResult"]> | null;
+  }>(() => {
     if (!baseline) {
-      return null;
+      return { view: null, postHandPeekResult: null };
     }
     let v = baseline;
+    let latestCompletedResult: NonNullable<
+      ReplayView["lastHandResult"]
+    > | null = baseline.lastHandResult;
+    let focusedDiscardsAfterResult = 0;
     const upTo = Math.min(playIndex, events.length - 1);
     for (let i = 0; i <= upTo; i++) {
-      v = applyReplayEvent(v, events[i]);
+      const event = events[i];
+      v = applyReplayEvent(v, event);
+      if (v.lastHandResult) {
+        latestCompletedResult = v.lastHandResult;
+        focusedDiscardsAfterResult = 0;
+      } else if (
+        latestCompletedResult &&
+        event.type === "discard" &&
+        event.seat === focusSeat
+      ) {
+        focusedDiscardsAfterResult += 1;
+      }
     }
-    return v;
-  }, [baseline, events, playIndex]);
+    return {
+      view: v,
+      postHandPeekResult:
+        !v.lastHandResult &&
+        !v.matchEnded &&
+        focusedDiscardsAfterResult < POST_HAND_PEEK_DISCARD_LIMIT
+          ? latestCompletedResult
+          : null,
+    };
+  }, [baseline, events, playIndex, focusSeat]);
+
+  useEffect(() => {
+    if (!eyeHeld) {
+      return;
+    }
+    const release = (): void => {
+      setEyeHeld(false);
+    };
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+  }, [eyeHeld]);
 
   // Round-boundary indices within `events` (each `hand_start`).
   const rounds = useMemo<number[]>(() => {
@@ -585,6 +636,7 @@ export default function GameSpectateRoute({
     r.setShowHands(overlays.showHands);
     r.setShowWalls(overlays.showWalls);
     r.setShowNames(overlays.showNames);
+    r.setHandResultOverride(eyeHeld ? postHandPeekResult : null);
     // Staged per-yaku win reveal only while following the live head.
     // Paused on history, new relay events keep rebuilding the view
     // (fresh `lastHandResult`), which would restart the reveal every
@@ -615,6 +667,8 @@ export default function GameSpectateRoute({
     seatEnrichment,
     roomState,
     live,
+    eyeHeld,
+    postHandPeekResult,
   ]);
 
   // -----------------------------------------------------------------------
@@ -961,6 +1015,36 @@ export default function GameSpectateRoute({
           {playIndex + 1} / {events.length}
         </span>
       </div>
+
+      {postHandPeekResult && pondCenter && (
+        <button
+          type="button"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setEyeHeld(true);
+          }}
+          onPointerUp={(event) => {
+            event.preventDefault();
+            setEyeHeld(false);
+          }}
+          onPointerLeave={() => {
+            setEyeHeld(false);
+          }}
+          className="pointer-events-auto absolute z-40 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
+          style={{
+            left: pondCenter.x,
+            top: pondCenter.y,
+            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            color: "#a7f3d0",
+            border: "1px solid rgba(16, 185, 129, 0.5)",
+          }}
+          aria-label="Peek last hand result"
+          title="Hold to peek at last hand result"
+        >
+          <EyeOutlined />
+        </button>
+      )}
 
       <ReplayOverlayPanel overlays={overlays} onChange={setOverlays} />
 

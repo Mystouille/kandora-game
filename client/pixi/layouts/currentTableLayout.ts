@@ -12,6 +12,7 @@ import {
 } from "../tableLayout";
 
 const legacy = computeTableLayout();
+const focusedHand = legacy.hands[0];
 
 export const currentTableLayout: TableLayoutConfig = {
   id: "current",
@@ -19,7 +20,12 @@ export const currentTableLayout: TableLayoutConfig = {
   viewport: { w: legacy.table.w, h: legacy.table.h },
   zones: {
     center: legacy.center,
-    hands: legacy.hands,
+    hands: [
+      { ...focusedHand, x: focusedHand.x - 35 },
+      legacy.hands[1],
+      legacy.hands[2],
+      legacy.hands[3],
+    ],
     discards: legacy.discards,
     walls: legacy.wall,
     playerInfo: legacy.playerInfo,

@@ -1,0 +1,1 @@
+export const POST_HAND_PEEK_DISCARD_LIMIT = 2;

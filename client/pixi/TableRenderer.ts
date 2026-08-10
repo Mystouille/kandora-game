@@ -390,9 +390,13 @@ export class TableRenderer {
   private liveSpectate = false;
   /** When false, the post-hand win-info panel and the match-end
    * standings panel are skipped during `render()`. Used by the
-   * "hide hand result" eye button next to the panel so reviewers
-   * can peek at the board state underneath the overlay. */
+   * host when it needs to suppress result overlays. */
   private showHandResult = true;
+  /** True while a pointer is held inside the visible win-info zone. */
+  private handResultPressHidden = false;
+  /** Whether the latest view has a press-hideable hand result. Match-end
+   * standings are deliberately excluded from this interaction. */
+  private winInfoPressEnabled = false;
   /**
    * Mirrors the host route's live-play "Auto win" toggle. When
    * true, the renderer suppresses the on-canvas ron/tsumo
@@ -523,9 +527,8 @@ export class TableRenderer {
    * Kept separate from `lastView` because the discard animator's
    * own `prevView` tracking is internal. */
   private prevHandSorterView: MatchView | null = null;
-  /** DOM listener detacher for the canvas right-click /
-   * contextmenu handlers installed in {@link mount}. Invoked
-   * during {@link destroy}. */
+  /** DOM listener detacher for canvas interactions installed in
+   * {@link mount}. Invoked during {@link destroy}. */
   private rightClickCleanup: (() => void) | null = null;
   /** Localized labels for the three center-square status lines.
    * Defaults to English; the React layer calls `setCenterLabels`
@@ -577,9 +580,8 @@ export class TableRenderer {
   /** Callback invoked at the end of every `render()` with the
    * canvas-pixel rect of the currently-visible result panel
    * (win-info inner zone or match-end standings panel), or
-   * `null` when no panel is showing. The React layer uses this
-   * to anchor the "hide hand result" eye button to the right
-   * edge of the panel. */
+   * `null` when no panel is showing. Host overlays can use this
+   * to anchor controls to the panel. */
   private resultPanelBoundsListener:
     | ((rect: { x: number; y: number; w: number; h: number } | null) => void)
     | null = null;
@@ -689,11 +691,51 @@ export class TableRenderer {
       e.preventDefault();
       this.handleRightClick();
     };
+    const onResultPointerDown = (e: PointerEvent): void => {
+      if (
+        !this.winInfoPressEnabled ||
+        !this.lastResultPanelBounds ||
+        (e.button !== 0 && e.button !== 2)
+      ) {
+        return;
+      }
+      const canvasRect = app.canvas.getBoundingClientRect();
+      const point = {
+        x:
+          ((e.clientX - canvasRect.left) * app.screen.width) / canvasRect.width,
+        y:
+          ((e.clientY - canvasRect.top) * app.screen.height) /
+          canvasRect.height,
+      };
+      if (!pointInsideRect(point, this.lastResultPanelBounds)) {
+        return;
+      }
+      // Capture and consume the press before Pixi or a replay route's
+      // bubbling mousedown handler can interpret it as another action.
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      this.handResultPressHidden = true;
+      this.requestRender();
+    };
+    const restoreHandResult = (): void => {
+      if (!this.handResultPressHidden) {
+        return;
+      }
+      this.handResultPressHidden = false;
+      this.requestRender();
+    };
     app.canvas.addEventListener("contextmenu", onContextMenu);
     app.canvas.addEventListener("mousedown", onCanvasMouseDown);
+    app.canvas.addEventListener("pointerdown", onResultPointerDown, true);
+    window.addEventListener("pointerup", restoreHandResult);
+    window.addEventListener("pointercancel", restoreHandResult);
     this.rightClickCleanup = (): void => {
       app.canvas.removeEventListener("contextmenu", onContextMenu);
       app.canvas.removeEventListener("mousedown", onCanvasMouseDown);
+      app.canvas.removeEventListener("pointerdown", onResultPointerDown, true);
+      window.removeEventListener("pointerup", restoreHandResult);
+      window.removeEventListener("pointercancel", restoreHandResult);
     };
 
     // Load the active design's atlases through the texture store,
@@ -1867,12 +1909,13 @@ export class TableRenderer {
 
     // Hand-result panel — shown after a hand ends and stays up
     // until the next `hand_start` clears `lastHandResult`. Both
-    // panels honour the `showHandResult` toggle so the eye
-    // button next to them can hide the overlay on press.
+    // panels honour the host toggle. A hand result is also hidden
+    // while the pointer is held inside its visible bounds.
     let designRect: { x: number; y: number; w: number; h: number } | null =
       null;
-    if (this.showHandResult) {
-      const effectiveResult = this.handResultOverride ?? view.lastHandResult;
+    const effectiveResult = this.handResultOverride ?? view.lastHandResult;
+    this.winInfoPressEnabled = Boolean(effectiveResult && !view.matchEnded);
+    if (this.showHandResult && !this.handResultPressHidden) {
       if (effectiveResult && !view.matchEnded) {
         designRect = this.renderHandResult(
           view,
@@ -1887,10 +1930,9 @@ export class TableRenderer {
       }
     }
 
-    // Publish the result-panel bounds (in canvas pixels) so the
-    // React layer can anchor the "hide hand result" eye button to
-    // its right edge. The fit transform applied to `this.root`
-    // earlier in this method is mirrored here. We dedupe against
+    // Publish the result-panel bounds (in canvas pixels) for host
+    // controls anchored to the panel. The fit transform applied to
+    // `this.root` earlier in this method is mirrored here. We dedupe against
     // the last-reported value to avoid spamming React with
     // identical updates on every render.
     let nextBounds: { x: number; y: number; w: number; h: number } | null =
@@ -6763,6 +6805,18 @@ export class TableRenderer {
     }
     return this.textureStore.getTexture(sheet, tile);
   }
+}
+
+export function pointInsideRect(
+  point: { x: number; y: number },
+  rect: { x: number; y: number; w: number; h: number }
+): boolean {
+  return (
+    point.x >= rect.x &&
+    point.x <= rect.x + rect.w &&
+    point.y >= rect.y &&
+    point.y <= rect.y + rect.h
+  );
 }
 
 const SUIT_ORDER: Record<string, number> = { m: 0, p: 1, s: 2, z: 3 }; /**

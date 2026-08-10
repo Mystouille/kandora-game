@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
-import { formatTableScore, replayDiscardingSeat } from "./TableRenderer";
+import {
+  formatTableScore,
+  pointInsideRect,
+  replayDiscardingSeat,
+} from "./TableRenderer";
 
 type ReplayTurnView = Pick<
   MatchView,
@@ -55,5 +59,20 @@ describe("formatTableScore", () => {
   it("does not prefix zero or negative relative scores", () => {
     expect(formatTableScore(25000, 25000, true)).toBe("0");
     expect(formatTableScore(18700, 25000, true)).toBe("-6300");
+  });
+});
+
+describe("pointInsideRect", () => {
+  const rect = { x: 100, y: 200, w: 300, h: 150 };
+
+  it("includes the panel interior and edges", () => {
+    expect(pointInsideRect({ x: 250, y: 275 }, rect)).toBe(true);
+    expect(pointInsideRect({ x: 100, y: 200 }, rect)).toBe(true);
+    expect(pointInsideRect({ x: 400, y: 350 }, rect)).toBe(true);
+  });
+
+  it("excludes points outside the panel", () => {
+    expect(pointInsideRect({ x: 99, y: 275 }, rect)).toBe(false);
+    expect(pointInsideRect({ x: 250, y: 351 }, rect)).toBe(false);
   });
 });
