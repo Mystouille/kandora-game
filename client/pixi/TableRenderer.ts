@@ -4751,17 +4751,34 @@ export class TableRenderer {
         const layer = this.screenShadowLayer(handContainer, rot);
         this.placeColumnShadows(
           layer,
-          sidePlacements.map((p) => {
-            const lx = p.wrap.x + p.sprite.x;
-            const ly = p.wrap.y + p.sprite.y;
-            return {
+          sidePlacements
+            // Drawn tile's settled shadow is skipped while it's hidden /
+            // sliding; the moving one is added just below.
+            .filter((p) => !(hideTsumoTile && p === lastSidePlacement))
+            .map((p) => {
+              const lx = p.wrap.x + p.sprite.x;
+              const ly = p.wrap.y + p.sprite.y;
+              return {
+                ax: lx * cos - ly * sin,
+                ay: lx * sin + ly * cos,
+                w: p.sprite.width,
+                h: p.sprite.height,
+              };
+            })
+        );
+        if (isDrawing && lastSidePlacement) {
+          const p = lastSidePlacement;
+          const lx = p.wrap.x + DRAW_SLIDE_PX * (1 - drawProgress) + p.sprite.x;
+          const ly = p.wrap.y + p.sprite.y;
+          this.placeColumnShadows(layer, [
+            {
               ax: lx * cos - ly * sin,
               ay: lx * sin + ly * cos,
               w: p.sprite.width,
               h: p.sprite.height,
-            };
-          })
-        );
+            },
+          ]);
+        }
       }
     } else if (seat === 2) {
       // Top hand (opponent across): face-down `topSmall` backs
@@ -4821,8 +4838,8 @@ export class TableRenderer {
         const layer = this.screenShadowLayer(handContainer, rot);
         const eff = this.tileDesign.effects.shadow;
         if (eff) {
-          for (const p of topPlacements) {
-            const lx = p.wrap.x + p.sprite.x;
+          const placeTopShadow = (p: TilePlacement, shift: number): void => {
+            const lx = p.wrap.x + shift + p.sprite.x;
             const ly = p.wrap.y + p.sprite.y;
             const ax = lx * cos - ly * sin;
             const ay = lx * sin + ly * cos;
@@ -4845,6 +4862,19 @@ export class TableRenderer {
                 eff.small
               );
             }
+          };
+          for (const p of topPlacements) {
+            // Drawn tile's settled shadow skipped while hidden / sliding.
+            if (hideTsumoTile && p === lastTopPlacement) {
+              continue;
+            }
+            placeTopShadow(p, 0);
+          }
+          if (isDrawing && lastTopPlacement) {
+            placeTopShadow(
+              lastTopPlacement,
+              DRAW_SLIDE_PX * (1 - drawProgress)
+            );
           }
         }
       }
@@ -5018,8 +5048,9 @@ export class TableRenderer {
         }
         // Focused-hand drop shadow: a basic ownShadow on each tile's
         // right edge (below all tiles). Occlusion by the next tile is
-        // intended, so only the rightmost tile's shadow shows.
-        if (ownShadowSpec) {
+        // intended, so only the rightmost tile's shadow shows. The
+        // drawn tile's shadow rides with the sliding tile (added below).
+        if (ownShadowSpec && !(hideTsumoTile && i === hand.length - 1)) {
           this.placeUprightShadow(
             ownShadowLayer,
             posX + spriteW,
@@ -5036,6 +5067,18 @@ export class TableRenderer {
       });
       if (isDrawing) {
         const slotX = (hand.length - 1) * (t.w + t.gap) + handGap;
+        const slidePosX = slotX + DRAW_SLIDE_PX * (1 - drawProgress);
+        // Shadow travels with the sliding tile (its settled one is
+        // skipped above while the tile is hidden / sliding).
+        if (ownShadowSpec) {
+          this.placeUprightShadow(
+            ownShadowLayer,
+            slidePosX + spriteW,
+            spriteH,
+            spriteH,
+            ownShadowSpec.big
+          );
+        }
         // Focused hand is always revealed: slide the real drawn tile
         // in face-up (from the `ownHand` sheet) rather than a back.
         const slideTile = factory.create({
@@ -5045,7 +5088,7 @@ export class TableRenderer {
           height: spriteH,
           anchor: 0,
         });
-        slideTile.position.set(slotX + DRAW_SLIDE_PX * (1 - drawProgress), 0);
+        slideTile.position.set(slidePosX, 0);
         handContainer.addChild(slideTile);
       }
       if (seat === 0) {
