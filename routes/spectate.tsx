@@ -940,21 +940,23 @@ export default function GameSpectateRoute({
             ⏭
           </button>
         </div>
-        {/* Row 3: Go-live shortcut. Hidden when already live + at
-            the buffer head; shown otherwise so the viewer can snap
-            forward without manually stepping through. */}
-        {!isLive && (
-          <button
-            type="button"
-            onClick={goLive}
-            className="px-3 py-2 text-base rounded bg-red-700 hover:bg-red-600 border border-red-900 text-white font-semibold flex items-center justify-center gap-2"
-            aria-label="Go live"
-            title="Jump to latest event and resume live updates"
-          >
-            <span className="inline-block w-2 h-2 rounded-full bg-white animate-pulse" />
-            Go live
-          </button>
-        )}
+        {/* Row 3: Go-live shortcut. Kept in the layout (just made
+            invisible) when already live so its appearance doesn't
+            shove the rows above it. */}
+        <button
+          type="button"
+          onClick={goLive}
+          disabled={isLive}
+          aria-hidden={isLive}
+          className={`px-3 py-2 text-base rounded bg-red-700 hover:bg-red-600 border border-red-900 text-white font-semibold flex items-center justify-center gap-2${
+            isLive ? " invisible" : ""
+          }`}
+          aria-label="Go live"
+          title="Jump to latest event and resume live updates"
+        >
+          <span className="inline-block w-2 h-2 rounded-full bg-white animate-pulse" />
+          Go live
+        </button>
         <span className="font-mono text-sm text-emerald-100/80 text-center">
           {playIndex + 1} / {events.length}
         </span>

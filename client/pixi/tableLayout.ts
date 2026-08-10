@@ -101,7 +101,9 @@ export const DESIGN_H = 926;
 /** Per-orientation tile metrics. */
 export const TILE_VERTICAL: TileDims = { w: 42, h: 63, gap: 2 };
 export const TILE_HORIZONTAL: TileDims = { w: 41, h: 63, gap: 0 };
-export const TILE_SELF: TileDims = { w: 67, h: 104, gap: 0 };
+// Focused-hand slot spacing. Kept in step with `BIG_TILE_SCALE` (the
+// sprite size) so the shrunk tiles stay flush (~0.2px overhang).
+export const TILE_SELF: TileDims = { w: 64.5, h: 100, gap: 0 };
 /** Side-hand tiles (seats 1/3). The 30 px overlap means
  * consecutive tiles share that much of their long axis, so the
  * stride is `h - overlap = 35` px. */

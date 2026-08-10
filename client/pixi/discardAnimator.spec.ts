@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
-import { DiscardAnimator } from "./discardAnimator";
+import {
+  DiscardAnimator,
+  SEQ_SLIDE_MS,
+  SEQ_HOVER_MS,
+  PHASE_B_DURATION_MS,
+  DRAW_SLIDE_MS,
+} from "./discardAnimator";
 
 function makeView(args: {
   hands?: Array<Array<string | null>>;
@@ -148,7 +154,7 @@ describe("DiscardAnimator", () => {
     expect(animator.hasActive()).toBe(false);
   });
 
-  it("sequenced: holds a discard at hover ~1s, settles, fires land SFX once", () => {
+  it("sequenced: holds a discard at hover, settling only when the next draw begins", () => {
     let now = 0;
     const discardSfx: Array<{ seat: number; isRiichi: boolean }> = [];
     const animator = new DiscardAnimator({ now: () => now });
@@ -175,32 +181,34 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
-    // Mid-slide (before 500ms): still sliding out, no land SFX yet.
-    now = 400;
-    animator.beginFrame(discarded);
-    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
-    expect(discardSfx).toHaveLength(0);
-
-    // Phase A elapsed (>=500ms): land SFX fires once; tile still hovers.
-    now = 500;
+    // Phase A elapsed: land SFX fires once; tile hovers.
+    now = SEQ_SLIDE_MS;
     animator.beginFrame(discarded);
     expect(discardSfx).toEqual([{ seat: 0, isRiichi: false }]);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
-    // Partway through the hover (before 1s) the SFX does not repeat.
-    now = 800;
+    // Past the slide + hover with NO draw yet (an open call window):
+    // the tile must NOT nudge home — it could still be called away.
+    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + 200;
     animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
     expect(discardSfx).toHaveLength(1);
 
-    // At +1s (slide + hover) it settles to final.
-    now = 1001;
-    animator.beginFrame(discarded);
+    // The next player draws → once that slide begins the discard
+    // settles to its flush slot.
+    const drew = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDrawnSeat: 1,
+    });
+    animator.beginFrame(drew);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
 
-    // Phase B (150ms) elapses → dropped.
-    now = 1152;
-    animator.beginFrame(discarded);
+    // Phase B elapses → dropped.
+    now = now + PHASE_B_DURATION_MS + 1;
+    animator.beginFrame(drew);
     expect(animator.getAnim(0)).toBeNull();
   });
 
@@ -244,21 +252,49 @@ describe("DiscardAnimator", () => {
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.getDrawProgress(1)).toBe(0);
 
-    // Still pending at 800ms while the discard hovers.
-    now = 800;
+    // Still pending late in the hover while the discard holds.
+    now = SEQ_SLIDE_MS + SEQ_HOVER_MS - 100;
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.isDrawTileHidden(1)).toBe(true);
 
-    // Just after +1s (discard slide + hover) the back begins sliding.
-    now = 1001;
+    // After slide + hover the back begins sliding.
+    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + 1;
     expect(animator.isDrawing(1)).toBe(true);
     expect(animator.getDrawProgress(1)).toBeGreaterThan(0);
 
-    // Slide completes ~1.5s → draw-land SFX fires once, entry dropped.
-    now = 1500;
+    // Slide completes → draw-land SFX fires once, entry dropped.
+    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + DRAW_SLIDE_MS;
     animator.beginFrame(drew);
     expect(drawSfx).toEqual([1]);
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.isDrawTileHidden(1)).toBe(false);
+  });
+
+  it("sources a tsumogiri from the tsumo slot even when the wire flag is missing", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    const before = makeView({
+      hands: [["1m", "2m", "3m", "9m"], [], [], []],
+      freshlyDrawnSeat: 0,
+    });
+    animator.beginFrame(before);
+    recordLayouts(animator, [
+      { sorted: ["1m", "2m", "3m", "9m"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    // Discard the just-drawn 9m. The relay never tags tsumogiri, so
+    // the flag is false — but the source must still be the tsumo slot
+    // (index 3), not the tedashi fallback one slot left (index 2).
+    const discard = makeView({
+      hands: [["1m", "2m", "3m"], [], [], []],
+      discards: [["9m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+    });
+    animator.beginFrame(discard);
+    expect(animator.getAnim(0)?.sourceSlot?.handIndex).toBe(3);
   });
 });

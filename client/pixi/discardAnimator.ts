@@ -41,9 +41,9 @@ const SEAT_COUNT = 4;
  * before the next player acts. */
 export const PHASE_A_DURATION_MS = 350;
 export const PHASE_B_DURATION_MS = 150;
-/** Draw-in slide: the freshly drawn tile enters as a face-down back
- * sliding from the wall into the tsumo slot. Always a fixed 0.5s. */
-export const DRAW_SLIDE_MS = 500;
+/** Draw-in slide: the freshly drawn tile enters sliding from the wall
+ * into the tsumo slot. Fixed 0.3s. */
+export const DRAW_SLIDE_MS = 300;
 
 /**
  * Live-spectator "sequenced" timeline (relay feeds only, enabled via
@@ -54,14 +54,14 @@ export const DRAW_SLIDE_MS = 500;
  * one turn reads:
  *
  *   0.0s  discard starts sliding out of the hand
- *   0.5s  discard reaches the hover (nudge) position   → discard SFX
- *   1.0s  next action begins; the discard settles flush
- *   1.5s  draw slide finishes                          → draw SFX
+ *   0.3s  discard reaches the hover (nudge) position   → discard SFX
+ *   0.8s  next action begins; the discard settles flush
+ *   1.1s  draw slide finishes                          → draw SFX
  *
  * (Plus any real server delay K from call windows, absorbed by the
  * `max(now, …)` in {@link DiscardAnimator.schedule}.)
  */
-export const SEQ_SLIDE_MS = 500;
+export const SEQ_SLIDE_MS = 300;
 export const SEQ_HOVER_MS = 500;
 /**
  * Catch-up bound. If the serial clock would schedule an animation
@@ -460,21 +460,20 @@ export class DiscardAnimator {
           });
         }
 
-        // --- (b) Phase A → Phase B once the discard has finished
-        // sliding (non-sequenced) or sliding + hovering (sequenced).
-        // The sequenced +1s settle coincides with the delayed next
-        // draw, so the tile nudges home exactly as play resumes. The
-        // static renderer no longer nudges the fresh discard, so
-        // settling straight to `final` here causes no snap-back.
+        // --- (b) Phase A → Phase B. Non-sequenced modes settle on a
+        // fixed timer once the slide elapses (self-contained discard).
+        // Sequenced mode instead waits for the next draw to begin — see
+        // the settle pass after this loop — so a tile that gets called
+        // never nudges to its flush slot first. The static renderer no
+        // longer nudges the fresh discard, so settling to `final` here
+        // causes no snap-back.
         const existing = this.anims.get(seat);
-        const settleAfterMs = this.sequenced
-          ? SEQ_SLIDE_MS + SEQ_HOVER_MS
-          : PHASE_A_DURATION_MS;
         if (
+          !this.sequenced &&
           existing &&
           existing.phase === "to-nudge" &&
           currLen > 0 &&
-          now - existing.startMs >= settleAfterMs
+          now - existing.startMs >= PHASE_A_DURATION_MS
         ) {
           // The static last-discard index might shift if a new
           // discard happens in the same frame (rare; would imply
@@ -508,6 +507,34 @@ export class DiscardAnimator {
             hideFrom: now,
             startMs,
             soundPlayed: false,
+          });
+        }
+      }
+    }
+
+    // Sequenced: a hovering discard settles to its flush slot ONLY once
+    // the following draw actually begins — proof nobody called it. A
+    // called tile is claimed straight from the hover (hard reset); a
+    // hand's last discard clears at `hand_end`. Neither nudges home
+    // first. Runs after the loop so this frame's draws are scheduled.
+    if (this.sequenced && !snap) {
+      for (const [seat, anim] of this.anims) {
+        if (anim.phase !== "to-nudge") {
+          continue;
+        }
+        let nextDrawBegun = false;
+        for (const d of this.drawAnims.values()) {
+          if (d.startMs > anim.startMs && now >= d.startMs) {
+            nextDrawBegun = true;
+            break;
+          }
+        }
+        if (nextDrawBegun) {
+          this.anims.set(seat, {
+            ...anim,
+            phase: "to-final",
+            startMs: now,
+            durationMs: PHASE_B_DURATION_MS,
           });
         }
       }
@@ -733,6 +760,20 @@ function pickHiddenSlot(args: {
           found++;
         }
       }
+    }
+  }
+  // Missing wire tsumogiri flag (the Tenhou relay never tags it): a
+  // freshly-drawn revealed hand discarding its just-drawn tile IS a
+  // tsumogiri, so source from the tsumo slot. Otherwise the closed-hand
+  // scan below skips it and, when the tile isn't held elsewhere, falls
+  // back one slot left — blanking a kept tile and leaving a hole.
+  if (isFreshlyDrawn && len > 0) {
+    const drawn = sortedHand[len - 1];
+    if (
+      drawn !== null &&
+      normalizeFive(drawn) === normalizeFive(discardedTile)
+    ) {
+      return len - 1;
     }
   }
   // Revealed / focused hand → find the discarded tile.

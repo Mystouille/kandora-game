@@ -98,7 +98,9 @@ const SIDE_TILE_W = SIDE_TILE_SRC.w * SIDE_TILE_SCALE;
 const SIDE_TILE_H = SIDE_TILE_SRC.h * SIDE_TILE_SCALE;
 
 const BIG_TILE_SRC = { w: 131, h: 198 } as const;
-const BIG_TILE_SCALE = 0.51;
+// Focused-hand tile scale. 198*0.491 ≈ 97.2 design-px tall → ~200px on a
+// 1905px board (DESIGN_H 926). Keep in step with TILE_SELF spacing.
+const BIG_TILE_SCALE = 0.491;
 const BIG_TILE_W = BIG_TILE_SRC.w * BIG_TILE_SCALE;
 const BIG_TILE_H = BIG_TILE_SRC.h * BIG_TILE_SCALE;
 
@@ -5193,8 +5195,16 @@ export class TableRenderer {
       seatDiscardAnim.discardIndex === lastIdx &&
       !(lastIdx === riichiIdx);
     // Lift the pond above the walls (zIndex 0..2) while a tile flies.
+    // Its shadows must NOT ride along (they would cover neighbouring
+    // ponds), so host them in a low-z sibling — its transform is
+    // matched to the pond after the position switch below.
+    let flyShadowHost: Container | null = null;
     if (lastIsAnimating) {
       discardContainer.zIndex = 5;
+      flyShadowHost = new Container();
+      flyShadowHost.zIndex = DISCARD_FLY_SHADOW_Z;
+      flyShadowHost.sortableChildren = true;
+      this.root.addChild(flyShadowHost);
     }
     // Pure container-local geometry per tile. Tint and the last-tile
     // fresh-nudge / animation remain renderer-owned below.
@@ -5247,7 +5257,10 @@ export class TableRenderer {
       const rot = SEAT_CONTAINER_ROT[seat];
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
-      const layer = this.screenShadowLayer(discardContainer, rot);
+      const layer = this.screenShadowLayer(
+        flyShadowHost ?? discardContainer,
+        rot
+      );
       this.placeColumnShadows(
         layer,
         discardPlacements
@@ -5325,6 +5338,13 @@ export class TableRenderer {
       }
     }
     this.root.addChild(discardContainer);
+    if (flyShadowHost) {
+      flyShadowHost.position.set(
+        discardContainer.position.x,
+        discardContainer.position.y
+      );
+      flyShadowHost.rotation = discardContainer.rotation;
+    }
 
     // -----------------------------------------------------------------
     // Animated last-discard overlay.
@@ -5407,21 +5427,10 @@ export class TableRenderer {
       wrap.zIndex = animLastPlacement.zIndex;
       discardContainer.addChild(wrap);
       if (shadow) {
-        // Keep the flying tile's shadow below every seat's tiles. The
-        // pond is lifted above the walls while a tile flies, which
-        // would drag a shadow parented to it over neighbouring ponds;
-        // host it in a low-z sibling that mirrors the pond transform.
-        const flyShadowHost = new Container();
-        flyShadowHost.position.set(
-          discardContainer.position.x,
-          discardContainer.position.y
-        );
-        flyShadowHost.rotation = discardContainer.rotation;
-        flyShadowHost.zIndex = DISCARD_FLY_SHADOW_Z;
-        flyShadowHost.sortableChildren = true;
-        this.root.addChild(flyShadowHost);
+        // Same low-z host as the static shadows (created with the pond
+        // lift): keeps the flying shadow below every seat's tiles.
         this.placeTileShadow(
-          flyShadowHost,
+          flyShadowHost ?? discardContainer,
           shadow,
           posX,
           posY,
