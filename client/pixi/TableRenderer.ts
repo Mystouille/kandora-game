@@ -134,6 +134,10 @@ const SEAT_CONTAINER_ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2] as const;
 /** zIndex for the shadow wraps within each area container: far below
  * every tile wrap so all drop-shadows render behind all tiles. */
 const SHADOW_LAYER_Z = -1_000_000;
+/** Root z for a flying discard's drop shadow: below every board tile
+ * (all >= 0) but above the felt mats (-10), so a pond lifted above the
+ * walls while a tile flies can't drag its shadow over a neighbour. */
+const DISCARD_FLY_SHADOW_Z = -5;
 
 const BG_COLOR: ColorSource = 0x2a2a2a;
 const FELT_COLOR: ColorSource = 0x007f0e;
@@ -4717,17 +4721,21 @@ export class TableRenderer {
       }
       if (isDrawing && lastSidePlacement) {
         const p = lastSidePlacement;
-        const back = factory.create({
+        // Face-up when the hand is revealed (`p.tile` set), else a
+        // face-down back — matching the static strip. Slide it in at
+        // the tsumo tile's natural z so it emerges from behind the
+        // hand (seat 1) instead of on top of it.
+        const slideTile = factory.create({
           atlasId: p.atlasId,
-          tile: null,
+          tile: p.tile,
           width: p.sprite.width,
           height: p.sprite.height,
           rotation: p.sprite.rotation,
         });
-        back.position.set(p.sprite.x, p.sprite.y);
+        slideTile.position.set(p.sprite.x, p.sprite.y);
         const wrap = new Container();
-        wrap.addChild(back);
-        wrap.zIndex = 1_000_000;
+        wrap.addChild(slideTile);
+        wrap.zIndex = p.zIndex;
         wrap.position.set(
           p.wrap.x + DRAW_SLIDE_PX * (1 - drawProgress),
           p.wrap.y
@@ -4787,16 +4795,17 @@ export class TableRenderer {
       }
       if (isDrawing && lastTopPlacement) {
         const p = lastTopPlacement;
-        const back = factory.create({
+        // Face-up when the hand is revealed (`p.tile` set), else a back.
+        const slideTile = factory.create({
           atlasId: p.atlasId,
-          tile: null,
+          tile: p.tile,
           width: p.sprite.width,
           height: p.sprite.height,
           rotation: p.sprite.rotation,
         });
-        back.position.set(p.sprite.x, p.sprite.y);
+        slideTile.position.set(p.sprite.x, p.sprite.y);
         const wrap = new Container();
-        wrap.addChild(back);
+        wrap.addChild(slideTile);
         wrap.position.set(
           p.wrap.x + DRAW_SLIDE_PX * (1 - drawProgress),
           p.wrap.y
@@ -5025,15 +5034,17 @@ export class TableRenderer {
       });
       if (isDrawing) {
         const slotX = (hand.length - 1) * (t.w + t.gap) + handGap;
-        const back = factory.create({
-          atlasId: this.tileDesign.sheets.wallBack[0],
-          tile: null,
+        // Focused hand is always revealed: slide the real drawn tile
+        // in face-up (from the `ownHand` sheet) rather than a back.
+        const slideTile = factory.create({
+          atlasId: "ownHand",
+          tile: hand[hand.length - 1],
           width: spriteW,
           height: spriteH,
           anchor: 0,
         });
-        back.position.set(slotX + DRAW_SLIDE_PX * (1 - drawProgress), 0);
-        handContainer.addChild(back);
+        slideTile.position.set(slotX + DRAW_SLIDE_PX * (1 - drawProgress), 0);
+        handContainer.addChild(slideTile);
       }
       if (seat === 0) {
         // Drag-to-reorder: enable zIndex sorting so the
@@ -5396,8 +5407,21 @@ export class TableRenderer {
       wrap.zIndex = animLastPlacement.zIndex;
       discardContainer.addChild(wrap);
       if (shadow) {
+        // Keep the flying tile's shadow below every seat's tiles. The
+        // pond is lifted above the walls while a tile flies, which
+        // would drag a shadow parented to it over neighbouring ponds;
+        // host it in a low-z sibling that mirrors the pond transform.
+        const flyShadowHost = new Container();
+        flyShadowHost.position.set(
+          discardContainer.position.x,
+          discardContainer.position.y
+        );
+        flyShadowHost.rotation = discardContainer.rotation;
+        flyShadowHost.zIndex = DISCARD_FLY_SHADOW_Z;
+        flyShadowHost.sortableChildren = true;
+        this.root.addChild(flyShadowHost);
         this.placeTileShadow(
-          discardContainer,
+          flyShadowHost,
           shadow,
           posX,
           posY,
