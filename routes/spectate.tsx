@@ -13,7 +13,7 @@ import {
   replayViewToMatchView,
   type ReplayView,
 } from "~/game/replay/player";
-import { playSoundForEvent } from "~/game/client/sound";
+import { playSoundForEvent, playGameSound } from "~/game/client/sound";
 import type {
   GameEvent,
   RoomState,
@@ -27,6 +27,29 @@ import {
   type ReplayOverlayState,
 } from "~/game/routes/ReplayOverlayPanel";
 import type { Route } from "./+types/spectate";
+
+/**
+ * Extract seat display names from the first `match_start` in an
+ * event stream. Relay feeds (e.g. live Tenhou public games) have no
+ * authoritative `room_state`, so the player names ride on this
+ * event alone — the spectator view falls back to them for any seat
+ * a richer source (room_state / host enrichment) hasn't filled.
+ */
+function seatNamesFromEvents(
+  events: GameEvent[]
+): [string, string, string, string] | null {
+  const start = events.find((e) => e.type === "match_start");
+  if (!start || start.type !== "match_start") {
+    return null;
+  }
+  const names: [string, string, string, string] = ["", "", "", ""];
+  for (const s of start.seats) {
+    if (s.seat >= 0 && s.seat < 4) {
+      names[s.seat] = s.displayName;
+    }
+  }
+  return names;
+}
 
 /**
  * `/spectate/:matchId` — read-only spectator view of an in-progress
@@ -263,6 +286,16 @@ export default function GameSpectateRoute({
         // faces, but the draw count is tracked so the wall shrinks
         // correctly. `showWalls` (off here) is what reveals faces.
         renderer.setLiveSpectate(false);
+        // Relay feeds deliver the next draw ~0ms after the previous
+        // discard, so space them onto the animator's serial timeline
+        // (discard slides + hovers, then the draw slides in as it
+        // settles). The discard/draw SFX are retimed to the slide
+        // landings here, so the per-event sound loop below skips them.
+        renderer.setDrawSequencing(true, {
+          onDiscardLand: (_seat, isRiichi) =>
+            playGameSound(isRiichi ? "riichi" : "discard"),
+          onDrawLand: () => playGameSound("draw"),
+        });
         renderer.setOnRenderRequest(() => {
           const r = rendererRef.current;
           const args = latestRenderRef.current;
@@ -370,6 +403,24 @@ export default function GameSpectateRoute({
               const startSeq = msg.seq - msg.events.length + 1;
               if (msg.seq <= lastRelaySeqRef.current) {
                 return;
+              }
+
+              // Relay feeds carry player names only on `match_start`
+              // (no room_state). Fill any seat not already named by a
+              // more authoritative source.
+              const relayNames = seatNamesFromEvents(msg.events);
+              if (relayNames) {
+                setSeatNames((prev) => {
+                  const next = [...prev] as [string, string, string, string];
+                  let changed = false;
+                  for (let i = 0; i < 4; i++) {
+                    if (!next[i] && relayNames[i]) {
+                      next[i] = relayNames[i];
+                      changed = true;
+                    }
+                  }
+                  return changed ? next : prev;
+                });
               }
 
               // Relay attach/reconnect sends the complete event history as a
@@ -508,6 +559,13 @@ export default function GameSpectateRoute({
       return;
     }
     for (let i = from + 1; i <= playIndex && i < events.length; i++) {
+      // `draw` / `discard` cues are retimed by the animator to their
+      // slide landings (see `setDrawSequencing`), so skip them here to
+      // avoid a double hit at event-arrival time.
+      const evType = events[i].type;
+      if (evType === "draw" || evType === "discard") {
+        continue;
+      }
       try {
         playSoundForEvent(events[i], null);
       } catch (err) {
@@ -527,6 +585,11 @@ export default function GameSpectateRoute({
     r.setShowHands(overlays.showHands);
     r.setShowWalls(overlays.showWalls);
     r.setShowNames(overlays.showNames);
+    // Staged per-yaku win reveal only while following the live head.
+    // Paused on history, new relay events keep rebuilding the view
+    // (fresh `lastHandResult`), which would restart the reveal every
+    // frame — an endless loop. Show it fully revealed instead.
+    r.setStagedRevealEnabled(live);
     r.setSeatEnrichment([
       seatEnrichment[(0 + focusSeat) % 4],
       seatEnrichment[(1 + focusSeat) % 4],
@@ -551,6 +614,7 @@ export default function GameSpectateRoute({
     seatNames,
     seatEnrichment,
     roomState,
+    live,
   ]);
 
   // -----------------------------------------------------------------------

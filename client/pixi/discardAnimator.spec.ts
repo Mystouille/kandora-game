@@ -147,4 +147,118 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(makeView({ freshlyDrawnSeat: 1 }));
     expect(animator.hasActive()).toBe(false);
   });
+
+  it("sequenced: holds a discard at hover ~1s, settles, fires land SFX once", () => {
+    let now = 0;
+    const discardSfx: Array<{ seat: number; isRiichi: boolean }> = [];
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setSequenced(true);
+    animator.setSoundHooks({
+      onDiscardLand: (seat, isRiichi) => discardSfx.push({ seat, isRiichi }),
+    });
+
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    const discarded = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+    });
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+
+    // Mid-slide (before 500ms): still sliding out, no land SFX yet.
+    now = 400;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+    expect(discardSfx).toHaveLength(0);
+
+    // Phase A elapsed (>=500ms): land SFX fires once; tile still hovers.
+    now = 500;
+    animator.beginFrame(discarded);
+    expect(discardSfx).toEqual([{ seat: 0, isRiichi: false }]);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+
+    // Partway through the hover (before 1s) the SFX does not repeat.
+    now = 800;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+    expect(discardSfx).toHaveLength(1);
+
+    // At +1s (slide + hover) it settles to final.
+    now = 1001;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)?.phase).toBe("to-final");
+
+    // Phase B (150ms) elapses → dropped.
+    now = 1152;
+    animator.beginFrame(discarded);
+    expect(animator.getAnim(0)).toBeNull();
+  });
+
+  it("sequenced: delays the next draw until the discard has hovered, hiding it until then", () => {
+    let now = 0;
+    const drawSfx: number[] = [];
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setSequenced(true);
+    animator.setSoundHooks({ onDrawLand: (seat) => drawSfx.push(seat) });
+
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    // Seat 0 discards at t=0.
+    const discarded = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+    });
+    animator.beginFrame(discarded);
+
+    // Seat 1 draws ~immediately after (the relay's 0-delay draw).
+    const drew = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDrawnSeat: 1,
+    });
+    animator.beginFrame(drew);
+
+    // Pending: the drawn tile is hidden but the back is NOT yet sliding.
+    expect(animator.isDrawTileHidden(1)).toBe(true);
+    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.getDrawProgress(1)).toBe(0);
+
+    // Still pending at 800ms while the discard hovers.
+    now = 800;
+    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.isDrawTileHidden(1)).toBe(true);
+
+    // Just after +1s (discard slide + hover) the back begins sliding.
+    now = 1001;
+    expect(animator.isDrawing(1)).toBe(true);
+    expect(animator.getDrawProgress(1)).toBeGreaterThan(0);
+
+    // Slide completes ~1.5s → draw-land SFX fires once, entry dropped.
+    now = 1500;
+    animator.beginFrame(drew);
+    expect(drawSfx).toEqual([1]);
+    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.isDrawTileHidden(1)).toBe(false);
+  });
 });

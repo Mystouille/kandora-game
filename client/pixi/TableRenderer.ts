@@ -1415,6 +1415,27 @@ export class TableRenderer {
     this.requestRender();
   }
 
+  /**
+   * Enable the live-spectator "sequenced" discard/draw timeline and
+   * (optionally) route the retimed discard/draw SFX. A Tenhou relay
+   * delivers the next draw ~0 ms after the previous discard, so the
+   * animator spaces them onto a serial clock: discard slides + hovers
+   * for ~1s, then the draw slides in as the discard settles. When
+   * `sounds` are supplied the cues fire at the slide landings, so the
+   * caller must suppress its own event-driven discard/draw SFX.
+   */
+  setDrawSequencing(
+    enabled: boolean,
+    sounds?: {
+      onDiscardLand: (seat: number, isRiichi: boolean) => void;
+      onDrawLand: (seat: number) => void;
+    }
+  ): void {
+    this.animator.setSequenced(enabled);
+    this.animator.setSoundHooks(sounds ?? {});
+    this.requestRender();
+  }
+
   /** Render seat display names alongside the score chips. */
   setShowNames(flag: boolean): void {
     this.showNames = flag;
@@ -4570,11 +4591,18 @@ export class TableRenderer {
     // Draw-in slide: while the freshly drawn tile arrives, render the
     // real tsumo tile invisible and slide a face-down back into its
     // slot (below). `isFreshlyDrawn` guarantees the reserved last-slot
-    // gap the back slides into.
+    // gap the back slides into. In sequenced (live-relay) mode the
+    // draw is held pending behind the previous discard: the tile stays
+    // hidden (`hideTsumoTile`) before the back actually slides
+    // (`isDrawing`), so nothing pops in during the hold.
     const isDrawing =
       view.freshlyDrawnSeat === seat &&
       isFreshlyDrawn &&
       this.animator.isDrawing(seat);
+    const hideTsumoTile =
+      view.freshlyDrawnSeat === seat &&
+      isFreshlyDrawn &&
+      this.animator.isDrawTileHidden(seat);
     const drawProgress = isDrawing ? this.animator.getDrawProgress(seat) : 1;
     // Wall-side offset (design px) the back travels along the hand's
     // reading axis into the tsumo slot.
@@ -4678,7 +4706,7 @@ export class TableRenderer {
         // Wait-tint; a no-op for the `null` back tiles.
         this.tintIfWait(sprite, p.tile);
         // Hide the just-drawn tsumo tile while the draw-in back slides.
-        if (isDrawing && p === lastSidePlacement) {
+        if (hideTsumoTile && p === lastSidePlacement) {
           sprite.alpha = 0;
         }
         const wrap = new Container();
@@ -4749,7 +4777,7 @@ export class TableRenderer {
         sprite.position.set(p.sprite.x, p.sprite.y);
         this.tintIfWait(sprite, p.tile);
         // Hide the just-drawn tsumo tile while the draw-in back slides.
-        if (isDrawing && p === lastTopPlacement) {
+        if (hideTsumoTile && p === lastTopPlacement) {
           sprite.alpha = 0;
         }
         const wrap = new Container();
@@ -4990,7 +5018,7 @@ export class TableRenderer {
           );
         }
         // Hide the just-drawn tsumo tile while the draw-in back slides.
-        if (isDrawing && i === hand.length - 1) {
+        if (hideTsumoTile && i === hand.length - 1) {
           tileSprite.alpha = 0;
         }
         handContainer.addChild(tileSprite);

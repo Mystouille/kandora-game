@@ -45,6 +45,32 @@ export const PHASE_B_DURATION_MS = 150;
  * sliding from the wall into the tsumo slot. Always a fixed 0.5s. */
 export const DRAW_SLIDE_MS = 500;
 
+/**
+ * Live-spectator "sequenced" timeline (relay feeds only, enabled via
+ * {@link DiscardAnimator.setSequenced}). A Tenhou relay delivers the
+ * next player's draw ~0 ms after the previous discard, so without
+ * spacing the discard and draw animate on top of each other. In
+ * sequenced mode each discard/draw is scheduled on a serial clock so
+ * one turn reads:
+ *
+ *   0.0s  discard starts sliding out of the hand
+ *   0.5s  discard reaches the hover (nudge) position   → discard SFX
+ *   1.0s  next action begins; the discard settles flush
+ *   1.5s  draw slide finishes                          → draw SFX
+ *
+ * (Plus any real server delay K from call windows, absorbed by the
+ * `max(now, …)` in {@link DiscardAnimator.schedule}.)
+ */
+export const SEQ_SLIDE_MS = 500;
+export const SEQ_HOVER_MS = 500;
+/**
+ * Catch-up bound. If the serial clock would schedule an animation
+ * more than this far ahead of real time (rapid tsumogiri exchanges
+ * arriving faster than the fixed cadence can play), snap it to
+ * `now` so the viewer can't fall unboundedly behind the feed.
+ */
+export const SEQ_CATCHUP_CAP_MS = 2000;
+
 /** Hidden hand slot for tedashi from a concealed (non-focused,
  * not-revealed) hand. Spec: "near the middle of the hand
  * (static position)". Slot index in the 14-slot post-draw layout. */
@@ -119,6 +145,27 @@ export interface DiscardAnimation {
    * while the slot animates. Cleared on phase-B transition so
    * the renderer falls back to the live `view.hands[seat]`. */
   phaseASnapshot: PhaseAHandSnapshot | null;
+  /** Sequenced mode: whether the "tile lands at hover" SFX has
+   * already fired for this discard (fired once when phase A
+   * elapses). Ignored outside sequenced mode. */
+  landSoundPlayed: boolean;
+}
+
+/**
+ * Active draw-in slide for a single seat.
+ *
+ * `startMs` may be in the *future* in sequenced mode: the draw is
+ * held "pending" (the drawn tile stays hidden) until the preceding
+ * discard has finished sliding + hovering, then the back slides in.
+ */
+interface DrawAnim {
+  /** Real tsumo tile is painted hidden from here through slide end
+   * (equals `startMs` outside sequenced mode — no pending phase). */
+  hideFrom: number;
+  /** Wall-clock ms the back starts sliding into the tsumo slot. */
+  startMs: number;
+  /** Sequenced mode: whether the "draw lands" SFX has fired. */
+  soundPlayed: boolean;
 }
 
 interface AnimatorOptions {
@@ -142,11 +189,22 @@ type PrevHandCache = Array<{
 
 export class DiscardAnimator {
   private readonly anims = new Map<number, DiscardAnimation>();
-  /** Per-seat draw-in animation start times (ms). A fresh draw
-   * slides a face-down back into the tsumo slot; independent of the
-   * discard `anims` map (a seat never draws and discards in the same
-   * frame). */
-  private readonly drawAnims = new Map<number, number>();
+  /** Per-seat draw-in animations. A fresh draw slides a face-down
+   * back into the tsumo slot; independent of the discard `anims`
+   * map (a seat never draws and discards in the same frame). */
+  private readonly drawAnims = new Map<number, DrawAnim>();
+  /** Live-spectator serial timeline (see {@link setSequenced}). */
+  private sequenced = false;
+  /** Earliest wall-clock ms the next sequenced animation may start.
+   * Advanced by {@link schedule} as each discard/draw is queued. */
+  private sequenceFreeMs = 0;
+  /** Sequenced-mode SFX hooks. Fired at the animation landings
+   * (discard reaches hover; draw slide completes) so the cue tracks
+   * the visual instead of the event arrival. Unset ⇒ silent (the
+   * host plays event-driven SFX in non-sequenced modes). */
+  private onDiscardLand: ((seat: number, isRiichi: boolean) => void) | null =
+    null;
+  private onDrawLand: ((seat: number) => void) | null = null;
   private readonly now: () => number;
   /** Last `view` we processed in {@link beginFrame}. Used to diff. */
   private prevView: MatchView | null = null;
@@ -190,6 +248,50 @@ export class DiscardAnimator {
   }
 
   /**
+   * Enable / disable the live-spectator "sequenced" timeline. When
+   * on, discards hold at a hover and the following draw is delayed
+   * so the two never animate on top of each other (see the
+   * module-level {@link SEQ_SLIDE_MS} doc). Off (default) keeps the
+   * self-contained discard used by live play and replay.
+   */
+  setSequenced(flag: boolean): void {
+    if (this.sequenced === flag) {
+      return;
+    }
+    this.sequenced = flag;
+    this.sequenceFreeMs = 0;
+  }
+
+  /**
+   * Register (or clear) the sequenced-mode SFX hooks. Only invoked
+   * while {@link setSequenced} is on; the host must then suppress its
+   * own event-driven discard/draw cues so they don't double up.
+   */
+  setSoundHooks(hooks: {
+    onDiscardLand?: (seat: number, isRiichi: boolean) => void;
+    onDrawLand?: (seat: number) => void;
+  }): void {
+    this.onDiscardLand = hooks.onDiscardLand ?? null;
+    this.onDrawLand = hooks.onDrawLand ?? null;
+  }
+
+  /**
+   * Reserve the next slot on the serial timeline. Returns the start
+   * time for an animation queued now, and advances the clock by
+   * `handoffMs`. Falls back to `now` (dropping accumulated backlog)
+   * when the clock has drifted more than {@link SEQ_CATCHUP_CAP_MS}
+   * ahead of real time, so fast exchanges can't lag without bound.
+   */
+  private schedule(now: number, handoffMs: number): number {
+    let start = Math.max(now, this.sequenceFreeMs);
+    if (start - now > SEQ_CATCHUP_CAP_MS) {
+      start = now;
+    }
+    this.sequenceFreeMs = start + handoffMs;
+    return start;
+  }
+
+  /**
    * Stash a hint that the player's *next* discard from `seat`
    * originated at the `ord`-th visible occurrence of `tile` in
    * their current display order (0-based). The hint is
@@ -210,6 +312,7 @@ export class DiscardAnimator {
     this.snapNextFlag = true;
     this.anims.clear();
     this.drawAnims.clear();
+    this.sequenceFreeMs = 0;
   }
 
   /** Drop all in-flight animations and forget prev state.
@@ -217,6 +320,7 @@ export class DiscardAnimator {
   reset(): void {
     this.anims.clear();
     this.drawAnims.clear();
+    this.sequenceFreeMs = 0;
     this.prevView = null;
     this.prevHandLayouts = makeEmptyHandCache();
     this.currentHandLayouts = makeEmptyHandCache();
@@ -291,6 +395,7 @@ export class DiscardAnimator {
     if (hardReset) {
       this.anims.clear();
       this.drawAnims.clear();
+      this.sequenceFreeMs = 0;
       // A hard reset means the semantic hand/discard relation
       // jumped discontinuously (call claimed a discard, hand_end,
       // snapshot resync). The layouts we cached from the previous
@@ -339,30 +444,37 @@ export class DiscardAnimator {
             isRiichi,
             isTsumogiri,
             phase: "to-nudge",
-            startMs: now,
-            durationMs: PHASE_A_DURATION_MS,
+            // Sequenced mode queues the slide on the serial clock so it
+            // can be held pending behind an in-flight draw; otherwise it
+            // starts immediately.
+            startMs: this.sequenced
+              ? this.schedule(now, SEQ_SLIDE_MS + SEQ_HOVER_MS)
+              : now,
+            durationMs: this.sequenced ? SEQ_SLIDE_MS : PHASE_A_DURATION_MS,
             sourceSlot: {
               handIndex: sourceSlot,
               handLength: prevLayout.sorted.length,
             },
             phaseASnapshot: makePhaseASnapshot(prevLayout, sourceSlot),
+            landSoundPlayed: false,
           });
         }
 
-        // --- (b) Phase A → Phase B once phase A elapses. The discard
-        // is self-contained: it always slides hand → nudge → final over
-        // a fixed duration, independent of when the next player acts.
-        // (The static renderer no longer nudges the fresh discard, so
-        // settling straight to `final` here causes no snap-back.)
+        // --- (b) Phase A → Phase B once the discard has finished
+        // sliding (non-sequenced) or sliding + hovering (sequenced).
+        // The sequenced +1s settle coincides with the delayed next
+        // draw, so the tile nudges home exactly as play resumes. The
+        // static renderer no longer nudges the fresh discard, so
+        // settling straight to `final` here causes no snap-back.
         const existing = this.anims.get(seat);
-        const phaseALanded =
-          existing?.phase === "to-nudge" &&
-          now - existing.startMs >= PHASE_A_DURATION_MS;
+        const settleAfterMs = this.sequenced
+          ? SEQ_SLIDE_MS + SEQ_HOVER_MS
+          : PHASE_A_DURATION_MS;
         if (
           existing &&
           existing.phase === "to-nudge" &&
           currLen > 0 &&
-          phaseALanded
+          now - existing.startMs >= settleAfterMs
         ) {
           // The static last-discard index might shift if a new
           // discard happens in the same frame (rare; would imply
@@ -386,7 +498,17 @@ export class DiscardAnimator {
         // A seat draws at the start of its turn (freshlyDrawnSeat set)
         // and discards at the end; the two never collide in one frame.
         if (view.freshlyDrawnSeat === seat && prev.freshlyDrawnSeat !== seat) {
-          this.drawAnims.set(seat, now);
+          // Sequenced mode delays the slide until the preceding discard
+          // has slid + hovered (serial clock), holding the drawn tile
+          // hidden until then; otherwise it slides immediately.
+          const startMs = this.sequenced
+            ? this.schedule(now, DRAW_SLIDE_MS)
+            : now;
+          this.drawAnims.set(seat, {
+            hideFrom: now,
+            startMs,
+            soundPlayed: false,
+          });
         }
       }
     }
@@ -412,6 +534,17 @@ export class DiscardAnimator {
         this.anims.delete(seat);
         continue;
       }
+      // Sequenced: fire the "tile lands at hover" cue exactly once, the
+      // moment phase A elapses (independent of the later +1s settle).
+      if (
+        this.sequenced &&
+        anim.phase === "to-nudge" &&
+        !anim.landSoundPlayed &&
+        now - anim.startMs >= SEQ_SLIDE_MS
+      ) {
+        anim.landSoundPlayed = true;
+        this.onDiscardLand?.(seat, anim.isRiichi);
+      }
       if (
         anim.phase === "to-nudge" &&
         anim.phaseASnapshot !== null &&
@@ -421,9 +554,15 @@ export class DiscardAnimator {
       }
     }
 
-    // Draw-in animations are pure overlays; drop them once elapsed.
-    for (const [seat, startMs] of this.drawAnims) {
-      if (now - startMs >= DRAW_SLIDE_MS) {
+    // Draw-in animations are pure overlays; drop them once the slide
+    // completes (a pending draw with a future `startMs` is kept). The
+    // sequenced "draw lands" cue fires here, at slide completion.
+    for (const [seat, d] of this.drawAnims) {
+      if (now - d.startMs >= DRAW_SLIDE_MS) {
+        if (this.sequenced && !d.soundPlayed) {
+          d.soundPlayed = true;
+          this.onDrawLand?.(seat);
+        }
         this.drawAnims.delete(seat);
       }
     }
@@ -449,9 +588,21 @@ export class DiscardAnimator {
       if (anim.phase === "to-nudge" && anim.phaseASnapshot !== null) {
         return true;
       }
+      // Sequenced: keep pumping through the hover so the deterministic
+      // +1s settle still fires when no draw follows (e.g. the last
+      // discard of a hand). Covers a pending discard's future start.
+      if (
+        this.sequenced &&
+        anim.phase === "to-nudge" &&
+        now - anim.startMs < SEQ_SLIDE_MS + SEQ_HOVER_MS + PHASE_B_DURATION_MS
+      ) {
+        return true;
+      }
     }
-    for (const startMs of this.drawAnims.values()) {
-      if (now - startMs < DRAW_SLIDE_MS) {
+    for (const d of this.drawAnims.values()) {
+      // `< startMs + DRAW_SLIDE_MS` is also true while a sequenced draw
+      // is pending (future startMs), so the ticker reaches its slide.
+      if (now - d.startMs < DRAW_SLIDE_MS) {
         return true;
       }
     }
@@ -476,19 +627,37 @@ export class DiscardAnimator {
     return easeOutCubic(t);
   }
 
-  /** True while the seat's draw-in slide is playing. */
+  /** True while the seat's draw-in slide is actually sliding (not
+   * during a sequenced pending hold, where `startMs` is still in the
+   * future — the back should not yet be on screen). */
   isDrawing(seat: number, nowMs: number = this.now()): boolean {
-    const start = this.drawAnims.get(seat);
-    return start !== undefined && nowMs - start < DRAW_SLIDE_MS;
+    const d = this.drawAnims.get(seat);
+    return (
+      d !== undefined && nowMs >= d.startMs && nowMs - d.startMs < DRAW_SLIDE_MS
+    );
   }
 
-  /** Normalized 0..1 progress of the seat's draw-in slide, eased. */
+  /** True while the real (view) tsumo tile must stay hidden: from the
+   * draw event through slide completion, including the sequenced
+   * pending hold before the slide begins. Equals {@link isDrawing}
+   * outside sequenced mode. */
+  isDrawTileHidden(seat: number, nowMs: number = this.now()): boolean {
+    const d = this.drawAnims.get(seat);
+    return (
+      d !== undefined &&
+      nowMs >= d.hideFrom &&
+      nowMs - d.startMs < DRAW_SLIDE_MS
+    );
+  }
+
+  /** Normalized 0..1 progress of the seat's draw-in slide, eased.
+   * Clamped to 0 during a sequenced pending hold. */
   getDrawProgress(seat: number, nowMs: number = this.now()): number {
-    const start = this.drawAnims.get(seat);
-    if (start === undefined) {
+    const d = this.drawAnims.get(seat);
+    if (d === undefined) {
       return 1;
     }
-    const t = Math.max(0, Math.min(1, (nowMs - start) / DRAW_SLIDE_MS));
+    const t = Math.max(0, Math.min(1, (nowMs - d.startMs) / DRAW_SLIDE_MS));
     return easeOutCubic(t);
   }
 }
