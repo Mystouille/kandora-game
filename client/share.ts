@@ -5,7 +5,7 @@
  * link" button, social embeds) **must** go through these helpers
  * so that:
  *
- *   1. The format stays consistent (`/replays/:source/:gameId`,
+ *   1. The format stays consistent (`/watch/replay/:gameId`,
  *      `/game/:matchId`, `/profile/:userId` — paths the routing
  *      layer already understands).
  *   2. The host we share matches the canonical public origin, not
@@ -59,7 +59,7 @@ export function publicBaseUrl(): string {
  * route infers the platform from the id shape, so callers only
  * need to pass the native game id (or the in-app matchId). */
 export function replayShareUrl(gameId: string): string {
-  return `${publicBaseUrl()}/replays/${encodeURIComponent(gameId)}`;
+  return `${publicBaseUrl()}/watch/replay/${encodeURIComponent(gameId)}`;
 }
 
 /** Canonical URL for a live match page (lobby invite / spectate). */

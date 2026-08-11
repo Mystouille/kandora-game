@@ -42,7 +42,7 @@ describe("share URL helpers", () => {
   it("builds replay share URLs", () => {
     vi.stubEnv("VITE_PUBLIC_BASE_URL", "https://kandora.example.com");
     expect(replayShareUrl("abc123")).toBe(
-      "https://kandora.example.com/replays/abc123"
+      "https://kandora.example.com/watch/replay/abc123"
     );
   });
 
@@ -63,7 +63,7 @@ describe("share URL helpers", () => {
   it("URL-encodes path segments", () => {
     vi.stubEnv("VITE_PUBLIC_BASE_URL", "https://kandora.example.com");
     expect(replayShareUrl("a/b c")).toBe(
-      "https://kandora.example.com/replays/a%2Fb%20c"
+      "https://kandora.example.com/watch/replay/a%2Fb%20c"
     );
   });
 });

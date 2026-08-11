@@ -47,7 +47,7 @@ export function normalizeReplayId(raw: string): string {
  *
  * The returned number is NOT an absolute seat: RC encodes the
  * round-1 wind position (0=E, 1=S, 2=W, 3=N), and the absolute
- * seat depends on `dealer_pos` of round 1. The `/replays/:gameId`
+ * seat depends on `dealer_pos` of round 1. The `/watch/replay/:gameId`
  * loader resolves the actual seat against the parsed log; callers
  * shouldn't try to translate it themselves.
  */

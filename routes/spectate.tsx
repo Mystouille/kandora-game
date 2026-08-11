@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EyeOutlined } from "@ant-design/icons";
-import { useNavigate, useSearchParams } from "react-router";
+import {
+  useNavigate,
+  useSearchParams,
+  type LoaderFunctionArgs,
+} from "react-router";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
 import type {
   TableRenderer,
@@ -28,7 +32,6 @@ import {
   defaultReplayOverlayState,
   type ReplayOverlayState,
 } from "~/game/routes/ReplayOverlayPanel";
-import type { Route } from "./+types/spectate";
 
 /**
  * Extract seat display names from the first `match_start` in an
@@ -54,8 +57,8 @@ function seatNamesFromEvents(
 }
 
 /**
- * `/spectate/:matchId` — read-only spectator view of an in-progress
- * match.
+ * Shared read-only spectator view for an in-progress match. The host route
+ * supplies the game-server match id through loader data.
  *
  * Phase 4 (unified viewer): spectators see the same UI as the replay
  * viewer — a left-edge overlay panel (hide/show waits/hands/walls/
@@ -73,12 +76,20 @@ function seatNamesFromEvents(
  *
  * Gated server-side by `requireGameEnabled()`.
  */
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params }: LoaderFunctionArgs) {
   requireGameEnabled();
+  const matchId = params.matchId;
+  if (!matchId) {
+    throw new Response("Missing match id.", { status: 404 });
+  }
   return {
-    matchId: params.matchId,
+    matchId,
     flag: getClientGameFlag(),
   };
+}
+
+interface GameSpectateRouteProps {
+  loaderData: Awaited<ReturnType<typeof loader>>;
 }
 
 /**
@@ -193,15 +204,16 @@ function beaconTelemetry(event: string, meta: Record<string, unknown>): void {
 
 export default function GameSpectateRoute({
   loaderData,
-}: Route.ComponentProps) {
+}: GameSpectateRouteProps) {
   const { matchId } = loaderData;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedReturnPath = searchParams.get("returnTo");
   const returnPath =
+    requestedReturnPath === "/" ||
     requestedReturnPath?.startsWith("/online-tournaments/") === true
       ? requestedReturnPath
-      : "/online-tournaments";
+      : "/";
   // `?delay=<ms>` — non-negative integer. Defaults to 0 (live).
   // The server caps this at 30 min.
   const delayMs = Math.max(0, Number(searchParams.get("delay") ?? 0)) | 0;

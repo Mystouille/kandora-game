@@ -6,7 +6,7 @@
  * the loader could query the `ReplayLog` collection by `(source,
  * sourceGameId)`. The four supported platforms happen to mint IDs in
  * pairwise-disjoint formats, so the `:source` segment is redundant —
- * we can recover it from the ID alone and route at `/replays/:gameId`.
+ * we can recover it from the ID alone and route at `/watch/replay/:gameId`.
  *
  * Shapes recognized (case-insensitive where relevant):
  *
