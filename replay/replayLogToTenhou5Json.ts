@@ -52,8 +52,8 @@
 
 import type { GameEvent, ReplayLog } from "~/game/replay/types";
 import type { Meld, Tile } from "~/game/protocol/messages";
-import { HAN_ROMAJI } from "~/db/i18n/hanRomaji";
-import { RIICHI_LIB_YAKU_TO_HAN } from "~/db/yaku/platformYakuMaps";
+import { HAN_ROMAJI } from "~/core/i18n/hanRomaji";
+import { RIICHI_LIB_YAKU_TO_HAN } from "~/core/yaku/platformYakuMaps";
 
 // ---------------------------------------------------------------------------
 // Output shape — kept identical to the majsoul converter so both

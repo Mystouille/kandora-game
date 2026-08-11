@@ -15,7 +15,7 @@ import type { GameEvent } from "~/game/protocol/messages";
  * replay reducer must not import platform-specific code.
  *
  * Persistence (step 8): documents live in their own `replaylogs`
- * collection (model in `app/db/models/ReplayLog.ts`), referenced
+ * collection (model in `app/core/models/game/ReplayLog.ts`), referenced
  * from `Game.replayLogRef` (and produced eagerly by the existing
  * hydration pipeline for league/tournament games, or by
  * `archiveMatch` for in-app games).

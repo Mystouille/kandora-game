@@ -53,8 +53,8 @@ import { randomBotDiscard } from "./bots/random";
 import { chooseBotCall, chooseBotSelfKan } from "./bots/calls";
 import { projectEvent, projectPublicEvent } from "./projection";
 import { archiveMatch, archiveReplayLog, createMatchDoc } from "./persist";
-import { riichiLibYakuToRomaji } from "~/db/yaku/platformYakuMaps";
-import type { MatchPlayer } from "~/db/models/Match";
+import { riichiLibYakuToRomaji } from "~/core/yaku/platformYakuMaps";
+import type { MatchPlayer } from "~/core/models/game/Match";
 
 export interface MatchPlayerInit {
   userId: string;

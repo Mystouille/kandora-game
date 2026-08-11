@@ -149,7 +149,7 @@ draws/calls)` is a candidate enhancement.
 3. Add a column to the matrix above and fill in every feature row.
 4. Extend the `ReplaySource` union in [`types.ts`](./types.ts)
    and the `source` enum on
-   [`app/db/models/ReplayLog.ts`](../../db/models/ReplayLog.ts).
+   [`app/core/models/game/ReplayLog.ts`](../../core/models/game/ReplayLog.ts).
 5. Map the portal `Game.platform` value to the new source in
    `platformToReplaySource` in
    [`app/components/ReplayLink.tsx`](../../components/ReplayLink.tsx)

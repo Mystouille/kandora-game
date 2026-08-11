@@ -48,8 +48,8 @@ import {
   type ReplaySeat,
 } from "~/game/replay/types";
 import { generateTenhouWalls, type TenhouWall } from "./wallGenerator";
-import { tenhouYakuIdToHan } from "~/db/yaku/platformYakuMaps";
-import { hanRomaji } from "~/db/i18n/hanRomaji";
+import { tenhouYakuIdToHan } from "~/core/yaku/platformYakuMaps";
+import { hanRomaji } from "~/core/i18n/hanRomaji";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 
 // ---------------------------------------------------------------------------

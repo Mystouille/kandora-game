@@ -44,7 +44,7 @@ export interface MatchSummary {
 export interface PortalAdapter {
   /**
    * Ensure the shared Mongo connection is ready. Game-side loaders /
-   * server code that read game models (`~/db/models/**`) call this
+   * server code that read game models (`~/core/models/game/**`) call this
    * once before any query. Idempotent. The standalone build points
    * this at its own DB.
    */

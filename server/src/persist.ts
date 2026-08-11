@@ -21,8 +21,8 @@
  * (or `[]` for an in-progress match — those events live only in
  * the resident `MatchProcess`).
  */
-import { MatchModel, type MatchPlayer } from "~/db/models/Match";
-import { ReplayLogModel } from "~/db/models/ReplayLog";
+import { MatchModel, type MatchPlayer } from "~/core/models/game/Match";
+import { ReplayLogModel } from "~/core/models/game/ReplayLog";
 import type { GameEvent } from "~/game/protocol/messages";
 import { REPLAY_LOG_SCHEMA_VERSION } from "~/game/replay/types";
 

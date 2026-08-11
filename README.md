@@ -35,10 +35,10 @@ portal config. Anything else must go through the `PortalAdapter`.
 Game code in `app/game/**` and `game-server/**` must follow these rules:
 
 - **No imports from portal feature code.** Allowed portal imports are:
-  - `~/db/models/**` — shared Mongoose schemas (day-one shortcut; see plan).
-    The flat `~/db/*` files (e.g. `~/db/User`) are portal-only and must
-    not be imported from the game subtree. ESLint enforces the broader
-    boundary; the `db/models/` distinction is enforced in code review
+  - `~/core/models/game/**` — shared Mongoose schemas (day-one shortcut; see plan).
+    The other model ownership directories (`portal`, `shared`, and `tournament`)
+    are host-owned and must not be imported from the game subtree. ESLint
+    enforces the broader boundary; the `db/models/game/` distinction is enforced in code review
     (the built-in `no-restricted-imports` rule cannot express the
     "allow this subdirectory" exception).
   - `~/game/portal-adapter/**` — the single integration seam.

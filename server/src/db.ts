@@ -5,7 +5,7 @@
  * `app/utils/dbConnection.server.ts` (boundary rule). It manages its
  * own connection here, reading `MONGODB_URI` from the environment.
  *
- * The shared `MatchModel` from `~/db/models/Match` is then used as-is.
+ * The shared `MatchModel` from `~/core/models/game/Match` is then used as-is.
  */
 import mongoose from "mongoose";
 
