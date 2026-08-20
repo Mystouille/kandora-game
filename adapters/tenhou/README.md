@@ -127,7 +127,7 @@ rejected.
 | `RELAY_MAX_CONCURRENT` | Game server | Concurrent upstream relay cap; default `20` |
 | `TENHOU_WS_URL` | Game server | Upstream endpoint; default `wss://b-ww.mjv.jp/` |
 | `TENHOU_ORIGIN` | Game server | WebSocket `Origin`; default `https://tenhou.net` |
-| `TENHOU_RELAY_ID` | Game server | Name sent in the upstream `HELO` frame |
+| `TENHOU_RELAY_ID` | Game server | Optional account name sent in `HELO`; defaults to anonymous `NoName` |
 
 ## Tournament integration
 

@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { splitTimedWgcFrame } from "./tenhouClient";
+import { resolveTenhouRelayId, splitTimedWgcFrame } from "./tenhouClient";
+
+describe("resolveTenhouRelayId", () => {
+  it("uses Tenhou's anonymous guest name when no account is configured", () => {
+    expect(resolveTenhouRelayId(undefined)).toBe("NoName");
+    expect(resolveTenhouRelayId("")).toBe("NoName");
+    expect(resolveTenhouRelayId("   ")).toBe("NoName");
+  });
+
+  it("uses the configured relay account", () => {
+    expect(resolveTenhouRelayId("  ID12345678-abcd1234  ")).toBe(
+      "ID12345678-abcd1234"
+    );
+  });
+});
 
 describe("splitTimedWgcFrame", () => {
   it("applies a leading delay before the first action", () => {

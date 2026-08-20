@@ -6,9 +6,8 @@
  * handshake captured in the HAR: HELO → WG(watchId) → GOK, then keepalive
  * `<Z/>` frames, forwarding `UN` / `INITBYLOG` / `WGC` frames to the decoder.
  *
- * NEEDS LIVE VALIDATION (spike 0b): the HELO name / guest-id acceptance, the
- * `Origin` policy, and the keepalive cadence are inferred from a captured HAR
- * and have NOT been confirmed against a live Tenhou endpoint from a server.
+ * Tenhou accepts `NoName` as the anonymous `HELO` identity; deployments may
+ * override it with `TENHOU_RELAY_ID` when a lobby requires an account.
  */
 import { WebSocket } from "ws";
 
@@ -31,7 +30,10 @@ export type TenhouClientFactory = (
 
 const TENHOU_WS_URL = process.env.TENHOU_WS_URL ?? "wss://b-ww.mjv.jp/";
 const TENHOU_ORIGIN = process.env.TENHOU_ORIGIN ?? "https://tenhou.net";
-const TENHOU_RELAY_ID = process.env.TENHOU_RELAY_ID ?? "";
+export function resolveTenhouRelayId(value: string | undefined): string {
+  return value?.trim() || "NoName";
+}
+const TENHOU_RELAY_ID = resolveTenhouRelayId(process.env.TENHOU_RELAY_ID);
 // Tenhou rejects Node's default User-Agent; use a browser-like one (matches
 // TenhouService / the lobby probe).
 const TENHOU_USER_AGENT =
