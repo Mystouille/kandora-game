@@ -6,11 +6,12 @@
  * environment so the shared `kandora-game` engine has no dependency on any host
  * app's config. The game is **off by default** — opt in with `GAME_ENABLED=true`.
  *
- * Server-side only: every game-route loader calls `requireGameEnabled()` first.
- * The client never imports this directly — it receives the sanitized flag via
- * loader data (`getClientGameFlag()`).
+ * Every game-route loader calls `requireGameEnabled()` first. Route modules are
+ * also evaluated during browser hydration, so the environment read itself must
+ * remain browser-safe; clients receive the sanitized flag via loader data.
  */
-const gameEnabled = process.env.GAME_ENABLED === "true";
+const gameEnabled =
+  typeof process !== "undefined" && process.env.GAME_ENABLED === "true";
 
 /**
  * Server-side guard. Call from every game-route loader. Throws a 404 Response
