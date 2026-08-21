@@ -830,10 +830,17 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   // Install the frame loop BEFORE sending the baseline — clients
   // may immediately respond with `ready` / `start_match`.
   ws.on("message", (raw) => {
-    void handleClientFrame(raw, match, assignedSeat, send, sendError);
+    const currentSeat = match.humanSeatFor(send);
+    if (currentSeat === null) {
+      return;
+    }
+    void handleClientFrame(raw, match, currentSeat, send, sendError);
   });
   ws.on("close", () => {
-    match.detachHuman(assignedSeat);
+    const currentSeat = match.humanSeatFor(send);
+    if (currentSeat === null || !match.detachHuman(currentSeat, send)) {
+      return;
+    }
     // End an in-progress match shortly after the last connected
     // human leaves: bots playing for an empty audience burns
     // CPU and stops the room from showing as "ended" in any

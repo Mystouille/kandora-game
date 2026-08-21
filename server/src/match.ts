@@ -679,6 +679,9 @@ export class MatchProcess {
     null,
     null,
   ];
+  private humanConnectionGeneration: [number, number, number, number] = [
+    0, 0, 0, 0,
+  ];
   /**
    * Per-seat liveness probe. Invoked by the orchestrator the first
    * time a seat exhausts its think buffer (i.e. the deadline-expiry
@@ -1184,9 +1187,9 @@ export class MatchProcess {
 
   /**
    * Hook `send` as the WS sender for a specific seat. Any prior
-   * attachment at that seat is overwritten (reconnect path: the
-   * caller is responsible for closing the previous socket). Throws
-   * if the seat is a bot — the orchestrator drives bots directly.
+    * attachment at that seat is superseded. Late frames and closes
+    * from that attachment are rejected by sender identity. Throws if
+    * the seat is a bot — the orchestrator drives bots directly.
    *
    * Optional `livenessProbe`: invoked by the orchestrator the
    * first time a seat exhausts its think buffer to ask the WS
@@ -1210,9 +1213,11 @@ export class MatchProcess {
         `attachHuman: seat ${seat} is a bot; cannot attach a human socket`
       );
     }
+    this.humanConnectionGeneration[seat] += 1;
     this.humanSockets[seat] = send;
     this.livenessProbes[seat] = livenessProbe ?? null;
     this.livenessProbeMisses[seat] = 0;
+    this.livenessProbeInflight[seat] = false;
     // A network-only reconnect auto-clears the disconnect flag
     // so the orchestrator stops auto-defaulting the player's
     // turns the instant their socket is back. Self-reported AFK
@@ -1258,9 +1263,30 @@ export class MatchProcess {
     ];
   }
 
-  detachHuman(seat: Seat): void {
+  isHumanAttached(seat: Seat, send: Send): boolean {
+    return this.humanSockets[seat] === send;
+  }
+
+  humanSeatFor(send: Send): Seat | null {
+    for (let seat = 0; seat < 4; seat++) {
+      if (this.humanSockets[seat] === send) {
+        return seat as Seat;
+      }
+    }
+    return null;
+  }
+
+  detachHuman(seat: Seat, expectedSend?: Send): boolean {
+    if (
+      this.humanSockets[seat] === null ||
+      (expectedSend !== undefined && !this.isHumanAttached(seat, expectedSend))
+    ) {
+      return false;
+    }
+    this.humanConnectionGeneration[seat] += 1;
     this.humanSockets[seat] = null;
     this.livenessProbes[seat] = null;
+    this.livenessProbeInflight[seat] = false;
     // Network-disconnected seats are treated as AFK for the
     // skip/auto-discard machinery. A future re-attach with a
     // working socket auto-clears the flag (see `attachHuman`).
@@ -1276,6 +1302,7 @@ export class MatchProcess {
       }
     }
     this.broadcastRoomState();
+    return true;
   }
 
   /**
@@ -3253,6 +3280,7 @@ export class MatchProcess {
     // had a probe in the first place.
     const isHuman = this.isHumanSeat(seat);
     const probe = this.livenessProbes[seat];
+    const connectionGeneration = this.humanConnectionGeneration[seat];
     if (
       isHuman &&
       probe !== null &&
@@ -3263,7 +3291,12 @@ export class MatchProcess {
       this.livenessProbeInflight[seat] = true;
       try {
         const alive = await probe();
-        if (alive) {
+        const isCurrentConnection =
+          this.humanConnectionGeneration[seat] === connectionGeneration &&
+          this.livenessProbes[seat] === probe;
+        if (!isCurrentConnection) {
+          // A replacement socket attached while this probe was pending.
+        } else if (alive) {
           this.livenessProbeMisses[seat] = 0;
         } else if (!this.disconnected[seat]) {
           this.livenessProbeMisses[seat] += 1;
@@ -3273,7 +3306,12 @@ export class MatchProcess {
           }
         }
       } finally {
-        this.livenessProbeInflight[seat] = false;
+        if (
+          this.humanConnectionGeneration[seat] === connectionGeneration &&
+          this.livenessProbes[seat] === probe
+        ) {
+          this.livenessProbeInflight[seat] = false;
+        }
       }
     }
     const actionId = this.pickDefaultActionId(seat);
@@ -3735,6 +3773,7 @@ export class MatchProcess {
     const oldAfkSelfReported = [...this.afkSelfReported];
     const oldProbes = [...this.livenessProbes];
     const oldProbeMisses = [...this.livenessProbeMisses];
+    const oldConnectionGenerations = [...this.humanConnectionGeneration];
     const oldChips = [...this.sessionChips] as [number, number, number, number];
     const oldDabuken = [...this.sessionDabuken] as [
       boolean,
@@ -3750,6 +3789,9 @@ export class MatchProcess {
       this.afkSelfReported[newSeat] = oldAfkSelfReported[fromSeat];
       this.livenessProbes[newSeat] = oldProbes[fromSeat];
       this.livenessProbeMisses[newSeat] = oldProbeMisses[fromSeat];
+      this.livenessProbeInflight[newSeat] = false;
+      this.humanConnectionGeneration[newSeat] =
+        oldConnectionGenerations[fromSeat] + 1;
       this.sessionChips[newSeat] = oldChips[fromSeat];
       this.sessionDabuken[newSeat] = oldDabuken[fromSeat];
     }

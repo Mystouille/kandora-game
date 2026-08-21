@@ -363,5 +363,10 @@ describe("MatchProcess — Buu multi-game session", () => {
     // New game's state.chips/dabuken match the permuted session ledger.
     expect(internals.state.chips).toEqual([...internals.sessionChips]);
     expect(internals.state.dabuken).toEqual([...internals.sessionDabuken]);
+
+    const humanSeat = Array.from(internals.players.entries()).find(
+      ([, player]) => player.userId === "u0"
+    )?.[0];
+    expect(m.humanSeatFor(sink)).toBe(humanSeat);
   });
 });

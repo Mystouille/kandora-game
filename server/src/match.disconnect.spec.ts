@@ -14,10 +14,9 @@
  *
  * Once flagged, future windows assigned to that seat skip the
  * deadline wait — `setSeatLegals` schedules the auto-default
- * with `0` ms. The flag clears via `handleAfk(seat, false)`
- * (the reconnect button); re-attaching the WS does NOT clear
- * it (deliberate: the user has to opt back in to avoid losing
- * the next turn to a still-loading tab).
+ * with `0` ms. A network-only flag clears on successful socket
+ * reattachment; a self-reported AFK flag requires an explicit
+ * `handleAfk(seat, false)` from the reconnect button.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -171,6 +170,61 @@ describe("MatchProcess — disconnect / AFK", () => {
     expect(occ.kind).toBe("human");
     if (occ.kind === "human") {
       expect(occ.connected).toBe(true);
+    }
+  });
+
+  it("ignores a stale socket detach after a replacement attaches", async () => {
+    const m = makeMatch(224);
+    const first = sink();
+    const replacement = sink();
+    m.attachHuman(0, first.send);
+    await m.start();
+
+    m.attachHuman(0, replacement.send);
+
+    expect(m.detachHuman(0, first.send)).toBe(false);
+    expect(m.isHumanAttached(0, replacement.send)).toBe(true);
+    expect(m.hasConnectedHumanPlayers()).toBe(true);
+
+    const room = m.buildRoomState(0);
+    const occupant = room.seats[0].occupant;
+    expect(occupant.kind).toBe("human");
+    if (occupant.kind === "human") {
+      expect(occupant.connected).toBe(true);
+    }
+  });
+
+  it("ignores a stale liveness result after a replacement attaches", async () => {
+    const m = makeMatch(225);
+    const first = sink();
+    let resolveFirstProbe: ((alive: boolean) => void) | undefined;
+    const firstProbe = (): Promise<boolean> =>
+      new Promise((resolve) => {
+        resolveFirstProbe = resolve;
+      });
+    m.attachHuman(0, first.send, firstProbe);
+    setActionTimeoutMs(0);
+    await m.start();
+
+    const internals = m as unknown as {
+      bufferMs: [number, number, number, number];
+      livenessProbeMisses: [number, number, number, number];
+      handleDeadlineExpiry: (seat: 0) => Promise<void>;
+    };
+    internals.bufferMs[0] = 0;
+    const expiry = internals.handleDeadlineExpiry(0);
+
+    const replacement = sink();
+    m.attachHuman(0, replacement.send, async () => true);
+    resolveFirstProbe?.(false);
+    await expiry;
+
+    expect(internals.livenessProbeMisses[0]).toBe(0);
+    expect(m.isHumanAttached(0, replacement.send)).toBe(true);
+    const occupant = m.buildRoomState(0).seats[0].occupant;
+    expect(occupant.kind).toBe("human");
+    if (occupant.kind === "human") {
+      expect(occupant.connected).toBe(true);
     }
   });
 

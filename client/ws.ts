@@ -125,9 +125,9 @@ export class GameWS {
     this.stopStallWatchdog();
     this.backoff = INITIAL_BACKOFF_MS;
     if (this.ws) {
-      // Detach listeners we don't want to fire (the close handler
-      // would otherwise schedule a backoff reconnect we just
-      // bypassed).
+      // Retire the current socket before opening its replacement.
+      // Its events may still arrive later, so every listener below
+      // verifies that it still owns `this.ws` before mutating state.
       const stale = this.ws;
       this.ws = null;
       try {
@@ -235,6 +235,9 @@ export class GameWS {
     let wsOpenedAt = 0;
 
     ws.addEventListener("open", () => {
+      if (this.ws !== ws) {
+        return;
+      }
       wsOpenedAt = Date.now();
       this.backoff = INITIAL_BACKOFF_MS;
       this.lastInboundAt = Date.now();
@@ -267,10 +270,16 @@ export class GameWS {
     });
 
     ws.addEventListener("message", (msgEvent) => {
+      if (this.ws !== ws) {
+        return;
+      }
       this.handleMessage(msgEvent.data);
     });
 
     ws.addEventListener("close", (event) => {
+      if (this.ws !== ws) {
+        return;
+      }
       const now = Date.now();
       const lifetime = wsOpenedAt > 0 ? now - wsOpenedAt : now - openedAt;
       const sinceLastInbound =
@@ -290,6 +299,9 @@ export class GameWS {
     });
 
     ws.addEventListener("error", () => {
+      if (this.ws !== ws) {
+        return;
+      }
       console.log(
         `[game-ws] error after=${Date.now() - openedAt}ms readyState=${ws.readyState}`
       );
