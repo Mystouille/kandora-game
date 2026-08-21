@@ -408,6 +408,7 @@ export class MatchProcess {
   summary(): {
     matchId: string;
     status: "waiting" | "playing" | "finished";
+    presetId: string;
     buuMode: boolean;
     seats: Array<{ name: string | null; isBot: boolean } | null>;
   } {
@@ -432,6 +433,7 @@ export class MatchProcess {
     return {
       matchId: this.matchId,
       status: this.statusValue,
+      presetId: this.relayMode ? this.relayRuleSet : this.presetId,
       buuMode,
       seats,
     };
@@ -810,6 +812,7 @@ export class MatchProcess {
    * (tenhou-hanchan).
    */
   private readonly ruleSetOverride?: RuleSetOverride;
+  private readonly presetId: string;
 
   // --- Buu multi-game session state ------------------------------------
   /**
@@ -886,7 +889,8 @@ export class MatchProcess {
     seed: number,
     players: MatchPlayerInit[],
     debug?: MatchDebug,
-    ruleSetOverride?: RuleSetOverride
+    ruleSetOverride?: RuleSetOverride,
+    presetId = "tenhou-hanchan"
   ) {
     if (players.length !== 4) {
       throw new Error("MatchProcess requires exactly 4 players");
@@ -898,6 +902,7 @@ export class MatchProcess {
     );
     this.debug = debug;
     this.ruleSetOverride = ruleSetOverride;
+    this.presetId = presetId;
   }
 
   /**
@@ -910,7 +915,8 @@ export class MatchProcess {
     matchId: string,
     seed: number,
     debug?: MatchDebug,
-    ruleSetOverride?: RuleSetOverride
+    ruleSetOverride?: RuleSetOverride,
+    presetId = "tenhou-hanchan"
   ): MatchProcess {
     // Build with four placeholder bots so every field initializer
     // and downstream invariant (players.size === 4) holds, then
@@ -928,7 +934,8 @@ export class MatchProcess {
       seed,
       placeholders,
       debug,
-      ruleSetOverride
+      ruleSetOverride,
+      presetId
     );
     for (let s = 0; s < 4; s++) {
       m.players.set(s as Seat, null);

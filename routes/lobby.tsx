@@ -1,9 +1,7 @@
-import { useNavigate } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import { useCallback, useEffect, useState } from "react";
-import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
 import type { MatchDebug } from "~/game/protocol/messages";
-import type { Route } from "./+types/lobby";
 
 /**
  * `/lobby` — entry point for the multi-human walking skeleton.
@@ -19,11 +17,16 @@ import type { Route } from "./+types/lobby";
  *
  * Gated by `requireGameEnabled()` — 404s when `GAME_ENABLED` is false.
  */
-export async function loader(_args: Route.LoaderArgs) {
-  requireGameEnabled();
-  return { flag: getClientGameFlag() };
+export interface LobbyLoaderData {
+  flag: { gameEnabled: boolean };
+  presets: Array<{
+    id: string;
+    displayName: string;
+    description?: string;
+  }>;
 }
 
+const DEFAULT_LOBBY_PRESET_ID = "buu-east";
 const PLACEHOLDER_HAND = "123456789m1234p";
 const PLACEHOLDER_DRAWS = "555z";
 const PLACEHOLDER_LEFT = "123z";
@@ -35,13 +38,16 @@ interface LiveRoomSeat {
 interface LiveRoom {
   matchId: string;
   status: "waiting" | "playing" | "finished";
+  presetId?: string;
   buuMode: boolean;
   seats: Array<LiveRoomSeat | null>;
 }
 
 export default function LobbyRoute() {
+  const { presets } = useLoaderData<LobbyLoaderData>();
   const navigate = useNavigate();
   const [starting, setStarting] = useState(false);
+  const [presetId, setPresetId] = useState(DEFAULT_LOBBY_PRESET_ID);
   const [showDebug, setShowDebug] = useState(false);
   const [humanHand, setHumanHand] = useState("");
   const [humanDraws, setHumanDraws] = useState("");
@@ -156,7 +162,7 @@ export default function LobbyRoute() {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ debug, preset: "buu-east" }),
+        body: JSON.stringify({ debug, preset: presetId }),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -245,6 +251,29 @@ export default function LobbyRoute() {
       <p className="text-gray-600 dark:text-gray-300 mb-8">
         Let's play some mahjong!
       </p>
+
+      <label className="block mb-6">
+        <span className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+          Rules
+        </span>
+        <select
+          value={presetId}
+          onChange={(event) => {
+            setPresetId(event.target.value);
+          }}
+          disabled={starting}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 rounded-md focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        >
+          {presets.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.displayName}
+            </option>
+          ))}
+        </select>
+        <span className="block mt-1 text-sm text-gray-500 dark:text-gray-400">
+          {presets.find((preset) => preset.id === presetId)?.description}
+        </span>
+      </label>
 
       <div className="flex flex-wrap gap-3 mb-6">
         <button
@@ -350,7 +379,9 @@ export default function LobbyRoute() {
                         {r.matchId}
                       </span>
                       <span className="text-xs text-gray-500 dark:text-gray-400">
-                        {r.buuMode ? "buu-east" : "tenhou"}
+                        {presets.find((preset) => preset.id === r.presetId)
+                          ?.displayName ??
+                          (r.buuMode ? "Buu Mahjong — East" : "Tenhou")}
                       </span>
                     </div>
                     <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">

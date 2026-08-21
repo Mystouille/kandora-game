@@ -51,6 +51,17 @@ describe("MatchProcess waiting-room state machine", () => {
     }
   });
 
+  it("includes the selected preset in the lobby summary", () => {
+    const m = MatchProcess.createWaitingRoom(
+      "room-m-league",
+      42,
+      undefined,
+      undefined,
+      "m-league"
+    );
+    expect(m.summary().presetId).toBe("m-league");
+  });
+
   it("claimSeat assigns an empty slot and is idempotent per userId", () => {
     const m = MatchProcess.createWaitingRoom("room-2", 1);
     const seatA = m.claimSeat("user-1", "Alice");

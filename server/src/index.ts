@@ -374,7 +374,8 @@ async function handleCreateRoom(
     matchId,
     hashStringToSeed(matchId),
     parsedDebug,
-    presetToRuleSet(getPreset(presetId))
+    presetToRuleSet(getPreset(presetId)),
+    presetId
   );
   matches.set(matchId, match);
   // Post-creation grace timer: if nobody connects within the

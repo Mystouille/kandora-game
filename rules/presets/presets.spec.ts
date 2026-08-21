@@ -22,6 +22,21 @@ describe("rule-set presets", () => {
     expect(p.startingScore).toBe(25000);
   });
 
+  it("loads the M-League rules", () => {
+    const preset = getPreset("m-league");
+    expect(preset.roundWindCount).toBe(2);
+    expect(preset.startingScore).toBe(25000);
+    expect(preset.atamahane).toBe(true);
+    expect(preset.bustedScore).toBeNull();
+    expect(preset.kiriageMangan).toBe(true);
+    expect(Object.values(preset.aborts)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
   it("getPreset throws on unknown id", () => {
     expect(() => getPreset("does-not-exist")).toThrow(
       /Unknown rule-set preset/

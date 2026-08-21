@@ -17,6 +17,7 @@
 import tenhouHanchan from "./tenhou-hanchan.json";
 import tenhouTonpuusen from "./tenhou-tonpuusen.json";
 import buuEast from "./buu-east.json";
+import mLeague from "./m-league.json";
 
 import type { RuleSet } from "../ruleSet";
 
@@ -31,6 +32,7 @@ const PRESET_SOURCES: ReadonlyArray<unknown> = [
   tenhouHanchan,
   tenhouTonpuusen,
   buuEast,
+  mLeague,
 ];
 
 /** The default preset id used when no override is supplied. */
