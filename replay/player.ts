@@ -910,6 +910,46 @@ export function replayViewToMatchView(
   return rotateMatchView(base, focus);
 }
 
+/** Rotate a completed hand result into the seat-relative renderer frame. */
+export function rotateHandResult(
+  result: NonNullable<MatchView["lastHandResult"]>,
+  focus: Seat
+): NonNullable<MatchView["lastHandResult"]> {
+  const rot = (seat: Seat): Seat => ((seat - focus + 4) % 4) as Seat;
+  const perm4 = <T>(arr: readonly T[]): [T, T, T, T] => [
+    arr[(0 + focus) % 4],
+    arr[(1 + focus) % 4],
+    arr[(2 + focus) % 4],
+    arr[(3 + focus) % 4],
+  ];
+  return {
+    ...result,
+    delta: result.delta ? perm4(result.delta) : result.delta,
+    tenpai: result.tenpai ? perm4(result.tenpai) : result.tenpai,
+    nagashi: result.nagashi ? perm4(result.nagashi) : result.nagashi,
+    scores: result.scores ? perm4(result.scores) : result.scores,
+    waits: result.waits ? perm4(result.waits) : result.waits,
+    tenpaiHands: result.tenpaiHands
+      ? perm4(result.tenpaiHands)
+      : result.tenpaiHands,
+    wins: result.wins
+      ? result.wins.map((win) => ({
+          ...win,
+          seat: rot(win.seat),
+          loser: win.loser != null ? rot(win.loser) : win.loser,
+        }))
+      : result.wins,
+    buuChombo: result.buuChombo
+      ? {
+          ...result.buuChombo,
+          seat: rot(result.buuChombo.seat),
+          chipDelta: perm4(result.buuChombo.chipDelta),
+          chips: perm4(result.buuChombo.chips),
+        }
+      : result.buuChombo,
+  };
+}
+
 /**
  * Rotate a `MatchView` so the seat at `focus` is rendered at the
  * bottom (relative seat 0). All per-seat arrays are reindexed and
@@ -929,34 +969,7 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     arr[(3 + focus) % 4],
   ];
   const result = mv.lastHandResult;
-  const rotatedResult = result
-    ? {
-        ...result,
-        delta: result.delta ? perm4(result.delta) : result.delta,
-        tenpai: result.tenpai ? perm4(result.tenpai) : result.tenpai,
-        nagashi: result.nagashi ? perm4(result.nagashi) : result.nagashi,
-        scores: result.scores ? perm4(result.scores) : result.scores,
-        waits: result.waits ? perm4(result.waits) : result.waits,
-        tenpaiHands: result.tenpaiHands
-          ? perm4(result.tenpaiHands)
-          : result.tenpaiHands,
-        wins: result.wins
-          ? result.wins.map((w) => ({
-              ...w,
-              seat: rot(w.seat),
-              loser: w.loser != null ? rot(w.loser) : w.loser,
-            }))
-          : result.wins,
-        buuChombo: result.buuChombo
-          ? {
-              ...result.buuChombo,
-              seat: rot(result.buuChombo.seat),
-              chipDelta: perm4(result.buuChombo.chipDelta),
-              chips: perm4(result.buuChombo.chips),
-            }
-          : result.buuChombo,
-      }
-    : result;
+  const rotatedResult = result ? rotateHandResult(result, focus) : result;
   return {
     ...mv,
     mySeat: 0,

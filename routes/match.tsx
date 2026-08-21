@@ -18,7 +18,7 @@ import {
   type LivePlayMenuFlags,
 } from "~/game/client/LivePlayMenu";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
-import { rotateMatchView } from "~/game/replay/player";
+import { rotateHandResult, rotateMatchView } from "~/game/replay/player";
 import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
 import chipIconUrl from "~/game/client/icons/chips.png";
@@ -883,10 +883,14 @@ export default function GameMatchRoute({
   // discard array is in scope).
   useEffect(() => {
     if (view.lastHandResult) {
-      setStashedResult(view.lastHandResult);
+      setStashedResult(
+        view.mySeat !== null && view.mySeat !== 0
+          ? rotateHandResult(view.lastHandResult, view.mySeat)
+          : view.lastHandResult
+      );
       setStashDiscardBaseline(null);
     }
-  }, [view.lastHandResult]);
+  }, [view.lastHandResult, view.mySeat]);
 
   // Drop the stash (hides the eye button) once the player has
   // discarded twice in the new hand. A fresh `lastHandResult`

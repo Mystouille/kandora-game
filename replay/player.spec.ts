@@ -13,8 +13,10 @@ import {
   applyReplayEvent,
   replayBounds,
   replayReducer,
+  rotateHandResult,
   roundBoundaries,
 } from "./player";
+import type { MatchView } from "~/game/client/store";
 import type { ReplayLog } from "./types";
 import { REPLAY_LOG_SCHEMA_VERSION } from "./types";
 
@@ -99,6 +101,26 @@ const STARTING: [string[], string[], string[], string[]] = [
     "2p",
   ],
 ];
+
+describe("rotateHandResult", () => {
+  it("rotates score transfers and winner seats into the viewer's frame", () => {
+    const result: NonNullable<MatchView["lastHandResult"]> = {
+      reason: "ron",
+      delta: [8000, -8000, 0, 0],
+      scores: [33000, 17000, 25000, 25000],
+      wins: [{ seat: 0, loser: 1, han: 4, fu: 30, ten: 8000 }],
+    };
+
+    const rotated = rotateHandResult(result, 1);
+
+    expect(rotated.delta).toEqual([-8000, 0, 0, 8000]);
+    expect(rotated.scores).toEqual([17000, 25000, 25000, 33000]);
+    expect(rotated.wins).toEqual([
+      { seat: 3, loser: 0, han: 4, fu: 30, ten: 8000 },
+    ]);
+    expect(result.delta).toEqual([8000, -8000, 0, 0]);
+  });
+});
 
 describe("replayReducer", () => {
   it("returns the initial view when index is below match_start", () => {

@@ -17,6 +17,7 @@ import {
   applyReplayEvent,
   initialView,
   replayViewToMatchView,
+  rotateHandResult,
   type ReplayView,
 } from "~/game/replay/player";
 import { playSoundForEvent, playGameSound } from "~/game/client/sound";
@@ -581,6 +582,13 @@ export default function GameSpectateRoute({
           : null,
     };
   }, [baseline, events, playIndex, focusSeat]);
+  const renderedPostHandPeekResult = useMemo(
+    () =>
+      postHandPeekResult && focusSeat !== 0
+        ? rotateHandResult(postHandPeekResult, focusSeat)
+        : postHandPeekResult,
+    [postHandPeekResult, focusSeat]
+  );
 
   useEffect(() => {
     if (!eyeHeld) {
@@ -648,7 +656,7 @@ export default function GameSpectateRoute({
     r.setShowHands(overlays.showHands);
     r.setShowWalls(overlays.showWalls);
     r.setShowNames(overlays.showNames);
-    r.setHandResultOverride(eyeHeld ? postHandPeekResult : null);
+    r.setHandResultOverride(eyeHeld ? renderedPostHandPeekResult : null);
     // Staged per-yaku win reveal only while following the live head.
     // Paused on history, new relay events keep rebuilding the view
     // (fresh `lastHandResult`), which would restart the reveal every
@@ -680,7 +688,7 @@ export default function GameSpectateRoute({
     roomState,
     live,
     eyeHeld,
-    postHandPeekResult,
+    renderedPostHandPeekResult,
   ]);
 
   // -----------------------------------------------------------------------

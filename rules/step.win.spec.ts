@@ -188,6 +188,43 @@ describe("step — ron", () => {
     expect(winEv.delta[3]).toBe(0);
   });
 
+  it("applies kiriage mangan to the emitted score and payment delta", () => {
+    const winner = tiles("234m234p11s23445s");
+    const base = craftState({
+      hands: [
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        winner,
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+      ],
+      turn: 1,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 0, tile: "6s" },
+    });
+    const state: MatchState = {
+      ...base,
+      doraIndicators: ["8m"],
+      uraDoraIndicators: ["8m"],
+      riichiDeclared: [false, true, false, false],
+      ruleSet: {
+        ...base.ruleSet,
+        kiriageMangan: true,
+        scoreCap: null,
+      },
+    };
+
+    const { state: next, events } = step(state, { type: "ron", seat: 1 });
+    const winEv = events.find((event) => event.type === "win");
+    if (winEv?.type !== "win") {
+      throw new Error("expected win event");
+    }
+
+    expect(winEv.score).toMatchObject({ han: 4, fu: 30, ten: 8000 });
+    expect(winEv.delta).toEqual([-8000, 8000, 0, 0]);
+    expect(next.scores).toEqual([17000, 33000, 25000, 25000]);
+  });
+
   it("rejects ron from the discarder themself", () => {
     const winner = tiles("11m22p33s44m55p66s7z");
     const state = craftState({

@@ -1457,6 +1457,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       melds: state.melds[action.seat],
       noKuitan: !state.ruleSet.kuitan,
       noAka: isAkaDisabled(state.ruleSet),
+      kiriageMangan: state.ruleSet.kiriageMangan,
       scoreCap: state.ruleSet.scoreCap,
       // Haitei raoyue: tsumo on the very last live-wall tile.
       // Exclude rinshan draws (those score rinshan kaihou via
@@ -1565,6 +1566,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         melds: state.melds[w],
         noKuitan: !state.ruleSet.kuitan,
         noAka: isAkaDisabled(state.ruleSet),
+        kiriageMangan: state.ruleSet.kiriageMangan,
         scoreCap: state.ruleSet.scoreCap,
         rinshanOrChankan: isChankan,
         // Houtei raoyui: ron on the final discard of the hand —

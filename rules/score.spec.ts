@@ -214,6 +214,27 @@ describe("scoreHand — closed-hand wins", () => {
     expect(r.ten).toBe(0);
   });
 
+  it("promotes a 4-han 30-fu ron to mangan when kiriage is enabled", () => {
+    const input = {
+      hand: tiles("234m234p11s23445s"),
+      winTile: "6s" as Tile,
+      tsumo: false,
+      riichi: true,
+    };
+    expect(scoreHand(input).ten).toBe(7700);
+
+    const r = scoreHand({
+      ...input,
+      kiriageMangan: true,
+    });
+
+    expect(r.isAgari).toBe(true);
+    expect(r.han).toBe(4);
+    expect(r.fu).toBe(30);
+    expect(r.ten).toBe(8000);
+    expect(r.ko).toEqual([8000]);
+  });
+
   it("scoreCap clamps a 6-han haneman down to mangan (non-dealer tsumo)", () => {
     // Same haneman tsumo as above; cap drops ten 12000 → 8000.
     const r = scoreHand({

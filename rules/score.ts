@@ -152,6 +152,8 @@ export interface ScoreInput {
   noKuitan?: boolean;
   /** Disable red-five dora (treat 0X as a normal 5X). Default: enabled. */
   noAka?: boolean;
+  /** Promote 4-han 30-fu and 3-han 60-fu wins to mangan. */
+  kiriageMangan?: boolean;
   /**
    * Clamp the result’s payment to the named tier when the
    * lib-computed `ten` exceeds it. `null` / omitted leaves the
@@ -419,6 +421,9 @@ export function scoreHand(input: ScoreInput): ScoreResult {
   }
   const raw = r.calc() as RiichiRaw;
 
+  if (input.kiriageMangan) {
+    applyKiriageMangan(raw, input.tsumo, input.seatWind === "E");
+  }
   if (input.scoreCap) {
     applyScoreCap(raw, input.scoreCap, input.tsumo, input.seatWind === "E");
   }
@@ -451,6 +456,19 @@ const SCORE_CAP_BASE: Record<NonNullable<ScoreInput["scoreCap"]>, number> = {
   sanbaiman: 6000,
 };
 
+function applyKiriageMangan(
+  raw: RiichiRaw,
+  isTsumo: boolean,
+  isDealer: boolean
+): void {
+  const isKiriageBoundary =
+    (raw.han === 4 && raw.fu === 30) || (raw.han === 3 && raw.fu === 60);
+  if (!raw.isAgari || raw.error || raw.yakuman > 0 || !isKiriageBoundary) {
+    return;
+  }
+  setBasePayments(raw, SCORE_CAP_BASE.mangan, isTsumo, isDealer);
+}
+
 /**
  * Clamp `raw.oya` / `raw.ko` / `raw.ten` to the named tier when
  * `raw.ten` already exceeds it. Preserves the lib’s array shape
@@ -472,6 +490,15 @@ function applyScoreCap(
   if (raw.ten <= capTen) {
     return;
   }
+  setBasePayments(raw, base, isTsumo, isDealer);
+}
+
+function setBasePayments(
+  raw: RiichiRaw,
+  base: number,
+  isTsumo: boolean,
+  isDealer: boolean
+): void {
   if (isTsumo) {
     raw.oya = [base * 2, base * 2, base * 2];
     raw.ko = [base * 2, base, base];
@@ -479,5 +506,5 @@ function applyScoreCap(
     raw.oya = [base * 6];
     raw.ko = [base * 4];
   }
-  raw.ten = capTen;
+  raw.ten = isDealer ? base * 6 : base * 4;
 }

@@ -164,10 +164,8 @@ export interface RuleSet {
    */
   tenpaiRenchan: boolean;
   /**
-   * When `true`, a 4-han 30-fu win is rounded up to mangan
-   * (kiriage mangan). Currently a recognized flag only — the
-   * scoring lib reports the un-rounded result and the post-hoc
-   * promotion lands alongside the chip system.
+   * When `true`, 4-han 30-fu and 3-han 60-fu wins are rounded up
+   * to mangan (kiriage mangan).
    */
   kiriageMangan: boolean;
   /**

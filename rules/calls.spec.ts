@@ -64,6 +64,26 @@ describe("enumerateCalls — chi", () => {
     expect(s1?.options.filter((o) => o.kind === "chi").length).toBe(3);
   });
 
+  it("offers separate chi options for red and normal fives", () => {
+    // Discarded 3p can be called with 4p + either 0p or 5p.
+    const seat1 = tiles("405p1m1m2m2m3m3m4m4m5m5m"); // 13
+    const out = enumerateCalls(
+      craft({
+        hands: [FILLER, seat1, FILLER, FILLER],
+        discarder: 0,
+        tile: "3p",
+      })
+    );
+    const chis = out
+      .find((o) => o.seat === 1)
+      ?.options.filter((o) => o.kind === "chi");
+
+    expect(chis).toEqual([
+      { kind: "chi", tiles: ["4p", "0p"] },
+      { kind: "chi", tiles: ["4p", "5p"] },
+    ]);
+  });
+
   it("does not offer chi to non-left seats", () => {
     const handWithPartners = tiles("3p4p6p7p1m2m3m4m5m6m7m8m9m");
     const out = enumerateCalls(

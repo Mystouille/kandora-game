@@ -103,10 +103,9 @@ function pushChi(
   //   v-1, v+1 | claimed   (kanchan: claimed is middle)
   //   v+1, v+2 | claimed   (claimed is left)
   // For each shape, we need both partner tiles to actually be in
-  // the caller's hand. Honor each partner-tile identity (white 5
-  // and red 5 are distinct tile strings) by picking the first
-  // matching copy from the hand, but treating them as equivalent
-  // when computing "do we have it".
+  // the caller's hand. Treat red and normal fives as the same rank
+  // when finding a run, but preserve their distinct tile strings
+  // when surfacing the available choices.
   const hand = state.hands[seat];
   const handByValue = new Map<number, Tile[]>();
   for (const t of hand) {
@@ -132,16 +131,15 @@ function pushChi(
     if (!aTiles || !bTiles) {
       continue;
     }
-    // Use canonical "red 5 preferred" pick so the orchestrator
-    // surfaces the same tile identities the engine will later
-    // remove. Red 5 ("0X") is preferred when present so the
-    // player's red 5 ends up consumed by the chi rather than
-    // held back.
-    const pick = (ts: Tile[]): Tile => {
-      const red = ts.find((t) => t[0] === "0");
-      return red ?? ts[0];
-    };
-    out.push({ kind: "chi", tiles: [pick(aTiles), pick(bTiles)] });
+    // Duplicate normal copies share the same tile string and do not
+    // represent a meaningful choice. A red five ("0X") and normal
+    // five ("5X"), however, must produce separate legal actions so
+    // the player can decide which one the meld consumes.
+    for (const aTile of new Set(aTiles)) {
+      for (const bTile of new Set(bTiles)) {
+        out.push({ kind: "chi", tiles: [aTile, bTile] });
+      }
+    }
   }
 }
 
