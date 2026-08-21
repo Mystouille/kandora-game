@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { EyeOutlined } from "@ant-design/icons";
-import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
 import type {
   SeatEnrichment,
   TableRenderer,
@@ -24,9 +23,10 @@ import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
 import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
-import tntLogoBlackUrl from "~/banner/TNT_logo-BLACK.png";
-import tntLogoWhiteUrl from "~/banner/TNT_logo-WHITE.png";
-import type { Route } from "./+types/match";
+
+const publicBasePath = import.meta.env.BASE_URL || "/";
+const tntLogoBlackUrl = `${publicBasePath}banner/TNT_logo-BLACK.png`;
+const tntLogoWhiteUrl = `${publicBasePath}banner/TNT_logo-WHITE.png`;
 
 /**
  * Pause inserted between a draw event and the auto-fired
@@ -329,12 +329,9 @@ function useMatchPageEffects(): void {
  *
  * Gated server-side by `requireGameEnabled()`.
  */
-export async function loader({ params }: Route.LoaderArgs) {
-  requireGameEnabled();
-  return {
-    matchId: params.matchId,
-    flag: getClientGameFlag(),
-  };
+export interface GameMatchLoaderData {
+  matchId: string;
+  flag: { gameEnabled: boolean };
 }
 
 /**
@@ -643,7 +640,11 @@ function ReadyCheckOverlay({
   );
 }
 
-export default function GameMatchRoute({ loaderData }: Route.ComponentProps) {
+export default function GameMatchRoute({
+  loaderData,
+}: {
+  loaderData: GameMatchLoaderData;
+}) {
   const { matchId } = loaderData;
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
