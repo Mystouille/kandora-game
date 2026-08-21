@@ -62,6 +62,13 @@ export {
   waits,
 } from "./shanten";
 
+export type {
+  StandardUkeireAnalysis,
+  UkeireDiscard,
+  UkeireDraw,
+} from "./ukeire";
+export { analyzeStandardUkeire } from "./ukeire";
+
 export type { ScoreInput, ScoreResult } from "./score";
 export { buildRiichiInput, indicatorToDora, scoreHand } from "./score";
 
