@@ -114,6 +114,7 @@ describe("step — shouminkan", () => {
       melds,
       deadWall,
     });
+    const liveWallBefore = [...state.liveWall];
     const r = step(state, {
       type: "kan",
       seat: 0,
@@ -144,6 +145,7 @@ describe("step — shouminkan", () => {
     });
     // No dora reveal yet — that ships with `complete_shouminkan`.
     expect(r.state.doraIndicators).toEqual([]);
+    expect(r.state.liveWall).toEqual(liveWallBefore);
 
     // Now complete (no chankan ron).
     const r2 = step(r.state, { type: "complete_shouminkan" });
@@ -154,6 +156,13 @@ describe("step — shouminkan", () => {
     expect(r2.state.lastDrawn[0]).toBe("5z");
     expect(r2.state.phase).toBe("awaiting_discard");
     expect(r2.state.pendingShouminkan).toBeNull();
+    expect(r2.state.liveWall).toHaveLength(liveWallBefore.length - 1);
+    expect(r2.state.deadWall).toHaveLength(deadWall.length);
+    expect(r2.state.deadWall.at(-1)).toBe(liveWallBefore.at(-1));
+    expect(r2.events.find((e) => e.type === "draw")).toMatchObject({
+      wallRemaining: liveWallBefore.length - 1,
+      fromDeadWall: true,
+    });
     // After the rinshan shift, deadWall[3] is the original index 4 = "1m".
     expect(r2.state.doraIndicators).toEqual(["1m"]);
   });
@@ -176,6 +185,32 @@ describe("step — shouminkan", () => {
     });
     expect(r.events).toEqual([]);
     expect(r.state).toBe(state);
+  });
+
+  it("rejects shouminkan after the final live-wall draw", () => {
+    const ponMeld: Meld = {
+      type: "pon",
+      tiles: ["3m", "3m", "3m"],
+      claimedTile: "3m",
+      from: 1,
+    };
+    const state = craft({
+      hands: [tiles("3m1p2p3p4p5p6p7p8p9p1s2s"), FILLER13, FILLER13, FILLER13],
+      turn: 0,
+      phase: "awaiting_discard",
+      lastDrawn: "3m",
+      liveWall: [],
+      melds: [[ponMeld], [], [], []],
+    });
+
+    const result = step(state, {
+      type: "kan",
+      seat: 0,
+      kind: "shouminkan",
+      tile: "3m",
+    });
+    expect(result.events).toEqual([]);
+    expect(result.state).toBe(state);
   });
 
   it("rejects when the upgrading tile isn't in hand", () => {

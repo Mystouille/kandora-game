@@ -68,7 +68,7 @@ export function enumerateCalls(state: MatchState): SeatCallOptions[] {
     // handled elsewhere).
     const inRiichi = state.riichiDeclared[seat];
 
-    if (!inRiichi) {
+    if (!inRiichi && state.liveWall.length > 0) {
       pushChi(state, seat, discarder, claimed, options);
       pushPon(state, seat, claimed, options);
       pushDaiminkan(state, seat, claimed, options);

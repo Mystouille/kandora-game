@@ -32,6 +32,7 @@ function craft(opts: {
   tile: Tile;
   dealer?: 0 | 1 | 2 | 3;
   riichiDeclared?: [boolean, boolean, boolean, boolean];
+  liveWall?: Tile[];
 }): MatchState {
   const base = createInitialState(0);
   return {
@@ -44,6 +45,7 @@ function craft(opts: {
     lastDrawn: [null, null, null, null],
     lastDiscard: { seat: opts.discarder, tile: opts.tile },
     riichiDeclared: opts.riichiDeclared ?? [false, false, false, false],
+    liveWall: opts.liveWall ?? base.liveWall,
   };
 }
 
@@ -231,6 +233,22 @@ describe("enumerateCalls — ron", () => {
 });
 
 describe("enumerateCalls — preconditions", () => {
+  it("offers only ron after the final live-wall tile is discarded", () => {
+    const chiHand = tiles("3p4p1m2m3m4m5m6m7m8m9m1s2s");
+    const ronHand = tiles("1m1m2p2p3s3s4m4m5p6p6p7s7s");
+    const ponHand = tiles("5p5p5p1m2m3m4m5m6m7m8m9m1s");
+    const out = enumerateCalls(
+      craft({
+        hands: [FILLER, chiHand, ronHand, ponHand],
+        discarder: 0,
+        tile: "5p",
+        liveWall: [],
+      })
+    );
+
+    expect(out).toEqual([{ seat: 2, options: [{ kind: "ron" }] }]);
+  });
+
   it("returns [] when state is not in awaiting_draw", () => {
     const base = craft({
       hands: [FILLER, FILLER, FILLER, FILLER],

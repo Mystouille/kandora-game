@@ -43,11 +43,11 @@ export type EngineEvent =
       tile: Tile;
       wallRemaining: number;
       /** True when this draw is a rinshan replacement (the tile
-       * came off the dead wall rather than the live wall). The
-       * live wall count is unchanged for rinshan draws. Consumed
-       * by the server to populate the wire event's same-named
-       * field, which drives the client's dead-wall depletion
-       * rendering. */
+       * came off the dead wall rather than the live wall). The kan
+       * still reduces `wallRemaining` because the back live-wall
+       * tile is transferred into the dead wall. Consumed by the
+       * server to populate the wire event's same-named field, which
+       * drives the client's dead-wall depletion rendering. */
       fromDeadWall?: boolean;
     }
   | {
@@ -138,6 +138,24 @@ export interface StepResult {
 }
 
 const WINDS: readonly Wind[] = ["E", "S", "W", "N"];
+
+/**
+ * Draw a rinshan tile and replenish the dead wall from the back of
+ * the live wall. The dead wall stays at 14 tiles while the number of
+ * future normal draws decreases by one, as required after every kan.
+ */
+function drawRinshan(next: MatchState): Tile | undefined {
+  if (next.deadWall.length === 0 || next.liveWall.length === 0) {
+    return undefined;
+  }
+  const rinshan = next.deadWall.shift();
+  const reserved = next.liveWall.pop();
+  if (rinshan === undefined || reserved === undefined) {
+    return undefined;
+  }
+  next.deadWall.push(reserved);
+  return rinshan;
+}
 
 /**
  * Capture the next kan-dora indicator and either reveal it now
@@ -1594,6 +1612,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (state.phase !== "awaiting_draw" || state.lastDiscard === null) {
       return noop(state);
     }
+    if (state.liveWall.length === 0) {
+      return noop(state);
+    }
     // Chi only legal from the seat immediately to the discarder's
     // left (i.e. the next-to-act seat under turn order).
     const expected = ((state.lastDiscard.seat + 1) % 4) as Seat;
@@ -1656,6 +1677,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (state.phase !== "awaiting_draw" || state.lastDiscard === null) {
       return noop(state);
     }
+    if (state.liveWall.length === 0) {
+      return noop(state);
+    }
     if (action.seat === state.lastDiscard.seat) {
       return noop(state);
     }
@@ -1704,6 +1728,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
 
   // ----- Kan -------------------------------------------------------------
   if (action.type === "kan") {
+    if (state.liveWall.length === 0) {
+      return noop(state);
+    }
     if (action.kind === "shouminkan") {
       // Shouminkan ("added kan"): the active seat extends one of
       // their open pons with the matching tile from their hand.
@@ -1836,7 +1863,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       next.ippatsuEligible = [false, false, false, false];
       // Rinshan draw from the front of the dead wall, then reveal a
       // new dora indicator.
-      const rinshan = next.deadWall.shift();
+      const rinshan = drawRinshan(next);
       if (rinshan === undefined) {
         return noop(state);
       }
@@ -1926,7 +1953,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     };
     next.melds[action.seat].push(meld);
     next.ippatsuEligible = [false, false, false, false];
-    const rinshan = next.deadWall.shift();
+    const rinshan = drawRinshan(next);
     if (rinshan === undefined) {
       return noop(state);
     }
@@ -2014,7 +2041,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     const next = clone(state);
     const declarer = state.pendingShouminkan.seat;
     // Rinshan draw from the front of the dead wall.
-    const rinshan = next.deadWall.shift();
+    const rinshan = drawRinshan(next);
     if (rinshan === undefined) {
       return noop(state);
     }

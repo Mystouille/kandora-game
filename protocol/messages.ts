@@ -534,11 +534,11 @@ export const SnapshotStateSchema = z.object({
   discards: z.array(z.array(TileSchema)).length(4),
   melds: z.array(z.array(MeldSchema)).length(4),
   wallRemaining: z.number().int().nonnegative(),
-  /** Number of tiles drawn from the live wall this hand (excluding
-   * rinshan draws from the dead wall). Used by the renderer to
-   * shrink the live wall and place the just-drawn tile near the
-   * dora end. Optional for back-compat with older snapshots; the
-   * renderer falls back to `70 - wallRemaining` when absent. */
+  /** Number of post-deal draws this hand, including rinshan draws.
+   * Each kan transfers one live-wall tile into the dead wall, so this
+   * equals `70 - wallRemaining`. Used by the renderer to shrink the
+   * wall and infer how many rinshan tiles were consumed alongside
+   * `liveDrawsTaken`. Optional for back-compat with older snapshots. */
   drawsTaken: z.number().int().nonnegative().optional(),
   doraIndicators: z.array(TileSchema),
   turn: SeatSchema,

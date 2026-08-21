@@ -12,7 +12,7 @@
  *   Tsumo: `<hand13><winTile>`
  *   Ron:   `<hand13>+<winTile>`
  *
- * Options (after the hand): `+<flags>+d<doraIndicators>+u<uraDora>+<wind>`
+ * Options (after the hand): `+<flags>+d<doraTiles>+<wind>`
  *   flag letters used here:
  *     r — riichi
  *     w — double riichi (we still set `r` too for clarity, but `w`
@@ -354,16 +354,17 @@ export function buildRiichiInput(input: ScoreInput): string {
   if (flags || windDigits) {
     tail.push(flags + windDigits);
   }
-  if (input.doraIndicators && input.doraIndicators.length > 0) {
-    const dora = input.doraIndicators.map(indicatorToDora);
+  // The `riichi` package accepts one `d` chunk and replaces (rather
+  // than appends) its internal list if another appears. Combine regular
+  // and ura indicators first so every indicator contributes, including
+  // duplicate indicators that point to the same tile.
+  const allDoraIndicators = [
+    ...(input.doraIndicators ?? []),
+    ...(input.uraDoraIndicators ?? []),
+  ];
+  if (allDoraIndicators.length > 0) {
+    const dora = allDoraIndicators.map(indicatorToDora);
     tail.push(`d${tilesToGroups(sortTiles(dora))}`);
-  }
-  // The `riichi` package supports a single `d` chunk for both regular
-  // and uradora; revealed only on a riichi win, both convert from
-  // indicators to actual dora tiles before being passed in.
-  if (input.uraDoraIndicators && input.uraDoraIndicators.length > 0) {
-    const ura = input.uraDoraIndicators.map(indicatorToDora);
-    tail.push(`d${tilesToGroups(sortTiles(ura))}`);
   }
 
   const segments: string[] = [withWin, ...meldChunks, ...tail];

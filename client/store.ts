@@ -127,18 +127,16 @@ export interface MatchView {
    * (rinshan / dora / ura / kan-dora positions). */
   deadWall: Tile[] | null;
   /**
-   * Number of live-wall tiles actually drawn since the current
-   * hand started. Drives the wall-shrinkage visualization in the
-   * renderer; reset to 0 on every `hand_start`, incremented on
-   * every `draw` event.
+   * Number of post-deal draws since the current hand started,
+   * including rinshan replacements. Drives the wall counter and
+   * wall-shrinkage visualization; reset to 0 on `hand_start` and
+   * incremented on every `draw` event.
    */
   drawsTaken: number;
   /**
    * Number of live-wall tiles drawn since the current hand
-   * started, excluding rinshan replacement draws. Populated by
-   * the replay reducer; in live play matches `drawsTaken`
-   * because the live broadcast path doesn't increment it for
-   * rinshan draws (no annotation pass runs on live events).
+   * started, excluding rinshan replacements. The difference
+   * `drawsTaken - liveDrawsTaken` is the number of completed kans.
    */
   liveDrawsTaken: number;
   /**
@@ -550,10 +548,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
       totalDiscards: snap.discards.reduce((acc, d) => acc + d.length, 0),
       wallRemaining: snap.wallRemaining,
       dice: snap.dice ? [snap.dice[0], snap.dice[1]] : null,
-      // Prefer the server's exact count when present; older
-      // snapshots without `drawsTaken` get a wall-size derivation
-      // that's exact for normal play (rinshan draws come off the
-      // dead wall and don't affect `wallRemaining`).
+      // Prefer the server's exact count when present. Every normal
+      // draw removes a live-wall tile, and every rinshan draw reserves
+      // one into the dead wall, so the wall-size fallback counts both.
       drawsTaken: snap.drawsTaken ?? Math.max(0, 70 - snap.wallRemaining),
       // Live snapshots never carry a draw schedule (it's a
       // replay-only post-process artifact); reset to safe

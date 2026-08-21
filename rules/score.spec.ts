@@ -185,6 +185,39 @@ describe("scoreHand — closed-hand wins", () => {
     expect(r.yaku).toMatchObject({ ドラ: "1飜" });
   });
 
+  it("counts every matching copy of a dora tile", () => {
+    const r = scoreHand({
+      hand: tiles("234m234p11s23445s"),
+      winTile: "6s",
+      tsumo: true,
+      riichi: true,
+      ippatsu: true,
+      doraIndicators: ["9s"], // dora 1s; the hand contains a pair
+    });
+
+    expect(r.han).toBe(8);
+    expect(r.ten).toBe(16000);
+    expect(r.yaku).toMatchObject({ ドラ: "2飜" });
+  });
+
+  it("counts identical regular and ura-dora indicators separately", () => {
+    const input = {
+      hand: tiles("234m234p11s23445s"),
+      winTile: "6s" as Tile,
+      tsumo: true,
+      riichi: true,
+      ippatsu: true,
+      doraIndicators: ["1m" as Tile],
+      uraDoraIndicators: ["1m" as Tile],
+    };
+
+    expect(buildRiichiInput(input)).toBe("234m234p11234456s+ri+d22m");
+    const r = scoreHand(input);
+    expect(r.han).toBe(8);
+    expect(r.ten).toBe(16000);
+    expect(r.yaku).toMatchObject({ ドラ: "2飜" });
+  });
+
   it("respects roundWind / seatWind for double yakuhai (south-south)", () => {
     const r = scoreHand({
       hand: tiles("234m234p234s222z1z"),

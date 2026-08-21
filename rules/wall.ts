@@ -10,9 +10,13 @@
  *       indices 4,6,8,10,12: dora indicators (revealed progressively)
  *       indices 5,7,9,11,13: ura indicators (revealed at win for riichi)
  *     Slice convention used here matches the server: `deadWall[4]` is
- *     the first revealed dora indicator.
+ *     the first revealed dora indicator. Each rinshan draw removes the
+ *     front tile and transfers the back tile of `liveWall` to the end,
+ *     keeping the dead wall at 14 tiles.
  *   - Live wall: everything between the dealt hands and the dead wall.
  *     For the standard 4×13-tile deal that's `136 - 52 - 14 = 70` tiles.
+ *     A normal draw removes the front tile; a kan reserves the back tile
+ *     into the dead wall, so both reduce the number of future draws.
  *
  * Phase 1 step 1 keeps the slice's "no red fives" build. Red-five
  * substitution is a configurable wall option that lands when scoring

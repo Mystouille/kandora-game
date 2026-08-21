@@ -246,6 +246,7 @@ describe("step — daiminkan", () => {
       deadWall: dw,
       doraIndicators: ["1m"], // pretend one dora already shown
     };
+    const liveWallBefore = [...seeded.liveWall];
     const r = step(seeded, {
       type: "kan",
       seat: 2,
@@ -261,6 +262,13 @@ describe("step — daiminkan", () => {
     expect(r.state.lastDrawn[2]).toBe("9z");
     expect(r.state.hands[2]).toContain("9z");
     expect(r.state.doraIndicators).toHaveLength(2);
+    expect(r.state.liveWall).toHaveLength(liveWallBefore.length - 1);
+    expect(r.state.deadWall).toHaveLength(dw.length);
+    expect(r.state.deadWall.at(-1)).toBe(liveWallBefore.at(-1));
+    expect(r.events.find((e) => e.type === "draw")).toMatchObject({
+      wallRemaining: liveWallBefore.length - 1,
+      fromDeadWall: true,
+    });
     expect(r.state.turn).toBe(2);
     expect(r.state.phase).toBe("awaiting_discard");
   });
@@ -302,6 +310,7 @@ describe("step — ankan", () => {
       deadWall: dw,
       doraIndicators: ["1m"],
     };
+    const liveWallBefore = [...seeded.liveWall];
     const r = step(seeded, {
       type: "kan",
       seat: 0,
@@ -317,6 +326,13 @@ describe("step — ankan", () => {
     });
     expect(r.state.lastDrawn[0]).toBe("9z");
     expect(r.state.doraIndicators).toHaveLength(2);
+    expect(r.state.liveWall).toHaveLength(liveWallBefore.length - 1);
+    expect(r.state.deadWall).toHaveLength(dw.length);
+    expect(r.state.deadWall.at(-1)).toBe(liveWallBefore.at(-1));
+    expect(r.events.find((e) => e.type === "draw")).toMatchObject({
+      wallRemaining: liveWallBefore.length - 1,
+      fromDeadWall: true,
+    });
     expect(r.state.phase).toBe("awaiting_discard");
     expect(r.state.turn).toBe(0);
   });
@@ -337,6 +353,44 @@ describe("step — ankan", () => {
       tile: "4m",
     });
     expect(r.events).toEqual([]);
+  });
+});
+
+describe("step — calls after the final live-wall draw", () => {
+  it("rejects chi, pon, and daiminkan on the final discard", () => {
+    const callerHand = tiles("3p4p5p5p5p1m2m3m4m5m6m7m8m");
+    const state = craft({
+      hands: [FILLER, callerHand, FILLER, FILLER],
+      turn: 1,
+      phase: "awaiting_draw",
+      lastDiscard: { seat: 0, tile: "5p" },
+      liveWall: [],
+    });
+
+    expect(
+      step(state, { type: "chi", seat: 1, tiles: ["3p", "4p"] }).events
+    ).toEqual([]);
+    expect(
+      step(state, { type: "pon", seat: 1, tiles: ["5p", "5p"] }).events
+    ).toEqual([]);
+    expect(
+      step(state, { type: "kan", seat: 1, kind: "daiminkan", tile: "5p" })
+        .events
+    ).toEqual([]);
+  });
+
+  it("rejects ankan after the final live-wall draw", () => {
+    const state = craft({
+      hands: [tiles("4m4m4m4m1p2p3p4p5p6p7p8p9p1s"), FILLER, FILLER, FILLER],
+      turn: 0,
+      phase: "awaiting_discard",
+      lastDrawn: "1s",
+      liveWall: [],
+    });
+
+    expect(
+      step(state, { type: "kan", seat: 0, kind: "ankan", tile: "4m" }).events
+    ).toEqual([]);
   });
 });
 

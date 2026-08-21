@@ -1895,10 +1895,9 @@ export class MatchProcess {
           }))
         ),
         wallRemaining: this.state.liveWall.length,
-        // Number of live-wall draws this hand. The live wall is
-        // 70 tiles after dealing; each normal draw shrinks it by
-        // one. Rinshan draws come off the dead wall and are not
-        // counted here.
+        // Number of post-deal draws this hand. A normal draw removes
+        // one live-wall tile; a rinshan draw reserves the back tile
+        // into the dead wall, so both shrink `liveWall` by one.
         drawsTaken: 70 - this.state.liveWall.length,
         doraIndicators: [...this.state.doraIndicators],
         turn: this.state.turn,
@@ -3119,6 +3118,9 @@ export class MatchProcess {
   private buildSelfKanLegals(seat: Seat): LegalAction[] {
     const out: LegalAction[] = [];
     if (this.state.phase !== "awaiting_discard") {
+      return out;
+    }
+    if (this.state.liveWall.length === 0) {
       return out;
     }
     if (this.state.lastDrawn[seat] === null) {

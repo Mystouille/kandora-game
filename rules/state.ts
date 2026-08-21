@@ -18,6 +18,8 @@
  *   - `lastDrawn[seat]` is the tile last drawn by `seat`, or `null`
  *     once they discard.
  *   - `liveWall[0]` is the next draw.
+ *   - `liveWall[liveWall.length - 1]` moves into the dead wall after
+ *     each kan, so `liveWall.length` is the number of future draws.
  *   - `turn` is the seat about to act (or who just drew).
  *   - When `phase === "hand_ended"`, the only legal action is
  *     `start_next_hand`. When `phase === "match_ended"` no further

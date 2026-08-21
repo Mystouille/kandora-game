@@ -241,6 +241,31 @@ describe("step — ippatsu + ura-dora on riichi win", () => {
     expect(winEv.score.han).toBeGreaterThanOrEqual(5);
   });
 
+  it("counts identical regular and ura indicators for every matching tile", () => {
+    const handTenpai = tiles("11m22p33s44m55p66s7z");
+    const state = craft({
+      hands: [FILLER, handTenpai, FILLER, FILLER],
+      turn: 1,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 0, tile: "7z" },
+      riichiDeclared: [false, true, false, false],
+      ippatsuEligible: [false, false, false, false],
+      doraIndicators: ["6z"],
+      uraDoraIndicators: ["6z"],
+    });
+
+    const r = step(state, { type: "ron", seat: 1 });
+    const winEv = r.events.find((event) => event.type === "win");
+    if (winEv?.type !== "win") {
+      throw new Error("expected win event");
+    }
+
+    // Chiitoitsu(2) + riichi(1) + two 7z × two indicators = 7 han.
+    expect(winEv.score.han).toBe(7);
+    expect(winEv.score.yaku["ドラ"]).toBe("4飜");
+  });
+
   it("non-riichi seat does not see ura-dora", () => {
     const handTenpai = tiles("11m22p33s44m55p66s7z");
     const state = craft({
