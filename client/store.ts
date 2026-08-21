@@ -298,6 +298,9 @@ export interface MatchView {
       ten?: number;
       yakumanCount?: number;
       yaku?: Record<string, string>;
+      doraCount?: number;
+      akaDoraCount?: number;
+      uraDoraCount?: number;
       hand?: Tile[];
       melds?: Meld[];
       doraIndicators?: Tile[];
@@ -901,6 +904,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ten: event.ten,
             yakumanCount: event.yakumanCount,
             yaku: event.yaku,
+            doraCount: event.doraCount,
+            akaDoraCount: event.akaDoraCount,
+            uraDoraCount: event.uraDoraCount,
             hand: event.hand ? [...event.hand] : undefined,
             melds: event.melds ? event.melds.map((m) => ({ ...m })) : undefined,
             doraIndicators: event.doraIndicators

@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import {
+  buildResultYakuEntries,
   formatTableScore,
   pointInsideRect,
   replayDiscardingSeat,
+  resultScoreBoxLayout,
+  shouldStageWinReveal,
+  sortTilesForDisplay,
+  topmostHandHoverTargetIndex,
+  winResultRevealKey,
 } from "./TableRenderer";
 
 type ReplayTurnView = Pick<
@@ -62,6 +68,44 @@ describe("formatTableScore", () => {
   });
 });
 
+describe("resultScoreBoxLayout", () => {
+  it("keeps cartridge dimensions fixed for short and long names", () => {
+    const shortName = resultScoreBoxLayout(80, 0);
+    const longName = resultScoreBoxLayout(360, 0);
+
+    expect({ width: longName.width, height: longName.height }).toEqual({
+      width: shortName.width,
+      height: shortName.height,
+    });
+    expect(shortName.nameScale).toBe(1);
+    expect(longName.nameScale).toBeLessThan(1);
+  });
+
+  it("reserves dealer text width and scales only the player name", () => {
+    const withoutDealer = resultScoreBoxLayout(240, 0);
+    const withDealer = resultScoreBoxLayout(240, 72);
+
+    expect(withDealer.nameScale).toBeLessThan(withoutDealer.nameScale);
+    expect(withDealer.width).toBe(withoutDealer.width);
+    expect(withDealer.height).toBe(withoutDealer.height);
+  });
+});
+
+describe("sortTilesForDisplay", () => {
+  it("places a red five after lower tiles in call previews", () => {
+    expect(sortTilesForDisplay(["0s", "4s"])).toEqual(["4s", "0s"]);
+  });
+
+  it("places a red five after a normal five and before six", () => {
+    expect(sortTilesForDisplay(["6p", "0p", "5p", "4p"])).toEqual([
+      "4p",
+      "5p",
+      "0p",
+      "6p",
+    ]);
+  });
+});
+
 describe("pointInsideRect", () => {
   const rect = { x: 100, y: 200, w: 300, h: 150 };
 
@@ -74,5 +118,109 @@ describe("pointInsideRect", () => {
   it("excludes points outside the panel", () => {
     expect(pointInsideRect({ x: 99, y: 275 }, rect)).toBe(false);
     expect(pointInsideRect({ x: 250, y: 351 }, rect)).toBe(false);
+  });
+});
+
+describe("topmostHandHoverTargetIndex", () => {
+  const bounds = [
+    { x: 10, y: 20, width: 50, height: 80 },
+    { x: 50, y: 20, width: 50, height: 80 },
+  ];
+
+  it("selects the topmost tile when identical copies overlap", () => {
+    expect(topmostHandHoverTargetIndex({ x: 55, y: 40 }, bounds)).toBe(1);
+  });
+
+  it("clears hover when the pointer moves outside every tile", () => {
+    expect(topmostHandHoverTargetIndex({ x: 105, y: 40 }, bounds)).toBeNull();
+  });
+});
+
+describe("shouldStageWinReveal", () => {
+  it("stages newly arrived live results", () => {
+    expect(shouldStageWinReveal(true, false)).toBe(true);
+  });
+
+  it("keeps eye-button result overrides static", () => {
+    expect(shouldStageWinReveal(true, true)).toBe(false);
+  });
+
+  it("keeps replay results static", () => {
+    expect(shouldStageWinReveal(false, false)).toBe(false);
+  });
+});
+
+describe("winResultRevealKey", () => {
+  const view = {
+    roundWind: "E" as const,
+    roundNumber: 2,
+    honba: 0,
+    dealer: 1 as const,
+  };
+  const result: NonNullable<MatchView["lastHandResult"]> = {
+    reason: "ron",
+    delta: [-8000, 8000, 0, 0],
+    wins: [
+      {
+        seat: 1,
+        loser: 0,
+        han: 3,
+        fu: 40,
+        ten: 8000,
+        yaku: { Riichi: "1飜", Pinfu: "1飜" },
+      },
+    ],
+  };
+
+  it("keeps the reveal clock across equivalent result clones", () => {
+    const clone: NonNullable<MatchView["lastHandResult"]> = {
+      ...result,
+      delta: result.delta ? [...result.delta] : undefined,
+      wins: result.wins?.map((win) => ({
+        ...win,
+        yaku: win.yaku ? { ...win.yaku } : undefined,
+      })),
+    };
+
+    expect(winResultRevealKey(view, clone)).toBe(
+      winResultRevealKey(view, result)
+    );
+  });
+
+  it("changes when a new hand with the same result begins", () => {
+    expect(winResultRevealKey({ ...view, honba: 1 }, result)).not.toBe(
+      winResultRevealKey(view, result)
+    );
+  });
+});
+
+describe("buildResultYakuEntries", () => {
+  it("separates structured regular and ura dora counts", () => {
+    expect(
+      buildResultYakuEntries({ Riichi: "1飜", Dora: "2飜" }, 1, 1, true)
+    ).toEqual([
+      { name: "Riichi", value: "1飜", alwaysHidden: false },
+      { name: "Dora", value: "1飜", alwaysHidden: false },
+      { name: "Ura Dora", value: "1飜", alwaysHidden: false },
+    ]);
+  });
+
+  it("reserves an always-hidden row for zero ura dora", () => {
+    expect(
+      buildResultYakuEntries({ Riichi: "1飜", Dora: "1飜" }, 1, 0, true)
+    ).toEqual([
+      { name: "Riichi", value: "1飜", alwaysHidden: false },
+      { name: "Dora", value: "1飜", alwaysHidden: false },
+      { name: "Ura Dora", value: "0飜", alwaysHidden: true },
+    ]);
+  });
+
+  it("does not reserve an ura row for non-riichi results", () => {
+    expect(
+      buildResultYakuEntries({ Tsumo: "1飜", Dora: "1飜" }, 1, undefined, false)
+    ).toEqual([
+      { name: "Tsumo", value: "1飜", alwaysHidden: false },
+      { name: "Dora", value: "1飜", alwaysHidden: false },
+    ]);
   });
 });

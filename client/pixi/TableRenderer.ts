@@ -68,6 +68,11 @@ export interface SeatEnrichment {
   teamLogoUrl?: string | null;
 }
 
+interface FocusedHandHoverTarget {
+  sprite: Sprite;
+  originalTint: number;
+}
+
 /**
  * Tile sprite sizing. There are three categories of tile sprites,
  * each living in a different sheet with its own per-cell source
@@ -158,6 +163,11 @@ const PLAYER_PANEL_ALPHA = 0.28;
 /** Above the identity panel (-10), below every root board tile layer (0+). */
 const PLAYER_PANEL_CONTENT_Z = -9;
 const RELATIVE_SCORE_DISPLAY_MS = 4_000;
+const HAND_HOVER_TINT = 0xffaaaa;
+const RESULT_SCORE_BOX_WIDTH = 220;
+const RESULT_SCORE_BOX_HEIGHT = 88;
+const RESULT_SCORE_BOX_PAD_X = 18;
+const RESULT_SCORE_BOX_NAME_GAP = 8;
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
  *  East, South, West, North. */
@@ -200,6 +210,91 @@ export function formatTableScore(
   return difference > 0 ? `+${difference}` : `${difference}`;
 }
 
+export function topmostHandHoverTargetIndex(
+  point: { x: number; y: number },
+  bounds: ReadonlyArray<{ x: number; y: number; width: number; height: number }>
+): number | null {
+  for (let index = bounds.length - 1; index >= 0; index--) {
+    const rect = bounds[index];
+    if (
+      point.x >= rect.x &&
+      point.x <= rect.x + rect.width &&
+      point.y >= rect.y &&
+      point.y <= rect.y + rect.height
+    ) {
+      return index;
+    }
+  }
+  return null;
+}
+
+export function shouldStageWinReveal(
+  stagedRevealEnabled: boolean,
+  hasHandResultOverride: boolean
+): boolean {
+  return stagedRevealEnabled && !hasHandResultOverride;
+}
+
+export function winResultRevealKey(
+  view: Pick<MatchView, "roundWind" | "roundNumber" | "honba" | "dealer">,
+  result: NonNullable<MatchView["lastHandResult"]>
+): string {
+  return `${view.roundWind}:${view.roundNumber}:${view.honba}:${view.dealer}:${JSON.stringify(result)}`;
+}
+
+export function buildResultYakuEntries(
+  yaku: Record<string, string> | undefined,
+  doraCount: number | undefined,
+  uraDoraCount: number | undefined,
+  reserveUraRow: boolean
+): Array<{ name: string; value: string; alwaysHidden: boolean }> {
+  const entries = Object.entries(yaku ?? {}).map(([name, value]) => ({
+    name,
+    value,
+    alwaysHidden: false,
+  }));
+  const setCount = (name: string, count: number, keepZero: boolean): void => {
+    const index = entries.findIndex((entry) => entry.name === name);
+    if (count === 0 && !keepZero) {
+      if (index >= 0) {
+        entries.splice(index, 1);
+      }
+      return;
+    }
+    const entry = {
+      name,
+      value: `${count}飜`,
+      alwaysHidden: count === 0,
+    };
+    if (index >= 0) {
+      entries[index] = entry;
+    } else {
+      entries.push(entry);
+    }
+  };
+
+  if (doraCount !== undefined) {
+    setCount("Dora", doraCount, false);
+  }
+  if (uraDoraCount !== undefined || reserveUraRow) {
+    setCount("Ura Dora", uraDoraCount ?? 0, true);
+  }
+
+  const filtered = entries.filter((entry) => {
+    const count = parseInt(entry.value, 10);
+    if (Number.isFinite(count) && count === 0) {
+      return entry.name === "Ura Dora";
+    }
+    return true;
+  });
+  const uraIndex = filtered.findIndex((entry) => entry.name === "Ura Dora");
+  if (uraIndex >= 0 && uraIndex !== filtered.length - 1) {
+    const [ura] = filtered.splice(uraIndex, 1);
+    filtered.push(ura);
+  }
+  return filtered;
+}
+
 /** Axis-aligned bounding box of a non-empty list of `Rect`s. */
 function boundingBox(rects: readonly Rect[]): Rect {
   const x0 = Math.min(...rects.map((r) => r.x));
@@ -223,6 +318,26 @@ function scoreCartridgeMetrics(center: Rect): {
     height,
     inset,
     bottomTop: center.y + center.h - inset - height,
+  };
+}
+
+export function resultScoreBoxLayout(
+  nameWidth: number,
+  dealerWidth: number
+): { width: number; height: number; nameScale: number } {
+  const dealerGap = dealerWidth > 0 ? RESULT_SCORE_BOX_NAME_GAP : 0;
+  const maxNameWidth = Math.max(
+    0,
+    RESULT_SCORE_BOX_WIDTH -
+      RESULT_SCORE_BOX_PAD_X * 2 -
+      dealerWidth -
+      dealerGap
+  );
+  return {
+    width: RESULT_SCORE_BOX_WIDTH,
+    height: RESULT_SCORE_BOX_HEIGHT,
+    nameScale:
+      nameWidth > maxNameWidth && nameWidth > 0 ? maxNameWidth / nameWidth : 1,
   };
 }
 
@@ -411,18 +526,12 @@ export class TableRenderer {
    * the button would otherwise flash in-and-out every draw.
    */
   private autoWinEnabled = false;
-  /**
-   * Raw-index of the focused-hand tile currently under the
-   * pointer (if any). Persisted across `render()` calls so the
-   * red hover tint doesn't blink off when an unrelated event
-   * (another seat's discard, a chip update, etc.) rebuilds the
-   * hand sprites while the cursor hasn't moved. Tracked by raw
-   * index — the stable identity of the tile in the source hand
-   * array — so post-sort/post-drag rebuilds re-apply the tint
-   * to the same physical tile rather than whatever happens to
-   * land in that slot.
-   */
-  private hoveredHandRawIdx: number | null = null;
+  /** Last non-touch pointer position, used to restore hover after redraws. */
+  private focusedHandPointerClient: { x: number; y: number } | null = null;
+  /** Current frame's focused-hand sprites in visual paint order. */
+  private focusedHandHoverTargets: FocusedHandHoverTarget[] = [];
+  /** Target currently carrying the red hover tint. */
+  private activeFocusedHandHover: FocusedHandHoverTarget | null = null;
   /**
    * When non-null, the renderer paints the hand-result overlay
    * using this data instead of `view.lastHandResult`. Used by
@@ -440,11 +549,8 @@ export class TableRenderer {
    * different override).
    */
   private currentWinPage = 0;
-  /** Tracks which `lastHandResult` the {@link currentWinPage}
-   * applies to; on reference change we reset the page index. */
-  private currentWinPageResult: NonNullable<
-    MatchView["lastHandResult"]
-  > | null = null;
+  /** Stable identity of the result that {@link currentWinPage} applies to. */
+  private currentWinPageResultKey: string | null = null;
   /**
    * Wall-clock time at which the current win panel page began
    * playing its staged reveal animation, in `performance.now()`
@@ -851,6 +957,9 @@ export class TableRenderer {
       return designX - this.handContainerOriginX;
     };
     const onWindowPointerMove = (e: PointerEvent): void => {
+      this.focusedHandPointerClient =
+        e.pointerType === "touch" ? null : { x: e.clientX, y: e.clientY };
+      this.updateFocusedHandHover();
       if (!this.handSorter.hasPointerDown()) {
         return;
       }
@@ -890,10 +999,15 @@ export class TableRenderer {
     window.addEventListener("pointermove", onWindowPointerMove);
     window.addEventListener("pointerup", onWindowPointerUp);
     window.addEventListener("pointercancel", onWindowPointerUp);
+    const onCanvasPointerLeave = (): void => {
+      this.clearFocusedHandHover(true);
+    };
+    app.canvas.addEventListener("pointerleave", onCanvasPointerLeave);
     this.handDragCleanup = (): void => {
       window.removeEventListener("pointermove", onWindowPointerMove);
       window.removeEventListener("pointerup", onWindowPointerUp);
       window.removeEventListener("pointercancel", onWindowPointerUp);
+      app.canvas.removeEventListener("pointerleave", onCanvasPointerLeave);
     };
 
     // Re-fit on container resizes (window resize, sidebar
@@ -980,6 +1094,51 @@ export class TableRenderer {
         this.onRenderRequest();
       }
     });
+  }
+
+  private clearFocusedHandHover(clearPointer = false): void {
+    if (this.activeFocusedHandHover) {
+      this.activeFocusedHandHover.sprite.tint =
+        this.activeFocusedHandHover.originalTint;
+      this.activeFocusedHandHover = null;
+    }
+    if (clearPointer) {
+      this.focusedHandPointerClient = null;
+    }
+  }
+
+  private updateFocusedHandHover(): void {
+    const app = this.app;
+    const pointer = this.focusedHandPointerClient;
+    let next: FocusedHandHoverTarget | null = null;
+    if (app && pointer && !this.handSorter.hasPointerDown()) {
+      const canvasRect = app.canvas.getBoundingClientRect();
+      if (canvasRect.width > 0 && canvasRect.height > 0) {
+        const point = {
+          x:
+            ((pointer.x - canvasRect.left) / canvasRect.width) *
+            app.screen.width,
+          y:
+            ((pointer.y - canvasRect.top) / canvasRect.height) *
+            app.screen.height,
+        };
+        const index = topmostHandHoverTargetIndex(
+          point,
+          this.focusedHandHoverTargets.map((target) =>
+            target.sprite.getBounds()
+          )
+        );
+        next = index === null ? null : this.focusedHandHoverTargets[index];
+      }
+    }
+    if (next === this.activeFocusedHandHover) {
+      return;
+    }
+    this.clearFocusedHandHover();
+    this.activeFocusedHandHover = next;
+    if (next) {
+      next.sprite.tint = HAND_HOVER_TINT;
+    }
   }
 
   /**
@@ -1539,9 +1698,6 @@ export class TableRenderer {
 
   /**
    * Override the hand-result overlay's source data. Pass `null`
-   * to fall back to the live `view.lastHandResult`. Used by the
-   * live match route's eye button to peek at the previous hand's
-   * panel after the auto-advance cleared the store entry.
    */
   setHandResultOverride(
     r: NonNullable<MatchView["lastHandResult"]> | null
@@ -1654,6 +1810,8 @@ export class TableRenderer {
   }
 
   destroy(): void {
+    this.clearFocusedHandHover(true);
+    this.focusedHandHoverTargets = [];
     if (this.relativeScoresResetTimer !== null) {
       clearTimeout(this.relativeScoresResetTimer);
       this.relativeScoresResetTimer = null;
@@ -1809,6 +1967,8 @@ export class TableRenderer {
       (screenH - layout.table.h * scale) / 2
     );
     const root = this.root;
+    this.clearFocusedHandHover();
+    this.focusedHandHoverTargets = [];
     // Tear down the previous frame's display tree. `removeChildren()`
     // alone only detaches — it leaves the per-child GPU buffers
     // (Graphics geometry, render-group caches) live until GC.
@@ -1925,6 +2085,11 @@ export class TableRenderer {
     let designRect: { x: number; y: number; w: number; h: number } | null =
       null;
     const effectiveResult = this.handResultOverride ?? view.lastHandResult;
+    if (!effectiveResult || view.matchEnded) {
+      this.currentWinPageResultKey = null;
+      this.currentWinPage = 0;
+      this.winPageRevealStartedAt = null;
+    }
     this.winInfoPressEnabled = Boolean(effectiveResult && !view.matchEnded);
     if (this.showHandResult && !this.handResultPressHidden) {
       if (effectiveResult && !view.matchEnded) {
@@ -2022,6 +2187,7 @@ export class TableRenderer {
         this.bottomHandBoundsListener(nextHandBounds);
       }
     }
+    this.updateFocusedHandHover();
   }
 
   // -------------------------------------------------------------------------
@@ -3082,6 +3248,12 @@ export class TableRenderer {
     if (!this.root) {
       return null;
     }
+    const resultKey = winResultRevealKey(view, r);
+    if (this.currentWinPageResultKey !== resultKey) {
+      this.currentWinPageResultKey = resultKey;
+      this.currentWinPage = 0;
+      this.winPageRevealStartedAt = null;
+    }
     // For wins, the upstream stream emits one or more `win`
     // events followed by `hand_end`. Both produce a
     // `lastHandResult`, which would surface the panel prematurely
@@ -3196,15 +3368,6 @@ export class TableRenderer {
     const rows: Row[] = [];
 
     if (r.wins && r.wins.length > 0 && !r.buuChombo) {
-      // Reset the page index whenever the underlying result
-      // object changes (new hand_end, override toggle, replay
-      // seek). Reference identity is sufficient — the store /
-      // replay projector produce a fresh object on each update.
-      if (this.currentWinPageResult !== r) {
-        this.currentWinPageResult = r;
-        this.currentWinPage = 0;
-        this.winPageRevealStartedAt = null;
-      }
       const total = r.wins.length;
       // Clamp in case `wins` shrank (shouldn't happen in
       // practice, but cheap defense).
@@ -3218,14 +3381,19 @@ export class TableRenderer {
       // this is a no-op — page 0 of 1.
       const pageIdx = this.currentWinPage;
       const winsToRender = total > 1 ? [r.wins[pageIdx]] : r.wins;
+      const stageReveal = shouldStageWinReveal(
+        this.stagedRevealEnabled,
+        this.handResultOverride !== null
+      );
       // Staged reveal: each panel page (re)starts a per-yaku
       // reveal sequence. We record the wall-clock moment the
       // page first appeared and use elapsed time to decide how
       // many yaku entries are visible and whether the ura-dora
       // indicators have been flipped. When staged reveal is
-      // disabled (replay playback) the elapsed time is set to
-      // `Infinity` so everything renders fully revealed.
-      if (this.stagedRevealEnabled) {
+      // disabled (replay playback or a historical eye-button
+      // override) the elapsed time is set to `Infinity` so
+      // everything renders fully revealed and silently.
+      if (stageReveal) {
         if (this.winPageRevealStartedAt === null) {
           this.winPageRevealStartedAt = performance.now();
           // Fresh page: clear the SFX play tracking so each
@@ -3237,7 +3405,7 @@ export class TableRenderer {
       } else {
         this.winPageRevealStartedAt = null;
       }
-      const revealElapsedMs = this.stagedRevealEnabled
+      const revealElapsedMs = stageReveal
         ? performance.now() - (this.winPageRevealStartedAt ?? 0)
         : Number.POSITIVE_INFINITY;
       // Per-yaku reveal interval. Mirrored on the server in
@@ -3275,54 +3443,47 @@ export class TableRenderer {
         } else if (r.reason === "ron") {
           rows.push({ kind: "title", text: "Ron", size: 36 });
         }
-        // Yaku rows. Skip yaku whose displayed value is 0 han
-        // (server may still emit them — typically dora when no
-        // dora tiles are held — and they shouldn't take up a
-        // line). Event producers (Majsoul / Tenhou / Riichi
-        // City adapters, internal scorer) emit `yaku` already
-        // sorted via `sortYakuRecord`, so insertion-order
-        // iteration is the canonical display order.
-        const yakuKeys = win.yaku ? Object.keys(win.yaku) : [];
-        // Filter out 0-han yaku (typically dora when no dora
-        // tiles are held); the rest preserve insertion order.
-        const visibleYakuAll: Array<{ name: string; value: string }> = [];
-        for (const name of yakuKeys) {
-          const value = win.yaku?.[name] ?? "";
-          const leading = parseInt(value, 10);
-          if (Number.isFinite(leading) && leading === 0) {
-            continue;
-          }
-          visibleYakuAll.push({ name, value });
-        }
-        // Move "Ura Dora" to the end of the list so the staged
-        // reveal always saves it for last (it doubles as the
-        // cue to flip the ura-dora indicators face-up). The
-        // adapter / scorer order is otherwise preserved.
-        const uraIdx = visibleYakuAll.findIndex((y) => y.name === "Ura Dora");
-        const hasUraYaku = uraIdx >= 0;
-        if (hasUraYaku && uraIdx !== visibleYakuAll.length - 1) {
-          const [u] = visibleYakuAll.splice(uraIdx, 1);
-          visibleYakuAll.push(u);
-        }
+        const yakuNames = Object.keys(win.yaku ?? {});
+        const hasRiichiYaku = yakuNames.some(
+          (name) =>
+            name === "Riichi" ||
+            name === "Double Riichi" ||
+            name === "Daburu Riichi" ||
+            name === "立直" ||
+            name === "ダブル立直" ||
+            name === "両立直"
+        );
+        const reserveUraRow =
+          (win.uraDoraIndicators?.length ?? 0) > 0 ||
+          (win.uraDoraCount !== undefined && hasRiichiYaku);
+        const visibleYakuAll = buildResultYakuEntries(
+          win.yaku,
+          win.doraCount,
+          win.uraDoraCount,
+          reserveUraRow
+        );
+        const revealableYakuCount = visibleYakuAll.filter(
+          (entry) => !entry.alwaysHidden
+        ).length;
+        const hasUraYaku = visibleYakuAll.some(
+          (entry) => entry.name === "Ura Dora" && !entry.alwaysHidden
+        );
         // Slice to the staged reveal frontier. Yaku k appears at
         // t = (k + 1) * YAKU_REVEAL_INTERVAL_MS, i.e. nothing is
         // visible until the first interval elapses.
-        const revealedCount = this.stagedRevealEnabled
+        const revealedCount = stageReveal
           ? Math.max(
               0,
               Math.min(
-                visibleYakuAll.length,
+                revealableYakuCount,
                 Math.floor(revealElapsedMs / YAKU_REVEAL_INTERVAL_MS)
               )
             )
-          : visibleYakuAll.length;
+          : revealableYakuCount;
         // Fire one `yaku-reveal` SFX per newly revealed yaku.
         // Idempotent across repeated `render()` calls within the
         // same reveal step thanks to `winPageYakuRevealSoundsPlayed`.
-        if (
-          this.stagedRevealEnabled &&
-          revealedCount > this.winPageYakuRevealSoundsPlayed
-        ) {
+        if (stageReveal && revealedCount > this.winPageYakuRevealSoundsPlayed) {
           const toPlay = revealedCount - this.winPageYakuRevealSoundsPlayed;
           for (let i = 0; i < toPlay; i++) {
             playGameSound("yaku-reveal");
@@ -3332,7 +3493,7 @@ export class TableRenderer {
         // Stash per-page totals for the ura-row gate + render
         // pump below. With pagination there is only one entry in
         // `winsToRender`, so an unconditional assign here is fine.
-        pageVisibleYakuTotal = visibleYakuAll.length;
+        pageVisibleYakuTotal = revealableYakuCount;
         pageRevealedYakuCount = revealedCount;
         pageHasUraYaku = hasUraYaku;
         // 1-column layout for short lists; 2-column for 5+
@@ -3352,7 +3513,7 @@ export class TableRenderer {
               kind: "yaku",
               name: y.name,
               value: y.value,
-              hidden: i >= revealedCount,
+              hidden: y.alwaysHidden || i >= revealedCount,
             });
           });
         } else {
@@ -3368,8 +3529,11 @@ export class TableRenderer {
               kind: "yaku2",
               left: left ?? { name: "", value: "" },
               right,
-              leftHidden: left !== null && i >= revealedCount,
-              rightHidden: right !== null && rightIdx >= revealedCount,
+              leftHidden:
+                left !== null && (left.alwaysHidden || i >= revealedCount),
+              rightHidden:
+                right !== null &&
+                (right.alwaysHidden || rightIdx >= revealedCount),
             });
           }
         }
@@ -3490,7 +3654,7 @@ export class TableRenderer {
           ? lastYakuRevealAtMs
           : lastYakuRevealAtMs + URA_REVEAL_AFTER_LAST_YAKU_MS;
         const uraRevealed =
-          !this.stagedRevealEnabled ||
+          !stageReveal ||
           (pageRevealedYakuCount >= pageVisibleYakuTotal &&
             revealElapsedMs >= uraRevealAtMs);
         const uraRow: (string | null)[] = uraRevealed
@@ -3503,11 +3667,7 @@ export class TableRenderer {
         // flip face-up — but only when there's no "Ura Dora"
         // yaku, since that yaku's own reveal already played a
         // cue and the flip is synced to it (per spec).
-        if (
-          this.stagedRevealEnabled &&
-          uraRevealed &&
-          !this.winPageUraRevealSoundPlayed
-        ) {
+        if (stageReveal && uraRevealed && !this.winPageUraRevealSoundPlayed) {
           if (!pageHasUraYaku) {
             playGameSound("yaku-reveal");
           }
@@ -3518,13 +3678,10 @@ export class TableRenderer {
         // only happen on the next store update (which may not
         // arrive for several seconds during quiet phases), and
         // the yaku list would never appear to animate.
-        if (this.stagedRevealEnabled && !uraRevealed) {
+        if (stageReveal && !uraRevealed) {
           this.requestRender();
         }
-      } else if (
-        this.stagedRevealEnabled &&
-        pageRevealedYakuCount < pageVisibleYakuTotal
-      ) {
+      } else if (stageReveal && pageRevealedYakuCount < pageVisibleYakuTotal) {
         // No ura indicators (no riichi) but yaku list is still
         // mid-reveal — keep painting.
         this.requestRender();
@@ -4078,15 +4235,19 @@ export class TableRenderer {
       return;
     }
     const container = new Container();
-    const nameText = new Text({
-      text: isDealer ? `${name} (dealer)` : name,
-      style: new TextStyle({
-        fontFamily: "Inter, system-ui, sans-serif",
-        fontSize: 20,
-        fontWeight: "700",
-        fill: 0xffffff,
-      }),
+    const nameStyle = new TextStyle({
+      fontFamily: "Inter, system-ui, sans-serif",
+      fontSize: 20,
+      fontWeight: "700",
+      fill: 0xffffff,
     });
+    const nameText = new Text({
+      text: name,
+      style: nameStyle,
+    });
+    const dealerText = isDealer
+      ? new Text({ text: "(dealer)", style: nameStyle })
+      : null;
     const scoreText = new Text({
       text: `${before}`,
       style: new TextStyle({
@@ -4109,23 +4270,42 @@ export class TableRenderer {
           }),
         })
       : null;
-    const padX = 18;
     const padY = 14;
     const innerGap = 10;
     const rowContentW = deltaText
       ? scoreText.width + innerGap + deltaText.width
       : scoreText.width;
     const rowContentH = Math.max(scoreText.height, deltaText?.height ?? 0);
-    const innerW = Math.max(nameText.width, rowContentW) + padX * 2;
-    const innerH = nameText.height + 8 + rowContentH + padY * 2;
+    const boxLayout = resultScoreBoxLayout(
+      nameText.width,
+      dealerText?.width ?? 0
+    );
+    const innerW = boxLayout.width;
+    const innerH = boxLayout.height;
+    nameText.scale.set(boxLayout.nameScale);
     const bg = new Graphics()
       .roundRect(0, 0, innerW, innerH, 10)
       .fill({ color: 0x000000, alpha: 0.85 })
       .stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
     container.addChild(bg);
-    nameText.position.set((innerW - nameText.width) / 2, padY);
+    const fittedNameWidth = nameText.width;
+    const dealerGap = dealerText ? RESULT_SCORE_BOX_NAME_GAP : 0;
+    const nameRowWidth = fittedNameWidth + dealerGap + (dealerText?.width ?? 0);
+    const nameRowHeight = 24;
+    const nameRowX = (innerW - nameRowWidth) / 2;
+    nameText.position.set(
+      nameRowX,
+      padY + (nameRowHeight - nameText.height) / 2
+    );
     container.addChild(nameText);
-    const rowY = padY + nameText.height + 8;
+    if (dealerText) {
+      dealerText.position.set(
+        nameRowX + fittedNameWidth + dealerGap,
+        padY + (nameRowHeight - dealerText.height) / 2
+      );
+      container.addChild(dealerText);
+    }
+    const rowY = innerH - padY - rowContentH;
     const rowX = (innerW - rowContentW) / 2;
     scoreText.position.set(rowX, rowY);
     container.addChild(scoreText);
@@ -4997,25 +5177,9 @@ export class TableRenderer {
           if ("tint" in tileSprite) {
             const tintable = tileSprite as unknown as { tint: number };
             const originalTint = tintable.tint;
-            const hoverRawIdx = rawIndices !== null ? rawIndices[i] : i;
-            // Re-apply the hover tint up-front if the cursor was
-            // already over this tile before the rebuild — Pixi
-            // won't re-fire `pointerover` against the new sprite
-            // unless the mouse moves, so without this the red
-            // highlight would blink off on every unrelated
-            // re-render (other-seat discards, score updates, …).
-            if (this.hoveredHandRawIdx === hoverRawIdx) {
-              tintable.tint = 0xffaaaa;
-            }
-            tileSprite.on("pointerover", () => {
-              this.hoveredHandRawIdx = hoverRawIdx;
-              tintable.tint = 0xffaaaa;
-            });
-            tileSprite.on("pointerout", () => {
-              if (this.hoveredHandRawIdx === hoverRawIdx) {
-                this.hoveredHandRawIdx = null;
-              }
-              tintable.tint = originalTint;
+            this.focusedHandHoverTargets.push({
+              sprite: tileSprite as Sprite,
+              originalTint,
             });
           }
           const localTile = tile;
@@ -5041,16 +5205,11 @@ export class TableRenderer {
             if (event.button === 2) {
               return;
             }
-            // Clear the persistent hover tracker on click: the
-            // hand is about to mutate (discard / riichi-tile
-            // pick) and the slot under the cursor will likely
-            // hold a different tile after the rebuild. Without
-            // this clear the post-rebuild restore logic would
-            // momentarily stamp the red hover tint onto whatever
-            // tile ends up at the old raw index. A genuine new
-            // hover will re-fire `pointerover` when the cursor
-            // next moves over the rebuilt strip.
-            this.hoveredHandRawIdx = null;
+            // The hand is about to mutate. Clear both the tint and
+            // cached pointer so a replacement tile under a
+            // stationary cursor is not highlighted until the mouse
+            // genuinely moves again.
+            this.clearFocusedHandHover(true);
             // The click semantics (riichi-tile-select vs
             // discard) are captured into a thunk and stashed
             // for the window-level pointerup handler to fire
@@ -5282,14 +5441,14 @@ export class TableRenderer {
     // Discard slide animation hookup. When this seat has an active
     // phase-A/B animation targeting the very last discard, we skip
     // painting its static wrap and reuse its placement for the overlay
-    // below. Riichi tiles are never animated.
+    // below. Riichi declarations use the same motion; their placement
+    // carries the sideways atlas / rotation through the overlay.
     // -----------------------------------------------------------------
     const lastIdx = discards.length - 1;
     const lastIsAnimating =
       seatDiscardAnim != null &&
       lastIdx >= 0 &&
-      seatDiscardAnim.discardIndex === lastIdx &&
-      !(lastIdx === riichiIdx);
+      seatDiscardAnim.discardIndex === lastIdx;
     // Lift the pond above the walls (zIndex 0..2) while a tile flies.
     // Its shadows must NOT ride along (they would cover neighbouring
     // ponds), so host them in a low-z sibling — its transform is
@@ -6629,8 +6788,13 @@ export class TableRenderer {
     ) {
       previewTiles.push(action.tile);
     }
-    // Sort ascending so chi previews read 4-5-6 left to right.
-    previewTiles.sort();
+    // Sort by mahjong rank rather than tile-string lexicography so
+    // red fives sit between a normal five and six instead of before one.
+    previewTiles.splice(
+      0,
+      previewTiles.length,
+      ...sortTilesForDisplay(previewTiles)
+    );
 
     const tileH = height - 12;
     const tileW = (tileH * SMALL_TILE_W) / SMALL_TILE_H;
@@ -6854,16 +7018,20 @@ export function pointInsideRect(
 
 const SUIT_ORDER: Record<string, number> = { m: 0, p: 1, s: 2, z: 3 }; /**
  * Sort key for a single tile string. Suits ordered m → p → s → z; within
- * a suit, ascending by number. Red fives (`0m`/`0p`/`0s`) collate at 5
- * and tie-break before the regular five (matches Tenhou-style rendering).
+ * a suit, ascending by number. Red fives (`0m`/`0p`/`0s`) sort immediately
+ * after the regular five and before six.
  */
 function tileSortKey(tile: string): number {
   const suit = tile[tile.length - 1];
   const n = Number(tile.slice(0, -1));
   const suitWeight = (SUIT_ORDER[suit] ?? 9) * 100;
-  // 0 (red five) → 4.5 so it sorts just before the plain 5.
-  const numWeight = n === 0 ? 4.5 : n;
+  // 0 (red five) → 5.5 so it sorts after the plain 5 and before 6.
+  const numWeight = n === 0 ? 5.5 : n;
   return suitWeight + numWeight;
+}
+
+export function sortTilesForDisplay(tiles: readonly string[]): string[] {
+  return [...tiles].sort((a, b) => tileSortKey(a) - tileSortKey(b));
 }
 
 /**

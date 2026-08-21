@@ -16,6 +16,7 @@ function makeView(args: {
   totalDiscards?: number;
   freshlyDrawnSeat?: number | null;
   freshlyDiscardedSeat?: number | null;
+  riichiTileIdx?: [number | null, number | null, number | null, number | null];
 }): MatchView {
   return {
     hands: args.hands ?? [[], [], [], []],
@@ -24,7 +25,7 @@ function makeView(args: {
     totalDiscards: args.totalDiscards ?? 0,
     freshlyDrawnSeat: args.freshlyDrawnSeat ?? null,
     freshlyDiscardedSeat: args.freshlyDiscardedSeat ?? null,
-    riichiTileIdx: [null, null, null, null],
+    riichiTileIdx: args.riichiTileIdx ?? [null, null, null, null],
   } as unknown as MatchView;
 }
 
@@ -43,6 +44,34 @@ function recordLayouts(
 }
 
 describe("DiscardAnimator", () => {
+  it("uses the normal discard timing for a riichi declaration", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    animator.beginFrame(
+      makeView({
+        hands: [[], [], [], []],
+        discards: [["1m"], [], [], []],
+        discardTsumogiri: [[false], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+        riichiTileIdx: [0, null, null, null],
+      })
+    );
+
+    expect(animator.getAnim(0)).toMatchObject({
+      isRiichi: true,
+      phase: "to-nudge",
+      durationMs: PHASE_A_DURATION_MS,
+    });
+  });
+
   it("holds a discard at hover until the next draw starts", () => {
     let now = 0;
     const animator = new DiscardAnimator({ now: () => now });

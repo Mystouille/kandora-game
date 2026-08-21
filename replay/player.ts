@@ -160,6 +160,9 @@ export interface ReplayView {
       ten?: number;
       yakumanCount?: number;
       yaku?: Record<string, string>;
+      doraCount?: number;
+      akaDoraCount?: number;
+      uraDoraCount?: number;
       hand?: Tile[];
       melds?: Meld[];
       doraIndicators?: Tile[];
@@ -597,6 +600,9 @@ export function applyReplayEvent(
         ten: event.ten,
         yakumanCount: event.yakumanCount,
         yaku: event.yaku,
+        doraCount: event.doraCount,
+        akaDoraCount: event.akaDoraCount,
+        uraDoraCount: event.uraDoraCount,
         hand: derivedHand,
         melds: derivedMelds,
         doraIndicators: event.doraIndicators

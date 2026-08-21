@@ -263,7 +263,10 @@ describe("step — ippatsu + ura-dora on riichi win", () => {
 
     // Chiitoitsu(2) + riichi(1) + two 7z × two indicators = 7 han.
     expect(winEv.score.han).toBe(7);
-    expect(winEv.score.yaku["ドラ"]).toBe("4飜");
+    expect(winEv.score.yaku["ドラ"]).toBe("2飜");
+    expect(winEv.score.yaku["裏ドラ"]).toBe("2飜");
+    expect(winEv.score.doraCount).toBe(2);
+    expect(winEv.score.uraDoraCount).toBe(2);
   });
 
   it("non-riichi seat does not see ura-dora", () => {

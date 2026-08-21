@@ -4037,7 +4037,8 @@ export class MatchProcess {
       // 0-han yaku, schedule each remaining yaku at a 750ms
       // beat, and tack on +1000ms when ura indicators are shown
       // without an accompanying "Ura Dora" yaku.
-      const hasUraIndicators = this.state.riichiDeclared[e.winner];
+      const hasUraIndicators =
+        this.state.ruleSet.uraDora && this.state.riichiDeclared[e.winner];
       let visibleYakuCount = 0;
       let hasUraYaku = false;
       for (const [name, value] of Object.entries(yakuRomaji)) {
@@ -4069,6 +4070,9 @@ export class MatchProcess {
         ten: score.ten,
         yakumanCount: score.yakumanCount,
         yaku: yakuRomaji,
+        doraCount: score.doraCount,
+        akaDoraCount: score.akaDoraCount,
+        ...(hasUraIndicators ? { uraDoraCount: score.uraDoraCount } : {}),
         hand: [...this.state.hands[e.winner]],
         melds: this.state.melds[e.winner].map((m) => ({
           type: m.type,
@@ -4077,10 +4081,9 @@ export class MatchProcess {
           from: m.from,
         })),
         doraIndicators: [...this.state.doraIndicators],
-        uraDoraIndicators:
-          this.state.ruleSet.uraDora && this.state.riichiDeclared[e.winner]
-            ? [...this.state.uraDoraIndicators]
-            : undefined,
+        uraDoraIndicators: hasUraIndicators
+          ? [...this.state.uraDoraIndicators]
+          : undefined,
       });
       return;
     }

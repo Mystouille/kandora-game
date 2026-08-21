@@ -5,11 +5,18 @@ import type {
   SeatEnrichment,
   TableRenderer,
 } from "~/game/client/pixi/TableRenderer";
-import { useMatchStore, type MatchView } from "~/game/client/store";
+import {
+  subscribeToGameEvents,
+  useMatchStore,
+  type MatchView,
+} from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
-import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
+import {
+  advancePostHandPeekDiscardCount,
+  shouldHidePostHandPeek,
+} from "~/game/client/postHandPeek";
 import {
   LivePlayMenu,
   buildInitialLivePlayMenuFlags,
@@ -663,9 +670,7 @@ export default function GameMatchRoute({
   const [stashedResult, setStashedResult] = useState<NonNullable<
     MatchView["lastHandResult"]
   > | null>(null);
-  const [stashDiscardBaseline, setStashDiscardBaseline] = useState<
-    number | null
-  >(null);
+  const postHandDiscardCountRef = useRef(0);
   const [eyeHeld, setEyeHeld] = useState(false);
   // Live-play options menu state. `autoSort` is persisted to
   // `localStorage` and reloaded on every fresh mount; the other
@@ -875,12 +880,8 @@ export default function GameMatchRoute({
 
   // Stash the active hand result the moment it arrives — keeps a
   // copy that survives the next `hand_start` clearing the store.
-  // Baseline is intentionally cleared here: `hand_start` resets
-  // `view.discards[mySeat]` to `[]`, so capturing the previous
-  // hand's discard count would be wrong. The "two new discards"
-  // baseline is taken in the effect below, on the first tick
-  // after the live panel clears (i.e. once the new hand's
-  // discard array is in scope).
+  // Reset the monotonic event counter for this completed result;
+  // `hand_start` resets it again before new-hand discards arrive.
   useEffect(() => {
     if (view.lastHandResult) {
       setStashedResult(
@@ -888,39 +889,30 @@ export default function GameMatchRoute({
           ? rotateHandResult(view.lastHandResult, view.mySeat)
           : view.lastHandResult
       );
-      setStashDiscardBaseline(null);
+      postHandDiscardCountRef.current = 0;
     }
   }, [view.lastHandResult, view.mySeat]);
 
-  // Drop the stash (hides the eye button) once the player has
-  // discarded twice in the new hand. A fresh `lastHandResult`
-  // overrides via the effect above, so no extra clean-up needed
-  // for the "new hand_end" branch.
+  // Count actual discard events rather than the visible pond length:
+  // calls remove claimed tiles from `view.discards`, so pile length is
+  // not monotonic and could leave the eye alive indefinitely.
   useEffect(() => {
-    if (stashedResult === null || view.mySeat === null) {
-      return;
-    }
-    if (view.lastHandResult) {
-      // Still in the live win-info phase; baseline gets taken
-      // once it clears.
-      return;
-    }
-    const current = view.discards[view.mySeat].length;
-    if (stashDiscardBaseline === null) {
-      setStashDiscardBaseline(current);
-      return;
-    }
-    if (current - stashDiscardBaseline >= POST_HAND_PEEK_DISCARD_LIMIT) {
-      setStashedResult(null);
-      setStashDiscardBaseline(null);
-    }
-  }, [
-    view.discards,
-    view.mySeat,
-    view.lastHandResult,
-    stashedResult,
-    stashDiscardBaseline,
-  ]);
+    return subscribeToGameEvents(({ event, mySeat }) => {
+      if (event.type === "hand_start") {
+        postHandDiscardCountRef.current = 0;
+        return;
+      }
+      postHandDiscardCountRef.current = advancePostHandPeekDiscardCount(
+        postHandDiscardCountRef.current,
+        event,
+        mySeat
+      );
+      if (shouldHidePostHandPeek(postHandDiscardCountRef.current)) {
+        setStashedResult(null);
+        setEyeHeld(false);
+      }
+    });
+  }, []);
 
   useMatchPageEffects();
 

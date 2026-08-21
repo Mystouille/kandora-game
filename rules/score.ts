@@ -183,6 +183,12 @@ export interface ScoreResult {
   ten: number;
   /** Yaku name → han string (e.g. "立直" → "1飜"). */
   yaku: Record<string, string>;
+  /** Regular indicator dora, excluding red fives and ura dora. */
+  doraCount: number;
+  /** Red-five dora. */
+  akaDoraCount: number;
+  /** Ura dora. */
+  uraDoraCount: number;
   /** True if any yakuman is scored. */
   isYakuman: boolean;
   /** Yakuman multiple (1 = single, 2 = double, etc.; 0 if none). */
@@ -326,6 +332,22 @@ export function indicatorToDora(indicator: Tile): Tile {
   return `${(n % 9) + 1}${suit}`;
 }
 
+function normalizeRedFive(tile: Tile): Tile {
+  return tile[0] === "0" ? (`5${tileSuit(tile)}` as Tile) : tile;
+}
+
+function countIndicatorDora(
+  tiles: readonly Tile[],
+  indicators: readonly Tile[]
+): number {
+  return indicators.reduce((total, indicator) => {
+    const dora = normalizeRedFive(indicatorToDora(indicator));
+    return (
+      total + tiles.filter((tile) => normalizeRedFive(tile) === dora).length
+    );
+  }, 0);
+}
+
 /** Public for tests / debugging. */
 export function buildRiichiInput(input: ScoreInput): string {
   const meldCount = input.melds?.length ?? 0;
@@ -429,12 +451,42 @@ export function scoreHand(input: ScoreInput): ScoreResult {
     applyScoreCap(raw, input.scoreCap, input.tsumo, input.seatWind === "E");
   }
 
+  const winningTiles = [
+    ...input.hand,
+    input.winTile,
+    ...(input.melds?.flatMap((meld) => meld.tiles) ?? []),
+  ];
+  const doraCount = countIndicatorDora(
+    winningTiles,
+    input.doraIndicators ?? []
+  );
+  const uraDoraCount = countIndicatorDora(
+    winningTiles,
+    input.uraDoraIndicators ?? []
+  );
+  const akaDoraCount = input.noAka
+    ? 0
+    : winningTiles.filter((tile) => tile[0] === "0").length;
+  const yaku = { ...raw.yaku };
+  if (Object.hasOwn(yaku, "ドラ")) {
+    delete yaku["ドラ"];
+    if (doraCount > 0) {
+      yaku["ドラ"] = `${doraCount}飜`;
+    }
+  }
+  if ((input.uraDoraIndicators?.length ?? 0) > 0 && raw.yakuman === 0) {
+    yaku["裏ドラ"] = `${uraDoraCount}飜`;
+  }
+
   return {
     isAgari: raw.isAgari && !raw.error,
     han: raw.han,
     fu: raw.fu,
     ten: raw.ten,
-    yaku: sortYakuRecord(raw.yaku),
+    yaku: sortYakuRecord(yaku),
+    doraCount,
+    akaDoraCount,
+    uraDoraCount,
     isYakuman: raw.yakuman > 0,
     yakumanCount: raw.yakuman,
     oya: raw.oya,

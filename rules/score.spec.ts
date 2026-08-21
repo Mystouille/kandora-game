@@ -215,7 +215,24 @@ describe("scoreHand — closed-hand wins", () => {
     const r = scoreHand(input);
     expect(r.han).toBe(8);
     expect(r.ten).toBe(16000);
-    expect(r.yaku).toMatchObject({ ドラ: "2飜" });
+    expect(r.yaku).toMatchObject({ ドラ: "1飜", 裏ドラ: "1飜" });
+    expect(r.doraCount).toBe(1);
+    expect(r.uraDoraCount).toBe(1);
+  });
+
+  it("keeps a zero-count ura-dora entry for a riichi win", () => {
+    const r = scoreHand({
+      hand: tiles("234m234p11s23445s"),
+      winTile: "6s",
+      tsumo: true,
+      riichi: true,
+      doraIndicators: ["1m"],
+      uraDoraIndicators: ["8m"],
+    });
+
+    expect(r.yaku).toMatchObject({ ドラ: "1飜", 裏ドラ: "0飜" });
+    expect(r.doraCount).toBe(1);
+    expect(r.uraDoraCount).toBe(0);
   });
 
   it("respects roundWind / seatWind for double yakuhai (south-south)", () => {
