@@ -39,6 +39,11 @@ import {
 } from "./tableLayout";
 import type { Seat } from "./tableGeometry";
 import { DiscardAnimator } from "./discardAnimator";
+import {
+  MELD_SLIDE_TILE_WIDTHS,
+  MeldAnimator,
+  rotateMeldLocalPoint,
+} from "./meldAnimator";
 import { HandSorter, naturalOrderRawIndices } from "./handSorter";
 import { ACTIVE_TILE_DESIGN } from "./tiles/activeTileDesign";
 import { ACTIVE_TABLE_LAYOUT } from "./layouts/activeTableLayout";
@@ -488,6 +493,8 @@ export class TableRenderer {
    * {@link onRenderRequest} so the in-flight slide tweens forward.
    */
   private animator = new DiscardAnimator();
+  /** Slides appended melds from player-left and shouminkan tiles from above. */
+  private meldAnimator = new MeldAnimator();
   /** Bound animator-ticker callback retained so {@link destroy}
    * can detach it cleanly. */
   private animatorTickHandler: (() => void) | null = null;
@@ -805,13 +812,15 @@ export class TableRenderer {
     this.timerTickHandler = tickHandler;
     app.ticker.add(tickHandler);
 
-    // Discard-animation pump: while the animator has in-flight
-    // slides, re-request a render every frame so the tween
-    // advances. Cheap no-op otherwise. We also pump while the
-    // focused-hand sorter is mid-slide or mid-drag for the same
-    // reason.
+    // Animation pump: while any discard, meld, or focused-hand
+    // slide is active, re-request a render every frame so the tween
+    // advances. Cheap no-op otherwise.
     const animTickHandler = () => {
-      if (this.animator.hasActive() || this.handSorter.hasActiveAnimation()) {
+      if (
+        this.animator.hasActive() ||
+        this.meldAnimator.hasActive() ||
+        this.handSorter.hasActiveAnimation()
+      ) {
         this.requestRender();
       }
     };
@@ -1006,29 +1015,29 @@ export class TableRenderer {
   }
 
   /**
-   * Toggle the discard slide animations. When `false`, the
-   * renderer reverts to the legacy snap-to-nudged behaviour with
-   * no per-tile slide. In-flight animations are cancelled
-   * immediately so the next render snaps to the static layout.
+   * Toggle table motion animations. When `false`, discard and meld
+   * transitions snap directly to their static layouts. In-flight
+   * animations are cancelled immediately.
    *
    * Wired up by hosts that want to disable motion (eg the future
    * accessibility "reduce motion" toggle).
    */
   setAnimationsEnabled(flag: boolean): void {
     this.animator.setEnabled(flag);
+    this.meldAnimator.setEnabled(flag);
   }
 
   /**
-   * One-shot: skip discard-slide diffing for the immediately
+   * One-shot: skip discard and meld diffing for the immediately
    * upcoming {@link render} call. The replay viewer uses this for
-   * mouse-wheel scrubbing so consecutive scroll-steps snap
-   * instantly (no chained slide animations) while single-step
-   * button / right-click advances still animate.
+   * mouse-wheel scrubbing so consecutive scroll-steps snap instantly
+   * while single-step button / right-click advances still animate.
    *
    * Call this *before* the `render(view)` that should snap.
    */
   snapNextAnimation(): void {
     this.animator.snapNext();
+    this.meldAnimator.snapNext();
   }
 
   /**
@@ -1680,6 +1689,7 @@ export class TableRenderer {
         this.animatorTickHandler = null;
       }
       this.animator.reset();
+      this.meldAnimator.reset();
       this.handSorter.reset();
       if (this.handDragCleanup) {
         this.handDragCleanup();
@@ -1717,6 +1727,7 @@ export class TableRenderer {
     // discard slide (which renderSeat consumes below) or transition
     // a pending phase-A into phase B.
     this.animator.beginFrame(view);
+    this.meldAnimator.beginFrame(view);
     // Focused-hand sort state: wipe on every hand boundary, then
     // reconcile customOrder + prune slide-tracks against the
     // current raw hand so any draw / discard / call since the last
@@ -5830,8 +5841,6 @@ export class TableRenderer {
     const meldWidths: number[] = [];
     let loopIter = 0;
     const stripRot = SEAT_CONTAINER_ROT[seat];
-    const scos = Math.cos(stripRot);
-    const ssin = Math.sin(stripRot);
     const shadowBoxes: Array<{
       ax: number;
       ay: number;
@@ -5840,13 +5849,33 @@ export class TableRenderer {
       isolated?: boolean;
     }> = [];
     for (let i = melds.length - 1; i >= 0; i--) {
-      const { node, width, boxes } = this.drawMeld(melds[i], seat);
-      node.position.set(cursor, 0);
+      const slideDistance =
+        meldTileDims(this.tileDesign, seat).w * MELD_SLIDE_TILE_WIDTHS;
+      const slideOffsetX = this.meldAnimator.getMeldOffsetX(
+        seat,
+        i,
+        slideDistance
+      );
+      const shouminkanOffsetY = this.meldAnimator.getShouminkanOffsetY(
+        seat,
+        i,
+        slideDistance
+      );
+      const { node, width, boxes } = this.drawMeld(
+        melds[i],
+        seat,
+        shouminkanOffsetY
+      );
+      node.position.set(cursor + slideOffsetX, 0);
       for (const b of boxes) {
-        const sx = cursor + b.cx;
+        const shadowPoint = rotateMeldLocalPoint(
+          cursor + slideOffsetX + b.cx,
+          b.cy,
+          stripRot
+        );
         shadowBoxes.push({
-          ax: sx * scos - b.cy * ssin,
-          ay: sx * ssin + b.cy * scos,
+          ax: shadowPoint.x,
+          ay: shadowPoint.y,
           w: b.w,
           h: b.h,
           isolated: b.isolated,
@@ -5960,7 +5989,8 @@ export class TableRenderer {
    */
   private drawMeld(
     meld: Meld,
-    seat: number
+    seat: number,
+    shouminkanOffsetY = 0
   ): {
     node: Container;
     width: number;
@@ -6212,7 +6242,10 @@ export class TableRenderer {
       // reads as a glitch from a side perspective.
       const stackOverlap =
         seat === 1 || seat === 3 ? 0 : DISCARD_ROW_OVERLAP_HORIZ;
-      stack.position.set(calledX, mt.h - tilted.w + stackOverlap);
+      stack.position.set(
+        calledX,
+        mt.h - tilted.w + stackOverlap + shouminkanOffsetY
+      );
       c.addChild(stack);
       boxes.push({
         cx: stack.position.x + stackOffX,
