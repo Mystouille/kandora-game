@@ -21,6 +21,7 @@ import type {
   SnapshotState,
   Tile,
 } from "~/game/protocol/messages";
+import { discardIndexForSource } from "./discardActions";
 
 /**
  * Lightweight event bus for applied `GameEvent`s.
@@ -101,6 +102,8 @@ export interface MatchView {
    * renderer; combined with `discardOrdinals` + `totalDiscards`
    * to fade the shading after 2 more discards have passed. */
   discardTsumogiri: boolean[][];
+  /** Authoritative source when known; null for snapshot/legacy history. */
+  discardSources?: Array<Array<"hand" | "draw" | null>>;
   /** Parallel to `discards`: per-tile cross-seat ordinal
    * (0-based) at the moment the discard landed. `totalDiscards -
    * discardOrdinals[seat][i]` is the number of discards that
@@ -437,6 +440,7 @@ const initialState: MatchView = {
   melds: emptyMelds,
   discards: emptyDiscards,
   discardTsumogiri: [[], [], [], []],
+  discardSources: [[], [], [], []],
   discardOrdinals: [[], [], [], []],
   totalDiscards: 0,
   wallRemaining: 70,
@@ -496,6 +500,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       melds: [[], [], [], []],
       discards: [[], [], [], []],
       discardTsumogiri: [[], [], [], []],
+      discardSources: [[], [], [], []],
       discardOrdinals: [[], [], [], []],
       totalDiscards: 0,
     });
@@ -547,6 +552,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       // any discards that pre-date the snapshot — acceptable
       // since the effect is a brief in-the-moment cue.
       discardTsumogiri: snap.discards.map((d) => d.map(() => false)),
+      discardSources: snap.discards.map((d) => d.map(() => null)),
       discardOrdinals: snap.discards.map((d) => d.map((_, i) => i)),
       totalDiscards: snap.discards.reduce((acc, d) => acc + d.length, 0),
       wallRemaining: snap.wallRemaining,
@@ -712,6 +718,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             melds: [[], [], [], []],
             discards: [[], [], [], []],
             discardTsumogiri: [[], [], [], []],
+            discardSources: [[], [], [], []],
             discardOrdinals: [[], [], [], []],
             totalDiscards: 0,
             doraIndicators: [...event.doraIndicators],
@@ -792,7 +799,12 @@ export const useMatchStore = create<MatchStore>((set) => ({
           const visibleHand =
             state.mySeat === null || event.seat === state.mySeat;
           const idx = visibleHand
-            ? hands[event.seat].lastIndexOf(event.tile)
+            ? discardIndexForSource(
+                hands[event.seat],
+                event.tile,
+                event.discardSource,
+                state.freshlyDrawnSeat === event.seat
+              )
             : hands[event.seat].findIndex((t) => t === null);
           if (idx >= 0) {
             hands[event.seat].splice(idx, 1);
@@ -805,6 +817,10 @@ export const useMatchStore = create<MatchStore>((set) => ({
           // shading after a couple more discards land.
           const discardTsumogiri = state.discardTsumogiri.map((a) => [...a]);
           discardTsumogiri[event.seat].push(event.tsumogiri);
+          const discardSources = (state.discardSources ?? [[], [], [], []]).map(
+            (sources) => [...sources]
+          );
+          discardSources[event.seat].push(event.discardSource ?? null);
           const discardOrdinals = state.discardOrdinals.map((a) => [...a]);
           discardOrdinals[event.seat].push(state.totalDiscards);
           const totalDiscards = state.totalDiscards + 1;
@@ -876,6 +892,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             hands,
             discards,
             discardTsumogiri,
+            discardSources,
             discardOrdinals,
             totalDiscards,
             riichiDeclared,
@@ -1000,6 +1017,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
           const hands = state.hands.map((h) => [...h]);
           const discards = state.discards.map((d) => [...d]);
           const discardTsumogiri = state.discardTsumogiri.map((a) => [...a]);
+          const discardSources = (state.discardSources ?? [[], [], [], []]).map(
+            (sources) => [...sources]
+          );
           const discardOrdinals = state.discardOrdinals.map((a) => [...a]);
           const caller = event.seat;
           const meld = event.meld;
@@ -1013,6 +1033,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             if (idx >= 0) {
               pile.splice(idx, 1);
               discardTsumogiri[meld.from].splice(idx, 1);
+              discardSources[meld.from].splice(idx, 1);
               discardOrdinals[meld.from].splice(idx, 1);
             }
           }
@@ -1102,6 +1123,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             melds,
             discards,
             discardTsumogiri,
+            discardSources,
             discardOrdinals,
             freshlyDrawnSeat: null,
             freshlyDiscardedSeat: null,

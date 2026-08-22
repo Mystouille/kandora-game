@@ -11,6 +11,7 @@ import {
   type MatchView,
 } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
+import { findTileAction } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
 import {
@@ -812,9 +813,7 @@ export default function GameMatchRoute({
       if (!drawn) {
         return;
       }
-      const discard = actions.find(
-        (a) => a.type === "discard" && a.tile === drawn
-      );
+      const discard = findTileAction(actions, "discard", drawn, "draw");
       if (discard && lastAutoActedIdRef.current !== discard.id) {
         // If a previous timer is still pending (shouldn't happen
         // in practice — `legalActions` changing re-runs the
@@ -1006,7 +1005,7 @@ export default function GameMatchRoute({
           renderer.setResultPanelBoundsListener((rect) => {
             setResultPanelBounds(rect);
           });
-          renderer.setOnTileClick(({ tile }) => {
+          renderer.setOnTileClick(({ tile, discardSource }) => {
             // Optimistic discard for own seat; the server confirmation
             // (a `discard` event) will clear `pendingDiscard`.
             const state = useMatchStore.getState();
@@ -1015,8 +1014,11 @@ export default function GameMatchRoute({
             }
             state.setPendingDiscard({ seat: state.mySeat, tile });
             // Find the matching legal action and forward it.
-            const legal = state.legalActions.find(
-              (a) => a.type === "discard" && a.tile === tile
+            const legal = findTileAction(
+              state.legalActions,
+              "discard",
+              tile,
+              discardSource
             );
             if (legal && wsRef.current) {
               wsRef.current.act(legal.id);
@@ -1163,9 +1165,7 @@ export default function GameMatchRoute({
       if (!drawn) {
         return;
       }
-      const discard = legals.find(
-        (a) => a.type === "discard" && a.tile === drawn
-      );
+      const discard = findTileAction(legals, "discard", drawn, "draw");
       if (discard) {
         state.setPendingDiscard({ seat: mySeat, tile: drawn });
         ws.act(discard.id);

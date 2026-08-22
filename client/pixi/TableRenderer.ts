@@ -62,6 +62,11 @@ import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
 import tenhouBgUrl from "~/game/tenhouSprites/tenhouBg.png";
 import { splitWinningHandForDisplay } from "./winningHand";
+import {
+  discardSourceForRawIndex,
+  findTileAction,
+  type DiscardSource,
+} from "../discardActions";
 
 /** Per-seat team enrichment drawn on spectator / replay nameplates. */
 export interface SeatEnrichment {
@@ -494,6 +499,7 @@ export interface TileClick {
   index: number;
   /** Tile string for the clicked tile (own seat only — opponents are redacted). */
   tile: string;
+  discardSource: DiscardSource;
 }
 
 export interface ActionClick {
@@ -1342,8 +1348,11 @@ export class TableRenderer {
     if (drawn == null) {
       return;
     }
-    const tsumogiri = view.legalActions.find(
-      (a) => a.type === "discard" && a.tile === drawn
+    const tsumogiri = findTileAction(
+      view.legalActions,
+      "discard",
+      drawn,
+      "draw"
     );
     if (tsumogiri) {
       this.onActionClick({ action: tsumogiri });
@@ -4953,16 +4962,6 @@ export class TableRenderer {
       handWidth = hand.length * (t.w + t.gap) - t.gap + handGap;
     }
 
-    // Pre-index this seat's riichi legal actions by tile so a click
-    // in `riichiMode` can dispatch the right `riichi:TILE` action.
-    const riichiLegalsByTile = new Map<string, LegalAction>();
-    if (isYou) {
-      for (const a of view.legalActions) {
-        if (a.type === "riichi" && a.tile) {
-          riichiLegalsByTile.set(a.tile, a);
-        }
-      }
-    }
     const inRiichiMode = isYou && this.riichiMode;
 
     if (isSideHand) {
@@ -5221,7 +5220,18 @@ export class TableRenderer {
           tileSprite.zIndex = 1_000_000;
         }
         if (isYou && tile && canInteractWithFocusedHand(view)) {
-          const riichiLegal = riichiLegalsByTile.get(tile);
+          const localRawIdx = rawIndices !== null ? rawIndices[i] : i;
+          const localDiscardSource = discardSourceForRawIndex(
+            localRawIdx,
+            rawHand.length,
+            isFreshlyDrawnNatural
+          );
+          const riichiLegal = findTileAction(
+            view.legalActions,
+            "riichi",
+            tile,
+            localDiscardSource
+          );
           // Darken tiles that aren't legal riichi discards without
           // making the tile artwork transparent.
           const riichiTint = riichiSelectionTileTint(
@@ -5250,7 +5260,6 @@ export class TableRenderer {
           }
           const localTile = tile;
           const localIndex = i;
-          const localRawIdx = rawIndices !== null ? rawIndices[i] : i;
           const localSlotX = slotX;
           const localSpriteW = spriteW;
           // Count how many copies of this tile sit to the LEFT
@@ -5303,6 +5312,7 @@ export class TableRenderer {
                   seat,
                   index: localIndex,
                   tile: localTile,
+                  discardSource: localDiscardSource,
                 });
               }
             };

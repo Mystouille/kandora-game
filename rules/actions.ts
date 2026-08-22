@@ -16,10 +16,14 @@
 
 import type { Seat, Tile } from "./types";
 
+export type DiscardSource = "hand" | "draw";
+
 export interface DiscardAction {
   type: "discard";
   seat: Seat;
   tile: Tile;
+  /** Physical source of this copy when the drawn tile duplicates a hand tile. */
+  discardSource?: DiscardSource;
 }
 
 /**
@@ -67,6 +71,8 @@ export interface RiichiAction {
   type: "riichi";
   seat: Seat;
   tile: Tile;
+  /** Physical source of the discarded copy, shared with normal discards. */
+  discardSource?: DiscardSource;
 }
 
 /**

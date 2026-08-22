@@ -15,7 +15,7 @@
  * `app/game/protocol/messages.ts`; their shapes track this union.
  */
 
-import type { Action } from "./actions";
+import type { Action, DiscardSource } from "./actions";
 import { dealMatch } from "./wall";
 import type { HandResult, MatchState, Meld } from "./state";
 import { distributePayments } from "./payments";
@@ -55,6 +55,7 @@ export type EngineEvent =
       seat: Seat;
       tile: Tile;
       tsumogiri: boolean;
+      discardSource: DiscardSource;
       riichi?: boolean;
     }
   | {
@@ -1121,6 +1122,35 @@ function computeFuritenAll(
   ];
 }
 
+function resolveDiscardSelection(
+  state: MatchState,
+  seat: Seat,
+  tile: Tile,
+  source: DiscardSource | undefined
+): { index: number; tsumogiri: boolean } | null {
+  const hand = state.hands[seat];
+  const drawn = state.lastDrawn[seat];
+  const drawnIndex = drawn === null ? -1 : hand.length - 1;
+
+  if (source === "draw") {
+    return drawn === tile && hand[drawnIndex] === tile
+      ? { index: drawnIndex, tsumogiri: true }
+      : null;
+  }
+  if (source === "hand") {
+    const lastHandIndex = drawnIndex >= 0 ? drawnIndex - 1 : hand.length - 1;
+    for (let index = lastHandIndex; index >= 0; index--) {
+      if (hand[index] === tile) {
+        return { index, tsumogiri: false };
+      }
+    }
+    return null;
+  }
+
+  const index = hand.lastIndexOf(tile);
+  return index >= 0 ? { index, tsumogiri: drawn === tile } : null;
+}
+
 export function step(state: MatchState, action: Action): StepResult {
   const before = computeFuritenAll(state);
   const result = stepInternal(state, action);
@@ -1272,17 +1302,22 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // discard) on every turn after their riichi declaration.
     if (
       state.riichiDeclared[action.seat] &&
-      action.tile !== state.lastDrawn[action.seat]
+      (action.tile !== state.lastDrawn[action.seat] ||
+        action.discardSource === "hand")
     ) {
       return noop(state);
     }
-    const idx = state.hands[action.seat].lastIndexOf(action.tile);
-    if (idx < 0) {
+    const selection = resolveDiscardSelection(
+      state,
+      action.seat,
+      action.tile,
+      action.discardSource
+    );
+    if (selection === null) {
       return noop(state);
     }
     const next = clone(state);
-    const tsumogiri = next.lastDrawn[action.seat] === action.tile;
-    next.hands[action.seat].splice(idx, 1);
+    next.hands[action.seat].splice(selection.index, 1);
     next.discards[action.seat].push(action.tile);
     next.lastDrawn[action.seat] = null;
     next.lastDiscard = { seat: action.seat, tile: action.tile };
@@ -1304,7 +1339,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       type: "discard",
       seat: action.seat,
       tile: action.tile,
-      tsumogiri,
+      tsumogiri: selection.tsumogiri,
+      discardSource: selection.tsumogiri ? "draw" : "hand",
     };
     const events: EngineEvent[] = [discardEvent];
     // Deferred kan-dora reveals (from earlier kans this hand under
@@ -1360,8 +1396,13 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (state.liveWall.length < 4) {
       return noop(state);
     }
-    const idx = state.hands[action.seat].lastIndexOf(action.tile);
-    if (idx < 0) {
+    const selection = resolveDiscardSelection(
+      state,
+      action.seat,
+      action.tile,
+      action.discardSource
+    );
+    if (selection === null) {
       return noop(state);
     }
     // Tenpai check on the 13-tile hand left after discarding.
@@ -1372,13 +1413,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // any concealed kans already declared (ankan during prior
     // turns / earlier this turn via rinshan).
     const after = [...state.hands[action.seat]];
-    after.splice(idx, 1);
+    after.splice(selection.index, 1);
     if (waits(after, state.melds[action.seat].length).length === 0) {
       return noop(state);
     }
     const next = clone(state);
-    const tsumogiri = next.lastDrawn[action.seat] === action.tile;
-    next.hands[action.seat].splice(idx, 1);
+    next.hands[action.seat].splice(selection.index, 1);
     next.discards[action.seat].push(action.tile);
     next.lastDrawn[action.seat] = null;
     next.lastDiscard = { seat: action.seat, tile: action.tile };
@@ -1407,7 +1447,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       type: "discard",
       seat: action.seat,
       tile: action.tile,
-      tsumogiri,
+      tsumogiri: selection.tsumogiri,
+      discardSource: selection.tsumogiri ? "draw" : "hand",
       riichi: true,
     };
     const events: EngineEvent[] = [discardEvent];

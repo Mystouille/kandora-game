@@ -421,7 +421,11 @@ export class DiscardAnimator {
         if (currLen > prevLen && currLen > 0) {
           const lastIdx = currLen - 1;
           const tile = currDiscards[lastIdx];
-          const isTsumogiri = view.discardTsumogiri[seat]?.[lastIdx] ?? false;
+          const discardSource = view.discardSources?.[seat]?.[lastIdx] ?? null;
+          const isTsumogiri =
+            discardSource === "draw" ||
+            (discardSource === null &&
+              (view.discardTsumogiri[seat]?.[lastIdx] ?? false));
           const isRiichi = view.riichiTileIdx[seat] === lastIdx;
 
           // The pre-discard layout we want to capture is exactly
@@ -435,6 +439,7 @@ export class DiscardAnimator {
             isConcealed: prevLayout.isConcealed,
             discardedTile: tile,
             isTsumogiri,
+            sourceKnown: discardSource !== null,
             hint,
           });
 
@@ -678,6 +683,7 @@ function pickHiddenSlot(args: {
   isConcealed: boolean;
   discardedTile: string;
   isTsumogiri: boolean;
+  sourceKnown: boolean;
   hint?: { tile: string; ord: number } | null;
 }): number {
   const {
@@ -686,6 +692,7 @@ function pickHiddenSlot(args: {
     isConcealed,
     discardedTile,
     isTsumogiri,
+    sourceKnown,
     hint,
   } = args;
   const len = sortedHand.length;
@@ -724,12 +731,13 @@ function pickHiddenSlot(args: {
       }
     }
   }
-  // Missing wire tsumogiri flag (the Tenhou relay never tags it): a
-  // freshly-drawn revealed hand discarding its just-drawn tile IS a
-  // tsumogiri, so source from the tsumo slot. Otherwise the closed-hand
-  // scan below skips it and, when the tile isn't held elsewhere, falls
-  // back one slot left — blanking a kept tile and leaving a hole.
-  if (isFreshlyDrawn && len > 0) {
+  // Legacy/external events may lack authoritative `discardSource`
+  // provenance (the Tenhou relay reports every tsumogiri flag as false).
+  // In that compatibility case only, a freshly-drawn revealed hand
+  // discarding its drawn value is inferred as tsumogiri. Authoritative
+  // `sourceKnown` tedashi must never take this value-based fallback when
+  // an identical copy remains in the draw slot.
+  if (!sourceKnown && isFreshlyDrawn && len > 0) {
     const drawn = sortedHand[len - 1];
     if (
       drawn !== null &&

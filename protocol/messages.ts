@@ -195,6 +195,8 @@ const DiscardEvent = z.object({
   seat: SeatSchema,
   tile: TileSchema,
   tsumogiri: z.boolean(),
+  /** Authoritative physical source; absent on legacy/external logs. */
+  discardSource: z.enum(["hand", "draw"]).optional(),
   /** True when this discard was the riichi declaration tile. */
   riichi: z.boolean().optional(),
   /** Authoritative post-discard waits for the discarder, sourced from
@@ -508,6 +510,8 @@ export const LegalActionSchema = z.object({
     "riichi",
   ]),
   tile: TileSchema.optional(),
+  /** Physical copy selected for discard when tile values are identical. */
+  discardSource: z.enum(["hand", "draw"]).optional(),
   /** Caller's contributed tiles for chi/pon/daiminkan. */
   tiles: z.array(TileSchema).optional(),
   /** Disambiguates kan flavor when `type === "kan"`. */

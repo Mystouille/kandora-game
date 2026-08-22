@@ -114,6 +114,7 @@ function snapshotToReplayView(s: SnapshotState): ReplayView {
     // worth replicating on reconnect/attach). Initialize parallel
     // arrays so the renderer's per-tile lookups stay in bounds.
     discardTsumogiri: s.discards.map((d) => d.map(() => false)),
+    discardSources: s.discards.map((d) => d.map(() => null)),
     discardOrdinals: s.discards.map((d) => d.map((_, i) => i)),
     totalDiscards: s.discards.reduce((acc, d) => acc + d.length, 0),
     wallRemaining: s.wallRemaining,

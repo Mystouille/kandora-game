@@ -42,6 +42,7 @@ import {
   applyChipDelta,
   evaluateBuuEndOfGameChips,
   type CallOption,
+  type DiscardSource,
   type EngineEvent,
   type FuritenChange,
   type MatchEndReason,
@@ -2165,7 +2166,7 @@ export class MatchProcess {
       return;
     }
     if (action.type === "discard" && action.tile) {
-      await this.applyDiscard(seat, action.tile);
+      await this.applyDiscard(seat, action.tile, action.discardSource);
       await this.afterDiscard();
       return;
     }
@@ -2225,7 +2226,12 @@ export class MatchProcess {
       // implicit "hand-ended" suppression that already hides
       // the ron / tsumo buttons immediately on click.
       this.setSeatLegals(seat, []);
-      await this.applyEngineAction({ type: "riichi", seat, tile: action.tile });
+      await this.applyEngineAction({
+        type: "riichi",
+        seat,
+        tile: action.tile,
+        discardSource: action.discardSource,
+      });
       await this.afterDiscard();
       return;
     }
@@ -2332,6 +2338,7 @@ export class MatchProcess {
       }
     }
     let tile: Tile;
+    let discardSource: DiscardSource;
     if (seat === 3 && this.leftDiscardQueue.length > 0) {
       tile = this.leftDiscardQueue.shift() as Tile;
       const handIdx = this.state.hands[seat].lastIndexOf(tile);
@@ -2341,6 +2348,13 @@ export class MatchProcess {
           drawn !== null ? this.state.hands[seat].lastIndexOf(drawn) : -1;
         this.state.hands[seat][drawnIdx >= 0 ? drawnIdx : 0] = tile;
         this.state.lastDrawn[seat] = tile;
+        discardSource = "draw";
+      } else {
+        discardSource =
+          this.state.lastDrawn[seat] !== null &&
+          handIdx === this.state.hands[seat].length - 1
+            ? "draw"
+            : "hand";
       }
     } else {
       const drawn = this.state.lastDrawn[seat];
@@ -2349,8 +2363,9 @@ export class MatchProcess {
         drawn,
       });
       tile = picked.tile;
+      discardSource = picked.discardSource;
     }
-    await this.applyDiscard(seat, tile);
+    await this.applyDiscard(seat, tile, discardSource);
     await this.afterDiscard();
   }
 
@@ -3024,7 +3039,7 @@ export class MatchProcess {
           setTimeout(resolve, DRAW_TO_DISCARD_DELAY_MS)
         );
       }
-      await this.applyDiscard(seat, tile);
+      await this.applyDiscard(seat, tile, legals[0].discardSource);
       await this.afterDiscard();
       return true;
     }
@@ -3049,8 +3064,17 @@ export class MatchProcess {
     await this.emitFuritenChanges(res.furitenChanges);
   }
 
-  private async applyDiscard(seat: Seat, tile: Tile): Promise<void> {
-    const res = step(this.state, { type: "discard", seat, tile });
+  private async applyDiscard(
+    seat: Seat,
+    tile: Tile,
+    discardSource?: DiscardSource
+  ): Promise<void> {
+    const res = step(this.state, {
+      type: "discard",
+      seat,
+      tile,
+      discardSource,
+    });
     if (res.events.length === 0) {
       // Engine rejected the action (illegal). Should not happen on
       // bot-driven or legal-action-driven paths; surface loudly.
@@ -3086,17 +3110,41 @@ export class MatchProcess {
       // chosen.
       const drawn = this.state.lastDrawn[seat];
       if (drawn !== null) {
-        out.push({ id: `discard:${drawn}`, type: "discard", tile: drawn });
+        out.push({
+          id: `discard:draw:${drawn}`,
+          type: "discard",
+          tile: drawn,
+          discardSource: "draw",
+        });
       }
     } else {
-      // One legal action per unique tile in hand.
+      const hand = this.state.hands[seat];
+      const drawn = this.state.lastDrawn[seat];
+      if (drawn !== null && hand[hand.length - 1] === drawn) {
+        out.push({
+          id: `discard:draw:${drawn}`,
+          type: "discard",
+          tile: drawn,
+          discardSource: "draw",
+        });
+      }
+      // One hand-source action per unique tile, excluding the
+      // appended drawn slot. A duplicate drawn value therefore
+      // has both a hand action and a draw action.
       const seen = new Set<string>();
-      for (const tile of this.state.hands[seat]) {
+      const handEnd = drawn !== null ? hand.length - 1 : hand.length;
+      for (let index = 0; index < handEnd; index++) {
+        const tile = hand[index];
         if (seen.has(tile)) {
           continue;
         }
         seen.add(tile);
-        out.push({ id: `discard:${tile}`, type: "discard", tile });
+        out.push({
+          id: `discard:hand:${tile}`,
+          type: "discard",
+          tile,
+          discardSource: "hand",
+        });
       }
     }
     // Tsumo: if `step` accepts a tsumo declaration for this seat,
@@ -3123,15 +3171,30 @@ export class MatchProcess {
     // hand not tenpai after discard, etc.), so a non-zero event
     // count is sufficient to surface the option.
     if (!this.state.riichiDeclared[seat]) {
-      const seenRiichi = new Set<string>();
-      for (const tile of this.state.hands[seat]) {
-        if (seenRiichi.has(tile)) {
-          continue;
+      const discardChoices = out.filter(
+        (action) => action.type === "discard" && action.tile
+      );
+      const riichiChoices = [...discardChoices].sort((left, right) => {
+        if (left.discardSource === right.discardSource) {
+          return 0;
         }
-        seenRiichi.add(tile);
-        const probe = step(this.state, { type: "riichi", seat, tile });
+        return left.discardSource === "draw" ? 1 : -1;
+      });
+      for (const choice of riichiChoices) {
+        const tile = choice.tile as Tile;
+        const probe = step(this.state, {
+          type: "riichi",
+          seat,
+          tile,
+          discardSource: choice.discardSource,
+        });
         if (probe.events.length > 0) {
-          out.push({ id: `riichi:${tile}`, type: "riichi", tile });
+          out.push({
+            id: `riichi:${choice.discardSource ?? "hand"}:${tile}`,
+            type: "riichi",
+            tile,
+            discardSource: choice.discardSource,
+          });
         }
       }
     }
@@ -3372,7 +3435,10 @@ export class MatchProcess {
     const drawn = this.state.lastDrawn[seat];
     if (drawn !== null) {
       const tsumogiri = legals.find(
-        (a) => a.type === "discard" && a.tile === drawn
+        (a) =>
+          a.type === "discard" &&
+          a.tile === drawn &&
+          (a.discardSource === "draw" || a.discardSource === undefined)
       );
       if (tsumogiri) {
         return tsumogiri.id;
@@ -4027,6 +4093,7 @@ export class MatchProcess {
         seat: e.seat,
         tile: e.tile,
         tsumogiri: e.tsumogiri,
+        discardSource: e.discardSource,
         ...(e.riichi ? { riichi: true as const } : {}),
       });
       if (e.riichi) {

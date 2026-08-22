@@ -97,6 +97,41 @@ describe("step — riichi declaration", () => {
     expect(r.state.turn).toBe(1);
   });
 
+  it("distinguishes tedashi from tsumogiri when declaring riichi with a duplicate", () => {
+    const handTenpai = tiles("11m22p33s44m55p66s7z");
+    const state = craft({
+      hands: [[...handTenpai, "1m"], FILLER, FILLER, FILLER],
+      turn: 0,
+      phase: "awaiting_discard",
+      dealer: 0,
+      lastDrawn: "1m",
+    });
+
+    const handDiscard = step(state, {
+      type: "riichi",
+      seat: 0,
+      tile: "1m",
+      discardSource: "hand",
+    });
+    const drawDiscard = step(state, {
+      type: "riichi",
+      seat: 0,
+      tile: "1m",
+      discardSource: "draw",
+    });
+
+    expect(handDiscard.events[0]).toMatchObject({
+      type: "discard",
+      riichi: true,
+      tsumogiri: false,
+    });
+    expect(drawDiscard.events[0]).toMatchObject({
+      type: "discard",
+      riichi: true,
+      tsumogiri: true,
+    });
+  });
+
   it("rejects riichi when not tenpai", () => {
     // Random 14-tile mess, no tenpai for any discard.
     const hand = tiles("13579m13579p1357s");

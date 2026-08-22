@@ -13,6 +13,7 @@ function makeView(args: {
   hands?: Array<Array<string | null>>;
   discards?: string[][];
   discardTsumogiri?: boolean[][];
+  discardSources?: Array<Array<"hand" | "draw" | null>>;
   totalDiscards?: number;
   freshlyDrawnSeat?: number | null;
   freshlyDiscardedSeat?: number | null;
@@ -22,6 +23,7 @@ function makeView(args: {
     hands: args.hands ?? [[], [], [], []],
     discards: args.discards ?? [[], [], [], []],
     discardTsumogiri: args.discardTsumogiri ?? [[], [], [], []],
+    discardSources: args.discardSources ?? [[], [], [], []],
     totalDiscards: args.totalDiscards ?? 0,
     freshlyDrawnSeat: args.freshlyDrawnSeat ?? null,
     freshlyDiscardedSeat: args.freshlyDiscardedSeat ?? null,
@@ -373,5 +375,33 @@ describe("DiscardAnimator", () => {
     });
     animator.beginFrame(discard);
     expect(animator.getAnim(0)?.sourceSlot?.handIndex).toBe(3);
+  });
+
+  it("does not reinterpret authoritative tedashi when the drawn value matches", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    const before = makeView({
+      hands: [["5m", "2m", "3m", "5m"], [], [], []],
+      freshlyDrawnSeat: 0,
+    });
+    animator.beginFrame(before);
+    recordLayouts(animator, [
+      { sorted: ["5m", "2m", "3m", "5m"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    animator.beginFrame(
+      makeView({
+        hands: [["2m", "3m", "5m"], [], [], []],
+        discards: [["5m"], [], [], []],
+        discardTsumogiri: [[false], [], [], []],
+        discardSources: [["hand"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+
+    expect(animator.getAnim(0)?.sourceSlot?.handIndex).toBe(0);
   });
 });

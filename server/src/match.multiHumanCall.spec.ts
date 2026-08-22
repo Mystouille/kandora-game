@@ -129,6 +129,7 @@ interface MatchInternals {
     pendingShouminkan: unknown | null;
   };
   legalActions: LegalAction[][];
+  buildDiscardLegals: (seat: number) => LegalAction[];
   setSeatLegals: (seat: number, actions: LegalAction[]) => void;
 }
 
@@ -182,6 +183,51 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     setDelayAfterDiscardMs(350);
     setActionTimeoutMs(30_000);
     setReadyCheckMs(8000);
+  });
+
+  it("broadcasts tedashi when a hand copy matches the drawn tile", async () => {
+    const m = makeFourHumanMatch(41);
+    const sinks = [makeSink(), makeSink(), makeSink(), makeSink()];
+    for (let seat = 0; seat < 4; seat++) {
+      m.attachHuman(seat as 0 | 1 | 2 | 3, sinks[seat].send);
+    }
+    await m.start();
+
+    const internals = m as unknown as MatchInternals;
+    const drawn = internals.state.lastDrawn[0];
+    if (drawn === null) {
+      throw new Error("expected seat 0 to have drawn");
+    }
+    internals.state.hands[0][0] = drawn;
+    const legals = internals.buildDiscardLegals(0);
+    expect(legals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: `discard:draw:${drawn}`,
+          discardSource: "draw",
+        }),
+        expect.objectContaining({
+          id: `discard:hand:${drawn}`,
+          discardSource: "hand",
+        }),
+      ])
+    );
+    internals.setSeatLegals(0, legals);
+    for (const sink of sinks) {
+      sink.events.length = 0;
+    }
+
+    await m.handleAct(0, `discard:hand:${drawn}`);
+
+    const discard = sinks[0].events.find(
+      (event) => event.type === "discard" && event.seat === 0
+    );
+    expect(discard).toMatchObject({
+      type: "discard",
+      tile: drawn,
+      tsumogiri: false,
+      discardSource: "hand",
+    });
   });
 
   it("awards the ron to seat 2 when seat 1 passes and seat 2 calls (seat 3 also passes)", async () => {

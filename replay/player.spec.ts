@@ -237,6 +237,33 @@ describe("replayReducer", () => {
     expect(view.discards[0]).toEqual(["9p"]);
   });
 
+  it("preserves the drawn copy when an identical hand tile is discarded", () => {
+    const tile = STARTING[0][0];
+    const events: GameEvent[] = [
+      { type: "match_start", seats: [], ruleSet: "tenhou-default" },
+      {
+        type: "hand_start",
+        round: 0,
+        dealer: 0,
+        startingHands: STARTING,
+        doraIndicators: ["3m"],
+      },
+      { type: "draw", seat: 0, tile, wallRemaining: 69 },
+      {
+        type: "discard",
+        seat: 0,
+        tile,
+        tsumogiri: false,
+        discardSource: "hand",
+      },
+    ];
+
+    const view = replayReducer(makeLog(events), 3);
+
+    expect(view.hands[0]).toEqual([...STARTING[0].slice(1), tile]);
+    expect(view.discardSources?.[0]).toEqual(["hand"]);
+  });
+
   it("riichi discard flips the seat's flag and records the tile index", () => {
     const events: GameEvent[] = [
       { type: "match_start", seats: [], ruleSet: "tenhou-default" },

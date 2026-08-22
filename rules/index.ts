@@ -26,6 +26,7 @@ export { createInitialState } from "./state";
 
 export type {
   Action,
+  DiscardSource,
   DiscardAction,
   DrawAction,
   TsumoAction,

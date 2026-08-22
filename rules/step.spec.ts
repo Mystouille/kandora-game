@@ -94,6 +94,37 @@ describe("step — draw/discard loop", () => {
     expect(out.events[0]).toMatchObject({ tsumogiri: false });
   });
 
+  it("distinguishes a hand copy from an identical drawn tile", () => {
+    const s0 = createInitialState(1);
+    const drawn = step(s0, { type: "draw", seat: 0 });
+    const tile = drawn.state.lastDrawn[0]!;
+    drawn.state.hands[0][0] = tile;
+
+    const handDiscard = step(drawn.state, {
+      type: "discard",
+      seat: 0,
+      tile,
+      discardSource: "hand",
+    });
+    const drawDiscard = step(drawn.state, {
+      type: "discard",
+      seat: 0,
+      tile,
+      discardSource: "draw",
+    });
+
+    expect(handDiscard.events[0]).toMatchObject({
+      type: "discard",
+      tile,
+      tsumogiri: false,
+    });
+    expect(drawDiscard.events[0]).toMatchObject({
+      type: "discard",
+      tile,
+      tsumogiri: true,
+    });
+  });
+
   it("rejects illegal actions without mutating state", () => {
     const s0 = createInitialState(1);
     // Wrong seat to draw.

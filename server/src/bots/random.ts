@@ -6,6 +6,7 @@
  * out without touching `MatchProcess`.
  */
 import type { Tile } from "~/game/rules";
+import type { DiscardSource } from "~/game/rules";
 
 export interface RandomBotInput {
   hand: Tile[];
@@ -17,6 +18,7 @@ export interface RandomBotDiscard {
   tile: Tile;
   /** True when the bot discards exactly the tile it just drew. */
   tsumogiri: boolean;
+  discardSource: DiscardSource;
 }
 
 export function randomBotDiscard(input: RandomBotInput): RandomBotDiscard {
@@ -26,5 +28,11 @@ export function randomBotDiscard(input: RandomBotInput): RandomBotDiscard {
   }
   const idx = Math.floor(Math.random() * hand.length);
   const tile = hand[idx];
-  return { tile, tsumogiri: drawn !== null && tile === drawn };
+  const tsumogiri =
+    drawn !== null && idx === hand.length - 1 && tile === drawn;
+  return {
+    tile,
+    tsumogiri,
+    discardSource: tsumogiri ? "draw" : "hand",
+  };
 }
