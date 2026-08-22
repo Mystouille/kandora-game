@@ -6,6 +6,7 @@ import {
   canInteractWithFocusedHand,
   formatTableScore,
   pointInsideRect,
+  riichiSelectionTileTint,
   resultScoreBoxLayout,
   shouldStageWinReveal,
   sortTilesForDisplay,
@@ -144,6 +145,17 @@ describe("topmostHandHoverTargetIndex", () => {
 
   it("clears hover when the pointer moves outside every tile", () => {
     expect(topmostHandHoverTargetIndex({ x: 105, y: 40 }, bounds)).toBeNull();
+  });
+});
+
+describe("riichiSelectionTileTint", () => {
+  it("darkens tiles that cannot declare riichi", () => {
+    expect(riichiSelectionTileTint(true, false)).toBe(0xb0b0b0);
+  });
+
+  it("leaves legal and normal-play tiles unchanged", () => {
+    expect(riichiSelectionTileTint(true, true)).toBeNull();
+    expect(riichiSelectionTileTint(false, false)).toBeNull();
   });
 });
 

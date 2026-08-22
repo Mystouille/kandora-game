@@ -165,6 +165,7 @@ const PLAYER_PANEL_ALPHA = 0.28;
 const PLAYER_PANEL_CONTENT_Z = -9;
 const RELATIVE_SCORE_DISPLAY_MS = 4_000;
 const HAND_HOVER_TINT = 0xffaaaa;
+const RIICHI_UNAVAILABLE_TINT = 0xb0b0b0;
 const RESULT_SCORE_BOX_WIDTH = 220;
 const RESULT_SCORE_BOX_HEIGHT = 88;
 const RESULT_SCORE_BOX_PAD_X = 18;
@@ -227,6 +228,13 @@ export function topmostHandHoverTargetIndex(
     }
   }
   return null;
+}
+
+export function riichiSelectionTileTint(
+  inRiichiMode: boolean,
+  canDeclareRiichi: boolean
+): number | null {
+  return inRiichiMode && !canDeclareRiichi ? RIICHI_UNAVAILABLE_TINT : null;
 }
 
 export function shouldStageWinReveal(
@@ -5168,10 +5176,14 @@ export class TableRenderer {
         }
         if (isYou && tile && canInteractWithFocusedHand(view)) {
           const riichiLegal = riichiLegalsByTile.get(tile);
-          // Dim tiles that aren't legal riichi discards while the
-          // player is in select-riichi-tile mode.
-          if (inRiichiMode && !riichiLegal) {
-            tileSprite.alpha = 0.3;
+          // Darken tiles that aren't legal riichi discards without
+          // making the tile artwork transparent.
+          const riichiTint = riichiSelectionTileTint(
+            inRiichiMode,
+            riichiLegal !== undefined
+          );
+          if (riichiTint !== null) {
+            tileSprite.tint = riichiTint;
           }
           tileSprite.eventMode = "static";
           tileSprite.cursor = "pointer";
