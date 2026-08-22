@@ -56,6 +56,13 @@ export const DRAG_PROMOTE_THRESHOLD_PX = 5;
 /** Upward drag distance, measured in tile heights, required to discard. */
 export const UPWARD_DISCARD_TILE_HEIGHTS = 2;
 
+function isPastUpwardDiscardThreshold(drag: DragState): boolean {
+  return (
+    drag.downLocalY - drag.currentLocalY >
+    drag.tileHeight * UPWARD_DISCARD_TILE_HEIGHTS
+  );
+}
+
 /** Linear → ease-out cubic for slide animations. */
 export function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
@@ -213,6 +220,17 @@ export class HandSorter {
   /** Raw-hand index of the currently-dragged tile, if any. */
   getDraggedRawIdx(): number | null {
     return this.drag !== null && this.drag.promoted ? this.drag.rawIdx : null;
+  }
+
+  /** True while `rawIdx` is the active tile and its pointer has crossed
+   * the same strict upward threshold that {@link pointerUp} discards at. */
+  isDraggedPastDiscardThreshold(rawIdx: number): boolean {
+    return (
+      this.drag !== null &&
+      this.drag.promoted &&
+      this.drag.rawIdx === rawIdx &&
+      isPastUpwardDiscardThreshold(this.drag)
+    );
   }
 
   /** True iff at least one slide animation is mid-flight, or a
@@ -701,10 +719,7 @@ export class HandSorter {
     if (!drag.promoted) {
       return { kind: "click", rawIdx: drag.rawIdx };
     }
-    if (
-      drag.downLocalY - drag.currentLocalY >
-      drag.tileHeight * UPWARD_DISCARD_TILE_HEIGHTS
-    ) {
+    if (isPastUpwardDiscardThreshold(drag)) {
       return { kind: "discard", rawIdx: drag.rawIdx };
     }
     // Force the dragged tile to slide from its current

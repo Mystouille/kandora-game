@@ -5,6 +5,7 @@ import {
   ankanTilesForDisplay,
   buildResultYakuEntries,
   canInteractWithFocusedHand,
+  darkenTileTint,
   formatTableScore,
   pointInsideRect,
   resolveSeatHandPresentation,
@@ -182,6 +183,16 @@ describe("riichiSelectionTileTint", () => {
   it("leaves legal and normal-play tiles unchanged", () => {
     expect(riichiSelectionTileTint(true, true)).toBeNull();
     expect(riichiSelectionTileTint(false, false)).toBeNull();
+  });
+});
+
+describe("darkenTileTint", () => {
+  it("darkens a neutral tile without changing its hue", () => {
+    expect(darkenTileTint(0xffffff, 0.78)).toBe(0xc7c7c7);
+  });
+
+  it("preserves an existing colored tint while darkening it", () => {
+    expect(darkenTileTint(0xff5555, 0.78)).toBe(0xc74242);
   });
 });
 

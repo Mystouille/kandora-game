@@ -171,6 +171,7 @@ const PLAYER_PANEL_CONTENT_Z = -9;
 const RELATIVE_SCORE_DISPLAY_MS = 4_000;
 const HAND_HOVER_TINT = 0xffaaaa;
 const RIICHI_UNAVAILABLE_TINT = 0xb0b0b0;
+const DRAG_DISCARD_READY_DARKEN_FACTOR = 0.78;
 const RESULT_SCORE_BOX_WIDTH = 220;
 const RESULT_SCORE_BOX_HEIGHT = 88;
 const RESULT_SCORE_BOX_PAD_X = 18;
@@ -329,6 +330,12 @@ export function riichiSelectionTileTint(
   canDeclareRiichi: boolean
 ): number | null {
   return inRiichiMode && !canDeclareRiichi ? RIICHI_UNAVAILABLE_TINT : null;
+}
+
+export function darkenTileTint(tint: number, factor: number): number {
+  const channel = (shift: number): number =>
+    Math.round(((tint >> shift) & 0xff) * factor);
+  return (channel(16) << 16) | (channel(8) << 8) | channel(0);
 }
 
 export function shouldStageWinReveal(
@@ -5289,6 +5296,12 @@ export class TableRenderer {
           );
           if (riichiTint !== null) {
             tileSprite.tint = riichiTint;
+          }
+          if (this.handSorter.isDraggedPastDiscardThreshold(localRawIdx)) {
+            tileSprite.tint = darkenTileTint(
+              Number(tileSprite.tint),
+              DRAG_DISCARD_READY_DARKEN_FACTOR
+            );
           }
           tileSprite.eventMode = "static";
           tileSprite.cursor = "pointer";

@@ -68,19 +68,24 @@ describe("HandSorter two-dimensional drag", () => {
     const exactThreshold = new HandSorter();
     beginDrag(exactThreshold);
     exactThreshold.pointerMove(150, 100, [0, 1, 2]);
+    expect(exactThreshold.isDraggedPastDiscardThreshold(1)).toBe(false);
     expect(exactThreshold.pointerUp()).toEqual({ kind: "drop", rawIdx: 1 });
 
     const beyondThreshold = new HandSorter();
     beginDrag(beyondThreshold);
     beyondThreshold.pointerMove(150, 99, [0, 1, 2]);
+    expect(beyondThreshold.isDraggedPastDiscardThreshold(1)).toBe(true);
+    expect(beyondThreshold.isDraggedPastDiscardThreshold(0)).toBe(false);
     expect(beyondThreshold.pointerUp()).toEqual({
       kind: "discard",
       rawIdx: 1,
     });
+    expect(beyondThreshold.isDraggedPastDiscardThreshold(1)).toBe(false);
 
     const downward = new HandSorter();
     beginDrag(downward);
     downward.pointerMove(150, 550, [0, 1, 2]);
+    expect(downward.isDraggedPastDiscardThreshold(1)).toBe(false);
     expect(downward.pointerUp()).toEqual({ kind: "drop", rawIdx: 1 });
   });
 });
