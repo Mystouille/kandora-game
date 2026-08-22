@@ -48,9 +48,19 @@ const TOGGLES: ToggleSpec[] = [
   { key: "showNames", label: "Show names" },
 ];
 
+export function replayOverlayToggles(
+  includeWallToggle: boolean
+): ToggleSpec[] {
+  return includeWallToggle
+    ? TOGGLES
+    : TOGGLES.filter((toggle) => toggle.key !== "showWalls");
+}
+
 interface ReplayOverlayPanelProps {
   overlays: ReplayOverlayState;
   onChange: (next: ReplayOverlayState) => void;
+  /** Wall order exists only in completed log replays, never live spectate. */
+  includeWallToggle?: boolean;
 }
 
 /**
@@ -66,6 +76,7 @@ interface ReplayOverlayPanelProps {
 export function ReplayOverlayPanel({
   overlays,
   onChange,
+  includeWallToggle = false,
 }: ReplayOverlayPanelProps): React.ReactElement {
   const [open, setOpen] = useState<boolean>(false);
 
@@ -98,7 +109,7 @@ export function ReplayOverlayPanel({
           aria-label="Replay overlay options"
         >
           <ul className="flex flex-col py-2">
-            {TOGGLES.map((t) => {
+            {replayOverlayToggles(includeWallToggle).map((t) => {
               const active = overlays[t.key];
               return (
                 <li key={t.key}>
