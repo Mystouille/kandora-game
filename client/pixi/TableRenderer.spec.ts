@@ -10,6 +10,7 @@ import {
   resolveSeatHandPresentation,
   riichiSelectionTileTint,
   resultScoreBoxLayout,
+  shouldRevealWinScoreSummary,
   shouldStageWinReveal,
   sortTilesForDisplay,
   topmostHandHoverTargetIndex,
@@ -268,6 +269,35 @@ describe("shouldStageWinReveal", () => {
 
   it("keeps replay results static", () => {
     expect(shouldStageWinReveal(false, false)).toBe(false);
+  });
+});
+
+describe("shouldRevealWinScoreSummary", () => {
+  it("reveals one beat after the final regular yaku", () => {
+    expect(shouldRevealWinScoreSummary(true, 2_999, 3, false, false)).toBe(
+      false
+    );
+    expect(shouldRevealWinScoreSummary(true, 3_000, 3, false, false)).toBe(
+      true
+    );
+  });
+
+  it("reveals one beat after a positive ura-dora yaku", () => {
+    expect(shouldRevealWinScoreSummary(true, 3_749, 4, true, true)).toBe(
+      false
+    );
+    expect(shouldRevealWinScoreSummary(true, 3_750, 4, true, true)).toBe(true);
+  });
+
+  it("waits for the zero-ura indicator flip before the final beat", () => {
+    expect(shouldRevealWinScoreSummary(true, 3_999, 3, false, true)).toBe(
+      false
+    );
+    expect(shouldRevealWinScoreSummary(true, 4_000, 3, false, true)).toBe(true);
+  });
+
+  it("keeps static replay and history results fully visible", () => {
+    expect(shouldRevealWinScoreSummary(false, 0, 3, false, true)).toBe(true);
   });
 });
 

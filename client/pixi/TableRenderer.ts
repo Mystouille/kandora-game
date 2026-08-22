@@ -175,6 +175,9 @@ const RESULT_SCORE_BOX_WIDTH = 220;
 const RESULT_SCORE_BOX_HEIGHT = 88;
 const RESULT_SCORE_BOX_PAD_X = 18;
 const RESULT_SCORE_BOX_NAME_GAP = 8;
+const RESULT_YAKU_REVEAL_INTERVAL_MS = 750;
+const RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
+const RESULT_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS = 750;
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
  *  East, South, West, North. */
@@ -333,6 +336,28 @@ export function shouldStageWinReveal(
   hasHandResultOverride: boolean
 ): boolean {
   return stagedRevealEnabled && !hasHandResultOverride;
+}
+
+export function shouldRevealWinScoreSummary(
+  stageReveal: boolean,
+  revealElapsedMs: number,
+  visibleYakuCount: number,
+  hasUraYaku: boolean,
+  hasUraIndicators: boolean
+): boolean {
+  if (!stageReveal) {
+    return true;
+  }
+  const lastYakuRevealAtMs =
+    visibleYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS;
+  const finalDetailRevealAtMs =
+    hasUraIndicators && !hasUraYaku
+      ? lastYakuRevealAtMs + RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS
+      : lastYakuRevealAtMs;
+  return (
+    revealElapsedMs >=
+    finalDetailRevealAtMs + RESULT_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS
+  );
 }
 
 export function winResultRevealKey(
@@ -3466,6 +3491,7 @@ export class TableRenderer {
           han: string;
           pts: string | null;
           ptsColor?: number;
+          hidden?: boolean;
         }
       | { kind: "tiles"; tiles: (string | null)[] }
       | {
@@ -3519,15 +3545,6 @@ export class TableRenderer {
       const revealElapsedMs = stageReveal
         ? performance.now() - (this.winPageRevealStartedAt ?? 0)
         : Number.POSITIVE_INFINITY;
-      // Per-yaku reveal interval. Mirrored on the server in
-      // `WIN_YAKU_REVEAL_INTERVAL_MS` so the post-hand OK-timer
-      // doesn't start mid-reveal. Keep the two values in sync.
-      const YAKU_REVEAL_INTERVAL_MS = 750;
-      // Extra delay after the last yaku reveal before the
-      // ura-dora indicators flip face-up (only used when the
-      // hand had no "Ura Dora" yaku to peg the flip to). Also
-      // mirrored on the server.
-      const URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
       if (total > 1) {
         rows.push({
           kind: "label",
@@ -3542,6 +3559,14 @@ export class TableRenderer {
       let pageHasUraYaku = false;
       let pageRevealedYakuCount = 0;
       let pageVisibleYakuTotal = 0;
+      let pageScoreSummaryRevealed = !stageReveal;
+      const sharedDora =
+        r.wins.find((w) => w.doraIndicators && w.doraIndicators.length > 0)
+          ?.doraIndicators ?? [];
+      const sharedUra =
+        r.wins.find(
+          (w) => w.uraDoraIndicators && w.uraDoraIndicators.length > 0
+        )?.uraDoraIndicators ?? [];
       winsToRender.forEach((win, idx) => {
         if (idx > 0) {
           rows.push({ kind: "divider" });
@@ -3587,7 +3612,9 @@ export class TableRenderer {
               0,
               Math.min(
                 revealableYakuCount,
-                Math.floor(revealElapsedMs / YAKU_REVEAL_INTERVAL_MS)
+                Math.floor(
+                  revealElapsedMs / RESULT_YAKU_REVEAL_INTERVAL_MS
+                )
               )
             )
           : revealableYakuCount;
@@ -3607,6 +3634,13 @@ export class TableRenderer {
         pageVisibleYakuTotal = revealableYakuCount;
         pageRevealedYakuCount = revealedCount;
         pageHasUraYaku = hasUraYaku;
+        pageScoreSummaryRevealed = shouldRevealWinScoreSummary(
+          stageReveal,
+          revealElapsedMs,
+          revealableYakuCount,
+          hasUraYaku,
+          sharedUra.length > 0
+        );
         // 1-column layout for short lists; 2-column for 5+
         // entries so very-yaku-rich hands (e.g. yakuman piles)
         // don't push the panel absurdly tall. We base the
@@ -3700,6 +3734,7 @@ export class TableRenderer {
           han: hanLabel,
           pts: ptsLabel,
           ptsColor: 0xfde68a,
+          hidden: !pageScoreSummaryRevealed,
         });
         // Winning hand strip. The server records the concealed
         // hand at win time; we display it as a single row with
@@ -3738,9 +3773,6 @@ export class TableRenderer {
       // kan), the rest face-down. Shared across all winners in
       // a multi-ron (the indicators are determined by the
       // wall, not by who wins).
-      const sharedDora =
-        r.wins.find((w) => w.doraIndicators && w.doraIndicators.length > 0)
-          ?.doraIndicators ?? [];
       const doraRow: (string | null)[] = Array.from({ length: 5 }, (_, i) =>
         i < sharedDora.length ? (sharedDora[i] ?? null) : null
       );
@@ -3748,10 +3780,6 @@ export class TableRenderer {
       // Ura dora indicator row: only revealed when at least
       // one winner had declared riichi. Server gates this by
       // populating `uraDoraIndicators` only in that case.
-      const sharedUra =
-        r.wins.find(
-          (w) => w.uraDoraIndicators && w.uraDoraIndicators.length > 0
-        )?.uraDoraIndicators ?? [];
       if (sharedUra.length > 0) {
         // Staged reveal: keep the indicators face-down until
         // either the "Ura Dora" yaku (which we sort to last
@@ -3760,10 +3788,10 @@ export class TableRenderer {
         // appears. With staged reveal disabled the indicators
         // are always face-up (full panel).
         const lastYakuRevealAtMs =
-          pageVisibleYakuTotal * YAKU_REVEAL_INTERVAL_MS;
+          pageVisibleYakuTotal * RESULT_YAKU_REVEAL_INTERVAL_MS;
         const uraRevealAtMs = pageHasUraYaku
           ? lastYakuRevealAtMs
-          : lastYakuRevealAtMs + URA_REVEAL_AFTER_LAST_YAKU_MS;
+          : lastYakuRevealAtMs + RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS;
         const uraRevealed =
           !stageReveal ||
           (pageRevealedYakuCount >= pageVisibleYakuTotal &&
@@ -3784,17 +3812,11 @@ export class TableRenderer {
           }
           this.winPageUraRevealSoundPlayed = true;
         }
-        // Keep frames flowing while the reveal sequence has
-        // outstanding steps. Without this the next paint would
-        // only happen on the next store update (which may not
-        // arrive for several seconds during quiet phases), and
-        // the yaku list would never appear to animate.
-        if (stageReveal && !uraRevealed) {
-          this.requestRender();
-        }
-      } else if (stageReveal && pageRevealedYakuCount < pageVisibleYakuTotal) {
-        // No ura indicators (no riichi) but yaku list is still
-        // mid-reveal — keep painting.
+      }
+      // Keep frames flowing through the yaku, optional ura, and
+      // final score-summary beats. The summary is always last,
+      // so waiting for it also covers every preceding reveal.
+      if (stageReveal && !pageScoreSummaryRevealed) {
         this.requestRender();
       }
     } else if (r.buuChombo) {
@@ -4074,6 +4096,12 @@ export class TableRenderer {
           : hanText.width;
         const h = Math.max(hanText.height, ptsText?.height ?? 0) + 8;
         maxSingle = Math.max(maxSingle, w);
+        if (row.hidden) {
+          hanText.visible = false;
+          if (ptsText) {
+            ptsText.visible = false;
+          }
+        }
         built.push({ kind: "scoreRow", hanText, ptsText, w, h });
       } else {
         const t = new Text({

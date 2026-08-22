@@ -241,6 +241,23 @@ const WIN_YAKU_REVEAL_INTERVAL_MS = 750;
  */
 const WIN_URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
 
+/** Final beat between the last yaku/ura detail and the han/fu + value row. */
+const WIN_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS = 750;
+
+export function winResultRevealDurationMs(args: {
+  visibleYakuCount: number;
+  hasUraIndicators: boolean;
+  hasUraYaku: boolean;
+}): number {
+  const lastYakuRevealAtMs =
+    args.visibleYakuCount * WIN_YAKU_REVEAL_INTERVAL_MS;
+  const finalDetailRevealAtMs =
+    args.hasUraIndicators && !args.hasUraYaku
+      ? lastYakuRevealAtMs + WIN_URA_REVEAL_AFTER_LAST_YAKU_MS
+      : lastYakuRevealAtMs;
+  return finalDetailRevealAtMs + WIN_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS;
+}
+
 export function setDelayAfterDiscardMs(ms: number): void {
   DELAY_AFTER_DISCARD_MS = ms;
   DRAW_TO_DISCARD_DELAY_MS = ms;
@@ -4137,8 +4154,9 @@ export class MatchProcess {
       // countdown. Mirrors the visibility logic in
       // `TableRenderer.renderResultCenterInfo`: filter out
       // 0-han yaku, schedule each remaining yaku at a 750ms
-      // beat, and tack on +1000ms when ura indicators are shown
-      // without an accompanying "Ura Dora" yaku.
+      // beat, tack on +1000ms when ura indicators are shown
+      // without an accompanying "Ura Dora" yaku, then leave one
+      // final beat for the han/fu + hand-value summary.
       const hasUraIndicators =
         this.state.ruleSet.uraDora && this.state.riichiDeclared[e.winner];
       let visibleYakuCount = 0;
@@ -4153,11 +4171,11 @@ export class MatchProcess {
           hasUraYaku = true;
         }
       }
-      const revealMs =
-        visibleYakuCount * WIN_YAKU_REVEAL_INTERVAL_MS +
-        (hasUraIndicators && !hasUraYaku
-          ? WIN_URA_REVEAL_AFTER_LAST_YAKU_MS
-          : 0);
+      const revealMs = winResultRevealDurationMs({
+        visibleYakuCount,
+        hasUraIndicators,
+        hasUraYaku,
+      });
       if (revealMs > this.pendingWinRevealMs) {
         this.pendingWinRevealMs = revealMs;
       }
