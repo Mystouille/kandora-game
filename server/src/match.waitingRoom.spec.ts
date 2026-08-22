@@ -5,9 +5,11 @@
  *
  * Covers:
  *   - Empty room starts in `waiting` status with 4 empty seats.
- *   - `claimSeat` assigns a random empty slot, marks the seat
+ *   - `claimSeat` assigns a stable placeholder slot, marks the seat
  *     `human` in `buildRoomState`, and is idempotent per-userId
  *     (reconnect path).
+ *   - `fillBotsAndStart` randomizes final seats and keeps each
+ *     human socket attached to its occupant.
  *   - `releaseSeat` clears the slot back to `empty`.
  *   - `fillBots` fills every remaining empty slot with bots and
  *     leaves humans untouched.
@@ -24,7 +26,7 @@ vi.mock("./persist", () => ({
   archiveReplayLog: vi.fn(async () => undefined),
 }));
 
-import { MatchProcess } from "./match";
+import { MatchProcess, waitingRoomSeatPermutation } from "./match";
 import type { Seat, ServerMessage } from "~/game/protocol/messages";
 
 function makeSink(): {
@@ -39,6 +41,62 @@ function makeSink(): {
 }
 
 describe("MatchProcess waiting-room state machine", () => {
+  it("keeps join positions stable but varies final East by match seed", () => {
+    const room = MatchProcess.createWaitingRoom("stable-joins", 42);
+    expect(room.claimSeat("creator", "Creator")).toBe(0);
+    expect(room.claimSeat("second", "Second")).toBe(1);
+
+    const eastSources = new Set(
+      [1, 2, 3, 4, 5, 6, 7, 8].map(
+        (seed) => waitingRoomSeatPermutation(seed)[0]
+      )
+    );
+    expect(eastSources.size).toBeGreaterThan(1);
+  });
+
+  it("moves the creator socket to its randomized final seat at start", async () => {
+    const seed = [1, 2, 3, 4, 5, 6, 7, 8].find(
+      (candidate) => waitingRoomSeatPermutation(candidate).indexOf(0) !== 0
+    );
+    if (seed === undefined) {
+      throw new Error("expected a seed that moves waiting-room seat 0");
+    }
+    const finalSeat = waitingRoomSeatPermutation(seed).indexOf(0) as Seat;
+    const room = MatchProcess.createWaitingRoom("shuffle-on-start", seed);
+    const waitingSeat = room.claimSeat("creator", "Creator") as Seat;
+    expect(waitingSeat).toBe(0);
+    const sink = makeSink();
+    room.attachHuman(waitingSeat, sink.send);
+    sink.frames.length = 0;
+
+    await room.fillBotsAndStart();
+
+    expect(finalSeat).not.toBe(0);
+    expect(room.humanSeatFor(sink.send)).toBe(finalSeat);
+    const finalRoomState = [...sink.frames]
+      .reverse()
+      .find((frame) => frame.type === "room_state");
+    if (finalRoomState?.type !== "room_state") {
+      throw new Error("expected a final room_state frame");
+    }
+    expect(finalRoomState.status).toBe("playing");
+    expect(finalRoomState.mySeat).toBe(finalSeat);
+    const botNames = ["Bot East", "Bot South", "Bot West", "Bot North"];
+    for (const { seat, occupant } of finalRoomState.seats) {
+      if (seat === finalSeat) {
+        expect(occupant).toMatchObject({
+          kind: "human",
+          userId: "creator",
+        });
+      } else {
+        expect(occupant).toMatchObject({
+          kind: "bot",
+          displayName: botNames[seat],
+        });
+      }
+    }
+  });
+
   it("creates an empty waiting room", () => {
     const m = MatchProcess.createWaitingRoom("room-1", 42);
     expect(m.status).toBe("waiting");

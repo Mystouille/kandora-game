@@ -133,9 +133,9 @@ export function setMatchEndDisplayMs(ms: number): void {
 
 /**
  * Tiny deterministic shuffle (mulberry32 + Fisher–Yates) used
- * by `startNextGame` to randomize the non-winner seats. Pure
- * function of `seed` so test setups can predict the resulting
- * permutation without monkey-patching `Math.random`.
+ * for initial waiting-room seating and Buu next-game seating.
+ * Pure function of `seed` so test setups can predict the
+ * resulting permutation without monkey-patching `Math.random`.
  */
 function deterministicShuffle<T>(items: readonly T[], seed: number): T[] {
   let s = seed >>> 0;
@@ -152,6 +152,18 @@ function deterministicShuffle<T>(items: readonly T[], seed: number): T[] {
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
+}
+
+/**
+ * Map each final seat to the waiting-room seat whose occupant moves there.
+ * The match seed is chosen when the room is created but the permutation is
+ * not applied or revealed until the game actually starts.
+ */
+export function waitingRoomSeatPermutation(
+  seed: number
+): [Seat, Seat, Seat, Seat] {
+  const shuffled = deterministicShuffle<Seat>([0, 1, 2, 3], seed);
+  return [shuffled[0], shuffled[1], shuffled[2], shuffled[3]];
 }
 
 /**
@@ -1607,7 +1619,7 @@ export class MatchProcess {
 
   /**
    * Reclaim an existing human seat (matches by `userId`) or claim
-   * a random empty seat. Returns the assigned `Seat`, or `null`
+    * the first empty placeholder. Returns the assigned `Seat`, or `null`
    * when the room is `playing`/`finished` and the user has no
    * prior claim (a spectator situation we currently refuse).
    *
@@ -1625,13 +1637,9 @@ export class MatchProcess {
     if (this.statusValue !== "waiting") {
       return null;
     }
-    // Auto-random seating: pick a random empty slot. Exception:
-    // when the room is still completely empty (first human to
-    // claim a seat), always assign seat 0. This makes solo
-    // matches deterministic — the lone human always ends up at
-    // the bottom-of-the-table renderer viewpoint — and gives the
-    // multi-human room creator a stable host seat without
-    // affecting later joiners.
+    // Waiting-room positions are stable placeholders only. Final
+    // winds are randomized atomically in `fillBotsAndStart`, so a
+    // player cannot recreate or rejoin rooms to fish for East.
     const empties: Seat[] = [];
     for (const [seat, p] of this.players) {
       if (p === null) {
@@ -1641,10 +1649,7 @@ export class MatchProcess {
     if (empties.length === 0) {
       return null;
     }
-    const pick =
-      empties.length === 4
-        ? 0
-        : empties[Math.floor(Math.random() * empties.length)];
+    const pick = empties[0];
     this.players.set(pick, { userId, displayName, isBot: false });
     this.broadcastRoomState();
     return pick;
@@ -1694,6 +1699,37 @@ export class MatchProcess {
     }
   }
 
+  /** Move occupants and every identity-bound connection field together. */
+  private permuteSeatOccupants(
+    permutation: readonly [Seat, Seat, Seat, Seat]
+  ): void {
+    const oldPlayers = new Map(this.players);
+    const oldSockets = [...this.humanSockets];
+    const oldDisconnected = [...this.disconnected];
+    const oldAfkSelfReported = [...this.afkSelfReported];
+    const oldProbes = [...this.livenessProbes];
+    const oldProbeMisses = [...this.livenessProbeMisses];
+    const oldConnectionGenerations = [...this.humanConnectionGeneration];
+
+    for (let newSeat = 0; newSeat < 4; newSeat++) {
+      const fromSeat = permutation[newSeat];
+      this.players.set(newSeat as Seat, oldPlayers.get(fromSeat) ?? null);
+      this.humanSockets[newSeat] = oldSockets[fromSeat];
+      this.disconnected[newSeat] = oldDisconnected[fromSeat];
+      this.afkSelfReported[newSeat] = oldAfkSelfReported[fromSeat];
+      this.livenessProbes[newSeat] = oldProbes[fromSeat];
+      this.livenessProbeMisses[newSeat] = oldProbeMisses[fromSeat];
+      this.livenessProbeInflight[newSeat] = false;
+      this.humanConnectionGeneration[newSeat] =
+        oldConnectionGenerations[fromSeat] + 1;
+    }
+  }
+
+  /** Apply the final random seating immediately before game start. */
+  private randomizeWaitingRoomSeats(): void {
+    this.permuteSeatOccupants(waitingRoomSeatPermutation(this.seed));
+  }
+
   /**
    * Convenience: fill empty slots with bots, broadcast the
    * resulting `playing` room state, and start the match. Returns
@@ -1705,6 +1741,7 @@ export class MatchProcess {
         `fillBotsAndStart: cannot start from status "${this.statusValue}"`
       );
     }
+    this.randomizeWaitingRoomSeats();
     this.fillBots();
     // Status flip happens inside `start()`; broadcast the new
     // composition (now including the bots) BEFORE handing control
@@ -2324,7 +2361,7 @@ export class MatchProcess {
    *   - **Bots**: scanned synchronously here. Bots auto-take ron when
    *     legal (atamahane resolves ties); they always pass on
    *     chi/pon/kan.
-   *   - **Human (seat 0)**: if any options exist, opens a UI window;
+  *   - **Humans**: each eligible seat opens its own UI window;
    *     resolution waits for the `act`. Bot rons are remembered in
    *     `pendingBotRons` and combined with the human's response when
    *     the window resolves.
@@ -2925,8 +2962,8 @@ export class MatchProcess {
   /**
    * After a successful chi/pon/daiminkan, the engine puts the calling
    * seat into `awaiting_discard` (and for daiminkan also draws a
-   * rinshan tile). The human is seat 0 — surface their discard
-   * legals and wait.
+    * rinshan tile). If the caller is human, surface their discard
+    * legals and wait.
    */
   private async afterCall(): Promise<void> {
     if (
@@ -3766,16 +3803,8 @@ export class MatchProcess {
       shuffled[2],
     ];
 
-    // Permute per-seat orchestrator state. `oldPlayers` etc are
-    // captured before the loop so each newSeat reads a clean
-    // snapshot.
-    const oldPlayers = new Map(this.players);
-    const oldSockets = [...this.humanSockets];
-    const oldDisconnected = [...this.disconnected];
-    const oldAfkSelfReported = [...this.afkSelfReported];
-    const oldProbes = [...this.livenessProbes];
-    const oldProbeMisses = [...this.livenessProbeMisses];
-    const oldConnectionGenerations = [...this.humanConnectionGeneration];
+    // Permute identity-bound orchestrator state through the same
+    // primitive used by the initial waiting-room shuffle.
     const oldChips = [...this.sessionChips] as [number, number, number, number];
     const oldDabuken = [...this.sessionDabuken] as [
       boolean,
@@ -3783,17 +3812,9 @@ export class MatchProcess {
       boolean,
       boolean,
     ];
+    this.permuteSeatOccupants(perm);
     for (let newSeat = 0; newSeat < 4; newSeat++) {
       const fromSeat = perm[newSeat];
-      this.players.set(newSeat as Seat, oldPlayers.get(fromSeat) ?? null);
-      this.humanSockets[newSeat] = oldSockets[fromSeat];
-      this.disconnected[newSeat] = oldDisconnected[fromSeat];
-      this.afkSelfReported[newSeat] = oldAfkSelfReported[fromSeat];
-      this.livenessProbes[newSeat] = oldProbes[fromSeat];
-      this.livenessProbeMisses[newSeat] = oldProbeMisses[fromSeat];
-      this.livenessProbeInflight[newSeat] = false;
-      this.humanConnectionGeneration[newSeat] =
-        oldConnectionGenerations[fromSeat] + 1;
       this.sessionChips[newSeat] = oldChips[fromSeat];
       this.sessionDabuken[newSeat] = oldDabuken[fromSeat];
     }
