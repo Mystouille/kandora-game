@@ -403,6 +403,12 @@ export interface ActionClick {
   action: LegalAction;
 }
 
+export function canInteractWithFocusedHand(
+  view: Pick<MatchView, "conn">
+): boolean {
+  return view.conn !== "replay";
+}
+
 export class TableRenderer {
   private app: Application | null = null;
   private root: Container | null = null;
@@ -5158,7 +5164,7 @@ export class TableRenderer {
         ) {
           tileSprite.zIndex = 1_000_000;
         }
-        if (isYou && tile) {
+        if (isYou && tile && canInteractWithFocusedHand(view)) {
           const riichiLegal = riichiLegalsByTile.get(tile);
           // Dim tiles that aren't legal riichi discards while the
           // player is in select-riichi-tile mode.

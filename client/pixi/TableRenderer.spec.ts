@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import {
   buildResultYakuEntries,
+  canInteractWithFocusedHand,
   formatTableScore,
   pointInsideRect,
   replayDiscardingSeat,
@@ -133,6 +134,16 @@ describe("topmostHandHoverTargetIndex", () => {
 
   it("clears hover when the pointer moves outside every tile", () => {
     expect(topmostHandHoverTargetIndex({ x: 105, y: 40 }, bounds)).toBeNull();
+  });
+});
+
+describe("canInteractWithFocusedHand", () => {
+  it("keeps stored and live replay hands read-only", () => {
+    expect(canInteractWithFocusedHand({ conn: "replay" })).toBe(false);
+  });
+
+  it("allows hand interaction during an actual game", () => {
+    expect(canInteractWithFocusedHand({ conn: "open" })).toBe(true);
   });
 });
 
