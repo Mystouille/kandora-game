@@ -180,11 +180,11 @@ export interface MatchView {
    * match starts; falls back to the seat wind in the renderer
    * when missing. */
   seatNames: [string, string, string, string] | null;
-  /** Per-seat current wait tiles, populated by the replay loader
-   * (`annotateWaits` pass). Length 4; an empty inner array means
-   * the seat is not in a tenpai shape at this step. `null` in
-   * live play — only the replay path runs the precompute. Drives
-   * the renderer's red wait-tile tint when `showWaits` is on. */
+  /** Per-seat current wait tiles, populated by the stored replay
+   * loader or derived from an omniscient live spectator view.
+   * Length 4; an empty inner array means the seat is not in a
+   * tenpai shape at this step. `null` in ordinary player views.
+   * Drives the renderer's red wait-tile tint when `showWaits` is on. */
   currentWaits: Tile[][] | null;
   /** Per-seat current scores (1000-point chips × multiplier). */
   scores: [number, number, number, number];

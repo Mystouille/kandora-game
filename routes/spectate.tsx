@@ -24,6 +24,7 @@ import {
   rotateHandResult,
   type ReplayView,
 } from "~/game/replay/player";
+import { waitsForReplayView } from "~/game/replay/waits";
 import { playSoundForEvent, playGameSound } from "~/game/client/sound";
 import type {
   GameEvent,
@@ -599,6 +600,10 @@ export default function GameSpectateRoute({
         : postHandPeekResult,
     [postHandPeekResult, focusSeat]
   );
+  const currentWaits = useMemo(
+    () => (view && overlays.showWaits ? waitsForReplayView(view) : null),
+    [view, overlays.showWaits]
+  );
 
   useEffect(() => {
     if (!eyeHeld) {
@@ -674,6 +679,7 @@ export default function GameSpectateRoute({
       mySeat: focusSeat,
       matchId,
       seatNames,
+      currentWaits,
       roomState,
     });
     latestRenderRef.current = args;
@@ -690,6 +696,7 @@ export default function GameSpectateRoute({
     live,
     eyeHeld,
     renderedPostHandPeekResult,
+    currentWaits,
   ]);
 
   // -----------------------------------------------------------------------

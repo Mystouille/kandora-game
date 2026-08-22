@@ -2075,12 +2075,11 @@ export class TableRenderer {
     // `render` keeps the scale math below honest for free; the
     // call is a no-op when dimensions are already current.
     this.app.resize();
-    // Refresh the per-frame wait set from the server-precomputed
-    // `view.currentWaits` (annotated by `~/game/replay/annotateWaits`
-    // during the replay loader). Live play leaves `currentWaits`
-    // as `null`, so the set stays empty and `tintIfWait` is a
-    // cheap no-op. When `showWaits` is off we also leave the set
-    // empty regardless of the precompute.
+    // Refresh the per-frame wait set from `view.currentWaits`.
+    // Stored replays receive server-precomputed annotations; an
+    // omniscient live spectator derives the same shape at its
+    // current playhead. Ordinary player views leave it `null`.
+    // When `showWaits` is off the set stays empty regardless.
     //
     // Only the focused player's (`view.mySeat`) waits drive the
     // tint — the overlay is per-seat and follows the seat selector
