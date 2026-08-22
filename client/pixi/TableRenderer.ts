@@ -1755,7 +1755,7 @@ export class TableRenderer {
   setDrawSequencing(
     enabled: boolean,
     sounds?: {
-      onDiscardLand: (seat: number, isRiichi: boolean) => void;
+      onDiscardLand: (seat: number, isRiichiDeclaration: boolean) => void;
       onDrawLand: (seat: number) => void;
     }
   ): void {

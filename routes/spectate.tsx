@@ -318,8 +318,8 @@ export default function GameSpectateRoute({
         // settles). The discard/draw SFX are retimed to the slide
         // landings here, so the per-event sound loop below skips them.
         renderer.setDrawSequencing(true, {
-          onDiscardLand: (_seat, isRiichi) =>
-            playGameSound(isRiichi ? "riichi" : "discard"),
+          onDiscardLand: (_seat, isRiichiDeclaration) =>
+            playGameSound(isRiichiDeclaration ? "riichi" : "discard"),
           onDrawLand: () => playGameSound("draw"),
         });
         renderer.setOnRenderRequest(() => {

@@ -18,6 +18,7 @@ function makeView(args: {
   freshlyDrawnSeat?: number | null;
   freshlyDiscardedSeat?: number | null;
   riichiTileIdx?: [number | null, number | null, number | null, number | null];
+  riichiDeclared?: [boolean, boolean, boolean, boolean];
 }): MatchView {
   return {
     hands: args.hands ?? [[], [], [], []],
@@ -28,6 +29,7 @@ function makeView(args: {
     freshlyDrawnSeat: args.freshlyDrawnSeat ?? null,
     freshlyDiscardedSeat: args.freshlyDiscardedSeat ?? null,
     riichiTileIdx: args.riichiTileIdx ?? [null, null, null, null],
+    riichiDeclared: args.riichiDeclared ?? [false, false, false, false],
   } as unknown as MatchView;
 }
 
@@ -235,11 +237,15 @@ describe("DiscardAnimator", () => {
 
   it("sequenced: holds a discard at hover, settling only when the next draw begins", () => {
     let now = 0;
-    const discardSfx: Array<{ seat: number; isRiichi: boolean }> = [];
+    const discardSfx: Array<{
+      seat: number;
+      isRiichiDeclaration: boolean;
+    }> = [];
     const animator = new DiscardAnimator({ now: () => now });
     animator.setSequenced(true);
     animator.setSoundHooks({
-      onDiscardLand: (seat, isRiichi) => discardSfx.push({ seat, isRiichi }),
+      onDiscardLand: (seat, isRiichiDeclaration) =>
+        discardSfx.push({ seat, isRiichiDeclaration }),
     });
 
     animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
@@ -263,7 +269,7 @@ describe("DiscardAnimator", () => {
     // Phase A elapsed: land SFX fires once; tile hovers.
     now = SEQ_SLIDE_MS;
     animator.beginFrame(discarded);
-    expect(discardSfx).toEqual([{ seat: 0, isRiichi: false }]);
+    expect(discardSfx).toEqual([{ seat: 0, isRiichiDeclaration: false }]);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
     // Past the slide + hover with NO draw yet (an open call window):
@@ -289,6 +295,84 @@ describe("DiscardAnimator", () => {
     now = now + PHASE_B_DURATION_MS + 1;
     animator.beginFrame(drew);
     expect(animator.getAnim(0)).toBeNull();
+  });
+
+  it("keeps a replacement discard tilted without replaying the riichi sound", () => {
+    let now = 0;
+    const declarations: boolean[] = [];
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setSequenced(true);
+    animator.setSoundHooks({
+      onDiscardLand: (_seat, isDeclaration) => declarations.push(isDeclaration),
+    });
+
+    const before = makeView({
+      hands: [["2m"], [], [], []],
+      riichiDeclared: [true, false, false, false],
+      riichiTileIdx: [0, null, null, null],
+    });
+    animator.beginFrame(before);
+    recordLayouts(animator, [
+      { sorted: ["2m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    const replacementDiscard = makeView({
+      hands: [[], [], [], []],
+      discards: [["2m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+      riichiDeclared: [true, false, false, false],
+      riichiTileIdx: [0, null, null, null],
+    });
+    animator.beginFrame(replacementDiscard);
+
+    expect(animator.getAnim(0)).toMatchObject({
+      isRiichi: true,
+      isRiichiDeclaration: false,
+    });
+    now = SEQ_SLIDE_MS;
+    animator.beginFrame(replacementDiscard);
+    expect(declarations).toEqual([false]);
+  });
+
+  it("emits the riichi sound for the original declaration transition", () => {
+    let now = 0;
+    const declarations: boolean[] = [];
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setSequenced(true);
+    animator.setSoundHooks({
+      onDiscardLand: (_seat, isDeclaration) => declarations.push(isDeclaration),
+    });
+
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+    const declaration = makeView({
+      hands: [[], [], [], []],
+      discards: [["1m"], [], [], []],
+      discardTsumogiri: [[false], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+      riichiDeclared: [true, false, false, false],
+      riichiTileIdx: [0, null, null, null],
+    });
+    animator.beginFrame(declaration);
+
+    expect(animator.getAnim(0)).toMatchObject({
+      isRiichi: true,
+      isRiichiDeclaration: true,
+    });
+    now = SEQ_SLIDE_MS;
+    animator.beginFrame(declaration);
+    expect(declarations).toEqual([true]);
   });
 
   it("sequenced: delays the next draw until the discard has hovered, hiding it until then", () => {

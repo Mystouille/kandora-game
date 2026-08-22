@@ -126,10 +126,14 @@ export interface DiscardAnimation {
    * creation time and through both phases. */
   discardIndex: number;
   tile: string;
-  /** True iff this discard was the seat's riichi-declaration
-   * sideways tile. Carried through both phases so the renderer
-   * picks the rotated riichi sheet for the animated sprite. */
+  /** True iff this discard occupies the seat's current sideways
+   * riichi marker. This may be the replacement tile after the original
+   * declaration discard was called. Drives visual geometry only. */
   isRiichi: boolean;
+  /** True only for the actual declaration event. Unlike `isRiichi`,
+   * this does not transfer to the next pond tile when the declaration
+   * tile is called away. Drives the one-time riichi SFX. */
+  isRiichiDeclaration: boolean;
   /** Tsumogiri flag from the discard event. Hidden-hand
    * animations source from the rightmost slot when true, from
    * {@link HIDDEN_HAND_TEDASHI_SLOT} otherwise. */
@@ -201,8 +205,8 @@ export class DiscardAnimator {
    * (discard reaches hover; draw slide completes) so the cue tracks
    * the visual instead of the event arrival. Unset ⇒ silent (the
    * host plays event-driven SFX in non-sequenced modes). */
-  private onDiscardLand: ((seat: number, isRiichi: boolean) => void) | null =
-    null;
+  private onDiscardLand:
+    ((seat: number, isRiichiDeclaration: boolean) => void) | null = null;
   private onDrawLand: ((seat: number) => void) | null = null;
   private readonly now: () => number;
   /** Last `view` we processed in {@link beginFrame}. Used to diff. */
@@ -268,7 +272,7 @@ export class DiscardAnimator {
    * own event-driven discard/draw cues so they don't double up.
    */
   setSoundHooks(hooks: {
-    onDiscardLand?: (seat: number, isRiichi: boolean) => void;
+    onDiscardLand?: (seat: number, isRiichiDeclaration: boolean) => void;
     onDrawLand?: (seat: number) => void;
   }): void {
     this.onDiscardLand = hooks.onDiscardLand ?? null;
@@ -427,6 +431,9 @@ export class DiscardAnimator {
             (discardSource === null &&
               (view.discardTsumogiri[seat]?.[lastIdx] ?? false));
           const isRiichi = view.riichiTileIdx[seat] === lastIdx;
+          const isRiichiDeclaration =
+            !(prev.riichiDeclared?.[seat] ?? false) &&
+            (view.riichiDeclared?.[seat] ?? false);
 
           // The pre-discard layout we want to capture is exactly
           // what was rendered on the previous frame for this seat.
@@ -448,6 +455,7 @@ export class DiscardAnimator {
             discardIndex: lastIdx,
             tile,
             isRiichi,
+            isRiichiDeclaration,
             isTsumogiri,
             phase: "to-nudge",
             // Sequenced mode queues the slide on the serial clock so it
@@ -547,7 +555,7 @@ export class DiscardAnimator {
         now - anim.startMs >= SEQ_SLIDE_MS
       ) {
         anim.landSoundPlayed = true;
-        this.onDiscardLand?.(seat, anim.isRiichi);
+        this.onDiscardLand?.(seat, anim.isRiichiDeclaration);
       }
       if (
         anim.phase === "to-nudge" &&
