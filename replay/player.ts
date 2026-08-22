@@ -916,6 +916,19 @@ export function replayViewToMatchView(
   return rotateMatchView(base, focus);
 }
 
+/** Rotate an absolute-seat array into the renderer's focused-seat frame. */
+export function rotateSeatValues<T>(
+  values: readonly T[],
+  focus: Seat
+): [T, T, T, T] {
+  return [
+    values[(0 + focus) % 4],
+    values[(1 + focus) % 4],
+    values[(2 + focus) % 4],
+    values[(3 + focus) % 4],
+  ];
+}
+
 /** Rotate a completed hand result into the seat-relative renderer frame. */
 export function rotateHandResult(
   result: NonNullable<MatchView["lastHandResult"]>,

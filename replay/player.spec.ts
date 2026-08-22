@@ -14,6 +14,7 @@ import {
   replayBounds,
   replayReducer,
   rotateHandResult,
+  rotateSeatValues,
   roundBoundaries,
 } from "./player";
 import type { MatchView } from "~/game/client/store";
@@ -101,6 +102,14 @@ const STARTING: [string[], string[], string[], string[]] = [
     "2p",
   ],
 ];
+
+describe("rotateSeatValues", () => {
+  it("keeps seat metadata attached when focus moves to seat 2", () => {
+    expect(rotateSeatValues(["team-0", "team-1", "team-2", "team-3"], 2)).toEqual(
+      ["team-2", "team-3", "team-0", "team-1"]
+    );
+  });
+});
 
 describe("rotateHandResult", () => {
   it("rotates score transfers and winner seats into the viewer's frame", () => {
