@@ -181,8 +181,8 @@ const ROUND_WIND_KANJI: Record<MatchView["roundWind"], string> = {
 const KANJI_FONT_FAMILY =
   '"Yuji Syuku", "Yu Mincho", "Hiragino Mincho ProN", serif';
 
-/** In an omniscient replay, identify the seat whose hand must discard. */
-export function replayDiscardingSeat(
+/** Identify the seat whose complete hand is waiting for a discard. */
+export function activePlayerIndicatorSeat(
   view: Pick<MatchView, "hands" | "melds" | "lastHandResult" | "matchEnded">
 ): Seat | null {
   if (view.lastHandResult || view.matchEnded) {
@@ -2250,8 +2250,7 @@ export class TableRenderer {
       height: chipH,
       inset,
     } = scoreCartridgeMetrics(center);
-    const indicatorSeat =
-      view.conn === "replay" ? replayDiscardingSeat(view) : view.mySeat;
+    const indicatorSeat = activePlayerIndicatorSeat(view);
     type ChipSpec = { x: number; y: number; rotation: number };
     const specs: ChipSpec[] = [
       { x: cx, y: center.y + center.h - inset - chipH / 2, rotation: 0 },
@@ -2288,7 +2287,7 @@ export class TableRenderer {
       txt.anchor.set(1, 0.5);
       txt.position.set(chipW / 2 - horizontalPadding, 0);
       // Seat wind kanji, anchored to the left edge of the chip.
-      // The focused player's wind is red; otherwise East is white
+      // The active player's wind is red; otherwise East is white
       // and the remaining winds are muted grey.
       const wind = WIND_KANJI[(seat - view.dealer + 4) % 4];
       const isEast = wind === "東";

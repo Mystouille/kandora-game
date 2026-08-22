@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import {
+  activePlayerIndicatorSeat,
   buildResultYakuEntries,
   canInteractWithFocusedHand,
   formatTableScore,
   pointInsideRect,
-  replayDiscardingSeat,
   resultScoreBoxLayout,
   shouldStageWinReveal,
   sortTilesForDisplay,
@@ -32,25 +32,35 @@ function turnView(
   } as ReplayTurnView;
 }
 
-describe("replayDiscardingSeat", () => {
+describe("activePlayerIndicatorSeat", () => {
   it("finds an unmelded seat holding fourteen tiles", () => {
-    expect(replayDiscardingSeat(turnView([13, 14, 13, 13]))).toBe(1);
+    expect(activePlayerIndicatorSeat(turnView([13, 14, 13, 13]))).toBe(1);
   });
 
   it("accounts for three structural tiles per open meld", () => {
-    expect(replayDiscardingSeat(turnView([13, 11, 13, 13], [0, 1, 0, 0]))).toBe(
-      1
-    );
+    expect(
+      activePlayerIndicatorSeat(turnView([13, 11, 13, 13], [0, 1, 0, 0]))
+    ).toBe(1);
+  });
+
+  it("follows the active opponent instead of the focused live player", () => {
+    const liveView = {
+      ...turnView([13, 14, 13, 13]),
+      conn: "open" as const,
+      mySeat: 0 as const,
+    };
+
+    expect(activePlayerIndicatorSeat(liveView)).toBe(1);
   });
 
   it("returns null while a kan caller is waiting for a replacement draw", () => {
-    expect(replayDiscardingSeat(turnView([13, 10, 13, 13], [0, 1, 0, 0]))).toBe(
-      null
-    );
+    expect(
+      activePlayerIndicatorSeat(turnView([13, 10, 13, 13], [0, 1, 0, 0]))
+    ).toBe(null);
   });
 
   it("returns null after every seat has completed its turn", () => {
-    expect(replayDiscardingSeat(turnView([13, 13, 13, 13]))).toBe(null);
+    expect(activePlayerIndicatorSeat(turnView([13, 13, 13, 13]))).toBe(null);
   });
 });
 
