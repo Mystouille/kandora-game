@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import {
   activePlayerIndicatorSeat,
+  ankanTilesForDisplay,
   buildResultYakuEntries,
   canInteractWithFocusedHand,
   formatTableScore,
@@ -115,6 +116,29 @@ describe("sortTilesForDisplay", () => {
       "5p",
       "0p",
       "6p",
+    ]);
+  });
+});
+
+describe("ankanTilesForDisplay", () => {
+  it.each(["m", "p", "s"])(
+    "places the red five of %s in a visible middle slot",
+    (suit) => {
+      const normal = `5${suit}`;
+      const red = `0${suit}`;
+      const ordered = ankanTilesForDisplay([normal, normal, normal, red]);
+
+      expect(ordered).toHaveLength(4);
+      expect(ordered.slice(1, 3)).toContain(red);
+    }
+  );
+
+  it("keeps a non-red ankan naturally ordered", () => {
+    expect(ankanTilesForDisplay(["7z", "7z", "7z", "7z"])).toEqual([
+      "7z",
+      "7z",
+      "7z",
+      "7z",
     ]);
   });
 });

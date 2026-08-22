@@ -6264,7 +6264,7 @@ export class TableRenderer {
       return 0;
     };
     if (meld.type === "ankan") {
-      const tiles = meld.tiles;
+      const tiles = ankanTilesForDisplay(meld.tiles);
       let ax = 0;
       const mt = meldTileDims(this.tileDesign, seat);
       tiles.forEach((tile, i) => {
@@ -7106,6 +7106,17 @@ function tileSortKey(tile: string): number {
 
 export function sortTilesForDisplay(tiles: readonly string[]): string[] {
   return [...tiles].sort((a, b) => tileSortKey(a) - tileSortKey(b));
+}
+
+export function ankanTilesForDisplay(tiles: readonly string[]): string[] {
+  const ordered = sortTilesForDisplay(tiles);
+  const redIndex = ordered.findIndex((tile) => /^0[mps]$/.test(tile));
+  if (redIndex < 0 || ordered.length < 3) {
+    return ordered;
+  }
+  const [redFive] = ordered.splice(redIndex, 1);
+  ordered.splice(1, 0, redFive);
+  return ordered;
 }
 
 /**
