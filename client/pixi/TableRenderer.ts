@@ -757,18 +757,17 @@ export class TableRenderer {
    * drag gesture. Tracked here so {@link destroy} can detach
    * them cleanly. */
   private handDragCleanup: (() => void) | null = null;
-  /** Cached design-space x of seat 0's hand-container origin
+  /** Cached design-space origin of seat 0's hand container
    * (`handRect.x + longAxisOffset`). Stamped by `renderSeat` on
    * every render so the document-level pointermove handler can
-   * convert page coordinates into handContainer-local coords
+   * convert page coordinates into hand-container-local coords
    * without holding a stale Pixi node. */
   private handContainerOriginX = 0;
-  /** Click-fallback thunk recorded by the seat-0 pointerdown
-   * handler. If pointerup fires before the drag is promoted
-   * (i.e. the gesture is a quick click), we invoke this to
-   * preserve the legacy click-to-discard / click-to-riichi
-   * semantics with the original surrounding closure context. */
-  private pendingHandClickCallback: (() => void) | null = null;
+  private handContainerOriginY = 0;
+  /** Action thunk recorded by the seat-0 pointerdown handler. Invoked
+   * for a quick click or an upward-discard release, preserving the
+   * original discard/riichi closure context for the physical tile. */
+  private pendingHandClickCallback: ((rawIdx: number) => void) | null = null;
   /** Cached previous-frame view, used only by the focused-hand
    * sorter to detect hand boundaries (a `totalDiscards` reset).
    * Kept separate from `lastView` because the discard animator's
@@ -1074,21 +1073,40 @@ export class TableRenderer {
     // into handContainer-local space via the cached canvas rect,
     // root scale + position, and the seat-0 hand origin stamped
     // by `renderSeat`.
-    const pointerToHandLocalX = (clientX: number, clientY: number): number => {
+    const pointerToHandLocal = (
+      clientX: number,
+      clientY: number
+    ): { x: number; y: number } => {
       const a = this.app;
       if (!a || !this.root) {
-        return 0;
+        return { x: 0, y: 0 };
       }
       const rect = a.canvas.getBoundingClientRect();
       const cssX = clientX - rect.left;
+      const cssY = clientY - rect.top;
       // `app.screen.*` is in CSS pixels with autoDensity, matching
       // `rect.width`; no DPR math needed.
       const screenX = (cssX / Math.max(1, rect.width)) * a.screen.width;
-      void clientY;
+      const screenY = (cssY / Math.max(1, rect.height)) * a.screen.height;
       const designX = (screenX - this.root.position.x) / this.root.scale.x;
-      // Seat 0 (bottom): handContainer has no rotation, so
-      // local-x = design-x - handContainer.x.
-      return designX - this.handContainerOriginX;
+      const designY = (screenY - this.root.position.y) / this.root.scale.y;
+      // Seat 0 (bottom) has no rotation, so local coordinates are
+      // design coordinates relative to the cached container origin.
+      return {
+        x: designX - this.handContainerOriginX,
+        y: designY - this.handContainerOriginY,
+      };
+    };
+    const updateHandDragPointer = (clientX: number, clientY: number): void => {
+      const view = this.lastView;
+      if (!view || !this.handSorter.hasPointerDown()) {
+        return;
+      }
+      const local = pointerToHandLocal(clientX, clientY);
+      const rawHand = view.hands[0] ?? [];
+      const isFresh = view.freshlyDrawnSeat === 0;
+      const natural = naturalOrderRawIndices(rawHand, isFresh, tileSortKey);
+      this.handSorter.pointerMove(local.x, local.y, natural);
     };
     const onWindowPointerMove = (e: PointerEvent): void => {
       this.focusedHandPointerClient =
@@ -1097,15 +1115,7 @@ export class TableRenderer {
       if (!this.handSorter.hasPointerDown()) {
         return;
       }
-      const view = this.lastView;
-      if (!view) {
-        return;
-      }
-      const localX = pointerToHandLocalX(e.clientX, e.clientY);
-      const rawHand = view.hands[0] ?? [];
-      const isFresh = view.freshlyDrawnSeat === 0;
-      const natural = naturalOrderRawIndices(rawHand, isFresh, tileSortKey);
-      this.handSorter.pointerMove(localX, natural);
+      updateHandDragPointer(e.clientX, e.clientY);
       this.requestRender();
     };
     const onWindowPointerUp = (e: PointerEvent): void => {
@@ -1115,8 +1125,9 @@ export class TableRenderer {
       if (!this.handSorter.hasPointerDown()) {
         return;
       }
+      updateHandDragPointer(e.clientX, e.clientY);
       const result = this.handSorter.pointerUp();
-      if (result.kind === "click") {
+      if (result.kind === "click" || result.kind === "discard") {
         // Reproduce the legacy click-to-discard semantics. We
         // don't have direct access to the riichi-mode logic
         // here, so we route through a stashed click thunk set
@@ -1124,15 +1135,23 @@ export class TableRenderer {
         // surrounding closure context).
         const cb = this.pendingHandClickCallback;
         if (cb) {
-          cb();
+          cb(result.rawIdx);
         }
       }
       this.pendingHandClickCallback = null;
       this.requestRender();
     };
+    const onWindowPointerCancel = (): void => {
+      if (!this.handSorter.hasPointerDown()) {
+        return;
+      }
+      this.handSorter.cancelGesture();
+      this.pendingHandClickCallback = null;
+      this.requestRender();
+    };
     window.addEventListener("pointermove", onWindowPointerMove);
     window.addEventListener("pointerup", onWindowPointerUp);
-    window.addEventListener("pointercancel", onWindowPointerUp);
+    window.addEventListener("pointercancel", onWindowPointerCancel);
     const onCanvasPointerLeave = (): void => {
       this.clearFocusedHandHover(true);
     };
@@ -1140,7 +1159,7 @@ export class TableRenderer {
     this.handDragCleanup = (): void => {
       window.removeEventListener("pointermove", onWindowPointerMove);
       window.removeEventListener("pointerup", onWindowPointerUp);
-      window.removeEventListener("pointercancel", onWindowPointerUp);
+      window.removeEventListener("pointercancel", onWindowPointerCancel);
       app.canvas.removeEventListener("pointerleave", onCanvasPointerLeave);
     };
 
@@ -5232,10 +5251,12 @@ export class TableRenderer {
         // (handles drag-to-reorder + post-swap slide). Seat 2:
         // static slot x — opponents don't get the sort feature.
         let posX = slotX;
+        let posY = 0;
         if (seat === 0 && rawIndices !== null) {
           posX = this.handSorter.getRenderX(rawIndices[i], slotX);
+          posY = this.handSorter.getRenderY(rawIndices[i], 0);
         }
-        tileSprite.position.set(posX, 0);
+        tileSprite.position.set(posX, posY);
         // Float the dragged tile above its neighbours so it
         // reads as being "picked up". `sortableChildren` is
         // turned on below the forEach when we know a drag is
@@ -5290,6 +5311,7 @@ export class TableRenderer {
           const localIndex = i;
           const localSlotX = slotX;
           const localSpriteW = spriteW;
+          const localSpriteH = spriteH;
           // Count how many copies of this tile sit to the LEFT
           // of the clicked slot in the *current* display order:
           // that's the ordinal we hand to the discard animator
@@ -5319,7 +5341,7 @@ export class TableRenderer {
             // if the gesture stays under the drag-promotion
             // threshold. If it promotes to a drag, the thunk
             // is discarded and the sorter handles the drop.
-            const fireClick = (): void => {
+            const fireClick = (discardRawIdx: number): void => {
               if (inRiichiMode) {
                 if (riichiLegal && this.onActionClick) {
                   this.riichiMode = false;
@@ -5328,17 +5350,37 @@ export class TableRenderer {
                 return;
               }
               if (this.onTileClick) {
+                const naturalIndices = naturalOrderRawIndices(
+                  rawHand,
+                  isFreshlyDrawnNatural,
+                  tileSortKey
+                );
+                const currentOrder = this.handSorter.getDisplayOrder(
+                  rawHand,
+                  isFreshlyDrawnNatural,
+                  naturalIndices
+                ).rawIndices;
+                const currentSlot = currentOrder.indexOf(discardRawIdx);
+                let currentOrd = localOrd;
+                if (currentSlot >= 0) {
+                  currentOrd = 0;
+                  for (let slot = 0; slot < currentSlot; slot++) {
+                    if (rawHand[currentOrder[slot]] === localTile) {
+                      currentOrd++;
+                    }
+                  }
+                }
                 // Tell the discard animator which copy of a
                 // duplicate tile the player actually clicked,
                 // so phase A blanks the correct slot.
                 this.animator.setNextDiscardSourceHint(
                   seat,
                   localTile,
-                  localOrd
+                  currentOrd
                 );
                 this.onTileClick({
                   seat,
-                  index: localIndex,
+                  index: currentSlot >= 0 ? currentSlot : localIndex,
                   tile: localTile,
                   discardSource: localDiscardSource,
                 });
@@ -5357,8 +5399,11 @@ export class TableRenderer {
             this.handSorter.pointerDown({
               rawIdx: localRawIdx,
               pointerLocalX: localPt.x,
+              pointerLocalY: localPt.y,
               tileLeftX: localSlotX,
+              tileTopY: 0,
               tileLongAxisLen: localSpriteW,
+              tileHeight: localSpriteH,
             });
           });
         }
@@ -5370,7 +5415,7 @@ export class TableRenderer {
           this.placeUprightShadow(
             ownShadowLayer,
             posX + spriteW,
-            spriteH,
+            posY + spriteH,
             spriteH,
             ownShadowSpec.big
           );
@@ -5445,6 +5490,7 @@ export class TableRenderer {
         // coords into handContainer-local x without keeping a
         // stale Pixi node reference between renders.
         this.handContainerOriginX = handRect.x + longAxisOffset;
+        this.handContainerOriginY = handRect.y;
         break;
       }
       case 1: {

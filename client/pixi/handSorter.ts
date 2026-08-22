@@ -19,12 +19,13 @@
  *      pointermove that exceeds a small px threshold promotes it
  *      to a real drag (and flips `sortFlag` to false on first
  *      promotion). While dragging, the dragged tile's screen
- *      position follows the cursor on the horizontal axis; as its
- *      center crosses a neighbour's center, the two tiles swap in
- *      `customOrder` (the gap "stays under" the dragged tile).
- *      Pointerup with no promotion is a click (caller fires the
- *      discard); pointerup after promotion is a drop, and the
- *      dragged tile slides to its final slot.
+ *      position follows the cursor on both axes. Only horizontal
+ *      movement participates in reordering: as its center crosses a
+ *      neighbour's center, the two tiles swap in `customOrder` (the
+ *      gap "stays under" the dragged tile). Pointerup with no
+ *      promotion is a click; a promoted drag either drops back into
+ *      the hand or requests a discard when released more than two
+ *      tile heights above its starting point.
  *
  *   3. Slide animation.
  *      Whenever a tile's *target* slot x changes (swap during
@@ -52,6 +53,9 @@ export const HAND_SLIDE_DURATION_MS = 120;
  * promotes to a drag rather than firing as a click. */
 export const DRAG_PROMOTE_THRESHOLD_PX = 5;
 
+/** Upward drag distance, measured in tile heights, required to discard. */
+export const UPWARD_DISCARD_TILE_HEIGHTS = 2;
+
 /** Linear → ease-out cubic for slide animations. */
 export function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
@@ -62,6 +66,7 @@ export function easeOutCubic(t: number): number {
 export type PointerUpResult =
   | { kind: "click"; rawIdx: number }
   | { kind: "drop"; rawIdx: number }
+  | { kind: "discard"; rawIdx: number }
   | { kind: "none" };
 
 /** Snapshot of a tile's last-rendered x and (optionally) an
@@ -86,18 +91,22 @@ interface DragState {
   rawIdx: number;
   /** handContainer-local x of the pointer at pointerdown. */
   downLocalX: number;
+  /** handContainer-local y of the pointer at pointerdown. */
+  downLocalY: number;
   /** handContainer-local x of the pointer right now. */
   currentLocalX: number;
+  /** handContainer-local y of the pointer right now. */
+  currentLocalY: number;
   /** Tile-left-edge x at pointerdown (so we follow the cursor
    * with the same grab offset). */
   downTileLeftX: number;
+  /** Tile-top-edge y at pointerdown. */
+  downTileTopY: number;
   /** Tile width along the long axis (so we can compute the
    * dragged tile's center for swap-threshold tests). */
   tileLongAxisLen: number;
-  /** Total movement magnitude since pointerdown; once it
-   * exceeds {@link DRAG_PROMOTE_THRESHOLD_PX} we promote to a
-   * real drag. */
-  totalMovementPx: number;
+  /** Rendered tile height, used by the upward-discard threshold. */
+  tileHeight: number;
   /** True once the drag has been promoted past the threshold. */
   promoted: boolean;
 }
@@ -495,6 +504,22 @@ export class HandSorter {
     return x;
   }
 
+  /** Return the tile's hand-local y. Only the actively dragged tile
+   * departs from its slot; hand layout and neighbour swaps stay x-only. */
+  getRenderY(rawIdx: number, targetSlotY: number): number {
+    if (
+      this.drag !== null &&
+      this.drag.promoted &&
+      this.drag.rawIdx === rawIdx
+    ) {
+      return (
+        this.drag.downTileTopY +
+        (this.drag.currentLocalY - this.drag.downLocalY)
+      );
+    }
+    return targetSlotY;
+  }
+
   private computeCurrentX(track: TileTrack, now: number): number {
     if (track.fromX === null) {
       return track.toX;
@@ -526,58 +551,68 @@ export class HandSorter {
   /**
    * Begin tracking a pointerdown on the focused-hand tile at
    * raw-hand index `rawIdx`. Records the geometry needed for
-   * later swap-threshold checks but does NOT yet flip the
-   * sort flag — promotion happens on first pointermove past
-   * the threshold.
+  * later swap and discard-threshold checks. Promotion happens
+  * on the first two-dimensional move past the threshold;
+  * auto-sort changes only after enough horizontal movement.
    */
   pointerDown(args: {
     rawIdx: number;
     pointerLocalX: number;
+    pointerLocalY: number;
     tileLeftX: number;
+    tileTopY: number;
     tileLongAxisLen: number;
+    tileHeight: number;
   }): void {
     this.drag = {
       rawIdx: args.rawIdx,
       downLocalX: args.pointerLocalX,
+      downLocalY: args.pointerLocalY,
       currentLocalX: args.pointerLocalX,
+      currentLocalY: args.pointerLocalY,
       downTileLeftX: args.tileLeftX,
+      downTileTopY: args.tileTopY,
       tileLongAxisLen: args.tileLongAxisLen,
-      totalMovementPx: 0,
+      tileHeight: args.tileHeight,
       promoted: false,
     };
   }
 
   /**
-   * Update the pointer position. If movement exceeds the
-   * promote threshold and we haven't promoted yet, flip
-   * `sortFlag` to false (initializing `customOrder` from the
-   * current natural display order) and begin treating the
-   * pointer as a drag.
-   *
-   * `slotXs` is the *current* (post-render, pre-this-call) x
-   * positions of every display slot, in display order; we use
-   * them to figure out which slot the dragged tile's center
-   * has crossed into, and swap accordingly.
+  * Update the two-dimensional pointer position. Crossing the
+  * radial promote threshold starts visual dragging; crossing
+  * the horizontal threshold additionally disables auto-sort
+  * and seeds the custom order used by {@link maybeSwap}.
    */
   pointerMove(
     pointerLocalX: number,
+    pointerLocalY: number,
     naturalRawIndicesIfPromoting: number[]
   ): void {
     if (this.drag === null) {
       return;
     }
-    const dx = pointerLocalX - this.drag.currentLocalX;
-    this.drag.totalMovementPx += Math.abs(dx);
     this.drag.currentLocalX = pointerLocalX;
+    this.drag.currentLocalY = pointerLocalY;
     if (
       !this.drag.promoted &&
+      Math.hypot(
+        pointerLocalX - this.drag.downLocalX,
+        pointerLocalY - this.drag.downLocalY
+      ) >= DRAG_PROMOTE_THRESHOLD_PX
+    ) {
+      this.drag.promoted = true;
+    }
+    // Preserve the old rearranging contract: only horizontal
+    // movement disables auto-sort and seeds custom order. A
+    // vertical discard gesture can therefore float the tile
+    // without changing the player's sorting preference.
+    if (
+      this.drag.promoted &&
+      this.sortFlag &&
       Math.abs(pointerLocalX - this.drag.downLocalX) >=
         DRAG_PROMOTE_THRESHOLD_PX
     ) {
-      this.drag.promoted = true;
-      // Flip the sort flag and seed customOrder from the
-      // current natural display so the dragged tile is in the
-      // same slot it was before promotion.
       const wasOn = this.sortFlag;
       this.sortFlag = false;
       if (this.customOrder === null) {
@@ -653,9 +688,9 @@ export class HandSorter {
   }
 
   /**
-   * End the gesture. Returns whether the caller should treat
-   * it as a click (fire the original discard handler) or a
-   * drop (just let the slide animation settle the tile).
+  * End the gesture. Returns a click, an ordinary drop, or an
+  * upward discard when the pointer finishes beyond the strict
+  * two-tile-height threshold.
    */
   pointerUp(): PointerUpResult {
     const drag = this.drag;
@@ -665,6 +700,12 @@ export class HandSorter {
     }
     if (!drag.promoted) {
       return { kind: "click", rawIdx: drag.rawIdx };
+    }
+    if (
+      drag.downLocalY - drag.currentLocalY >
+      drag.tileHeight * UPWARD_DISCARD_TILE_HEIGHTS
+    ) {
+      return { kind: "discard", rawIdx: drag.rawIdx };
     }
     // Force the dragged tile to slide from its current
     // cursor-tracked x to its target slot x: we mark the track
@@ -682,9 +723,8 @@ export class HandSorter {
     return { kind: "drop", rawIdx: drag.rawIdx };
   }
 
-  /** Cancel any in-progress gesture without firing a click.
-   * Used when the pointer leaves the canvas, the renderer is
-   * destroyed, etc. */
+  /** Cancel any in-progress gesture without firing a click or discard.
+   * Used for pointer cancellation and renderer teardown. */
   cancelGesture(): void {
     this.drag = null;
   }
