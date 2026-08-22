@@ -11,6 +11,7 @@ import {
   resolveSeatHandPresentation,
   riichiSelectionTileTint,
   resultScoreBoxLayout,
+  shouldRevealWinScoreDelta,
   shouldRevealWinScoreSummary,
   shouldStageWinReveal,
   sortTilesForDisplay,
@@ -309,6 +310,17 @@ describe("shouldRevealWinScoreSummary", () => {
 
   it("keeps static replay and history results fully visible", () => {
     expect(shouldRevealWinScoreSummary(false, 0, 3, false, true)).toBe(true);
+  });
+});
+
+describe("shouldRevealWinScoreDelta", () => {
+  it("reveals when the final yaku appears", () => {
+    expect(shouldRevealWinScoreDelta(true, 2_249, 3)).toBe(false);
+    expect(shouldRevealWinScoreDelta(true, 2_250, 3)).toBe(true);
+  });
+
+  it("keeps static replay and history deltas visible", () => {
+    expect(shouldRevealWinScoreDelta(false, 0, 3)).toBe(true);
   });
 });
 

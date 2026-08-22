@@ -367,6 +367,17 @@ export function shouldRevealWinScoreSummary(
   );
 }
 
+export function shouldRevealWinScoreDelta(
+  stageReveal: boolean,
+  revealElapsedMs: number,
+  visibleYakuCount: number
+): boolean {
+  return (
+    !stageReveal ||
+    revealElapsedMs >= visibleYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS
+  );
+}
+
 export function winResultRevealKey(
   view: Pick<MatchView, "roundWind" | "roundNumber" | "honba" | "dealer">,
   result: NonNullable<MatchView["lastHandResult"]>
@@ -3453,7 +3464,7 @@ export class TableRenderer {
 
     // Center info: title, yaku list, han/fu total, and points
     // line (for wins); reason text otherwise.
-    this.renderResultCenterInfo(
+    const scoreDeltaRevealed = this.renderResultCenterInfo(
       r,
       cx,
       cy,
@@ -3469,7 +3480,7 @@ export class TableRenderer {
     // Four player boxes positioned at the seats, showing each
     // player's pre-delta score and the signed delta from this
     // hand.
-    this.renderResultScoreBoxes(view, r, inner, overlay);
+    this.renderResultScoreBoxes(view, r, inner, overlay, scoreDeltaRevealed);
 
     return { x: inner.x, y: inner.y, w: inner.w, h: inner.h };
   }
@@ -3489,11 +3500,12 @@ export class TableRenderer {
     parent: Container,
     seatNames: MatchView["seatNames"],
     scoreCap: MatchView["scoreCap"]
-  ): void {
+  ): boolean {
     if (!this.root) {
-      return;
+      return true;
     }
     const container = new Container();
+    let scoreDeltaRevealed = true;
 
     // Build the lines we want to render. Each entry is either a
     // single label (centered), a yaku name + value pair, a tile
@@ -3665,6 +3677,11 @@ export class TableRenderer {
           revealableYakuCount,
           hasUraYaku,
           sharedUra.length > 0
+        );
+        scoreDeltaRevealed = shouldRevealWinScoreDelta(
+          stageReveal,
+          revealElapsedMs,
+          revealableYakuCount
         );
         // 1-column layout for short lists; 2-column for 5+
         // entries so very-yaku-rich hands (e.g. yakuman piles)
@@ -4286,6 +4303,7 @@ export class TableRenderer {
         }
       });
     }
+    return scoreDeltaRevealed;
   }
 
   /**
@@ -4353,7 +4371,8 @@ export class TableRenderer {
     view: MatchView,
     r: NonNullable<MatchView["lastHandResult"]>,
     inner: Rect,
-    parent: Container
+    parent: Container,
+    scoreDeltaRevealed: boolean
   ): void {
     if (!this.root || !r.delta) {
       return;
@@ -4383,7 +4402,15 @@ export class TableRenderer {
       const isDealer = view.dealer === seat;
       const delta = r.delta[seat] ?? 0;
       const before = (view.scores[seat] ?? 0) - delta;
-      this.drawScoreBox(name, isDealer, before, delta, pos, parent);
+      this.drawScoreBox(
+        name,
+        isDealer,
+        before,
+        delta,
+        pos,
+        parent,
+        scoreDeltaRevealed
+      );
     }
   }
 
@@ -4393,7 +4420,8 @@ export class TableRenderer {
     before: number,
     delta: number,
     pos: { x: number; y: number; anchor: "n" | "e" | "s" | "w" },
-    parent: Container
+    parent: Container,
+    scoreDeltaRevealed: boolean
   ): void {
     if (!this.root) {
       return;
@@ -4421,9 +4449,9 @@ export class TableRenderer {
         fill: 0xffffff,
       }),
     });
-    const showDelta = delta !== 0;
+    const hasDelta = delta !== 0;
     const deltaColor = delta > 0 ? 0x4ade80 : 0xf87171;
-    const deltaText = showDelta
+    const deltaText = hasDelta
       ? new Text({
           text: delta > 0 ? `+${delta}` : `${delta}`,
           style: new TextStyle({
@@ -4434,6 +4462,9 @@ export class TableRenderer {
           }),
         })
       : null;
+    if (deltaText) {
+      deltaText.visible = scoreDeltaRevealed;
+    }
     const padY = 14;
     const innerGap = 10;
     const rowContentW = deltaText
