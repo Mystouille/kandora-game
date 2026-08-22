@@ -14,6 +14,10 @@ import { useMatchStore } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
+  replayArrivalSoundTarget,
+  replaySoundTarget,
+} from "~/game/client/replaySound";
+import {
   applyReplayEvent,
   initialView,
   replayViewToMatchView,
@@ -241,6 +245,7 @@ export default function GameSpectateRoute({
   // `-1` = baseline (snapshot view). `>= 0` = state after applying
   // events[0..playIndex] over the baseline.
   const [playIndex, setPlayIndex] = useState<number>(-1);
+  const pendingSoundIndexRef = useRef<number | null>(null);
   const [live, setLive] = useState<boolean>(true);
   const [focusSeat, setFocusSeat] = useState<Seat>(0);
   const [eyeHeld, setEyeHeld] = useState(false);
@@ -416,6 +421,7 @@ export default function GameSpectateRoute({
           ...(delayMs > 0 ? { delayMs } : {}),
           onMessage: (msg: ServerMessage) => {
             if (msg.type === "snapshot") {
+              pendingSoundIndexRef.current = null;
               lastRelaySeqRef.current = msg.seq;
               setBaseline(snapshotToReplayView(msg.state));
               setEvents([]);
@@ -453,6 +459,7 @@ export default function GameSpectateRoute({
               // The following resync response overlaps this batch, so the seq
               // guard above also prevents duplicate catch-up events.
               if (startSeq === 0 && msg.events.length > 1) {
+                pendingSoundIndexRef.current = null;
                 let hydrated = initialView();
                 for (const event of msg.events) {
                   hydrated = applyReplayEvent(hydrated, event);
@@ -480,6 +487,8 @@ export default function GameSpectateRoute({
               setEvents((prev) => {
                 const next = [...prev, ...incoming];
                 if (liveRef.current) {
+                  pendingSoundIndexRef.current =
+                    replayArrivalSoundTarget(next.length, incoming.length);
                   // Snap playhead to the last event in the new buffer.
                   // Use a setTimeout-free direct call: `setPlayIndex`
                   // is safe inside an updater because React batches
@@ -617,33 +626,24 @@ export default function GameSpectateRoute({
     return out;
   }, [events]);
 
-  // Sound cue dispatch — driven off the local `playIndex` rather
-  // than the live store's event bus (see the mount effect for the
-  // rationale). Forward steps emit one cue per newly-revealed
-  // event; backward seeks and snapshot resets advance the cursor
-  // silently. Mirrors the live player's per-event soundscape
-  // when `live === true` (playhead auto-tracks new arrivals).
-  const lastPlayedSoundIndexRef = useRef<number>(-1);
+  // Sound is armed explicitly by one live arrival or one forward
+  // event step. Round/wheel/go-live/catch-up jumps never iterate the
+  // skipped range, so they cannot replay a burst of historical cues.
   useEffect(() => {
-    const from = lastPlayedSoundIndexRef.current;
-    lastPlayedSoundIndexRef.current = playIndex;
-    if (playIndex <= from) {
+    const shouldPlay = pendingSoundIndexRef.current === playIndex;
+    pendingSoundIndexRef.current = null;
+    if (!shouldPlay) {
       return;
     }
-    for (let i = from + 1; i <= playIndex && i < events.length; i++) {
-      // `draw` / `discard` cues are retimed by the animator to their
-      // slide landings (see `setDrawSequencing`), so skip them here to
-      // avoid a double hit at event-arrival time.
-      const evType = events[i].type;
-      if (evType === "draw" || evType === "discard") {
-        continue;
-      }
-      try {
-        playSoundForEvent(events[i], null);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[game] spectator sound dispatch threw", err);
-      }
+    const event = events[playIndex];
+    if (!event || event.type === "draw" || event.type === "discard") {
+      return;
+    }
+    try {
+      playSoundForEvent(event, null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[game] spectator sound dispatch threw", err);
     }
   }, [playIndex, events]);
 
@@ -701,10 +701,12 @@ export default function GameSpectateRoute({
     Math.max(minIndex, Math.min(n, maxIndex));
   /** Step to absolute event index `n`. Always pauses live mode. */
   const goto = (n: number): void => {
+    pendingSoundIndexRef.current = null;
     setLive(false);
     setPlayIndex(clamp(n));
   };
   const goLive = (): void => {
+    pendingSoundIndexRef.current = null;
     setLive(true);
     setPlayIndex(maxIndex);
   };
@@ -767,6 +769,11 @@ export default function GameSpectateRoute({
     }
     const max = eventsRef.current.length - 1;
     const next = Math.max(-1, Math.min(playIndexRef.current + delta, max));
+    pendingSoundIndexRef.current = replaySoundTarget(
+      playIndexRef.current,
+      next,
+      "step"
+    );
     if (delta < 0) {
       setLive(false);
     }
@@ -779,6 +786,7 @@ export default function GameSpectateRoute({
    * turn per notch.
    */
   const stepToStop = (dir: 1 | -1): void => {
+    pendingSoundIndexRef.current = null;
     const buf = eventsRef.current;
     const max = buf.length - 1;
     const isStop = (i: number): boolean => {
@@ -979,7 +987,7 @@ export default function GameSpectateRoute({
           <button
             type="button"
             onClick={() => {
-              goto(playIndex - 1);
+              stepBy(-1);
             }}
             disabled={playIndex <= minIndex}
             className="px-3 py-2 text-lg rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
@@ -991,7 +999,7 @@ export default function GameSpectateRoute({
           <button
             type="button"
             onClick={() => {
-              goto(playIndex + 1);
+              stepBy(1);
             }}
             disabled={playIndex >= maxIndex}
             className="px-3 py-2 text-lg rounded bg-black/60 hover:bg-emerald-800 disabled:opacity-40 border border-emerald-700 text-emerald-100"
