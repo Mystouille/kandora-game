@@ -29,6 +29,7 @@ import {
 } from "pixi.js";
 import type { MatchView } from "../store";
 import type { LegalAction, Meld } from "~/game/protocol/messages";
+import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 import { playGameSound } from "../sound";
 import {
   tableLayoutFromConfig,
@@ -248,11 +249,13 @@ export function buildResultYakuEntries(
   uraDoraCount: number | undefined,
   reserveUraRow: boolean
 ): Array<{ name: string; value: string; alwaysHidden: boolean }> {
-  const entries = Object.entries(yaku ?? {}).map(([name, value]) => ({
-    name,
-    value,
-    alwaysHidden: false,
-  }));
+  const entries = Object.entries(sortYakuRecord(yaku ?? {})).map(
+    ([name, value]) => ({
+      name,
+      value,
+      alwaysHidden: false,
+    })
+  );
   const setCount = (name: string, count: number, keepZero: boolean): void => {
     const index = entries.findIndex((entry) => entry.name === name);
     if (count === 0 && !keepZero) {

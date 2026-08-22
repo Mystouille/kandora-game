@@ -216,6 +216,20 @@ describe("winResultRevealKey", () => {
 });
 
 describe("buildResultYakuEntries", () => {
+  it("places tsumo before tanyao regardless of source order", () => {
+    expect(
+      buildResultYakuEntries(
+        { Tanyao: "1飜", Tsumo: "1飜" },
+        undefined,
+        undefined,
+        false
+      )
+    ).toEqual([
+      { name: "Tsumo", value: "1飜", alwaysHidden: false },
+      { name: "Tanyao", value: "1飜", alwaysHidden: false },
+    ]);
+  });
+
   it("separates structured regular and ura dora counts", () => {
     expect(
       buildResultYakuEntries({ Riichi: "1飜", Dora: "2飜" }, 1, 1, true)
