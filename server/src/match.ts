@@ -191,19 +191,25 @@ let DELAY_AFTER_DISCARD_MS = 500;
 let DRAW_TO_DISCARD_DELAY_MS = 700;
 
 /**
- * Pause inserted between the action that opens a winning
- * opportunity (a `discard` for ron, a `draw` for tsumo) and the
- * emission of the resulting `win` event. Gives the table a
- * brief beat so the discard / draw lands visually and audibly
- * before the win panel takes over — without this, instant bot
- * rons / tsumos feel jarringly abrupt and the winning tile is
- * easy to miss. Applies to bot and human winners alike for a
- * consistent cadence.
+ * Maximum client animation time before a win-triggering tile has
+ * visibly landed (discard phase A is 350ms; draw/meld slides are
+ * 300-350ms), followed by the requested 700ms viewing beat.
+ * `waitForWinReaction` measures from the triggering event's actual
+ * emission time, so a human who takes longer to declare does not
+ * incur an unnecessary fixed delay after clicking.
  *
  * Tests override via `setDelayAfterDiscardMs(0)` (zeros this too).
  */
 // eslint-disable-next-line prefer-const
-let WIN_REACTION_DELAY_MS = 500;
+let WIN_REACTION_DELAY_MS = 350 + 700;
+
+export function remainingWinReactionDelayMs(
+  triggerEmittedAt: number,
+  now: number,
+  minimumAgeMs: number = WIN_REACTION_DELAY_MS
+): number {
+  return Math.max(0, minimumAgeMs - Math.max(0, now - triggerEmittedAt));
+}
 
 /**
  * Pause inserted between the `win` event and the subsequent
@@ -2206,11 +2212,7 @@ export class MatchProcess {
       // Brief beat between the seat's `draw` event and the
       // `win` event so the drawn tile registers visually before
       // the win panel takes over.
-      if (WIN_REACTION_DELAY_MS > 0) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, WIN_REACTION_DELAY_MS)
-        );
-      }
+      await this.waitForWinReaction("draw");
       await this.applyEngineAction({ type: "tsumo", seat });
       await this.afterHandEnd();
       return;
@@ -2240,6 +2242,33 @@ export class MatchProcess {
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  private async waitForWinReaction(
+    triggerType: "draw" | "discard" | "call"
+  ): Promise<void> {
+    if (WIN_REACTION_DELAY_MS <= 0) {
+      return;
+    }
+    let triggerEmittedAt: number | null = null;
+    for (let index = this.eventLog.length - 1; index >= 0; index--) {
+      const entry = this.eventLog[index];
+      if (entry.event.type === triggerType) {
+        triggerEmittedAt = entry.emittedAt;
+        break;
+      }
+    }
+    const remaining =
+      triggerEmittedAt === null
+        ? WIN_REACTION_DELAY_MS
+        : remainingWinReactionDelayMs(
+            triggerEmittedAt,
+            Date.now(),
+            WIN_REACTION_DELAY_MS
+          );
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
+  }
 
   private async advanceTurn(): Promise<void> {
     if (
@@ -2462,15 +2491,7 @@ export class MatchProcess {
       await this.advanceTurn();
       return;
     }
-    // Brief beat between the `discard` event and the `win` event
-    // so the discarded tile lands visually before the win panel
-    // takes over (instant bot rons otherwise feel abrupt and the
-    // winning tile is easy to miss).
-    if (WIN_REACTION_DELAY_MS > 0) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, WIN_REACTION_DELAY_MS)
-      );
-    }
+    await this.waitForWinReaction("discard");
     const ordered = candidates
       .slice()
       .sort((a, b) => ((a - discarder + 3) % 4) - ((b - discarder + 3) % 4));
@@ -2637,14 +2658,7 @@ export class MatchProcess {
       await this.completeShouminkanAndResume();
       return;
     }
-    // Brief beat between the shouminkan declaration and the
-    // robbing-ron win panel, matching the cadence applied to
-    // normal discard-rons in `resolveRons`.
-    if (WIN_REACTION_DELAY_MS > 0) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, WIN_REACTION_DELAY_MS)
-      );
-    }
+    await this.waitForWinReaction("call");
     // Head-bumper sort relative to the declarer (same atamahane
     // rule as a normal ron — closest counter-clockwise wins).
     const ordered = candidates
