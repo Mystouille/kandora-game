@@ -6,6 +6,7 @@ import {
   canInteractWithFocusedHand,
   formatTableScore,
   pointInsideRect,
+  resolveSeatHandPresentation,
   riichiSelectionTileTint,
   resultScoreBoxLayout,
   shouldStageWinReveal,
@@ -156,6 +157,69 @@ describe("riichiSelectionTileTint", () => {
   it("leaves legal and normal-play tiles unchanged", () => {
     expect(riichiSelectionTileTint(true, true)).toBeNull();
     expect(riichiSelectionTileTint(false, false)).toBeNull();
+  });
+});
+
+describe("resolveSeatHandPresentation", () => {
+  const liveHands = [
+    ["1m", "2m", "3m"],
+    [null, null, null],
+    [null, null, null],
+    [null, null, null],
+  ];
+  const historicalMeld = {
+    type: "pon" as const,
+    tiles: ["5p", "5p", "5p"],
+    claimedTile: "5p",
+    from: 2 as const,
+  };
+  const historicalResult: NonNullable<MatchView["lastHandResult"]> = {
+    reason: "ron",
+    wins: [
+      {
+        seat: 1,
+        winTile: "9s",
+        hand: ["1p", "2p", "3p"],
+        melds: [historicalMeld],
+      },
+    ],
+  };
+  const view = {
+    hands: liveHands,
+    melds: [[], [], [], []],
+    lastHandResult: null,
+    mySeat: 0 as const,
+    freshlyDrawnSeat: null,
+  } as Pick<
+    MatchView,
+    "hands" | "melds" | "lastHandResult" | "mySeat" | "freshlyDrawnSeat"
+  >;
+
+  it("keeps the focused player's current hand during a history peek", () => {
+    const focusedWin: NonNullable<MatchView["lastHandResult"]> = {
+      ...historicalResult,
+      wins: [{ ...historicalResult.wins![0], seat: 0 }],
+    };
+
+    const presentation = resolveSeatHandPresentation(view, focusedWin, 0);
+
+    expect(presentation.animationHand).toBe(liveHands[0]);
+    expect(presentation.displayHand).toBe(liveHands[0]);
+    expect(presentation.historicalReveal).toBe(false);
+  });
+
+  it("uses live animation state while displaying an opponent's old hand and melds", () => {
+    const presentation = resolveSeatHandPresentation(
+      view,
+      historicalResult,
+      1
+    );
+
+    expect(presentation.animationHand).toBe(liveHands[1]);
+    expect(presentation.displayHand).toEqual(["1p", "2p", "3p"]);
+    expect(presentation.displayMelds).toEqual([historicalMeld]);
+    expect(presentation.displayForceReveal).toBe(true);
+    expect(presentation.historicalReveal).toBe(true);
   });
 });
 

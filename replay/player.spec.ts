@@ -108,7 +108,23 @@ describe("rotateHandResult", () => {
       reason: "ron",
       delta: [8000, -8000, 0, 0],
       scores: [33000, 17000, 25000, 25000],
-      wins: [{ seat: 0, loser: 1, han: 4, fu: 30, ten: 8000 }],
+      wins: [
+        {
+          seat: 0,
+          loser: 1,
+          han: 4,
+          fu: 30,
+          ten: 8000,
+          melds: [
+            {
+              type: "pon",
+              tiles: ["5p", "5p", "5p"],
+              claimedTile: "5p",
+              from: 2,
+            },
+          ],
+        },
+      ],
     };
 
     const rotated = rotateHandResult(result, 1);
@@ -116,7 +132,21 @@ describe("rotateHandResult", () => {
     expect(rotated.delta).toEqual([-8000, 0, 0, 8000]);
     expect(rotated.scores).toEqual([17000, 25000, 25000, 33000]);
     expect(rotated.wins).toEqual([
-      { seat: 3, loser: 0, han: 4, fu: 30, ten: 8000 },
+      {
+        seat: 3,
+        loser: 0,
+        han: 4,
+        fu: 30,
+        ten: 8000,
+        melds: [
+          {
+            type: "pon",
+            tiles: ["5p", "5p", "5p"],
+            claimedTile: "5p",
+            from: 1,
+          },
+        ],
+      },
     ]);
     expect(result.delta).toEqual([8000, -8000, 0, 0]);
   });

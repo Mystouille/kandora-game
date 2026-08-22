@@ -200,6 +200,92 @@ export function activePlayerIndicatorSeat(
   return null;
 }
 
+type HandResult = NonNullable<MatchView["lastHandResult"]>;
+
+interface ResultSeatReveal {
+  hand: Array<string | null>;
+  melds: Meld[] | null;
+  separatesLastTile: boolean;
+}
+
+export interface SeatHandPresentation {
+  animationHand: Array<string | null>;
+  animationForceReveal: boolean;
+  animationSeparatesLastTile: boolean;
+  displayHand: Array<string | null>;
+  displayMelds: Meld[];
+  displayForceReveal: boolean;
+  displaySeparatesLastTile: boolean;
+  historicalReveal: boolean;
+}
+
+function resultSeatReveal(
+  result: HandResult | null,
+  seat: Seat
+): ResultSeatReveal | null {
+  if (!result) {
+    return null;
+  }
+  const win = result.wins?.find((candidate) => candidate.seat === seat);
+  if (win?.hand && win.hand.length > 0) {
+    const { concealed, agari } = splitWinningHandForDisplay(
+      win.hand,
+      win.winTile
+    );
+    const separatesLastTile = result.reason === "tsumo" && agari !== undefined;
+    return {
+      hand: separatesLastTile ? [...concealed, agari] : concealed,
+      melds: win.melds ?? null,
+      separatesLastTile,
+    };
+  }
+  if (
+    (result.reason === "exhaustive_draw" ||
+      (result.reason === "abort" && result.abortKind === "kyuushuu")) &&
+    result.tenpaiHands?.[seat]?.length
+  ) {
+    return {
+      hand: [...result.tenpaiHands[seat]],
+      melds: null,
+      separatesLastTile: false,
+    };
+  }
+  return null;
+}
+
+export function resolveSeatHandPresentation(
+  view: Pick<
+    MatchView,
+    "hands" | "melds" | "lastHandResult" | "mySeat" | "freshlyDrawnSeat"
+  >,
+  historicalResult: HandResult | null,
+  seat: Seat
+): SeatHandPresentation {
+  const liveHand = view.hands[seat] ?? [];
+  const liveMelds = view.melds[seat] ?? [];
+  const currentReveal = resultSeatReveal(view.lastHandResult, seat);
+  const historicalReveal =
+    view.lastHandResult === null && seat !== view.mySeat
+      ? resultSeatReveal(historicalResult, seat)
+      : null;
+  const displayReveal = historicalReveal ?? currentReveal;
+
+  return {
+    animationHand: currentReveal?.hand ?? liveHand,
+    animationForceReveal: currentReveal !== null,
+    animationSeparatesLastTile:
+      currentReveal?.separatesLastTile ?? view.freshlyDrawnSeat === seat,
+    displayHand: displayReveal?.hand ?? liveHand,
+    displayMelds: historicalReveal
+      ? (historicalReveal.melds ?? [])
+      : (currentReveal?.melds ?? liveMelds),
+    displayForceReveal: displayReveal !== null,
+    displaySeparatesLastTile:
+      displayReveal?.separatesLastTile ?? view.freshlyDrawnSeat === seat,
+    historicalReveal: historicalReveal !== null,
+  };
+}
+
 export function formatTableScore(
   score: number,
   focusedScore: number,
@@ -4639,63 +4725,13 @@ export class TableRenderer {
     if (!factory) {
       return;
     }
-    const { rawHand, forceReveal } = ((): {
-      rawHand: (string | null)[];
-      forceReveal: boolean;
-    } => {
-      const live = view.hands[seat] ?? [];
-      // Reveal each winner's actual concealed hand at their seat
-      // band as soon as the win event lands (no need to wait for
-      // `hand_end`), so opponents' winning hands flash in
-      // immediately alongside the win sound. Multi-ron reveals
-      // each winner as their event fires. At exhaustive draw the
-      // same reveal kicks in for each tenpai seat once
-      // `tenpaiHands` is available on `hand_end`; a kyuushuu
-      // kyuuhai abort reuses the same channel to reveal just the
-      // declaring seat's hand.
-      //
-      // When the hand is sourced from a win/tenpaiHands override
-      // we also flag `forceReveal` so the opponent-seat painters
-      // below (side seats 1/3 and top seat 2) actually flip the
-      // tiles face-up — otherwise they'd keep drawing the back
-      // sheet because `showHands` is gated on the user toggle.
-      const result = this.handResultOverride ?? view.lastHandResult;
-      if (result) {
-        if (result.wins) {
-          const winForSeat = result.wins.find((w) => w.seat === seat);
-          if (winForSeat?.hand && winForSeat.hand.length > 0) {
-            const { concealed, agari } = splitWinningHandForDisplay(
-              winForSeat.hand,
-              winForSeat.winTile
-            );
-            return {
-              rawHand:
-                result.reason === "tsumo" && agari
-                  ? [...concealed, agari]
-                  : concealed,
-              forceReveal: true,
-            };
-          }
-        }
-        // Exhaustive draw reveals every tenpai seat's hand; a
-        // kyuushuu kyuuhai abort reveals only the declaring seat's
-        // hand. Both arrive via `tenpaiHands` (null for seats that
-        // don't reveal), so one branch covers both.
-        if (
-          (result.reason === "exhaustive_draw" ||
-            (result.reason === "abort" && result.abortKind === "kyuushuu")) &&
-          result.tenpaiHands &&
-          result.tenpaiHands[seat] &&
-          result.tenpaiHands[seat]!.length > 0
-        ) {
-          return {
-            rawHand: [...result.tenpaiHands[seat]!],
-            forceReveal: true,
-          };
-        }
-      }
-      return { rawHand: live, forceReveal: false };
-    })();
+    const presentation = resolveSeatHandPresentation(
+      view,
+      this.handResultOverride,
+      seat as Seat
+    );
+    const rawHand = presentation.animationHand;
+    const forceReveal = presentation.animationForceReveal;
     const discards = view.discards[seat] ?? [];
 
     const isYou = view.mySeat === seat;
@@ -4718,7 +4754,7 @@ export class TableRenderer {
     // so the reducer tags the seat that holds a freshly drawn tile in
     // `view.freshlyDrawnSeat`. Drives both the sort split and the
     // tsumo-gap rendering below.
-    const isFreshlyDrawnNatural = view.freshlyDrawnSeat === seat;
+    const isFreshlyDrawnNatural = presentation.animationSeparatesLastTile;
     const handNatural = sortHand(rawHand, isFreshlyDrawnNatural);
     // -----------------------------------------------------------------
     // Discard animation: record this seat's natural (post-sort,
@@ -4835,6 +4871,16 @@ export class TableRenderer {
       hiddenHandSlot = seatDiscardAnim.phaseASnapshot.hiddenSlot;
       rawIndices = null;
     }
+    if (presentation.historicalReveal) {
+      hand = sortHand(
+        presentation.displayHand,
+        presentation.displaySeparatesLastTile
+      );
+      isFreshlyDrawn = presentation.displaySeparatesLastTile;
+      hiddenHandSlot = null;
+      rawIndices = null;
+    }
+    const displayForceReveal = presentation.displayForceReveal;
     const handContainer = new Container();
     // Side hands (seats 1 / 3, never the focused user) use a
     // dedicated tile size (`layout.tileSide`) and stack the tiles
@@ -4882,7 +4928,7 @@ export class TableRenderer {
     // and would stretch badly at discard dims.
     const sideHandRevealed =
       isSideHand &&
-      (this.showHands || forceReveal) &&
+      (this.showHands || displayForceReveal) &&
       hand.some((t) => t !== null);
     if (isSideHand) {
       let stride: number;
@@ -4942,7 +4988,7 @@ export class TableRenderer {
         seat as 1 | 3,
         hand,
         {
-          canReveal: this.showHands || forceReveal,
+          canReveal: this.showHands || displayForceReveal,
           isFreshlyDrawn,
           hiddenSlot: hiddenHandSlot,
         }
@@ -5036,7 +5082,7 @@ export class TableRenderer {
       const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = hand.length * topHand.w + handGap;
       const topPlacements = layoutTopHand(this.tileDesign, hand, {
-        canReveal: this.showHands || forceReveal,
+        canReveal: this.showHands || displayForceReveal,
         isFreshlyDrawn,
         hiddenSlot: hiddenHandSlot,
       });
@@ -5439,11 +5485,12 @@ export class TableRenderer {
     // (clockwise) corner of the hand so chi/pon/kan stacks read
     // naturally.
     this.renderMelds(
-      view.melds[seat] ?? [],
+      presentation.displayMelds,
       seat,
       handRect,
       longAxisOffset,
-      handWidth
+      handWidth,
+      !presentation.historicalReveal
     );
 
     // Discards as a 6-per-row pond. Rows overlap by
@@ -5991,7 +6038,8 @@ export class TableRenderer {
     seat: number,
     handRect: Rect,
     longAxisOffset: number,
-    handWidth: number
+    handWidth: number,
+    animate: boolean = true
   ): void {
     if (!this.root || melds.length === 0) {
       return;
@@ -6030,16 +6078,12 @@ export class TableRenderer {
     for (let i = melds.length - 1; i >= 0; i--) {
       const slideDistance =
         meldTileDims(this.tileDesign, seat).w * MELD_SLIDE_TILE_WIDTHS;
-      const slideOffsetX = this.meldAnimator.getMeldOffsetX(
-        seat,
-        i,
-        slideDistance
-      );
-      const shouminkanOffsetY = this.meldAnimator.getShouminkanOffsetY(
-        seat,
-        i,
-        slideDistance
-      );
+      const slideOffsetX = animate
+        ? this.meldAnimator.getMeldOffsetX(seat, i, slideDistance)
+        : 0;
+      const shouminkanOffsetY = animate
+        ? this.meldAnimator.getShouminkanOffsetY(seat, i, slideDistance)
+        : 0;
       const { node, width, boxes } = this.drawMeld(
         melds[i],
         seat,

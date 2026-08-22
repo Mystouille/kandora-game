@@ -943,6 +943,12 @@ export function rotateHandResult(
           ...win,
           seat: rot(win.seat),
           loser: win.loser != null ? rot(win.loser) : win.loser,
+          melds: win.melds
+            ? win.melds.map((meld) => ({
+                ...meld,
+                from: meld.from != null ? rot(meld.from) : meld.from,
+              }))
+            : win.melds,
         }))
       : result.wins,
     buuChombo: result.buuChombo
