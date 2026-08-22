@@ -682,7 +682,9 @@ export default function GameMatchRoute({
   const [liveMenuFlags, setLiveMenuFlags] = useState<LivePlayMenuFlags>(
     buildInitialLivePlayMenuFlags
   );
+  const noCallRef = useRef(liveMenuFlags.noCall);
   const handleLiveMenuChange = useCallback((next: LivePlayMenuFlags) => {
+    noCallRef.current = next.noCall;
     setLiveMenuFlags((prev) => {
       if (next.autoSort !== prev.autoSort) {
         // Persist the autoSort preference so it survives both
@@ -700,6 +702,9 @@ export default function GameMatchRoute({
       return next;
     });
   }, []);
+  useEffect(() => {
+    noCallRef.current = liveMenuFlags.noCall;
+  }, [liveMenuFlags.noCall]);
   // Per-hand ephemeral-flag reset. Whenever the active hand
   // identity (round / honba / dealer) flips we clear autoWin,
   // noCall, and autoDiscard back to `false` so they only apply
@@ -707,6 +712,7 @@ export default function GameMatchRoute({
   // `autoSort` preference is preserved.
   const handKey = `${view.roundWind}:${view.roundNumber}:${view.honba}:${view.dealer}`;
   useEffect(() => {
+    noCallRef.current = false;
     setLiveMenuFlags((prev) => resetEphemeralFlags(prev));
   }, [handKey]);
   // Keep the renderer's autoWin mirror in sync with the live
@@ -982,7 +988,9 @@ export default function GameMatchRoute({
     // Sound bindings subscribe to the store's game-event bus. Scoped
     // to the match-route lifecycle so SFX only fire while a match
     // is mounted.
-    const uninstallSound = installGameSoundBindings();
+    const uninstallSound = installGameSoundBindings({
+      isNoCallEnabled: () => noCallRef.current,
+    });
 
     // Pixi.js touches `navigator` at module-eval time, so it must
     // only load in the browser. Dynamic-import keeps it out of the

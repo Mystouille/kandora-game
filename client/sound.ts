@@ -19,8 +19,9 @@
  * a mute persists across page loads.
  */
 import { Howl } from "howler";
-import type { GameEvent, LegalAction, Seat } from "~/game/protocol/messages";
+import type { GameEvent, Seat } from "~/game/protocol/messages";
 import { subscribeToGameEvents, useMatchStore } from "./store";
+import { shouldTriggerCallPrompt } from "./callPrompt";
 
 /**
  * Hashed-URL map of every SFX shipped in this build, keyed by
@@ -311,7 +312,9 @@ export function playSoundForEvent(
  * replay viewers.
  */
 let uninstallBinding: (() => void) | null = null;
-export function installGameSoundBindings(): () => void {
+export function installGameSoundBindings(options?: {
+  isNoCallEnabled?: () => boolean;
+}): () => void {
   if (uninstallBinding) {
     uninstallBinding();
     uninstallBinding = null;
@@ -319,7 +322,9 @@ export function installGameSoundBindings(): () => void {
   const unsubscribe = subscribeToGameEvents(({ event, mySeat }) => {
     playSoundForEvent(event, mySeat);
   });
-  const unsubscribeCallPrompt = subscribeToCallPrompt();
+  const unsubscribeCallPrompt = subscribeToCallPrompt(
+    options?.isNoCallEnabled ?? (() => false)
+  );
   const teardown = (): void => {
     unsubscribe();
     unsubscribeCallPrompt();
@@ -342,35 +347,23 @@ export function installGameSoundBindings(): () => void {
  * Notes:
  * - `riichi` is excluded: it's a self-discard variant on the
  *   player's own turn, not a reactive call window.
+ * - `noCall` suppresses passable chi/pon/kan prompts, but ron and
+ *   tsumo remain audible because the option does not auto-pass wins.
  * - We fire on the rising edge only — the prompt stays up for
  *   the whole window, but we don't want the cue to repeat on
  *   every re-render.
  */
-const CALL_PROMPT_ACTION_TYPES: ReadonlySet<LegalAction["type"]> = new Set([
-  "chi",
-  "pon",
-  "kan",
-  "ron",
-  "tsumo",
-]);
-
-function hasCallPrompt(actions: readonly LegalAction[]): boolean {
-  for (const action of actions) {
-    if (CALL_PROMPT_ACTION_TYPES.has(action.type)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function subscribeToCallPrompt(): () => void {
+function subscribeToCallPrompt(isNoCallEnabled: () => boolean): () => void {
   return useMatchStore.subscribe((state, prev) => {
     if (state.legalActions === prev.legalActions) {
       return;
     }
-    const hadCall = hasCallPrompt(prev.legalActions);
-    const hasCall = hasCallPrompt(state.legalActions);
-    if (!hadCall && hasCall) {
+    const shouldPrompt = shouldTriggerCallPrompt(
+      prev.legalActions,
+      state.legalActions,
+      isNoCallEnabled()
+    );
+    if (shouldPrompt) {
       playGameSound("call-prompt");
     }
   });
