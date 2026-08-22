@@ -12,6 +12,8 @@ import type {
 } from "~/game/client/pixi/TableRenderer";
 import { useMatchStore } from "~/game/client/store";
 import { GameWS } from "~/game/client/ws";
+import { mergeSeatNames } from "~/game/client/spectatorNames";
+import { ViewerList } from "~/game/components/ViewerList";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   replayArrivalSoundTarget,
@@ -32,6 +34,7 @@ import type {
   Seat,
   ServerMessage,
   SnapshotState,
+  ViewerPresence,
 } from "~/game/protocol/messages";
 import {
   ReplayOverlayPanel,
@@ -273,6 +276,7 @@ export default function GameSpectateRoute({
   >([null, null, null, null]);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [conn, setConn] = useState<string>("idle");
+  const [viewers, setViewers] = useState<ViewerPresence[]>([]);
   const lastRelaySeqRef = useRef(-1);
 
   // Refs for stale-closure-safe access inside the WS callback.
@@ -382,7 +386,7 @@ export default function GameSpectateRoute({
                     };
                   }
                 }
-                setSeatNames(names);
+                setSeatNames((current) => mergeSeatNames(current, names));
                 setSeatEnrichment([bySeat[0], bySeat[1], bySeat[2], bySeat[3]]);
               }
             )
@@ -421,9 +425,18 @@ export default function GameSpectateRoute({
           spectate: true,
           ...(delayMs > 0 ? { delayMs } : {}),
           onMessage: (msg: ServerMessage) => {
+            if (msg.type === "viewer_state") {
+              setViewers(msg.viewers);
+              return;
+            }
             if (msg.type === "snapshot") {
               pendingSoundIndexRef.current = null;
               lastRelaySeqRef.current = msg.seq;
+              if (msg.state.seatNames) {
+                setSeatNames((current) =>
+                  mergeSeatNames(current, msg.state.seatNames ?? [])
+                );
+              }
               setBaseline(snapshotToReplayView(msg.state));
               setEvents([]);
               setPlayIndex(-1);
@@ -441,17 +454,9 @@ export default function GameSpectateRoute({
               // more authoritative source.
               const relayNames = seatNamesFromEvents(msg.events);
               if (relayNames) {
-                setSeatNames((prev) => {
-                  const next = [...prev] as [string, string, string, string];
-                  let changed = false;
-                  for (let i = 0; i < 4; i++) {
-                    if (!next[i] && relayNames[i]) {
-                      next[i] = relayNames[i];
-                      changed = true;
-                    }
-                  }
-                  return changed ? next : prev;
-                });
+                setSeatNames((current) =>
+                  mergeSeatNames(current, relayNames)
+                );
               }
 
               // Relay attach/reconnect sends the complete event history as a
@@ -508,7 +513,7 @@ export default function GameSpectateRoute({
                   names[s.seat] = occ.displayName;
                 }
               }
-              setSeatNames(names);
+              setSeatNames((current) => mergeSeatNames(current, names));
               // Capture the full room state so the renderer can
               // surface the per-seat `connected` flag (used to
               // paint the "disconnected" badge on nameplates).
@@ -917,6 +922,7 @@ export default function GameSpectateRoute({
         </button>
         <span className="ml-2 opacity-50 text-xs">{conn}</span>
       </div>
+  <ViewerList viewers={viewers} className="absolute left-2 top-12" />
 
       {/* Right-side: seat / round selectors + nav buttons. */}
       <div className="absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base">

@@ -48,14 +48,17 @@ interface DelayedSink {
   events: GameEvent[];
   frames: number;
   seqs: number[];
+  messages: ServerMessage[];
 }
 
 function makeDelayedSink(): DelayedSink {
   const events: GameEvent[] = [];
   const seqs: number[] = [];
+  const messages: ServerMessage[] = [];
   let frames = 0;
   return {
     send: (msg: ServerMessage): void => {
+      messages.push(msg);
       if (msg.type === "event") {
         frames += 1;
         seqs.push(msg.seq);
@@ -65,6 +68,7 @@ function makeDelayedSink(): DelayedSink {
       }
     },
     events,
+    messages,
     get frames() {
       return frames;
     },
@@ -105,6 +109,30 @@ describe("MatchProcess delayed-spectator API", () => {
     m.attachDelayedSpectator(sink.send, 5 * 60_000);
     expect(sink.frames).toBe(0);
     expect(sink.events).toHaveLength(0);
+  });
+
+  it("broadcasts presence immediately without releasing delayed events", async () => {
+    const match = makeMatch(32);
+    await match.start();
+    const sink = makeDelayedSink();
+
+    match.attachDelayedSpectator(sink.send, 5 * 60_000, {
+      userId: "viewer-1",
+      displayName: "Viewer",
+      role: "spectator",
+    });
+
+    expect(sink.events).toHaveLength(0);
+    expect(sink.messages).toContainEqual({
+      type: "viewer_state",
+      viewers: [
+        {
+          userId: "viewer-1",
+          displayName: "Viewer",
+          role: "spectator",
+        },
+      ],
+    });
   });
 
   it("attaching with delayMs=0 catches up the entire log immediately as one batch", async () => {

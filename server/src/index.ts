@@ -7,10 +7,9 @@
  * Per-connection lifecycle:
  *   1. Refuse the WS upgrade when `GAME_ENABLED=false`.
  *   2. On open, expect a `hello { token, matchId }` frame within
- *      a short window. Spectators (`spectate: true`) are read-only,
- *      omniscient public viewers and are auth-exempt (no token/
- *      profile required); players verify their token via
- *      `PortalAdapter`.
+ *      a short window. Every connection verifies its token via
+ *      `PortalAdapter`; spectators (`spectate: true`) are read-only
+ *      omniscient viewers while players additionally claim a seat.
  *   3. Find the resident `MatchProcess` for `matchId` (or create
  *      a fresh waiting room).
  *   4. Claim a seat for this user (random empty slot, or the
@@ -43,6 +42,7 @@ import {
   type ServerMessage,
   type Seat,
   type MatchDebug,
+  type ViewerPresence,
 } from "~/game/protocol/messages";
 import { MatchProcess, setReadyCheckMs } from "./match";
 import { connectGameDb } from "./db";
@@ -697,15 +697,25 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     return;
   }
 
-  // Spectator handshake: read-only, omniscient public view of an
-  // in-progress match. No seat claim, no `act`/`ready`/`start_match`/
-  // `leave_seat` accepted — so spectators need NO token and NO user
-  // profile. This keeps live viewing public and lets any host app
-  // (portal, tournaments) embed the viewer without sharing a user
-  // store. The match must already be `playing` in-memory — we don't
-  // currently support cross-instance spectating (matches are pinned to
-  // the instance that hosts them) nor watching `waiting` / `finished`
-  // rooms. (Players below still require a verified, known user.)
+  // Every connection is authenticated before branching into player or
+  // spectator behavior. Besides protecting live game state, the public
+  // profile supplies the display name used by ephemeral viewer presence.
+  const verified = await adapter.verifyToken(hello.token);
+  if (!verified) {
+    sendError("auth_failed", "Invalid or expired token.");
+    ws.close();
+    return;
+  }
+  const profile = await adapter.getUserProfile(verified.userId);
+  if (!profile) {
+    sendError("user_not_found", "User profile not found.");
+    ws.close();
+    return;
+  }
+
+  // Spectator handshake: authenticated, read-only omniscient view of an
+  // in-progress match. No seat claim and no action frames are accepted.
+  // The match must already be `playing` in-memory.
   if (hello.spectate === true) {
     const match = matches.get(matchId);
     if (!match || match.status !== "playing") {
@@ -725,25 +735,23 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
       ws.close();
       return;
     }
+    const viewer: ViewerPresence = {
+      userId: verified.userId,
+      displayName: profile.displayName,
+      role: "spectator",
+    };
     if (delayMs > 0) {
-      handleDelayedSpectatorConnection(ws, match, send, sendError, delayMs);
+      handleDelayedSpectatorConnection(
+        ws,
+        match,
+        send,
+        sendError,
+        delayMs,
+        viewer
+      );
     } else {
-      handleSpectatorConnection(ws, match, send, sendError);
+      handleSpectatorConnection(ws, match, send, sendError, viewer);
     }
-    return;
-  }
-
-  // ---- Player path: requires a verified token + a known user. ----
-  const verified = await adapter.verifyToken(hello.token);
-  if (!verified) {
-    sendError("auth_failed", "Invalid or expired token.");
-    ws.close();
-    return;
-  }
-  const profile = await adapter.getUserProfile(verified.userId);
-  if (!profile) {
-    sendError("user_not_found", "User profile not found.");
-    ws.close();
     return;
   }
 
@@ -1026,9 +1034,10 @@ function handleSpectatorConnection(
   ws: WebSocket,
   match: MatchProcess,
   send: (msg: ServerMessage) => void,
-  sendError: (code: string, message: string) => void
+  sendError: (code: string, message: string) => void,
+  viewer: ViewerPresence
 ): void {
-  match.attachSpectator(send);
+  match.attachSpectator(send, viewer);
   if (match.isRelay) {
     // Relay matches have no engine state; hydrate the spectator from the
     // event buffer instead of an engine snapshot.
@@ -1131,9 +1140,10 @@ function handleDelayedSpectatorConnection(
   match: MatchProcess,
   send: (msg: ServerMessage) => void,
   sendError: (code: string, message: string) => void,
-  delayMs: number
+  delayMs: number,
+  viewer: ViewerPresence
 ): void {
-  const session = match.attachDelayedSpectator(send, delayMs);
+  const session = match.attachDelayedSpectator(send, delayMs, viewer);
 
   let specSet = spectatorSockets.get(match.matchId);
   if (!specSet) {

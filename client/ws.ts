@@ -68,6 +68,8 @@ const TERMINAL_SPECTATOR_ERRORS = new Set([
   "matchid_mismatch",
   "spectate_unavailable",
   "spectate_delay_too_large",
+  "auth_failed",
+  "user_not_found",
 ]);
 
 export class GameWS {
@@ -417,6 +419,10 @@ export class GameWS {
       }
       case "room_state": {
         store.setRoomState(msg);
+        return;
+      }
+      case "viewer_state": {
+        store.setViewers(msg.viewers);
         return;
       }
     }

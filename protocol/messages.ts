@@ -759,6 +759,23 @@ const RoomStateMsg = z.object({
 });
 export type RoomState = z.infer<typeof RoomStateMsg>;
 
+export const ViewerPresenceSchema = z.object({
+  userId: z.string(),
+  displayName: z.string(),
+  role: z.enum(["player", "spectator"]),
+});
+export type ViewerPresence = z.infer<typeof ViewerPresenceSchema>;
+
+/**
+ * Ephemeral connected-viewer presence. This is deliberately a server
+ * message rather than a `GameEvent`: clients display it live, but it is
+ * never appended to match history or persisted in replay logs.
+ */
+const ViewerStateMsg = z.object({
+  type: z.literal("viewer_state"),
+  viewers: z.array(ViewerPresenceSchema),
+});
+
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   SnapshotMsg,
   EventMsg,
@@ -766,6 +783,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   ReadyCheckMsg,
   ReadyCheckEndMsg,
   RoomStateMsg,
+  ViewerStateMsg,
   KeepaliveMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

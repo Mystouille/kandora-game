@@ -5,6 +5,7 @@ const store = vi.hoisted(() => ({
   matchId: "match-1",
   setConn: vi.fn(),
   setReadyCheck: vi.fn(),
+  setViewers: vi.fn(),
 }));
 
 vi.mock("./store", () => ({
@@ -76,6 +77,7 @@ describe("GameWS reconnect ownership", () => {
     store.matchId = "match-1";
     store.setConn.mockReset();
     store.setReadyCheck.mockReset();
+    store.setViewers.mockReset();
   });
 
   afterEach(() => {
@@ -125,6 +127,33 @@ describe("GameWS reconnect ownership", () => {
     expect(store.setConn).toHaveBeenCalledWith("reconnecting");
     vi.advanceTimersByTime(500);
     expect(FakeWebSocket.instances).toHaveLength(2);
+    client.close();
+  });
+
+  it("dispatches ephemeral viewer presence", () => {
+    const client = new GameWS({
+      wsUrl: "ws://game.test/ws/game/match-1",
+      token: "token",
+      matchId: "match-1",
+    });
+    client.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+
+    socket.emitMessage(
+      JSON.stringify({
+        type: "viewer_state",
+        viewers: [
+          { userId: "u1", displayName: "Alice", role: "player" },
+          { userId: "u2", displayName: "Bob", role: "spectator" },
+        ],
+      })
+    );
+
+    expect(store.setViewers).toHaveBeenCalledWith([
+      { userId: "u1", displayName: "Alice", role: "player" },
+      { userId: "u2", displayName: "Bob", role: "spectator" },
+    ]);
     client.close();
   });
 });

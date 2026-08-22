@@ -29,6 +29,7 @@ import type {
   RoomSeatOccupant,
   Seat,
   ServerMessage,
+  ViewerPresence,
 } from "~/game/protocol/messages";
 import {
   createInitialState,
@@ -431,6 +432,9 @@ export class MatchProcess {
     score: number;
     place: 1 | 2 | 3 | 4;
   }> | null = null;
+
+  /** Authenticated spectator identities keyed by their connection sender. */
+  private readonly spectatorViewers = new Map<Send, ViewerPresence>();
 
   /**
    * Lightweight projection of this match for the lobby's live-
@@ -1275,6 +1279,7 @@ export class MatchProcess {
     // is set). Either way, surface to everyone — humans AND
     // spectators — so badges update in lockstep.
     this.broadcastRoomState();
+    this.broadcastViewerState();
   }
 
   /**
@@ -1338,6 +1343,7 @@ export class MatchProcess {
       }
     }
     this.broadcastRoomState();
+    this.broadcastViewerState();
     return true;
   }
 
@@ -1459,16 +1465,22 @@ export class MatchProcess {
    * `buildSpectatorSnapshot()` (sent by the caller). They have no
    * seat, no legal actions, and no deadline.
    */
-  attachSpectator(send: Send): void {
+  attachSpectator(send: Send, viewer?: ViewerPresence): void {
     this.spectatorSockets.add(send);
+    if (viewer) {
+      this.spectatorViewers.set(send, viewer);
+    }
     // Hydrate the spectator with the latest room composition so
     // disconnect badges paint correctly before the next public
     // event arrives.
     send(this.buildRoomState(null));
+    this.broadcastViewerState();
   }
 
   detachSpectator(send: Send): void {
     this.spectatorSockets.delete(send);
+    this.spectatorViewers.delete(send);
+    this.broadcastViewerState();
   }
 
   /**
@@ -1487,7 +1499,11 @@ export class MatchProcess {
    * `delayMs` must be >= 0; the WS layer is responsible for
    * gating the maximum allowable delay.
    */
-  attachDelayedSpectator(send: Send, delayMs: number): DelayedSpectatorSession {
+  attachDelayedSpectator(
+    send: Send,
+    delayMs: number,
+    viewer?: ViewerPresence
+  ): DelayedSpectatorSession {
     if (delayMs < 0) {
       throw new Error("attachDelayedSpectator: delayMs must be >= 0");
     }
@@ -1500,10 +1516,14 @@ export class MatchProcess {
       closed: false,
     };
     this.delayedSpectators.add(session);
+    if (viewer) {
+      this.spectatorViewers.set(send, viewer);
+    }
     // Immediate catch-up: drain all currently-ripe events as a
     // single batched `event` frame, then arm a timer for the
     // next unripe one (if any).
     this.dispatchDelayedSpectator(session, /* batched */ true);
+    this.broadcastViewerState();
     return session;
   }
 
@@ -1514,6 +1534,8 @@ export class MatchProcess {
       session.timer = null;
     }
     this.delayedSpectators.delete(session);
+    this.spectatorViewers.delete(session.send);
+    this.broadcastViewerState();
   }
 
   /**
@@ -1838,6 +1860,49 @@ export class MatchProcess {
       const spectatorFrame = this.buildRoomState(null);
       for (const send of this.spectatorSockets) {
         send(spectatorFrame);
+      }
+    }
+  }
+
+  /** Build a stable, deduplicated list of authenticated people present. */
+  buildViewerState(): Extract<ServerMessage, { type: "viewer_state" }> {
+    const byUserId = new Map<string, ViewerPresence>();
+    for (let seat = 0; seat < 4; seat++) {
+      const player = this.players.get(seat as Seat);
+      if (player && !player.isBot && this.humanSockets[seat] !== null) {
+        byUserId.set(player.userId, {
+          userId: player.userId,
+          displayName: player.displayName,
+          role: "player",
+        });
+      }
+    }
+    for (const viewer of this.spectatorViewers.values()) {
+      if (!byUserId.has(viewer.userId)) {
+        byUserId.set(viewer.userId, viewer);
+      }
+    }
+    const viewers = [...byUserId.values()].sort((left, right) => {
+      if (left.role !== right.role) {
+        return left.role === "player" ? -1 : 1;
+      }
+      return left.displayName.localeCompare(right.displayName);
+    });
+    return { type: "viewer_state", viewers };
+  }
+
+  /** Broadcast presence outside the event log to every live connection. */
+  private broadcastViewerState(): void {
+    const frame = this.buildViewerState();
+    for (const send of this.humanSockets) {
+      send?.(frame);
+    }
+    for (const send of this.spectatorSockets) {
+      send(frame);
+    }
+    for (const session of this.delayedSpectators) {
+      if (!session.closed) {
+        session.send(frame);
       }
     }
   }

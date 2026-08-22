@@ -14,6 +14,7 @@ import { GameWS } from "~/game/client/ws";
 import { findTileAction } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
+import { ViewerList } from "~/game/components/ViewerList";
 import {
   advancePostHandPeekDiscardCount,
   shouldHidePostHandPeek,
@@ -1256,6 +1257,10 @@ export default function GameMatchRoute({
         <span className="pointer-events-none absolute top-0 left-4 font-mono text-[10px] text-emerald-100/70 select-text">
           match {matchId}
         </span>
+        <ViewerList
+          viewers={view.viewers}
+          className="absolute left-4 top-5"
+        />
         {/* Reconnect overlay: shown whenever the server has
             flagged this seat as disconnected (network loss or a
             previous AFK self-report). The button sends

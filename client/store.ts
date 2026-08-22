@@ -20,6 +20,7 @@ import type {
   Seat,
   SnapshotState,
   Tile,
+  ViewerPresence,
 } from "~/game/protocol/messages";
 import { discardIndexForSource } from "./discardActions";
 
@@ -414,6 +415,7 @@ export interface MatchView {
 }
 
 interface MatchStore extends MatchView {
+  viewers: ViewerPresence[];
   setConn: (status: ConnStatus) => void;
   setMatch: (matchId: string, mySeat?: Seat | null) => void;
   applyEvent: (event: GameEvent, seq: number) => void;
@@ -426,6 +428,7 @@ interface MatchStore extends MatchView {
     rc: { deadline: number; acked: [boolean, boolean, boolean, boolean] } | null
   ) => void;
   setRoomState: (rs: RoomState | null) => void;
+  setViewers: (viewers: ViewerPresence[]) => void;
   reset: () => void;
 }
 
@@ -486,6 +489,7 @@ const initialState: MatchView = {
 
 export const useMatchStore = create<MatchStore>((set) => ({
   ...initialState,
+  viewers: [],
 
   setConn: (conn) => {
     set({ conn });
@@ -503,6 +507,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       discardSources: [[], [], [], []],
       discardOrdinals: [[], [], [], []],
       totalDiscards: 0,
+      viewers: [],
     });
   },
 
@@ -536,6 +541,10 @@ export const useMatchStore = create<MatchStore>((set) => ({
       roomState,
       mySeat: roomState?.mySeat ?? state.mySeat,
     }));
+  },
+
+  setViewers: (viewers) => {
+    set({ viewers });
   },
 
   hydrateSnapshot: (snap, seq) => {
@@ -1262,6 +1271,6 @@ export const useMatchStore = create<MatchStore>((set) => ({
   },
 
   reset: () => {
-    set({ ...initialState });
+    set({ ...initialState, viewers: [] });
   },
 }));

@@ -106,6 +106,60 @@ describe("MatchProcess spectator API", () => {
     expect(parsed.data.state.furiten).toEqual([false, false, false, false]);
   });
 
+  it("broadcasts deduplicated ephemeral player and spectator presence", () => {
+    const match = new MatchProcess("presence", 1, [
+      { userId: "player", displayName: "Player", isBot: false },
+      { userId: "b1", displayName: "Bot1", isBot: true },
+      { userId: "b2", displayName: "Bot2", isBot: true },
+      { userId: "b3", displayName: "Bot3", isBot: true },
+    ]);
+    const playerMessages: ServerMessage[] = [];
+    const firstMessages: ServerMessage[] = [];
+    const duplicateMessages: ServerMessage[] = [];
+    const playerSend = (message: ServerMessage): void => {
+      playerMessages.push(message);
+    };
+    const firstSend = (message: ServerMessage): void => {
+      firstMessages.push(message);
+    };
+    const duplicateSend = (message: ServerMessage): void => {
+      duplicateMessages.push(message);
+    };
+
+    match.attachHuman(0, playerSend);
+    match.attachSpectator(firstSend, {
+      userId: "viewer",
+      displayName: "Viewer",
+      role: "spectator",
+    });
+    match.attachSpectator(duplicateSend, {
+      userId: "viewer",
+      displayName: "Viewer",
+      role: "spectator",
+    });
+
+    expect(match.buildViewerState()).toEqual({
+      type: "viewer_state",
+      viewers: [
+        { userId: "player", displayName: "Player", role: "player" },
+        { userId: "viewer", displayName: "Viewer", role: "spectator" },
+      ],
+    });
+    expect(ServerMessageSchema.safeParse(match.buildViewerState()).success).toBe(
+      true
+    );
+    expect(
+      playerMessages.some((message) => message.type === "viewer_state")
+    ).toBe(true);
+
+    match.detachSpectator(firstSend);
+    expect(match.buildViewerState().viewers).toHaveLength(2);
+    match.detachSpectator(duplicateSend);
+    expect(match.buildViewerState().viewers).toEqual([
+      { userId: "player", displayName: "Player", role: "player" },
+    ]);
+  });
+
   it("attached spectator receives projected events with omniscient draw tile and contiguous seq", async () => {
     const m = makeMatch(11);
     const sink = makeSpectator();
