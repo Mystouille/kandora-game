@@ -39,7 +39,7 @@ export interface LobbyLoaderData {
   }>;
 }
 
-const DEFAULT_LOBBY_PRESET_ID = "buu-east";
+const DEFAULT_LOBBY_PRESET_ID = "m-league";
 const PLACEHOLDER_HAND = "123456789m1234p";
 const PLACEHOLDER_DRAWS = "555z";
 const PLACEHOLDER_LEFT = "123z";
