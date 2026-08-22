@@ -1,5 +1,6 @@
-import { useLoaderData, useNavigate } from "react-router";
+import { Link, useLoaderData, useNavigate } from "react-router";
 import { useCallback, useEffect, useState } from "react";
+import { PlayCircleOutlined } from "@ant-design/icons";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
 import type { MatchDebug } from "~/game/protocol/messages";
 
@@ -24,12 +25,29 @@ export interface LobbyLoaderData {
     displayName: string;
     description?: string;
   }>;
+  gameLogs: Array<{
+    gameId: string;
+    ruleSet: string;
+    startedAt: number;
+    endedAt: number;
+    seats: Array<{
+      seat: number;
+      displayName: string;
+      finalScore: number;
+      place: number;
+    }>;
+  }>;
 }
 
 const DEFAULT_LOBBY_PRESET_ID = "buu-east";
 const PLACEHOLDER_HAND = "123456789m1234p";
 const PLACEHOLDER_DRAWS = "555z";
 const PLACEHOLDER_LEFT = "123z";
+
+function formatGameLogTime(timestamp: number): string {
+  const iso = new Date(timestamp).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
 
 interface LiveRoomSeat {
   name: string | null;
@@ -44,8 +62,11 @@ interface LiveRoom {
 }
 
 export default function LobbyRoute() {
-  const { presets } = useLoaderData<LobbyLoaderData>();
+  const { presets, gameLogs } = useLoaderData<LobbyLoaderData>();
   const navigate = useNavigate();
+  const presetNameById = new Map(
+    presets.map((preset) => [preset.id, preset.displayName])
+  );
   const [starting, setStarting] = useState(false);
   const [presetId, setPresetId] = useState(DEFAULT_LOBBY_PRESET_ID);
   const [showDebug, setShowDebug] = useState(false);
@@ -431,6 +452,69 @@ export default function LobbyRoute() {
           </ul>
         )}
       </div>
+
+      <section className="mb-8" aria-labelledby="game-logs-heading">
+        <h2
+          id="game-logs-heading"
+          className="text-sm font-medium text-gray-700 dark:text-gray-200 mb-3"
+        >
+          Game logs
+        </h2>
+        {gameLogs.length === 0 ? (
+          <p className="p-4 text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-md">
+            No completed games yet.
+          </p>
+        ) : (
+          <ul className="max-h-96 overflow-y-auto overscroll-contain divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900">
+            {gameLogs.map((log) => (
+              <li key={log.gameId} className="p-4">
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="flex-1 min-w-[220px]">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <time
+                        dateTime={new Date(log.endedAt).toISOString()}
+                        className="text-sm font-medium text-gray-900 dark:text-gray-100"
+                      >
+                        {formatGameLogTime(log.endedAt)}
+                      </time>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        {presetNameById.get(log.ruleSet) ?? log.ruleSet}
+                      </span>
+                    </div>
+                    <ol className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-1">
+                      {[...log.seats]
+                        .sort((left, right) => left.place - right.place)
+                        .map((seat) => (
+                          <li
+                            key={seat.seat}
+                            className="flex items-baseline gap-2 text-xs"
+                          >
+                            <span className="w-5 text-gray-500 dark:text-gray-400">
+                              {seat.place}.
+                            </span>
+                            <span className="flex-1 truncate text-gray-700 dark:text-gray-200">
+                              {seat.displayName}
+                            </span>
+                            <span className="tabular-nums text-gray-500 dark:text-gray-400">
+                              {seat.finalScore.toLocaleString("en-US")}
+                            </span>
+                          </li>
+                        ))}
+                    </ol>
+                  </div>
+                  <Link
+                    to={`/watch/replay/${encodeURIComponent(log.gameId)}`}
+                    className="inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-white bg-sky-600 hover:bg-sky-700 rounded-md"
+                  >
+                    <PlayCircleOutlined aria-hidden="true" />
+                    Open replay
+                  </Link>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {error && (
         <p className="text-red-600 dark:text-red-400 text-sm font-medium mb-4">
