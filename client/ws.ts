@@ -20,8 +20,7 @@ import {
 import { useMatchStore } from "./store";
 
 export interface GameWSOptions {
-  wsUrl: string | null;
-  token: string;
+  getConnectionDetails: () => Promise<GameWSConnectionDetails>;
   matchId: string;
   /** Optional debug seed sent once in the `hello` frame on first attach. */
   debug?: MatchDebug;
@@ -42,6 +41,21 @@ export interface GameWSOptions {
    * is a pure observer, not an interceptor. */
   onMessage?: (msg: ServerMessage) => void;
   onError?: (code: string, message: string) => void;
+}
+
+export interface GameWSConnectionDetails {
+  wsUrl: string | null;
+  token: string;
+}
+
+export class GameWSConnectionDetailsError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean
+  ) {
+    super(message);
+    this.name = "GameWSConnectionDetailsError";
+  }
 }
 
 const INITIAL_BACKOFF_MS = 500;
@@ -79,23 +93,18 @@ export class GameWS {
   private intentionallyClosed = false;
   private lastInboundAt = 0;
   private stallTimer: ReturnType<typeof setInterval> | null = null;
+  private connectionAttempt = 0;
 
   constructor(private readonly opts: GameWSOptions) {}
 
   connect(): void {
-    if (!this.opts.wsUrl) {
-      // No server yet — Phase 0.5 ships the client ahead of the server.
-      // Mark connection as `idle`; the table will render whatever the
-      // store already has (initially empty).
-      useMatchStore.getState().setConn("idle");
-      return;
-    }
     this.intentionallyClosed = false;
-    this.openSocket();
+    void this.openSocket();
   }
 
   close(): void {
     this.intentionallyClosed = true;
+    this.connectionAttempt += 1;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -116,10 +125,8 @@ export class GameWS {
    * to call regardless of current connection state.
    */
   forceReconnect(): void {
-    if (!this.opts.wsUrl) {
-      return;
-    }
     this.intentionallyClosed = false;
+    this.connectionAttempt += 1;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -138,7 +145,7 @@ export class GameWS {
         // ignored — stale socket cleanup
       }
     }
-    this.openSocket();
+    void this.openSocket();
   }
 
   send(message: ClientMessage): void {
@@ -224,14 +231,41 @@ export class GameWS {
   // Internals
   // -------------------------------------------------------------------------
 
-  private openSocket(): void {
-    if (!this.opts.wsUrl) {
-      return;
-    }
+  private async openSocket(): Promise<void> {
+    const attempt = ++this.connectionAttempt;
     const store = useMatchStore.getState();
     store.setConn(store.lastSeq >= 0 ? "reconnecting" : "connecting");
 
-    const ws = new WebSocket(this.opts.wsUrl);
+    let connection: GameWSConnectionDetails;
+    try {
+      connection = await this.opts.getConnectionDetails();
+    } catch (error) {
+      if (attempt !== this.connectionAttempt || this.intentionallyClosed) {
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : "Connection refresh failed";
+      this.reportError("session_refresh_failed", message);
+      if (
+        error instanceof GameWSConnectionDetailsError &&
+        !error.retryable
+      ) {
+        useMatchStore.getState().setConn("closed");
+        return;
+      }
+      this.scheduleReconnect();
+      return;
+    }
+
+    if (attempt !== this.connectionAttempt || this.intentionallyClosed) {
+      return;
+    }
+    if (!connection.wsUrl) {
+      useMatchStore.getState().setConn("idle");
+      return;
+    }
+
+    const ws = new WebSocket(connection.wsUrl);
     this.ws = ws;
     const openedAt = Date.now();
     let wsOpenedAt = 0;
@@ -246,14 +280,14 @@ export class GameWS {
       this.startStallWatchdog();
       useMatchStore.getState().setConn("open");
       console.log(
-        `[game-ws] open handshake=${wsOpenedAt - openedAt}ms url=${this.opts.wsUrl}`
+        `[game-ws] open handshake=${wsOpenedAt - openedAt}ms url=${connection.wsUrl}`
       );
 
       // Send `hello`; if we have a positive `lastSeq` we're reconnecting
       // and should immediately request a gap-fill afterward.
       this.send({
         type: "hello",
-        token: this.opts.token,
+        token: connection.token,
         matchId: this.opts.matchId,
         debug: this.opts.debug,
         ...(this.opts.spectate ? { spectate: true } : {}),
@@ -317,7 +351,7 @@ export class GameWS {
     this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF_MS);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.openSocket();
+      void this.openSocket();
     }, delay);
   }
 

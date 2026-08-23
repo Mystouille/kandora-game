@@ -88,6 +88,10 @@ export default function LobbyRoute() {
         method: "GET",
         credentials: "include",
       });
+      if (res.status === 401 || res.status === 403) {
+        window.location.reload();
+        return;
+      }
       if (!res.ok) {
         setRoomsError(`Failed to load rooms (${res.status}).`);
         return;
@@ -185,6 +189,10 @@ export default function LobbyRoute() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ debug, preset: presetId }),
       });
+      if (res.status === 401 || res.status === 403) {
+        window.location.reload();
+        return null;
+      }
       if (!res.ok) {
         const text = await res.text();
         setError(`Failed to create room (${res.status}): ${text || "unknown"}`);

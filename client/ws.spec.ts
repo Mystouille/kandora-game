@@ -14,7 +14,7 @@ vi.mock("./store", () => ({
   },
 }));
 
-import { GameWS } from "./ws";
+import { GameWS, GameWSConnectionDetailsError } from "./ws";
 
 type SocketListener = (event: Record<string, unknown>) => void;
 
@@ -85,17 +85,30 @@ describe("GameWS reconnect ownership", () => {
     vi.unstubAllGlobals();
   });
 
-  it("ignores a replaced socket's late close and messages", () => {
-    const client = new GameWS({
+  function connectionDetails(token = "token") {
+    return vi.fn().mockResolvedValue({
       wsUrl: "ws://game.test/ws/game/match-1",
-      token: "token",
+      token,
+    });
+  }
+
+  async function flushConnectionAttempt(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("ignores a replaced socket's late close and messages", async () => {
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
       matchId: "match-1",
     });
     client.connect();
+    await flushConnectionAttempt();
     const first = FakeWebSocket.instances[0];
     first.emitOpen();
 
     client.forceReconnect();
+    await flushConnectionAttempt();
     const replacement = FakeWebSocket.instances[1];
     replacement.emitOpen();
     store.setConn.mockClear();
@@ -113,30 +126,131 @@ describe("GameWS reconnect ownership", () => {
     client.close();
   });
 
-  it("still reconnects after the current socket closes", () => {
+  it("refreshes credentials and resyncs after the current socket closes", async () => {
+    const getConnectionDetails = vi
+      .fn()
+      .mockResolvedValueOnce({
+        wsUrl: "ws://game.test/ws/game/match-1",
+        token: "token-1",
+      })
+      .mockResolvedValueOnce({
+        wsUrl: "ws://game.test/ws/game/match-1",
+        token: "token-2",
+      });
     const client = new GameWS({
-      wsUrl: "ws://game.test/ws/game/match-1",
-      token: "token",
+      getConnectionDetails,
       matchId: "match-1",
     });
     client.connect();
+    await flushConnectionAttempt();
     const current = FakeWebSocket.instances[0];
     current.emitOpen();
+    expect(JSON.parse(current.sent[0])).toMatchObject({
+      type: "hello",
+      token: "token-1",
+    });
 
+    store.lastSeq = 42;
     current.emitClose();
     expect(store.setConn).toHaveBeenCalledWith("reconnecting");
-    vi.advanceTimersByTime(500);
+    await vi.advanceTimersByTimeAsync(500);
+    await flushConnectionAttempt();
     expect(FakeWebSocket.instances).toHaveLength(2);
+    const replacement = FakeWebSocket.instances[1];
+    replacement.emitOpen();
+    expect(JSON.parse(replacement.sent[0])).toMatchObject({
+      type: "hello",
+      token: "token-2",
+    });
+    expect(JSON.parse(replacement.sent[1])).toEqual({
+      type: "resync",
+      matchId: "match-1",
+      lastSeq: 42,
+    });
+    expect(getConnectionDetails).toHaveBeenCalledTimes(2);
     client.close();
   });
 
-  it("dispatches ephemeral viewer presence", () => {
+  it("retries a transient connection-details failure", async () => {
+    const onError = vi.fn();
+    const getConnectionDetails = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Discord unavailable"))
+      .mockResolvedValueOnce({
+        wsUrl: "ws://game.test/ws/game/match-1",
+        token: "fresh-token",
+      });
     const client = new GameWS({
+      getConnectionDetails,
+      matchId: "match-1",
+      onError,
+    });
+
+    client.connect();
+    await flushConnectionAttempt();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(onError).toHaveBeenCalledWith(
+      "session_refresh_failed",
+      "Discord unavailable"
+    );
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushConnectionAttempt();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    client.close();
+  });
+
+  it("does not retry a terminal connection-details failure", async () => {
+    const getConnectionDetails = vi.fn().mockRejectedValue(
+      new GameWSConnectionDetailsError("Access denied", false)
+    );
+    const client = new GameWS({
+      getConnectionDetails,
+      matchId: "match-1",
+      onError: vi.fn(),
+    });
+
+    client.connect();
+    await flushConnectionAttempt();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(getConnectionDetails).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(store.setConn).toHaveBeenCalledWith("closed");
+    client.close();
+  });
+
+  it("ignores connection details resolved after close", async () => {
+    let resolveDetails!: (value: { wsUrl: string; token: string }) => void;
+    const getConnectionDetails = vi.fn(
+      () =>
+        new Promise<{ wsUrl: string; token: string }>((resolve) => {
+          resolveDetails = resolve;
+        })
+    );
+    const client = new GameWS({
+      getConnectionDetails,
+      matchId: "match-1",
+    });
+
+    client.connect();
+    client.close();
+    resolveDetails({
       wsUrl: "ws://game.test/ws/game/match-1",
-      token: "token",
+      token: "stale-token",
+    });
+    await flushConnectionAttempt();
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("dispatches ephemeral viewer presence", async () => {
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
       matchId: "match-1",
     });
     client.connect();
+    await flushConnectionAttempt();
     const socket = FakeWebSocket.instances[0];
     socket.emitOpen();
 

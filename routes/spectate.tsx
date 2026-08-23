@@ -11,7 +11,10 @@ import type {
   SeatEnrichment,
 } from "~/game/client/pixi/TableRenderer";
 import { useMatchStore } from "~/game/client/store";
-import { GameWS } from "~/game/client/ws";
+import {
+  GameWS,
+  GameWSConnectionDetailsError,
+} from "~/game/client/ws";
 import { mergeSeatNames } from "~/game/client/spectatorNames";
 import { ViewerList } from "~/game/components/ViewerList";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
@@ -397,34 +400,40 @@ export default function GameSpectateRoute({
       }
     );
 
-    void (async () => {
-      try {
+    const ws = new GameWS({
+      getConnectionDetails: async () => {
         const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
         const res = await fetch(`${basePath}/api/game/session`, {
           credentials: "include",
         });
+        if (res.status === 401 || res.status === 403) {
+          window.location.reload();
+          throw new GameWSConnectionDetailsError(
+            "Live-game access requires authorization.",
+            false
+          );
+        }
         if (!res.ok) {
-          return;
+          throw new GameWSConnectionDetailsError(
+            `Session refresh failed (${res.status}).`,
+            true
+          );
         }
         const session = (await res.json()) as {
           token: string;
           wsUrl: string | null;
           wsPath: string;
         };
-        if (cancelled) {
-          return;
-        }
         const wsScheme = window.location.protocol === "https:" ? "wss:" : "ws:";
         const origin =
           session.wsUrl ?? `${wsScheme}//${window.location.host}${basePath}`;
         const fullUrl = `${origin}${session.wsPath}/${encodeURIComponent(matchId)}`;
-        const ws = new GameWS({
-          wsUrl: fullUrl,
-          token: session.token,
-          matchId,
-          spectate: true,
-          ...(delayMs > 0 ? { delayMs } : {}),
-          onMessage: (msg: ServerMessage) => {
+        return { wsUrl: fullUrl, token: session.token };
+      },
+      matchId,
+      spectate: true,
+      ...(delayMs > 0 ? { delayMs } : {}),
+      onMessage: (msg: ServerMessage) => {
             if (msg.type === "viewer_state") {
               setViewers(msg.viewers);
               return;
@@ -519,15 +528,10 @@ export default function GameSpectateRoute({
               // paint the "disconnected" badge on nameplates).
               setRoomState(msg);
             }
-          },
-        });
-        wsRef.current = ws;
-        ws.connect();
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[game] spectator session fetch failed", err);
-      }
-    })();
+      },
+    });
+    wsRef.current = ws;
+    ws.connect();
 
     // Mirror useMatchStore.conn into local state so the banner can
     // display it without re-rendering the canvas on every store
