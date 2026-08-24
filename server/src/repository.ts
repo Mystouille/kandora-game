@@ -13,13 +13,28 @@ const SeatSchema = z.union([
   z.literal(3),
 ]);
 
-export const PendingMatchCommandSchema = z
-  .object({
-    type: z.literal("act"),
-    seat: SeatSchema,
-    actionId: z.string().min(1),
-  })
-  .strict();
+export const PendingMatchCommandSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("act"),
+      seat: SeatSchema,
+      actionId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("ready"),
+      seat: SeatSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("vote_continue"),
+      seat: SeatSchema,
+      vote: z.enum(["yes", "no"]),
+    })
+    .strict(),
+]);
 export type PendingMatchCommand = z.infer<typeof PendingMatchCommandSchema>;
 
 export const MatchRecoveryRecordSchema = z
@@ -34,6 +49,38 @@ export const MatchRecoveryRecordSchema = z
       return;
     }
     const checkpoint = record.checkpoint;
+    if (command.type === "ready") {
+      const valid =
+        checkpoint.status === "playing" &&
+        checkpoint.checkpointKind === "ready_check" &&
+        !checkpoint.seats[command.seat].isBot &&
+        !checkpoint.readyAcked[command.seat];
+      if (!valid) {
+        context.addIssue({
+          code: "custom",
+          path: ["pendingCommand", "seat"],
+          message: "Pending ready command requires an unacked human seat",
+        });
+      }
+      return;
+    }
+    if (command.type === "vote_continue") {
+      const valid =
+        checkpoint.status === "playing" &&
+        checkpoint.checkpointKind === "continue_vote" &&
+        !checkpoint.seats[command.seat].isBot &&
+        !checkpoint.votes.some((vote) => vote === "no") &&
+        !checkpoint.votes.every((vote) => vote === "yes") &&
+        checkpoint.votes[command.seat] !== command.vote;
+      if (!valid) {
+        context.addIssue({
+          code: "custom",
+          path: ["pendingCommand", "vote"],
+          message: "Pending vote command requires an unresolved human vote",
+        });
+      }
+      return;
+    }
     let legalActionIds: string[] = [];
     if (
       checkpoint.status === "playing" &&

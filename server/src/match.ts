@@ -103,6 +103,13 @@ export interface MatchProcessDependencies {
 
 type Send = (msg: ServerMessage) => void;
 
+class CommandBoundaryCommitError extends Error {
+  constructor(cause: unknown) {
+    super("failed to commit command input boundary", { cause });
+    this.name = "CommandBoundaryCommitError";
+  }
+}
+
 /**
  * Per-connection state for a delayed-spectator session. Tracks
  * the next omniscient log index to consider, the running
@@ -746,7 +753,7 @@ export class MatchProcess {
    * case, scanning is microseconds) and (b) the payload archived
    * to Mongo in one shot from `finalizeMatch` via `archiveMatch`.
     * Durable recovery stores this log inside quiescent checkpoints
-    * and write-ahead action records; the standalone Match archive
+    * and write-ahead command records; the standalone Match archive
     * still receives the complete log only at game completion.
    */
   private readonly eventLog: Array<{
@@ -998,8 +1005,21 @@ export class MatchProcess {
   private pausedCheckpoint: MatchCheckpoint | null = null;
   private checkpointSavePromise: Promise<MatchCheckpoint> | null = null;
   private commandTransactionPromise: Promise<void> | null = null;
+  private nextCommandTransactionId = 1;
+  private activeCommandTransactionId: number | null = null;
+  private readonly yieldedCommandTransactionIds = new Set<number>();
   private pendingCommandCommitCheckpoint: MatchCheckpoint | null = null;
+  private commandCommitRetryPromise: Promise<boolean> | null = null;
+  private pendingCommandCommitRestoresContinuation = false;
   private commandRecoveryRequired = false;
+  private commandRecoveryError: Error | null = null;
+  private commandBoundaryResolve: (() => void) | null = null;
+  private commandBoundaryPromise: Promise<void> | null = null;
+  private commandBoundaryHandoffPromise: Promise<void> | null = null;
+  private suspendedCommandTimer:
+    | { kind: "ready" }
+    | { kind: "continue_vote"; timeoutArmed: boolean }
+    | null = null;
 
   get isPaused(): boolean {
     return this.pausedCheckpoint !== null || this.commandRecoveryRequired;
@@ -1007,6 +1027,10 @@ export class MatchProcess {
 
   get hasPendingCommandCommit(): boolean {
     return this.pendingCommandCommitCheckpoint !== null;
+  }
+
+  get pendingCommandRecoveryError(): Error | null {
+    return this.commandRecoveryError;
   }
 
   private assertNotPaused(operation: string): void {
@@ -1209,7 +1233,7 @@ export class MatchProcess {
 
   private resumeCheckpoint(
     checkpoint: MatchCheckpoint,
-    armTimers = true
+    restoredContinuation = false
   ): void {
     this.pausedCheckpoint = null;
     if (checkpoint.status === "playing") {
@@ -1218,14 +1242,14 @@ export class MatchProcess {
       } else if (checkpoint.checkpointKind === "call_window") {
         this.installCheckpointCallWindows(checkpoint);
       } else if (checkpoint.checkpointKind === "ready_check") {
-        this.installCheckpointReadyCheck(checkpoint, false);
+        this.installCheckpointReadyCheck(checkpoint, restoredContinuation);
       } else if (checkpoint.checkpointKind === "continue_vote") {
-        this.installCheckpointContinueVote(checkpoint, false);
+        this.installCheckpointContinueVote(checkpoint, restoredContinuation);
       } else {
-        this.installCheckpointResultTransition(checkpoint, false);
-      }
-      if (!armTimers) {
-        this.cancelCheckpointTimers(checkpoint);
+        this.installCheckpointResultTransition(
+          checkpoint,
+          restoredContinuation
+        );
       }
     }
   }
@@ -1263,23 +1287,74 @@ export class MatchProcess {
     }
     const match = MatchProcess.restoreCheckpoint(checkpoint, dependencies);
     if (recovery.pendingCommand !== null) {
-      await match.replayPendingCommand(recovery.pendingCommand);
+      const boundary = match.beginCommandBoundaryWatch();
+      const replaying = match.replayPendingCommand(recovery.pendingCommand);
+      match.commandTransactionPromise = replaying;
+      const clearReplay = (): void => {
+        if (match.commandTransactionPromise === replaying) {
+          match.commandTransactionPromise = null;
+        }
+        match.clearCommandBoundaryWatch(boundary);
+      };
+      void replaying.then(clearReplay, clearReplay);
+      await Promise.race([replaying, boundary]);
     }
     return match;
   }
 
-  async retryPendingCommandCommit(): Promise<boolean> {
+  private beginCommandBoundaryWatch(): Promise<void> {
+    const boundary = new Promise<void>((resolve) => {
+      this.commandBoundaryResolve = resolve;
+    });
+    this.commandBoundaryPromise = boundary;
+    return boundary;
+  }
+
+  private clearCommandBoundaryWatch(boundary: Promise<void>): void {
+    if (this.commandBoundaryPromise === boundary) {
+      this.commandBoundaryPromise = null;
+      this.commandBoundaryResolve = null;
+    }
+  }
+
+  private signalCommandBoundary(): void {
+    const resolve = this.commandBoundaryResolve;
+    this.commandBoundaryPromise = null;
+    this.commandBoundaryResolve = null;
+    resolve?.();
+  }
+
+  retryPendingCommandCommit(): Promise<boolean> {
+    if (this.commandCommitRetryPromise !== null) {
+      return this.commandCommitRetryPromise;
+    }
     const checkpoint = this.pendingCommandCommitCheckpoint;
     if (checkpoint === null) {
-      return false;
+      return Promise.resolve(false);
     }
-    await this.repository.saveCheckpoint({
-      matchId: this.matchId,
-      checkpoint,
-    });
-    this.pendingCommandCommitCheckpoint = null;
-    this.resumeCheckpoint(checkpoint);
-    return true;
+    const retrying = this.persistPendingCommandCommit(checkpoint);
+    this.commandCommitRetryPromise = retrying;
+    return retrying;
+  }
+
+  private async persistPendingCommandCommit(
+    checkpoint: MatchCheckpoint
+  ): Promise<boolean> {
+    try {
+      await this.repository.saveCheckpoint({
+        matchId: this.matchId,
+        checkpoint,
+      });
+      const restoredContinuation =
+        this.pendingCommandCommitRestoresContinuation;
+      this.pendingCommandCommitCheckpoint = null;
+      this.pendingCommandCommitRestoresContinuation = false;
+      this.suspendedCommandTimer = null;
+      this.resumeCheckpoint(checkpoint, restoredContinuation);
+      return true;
+    } finally {
+      this.commandCommitRetryPromise = null;
+    }
   }
 
   async deleteSavedCheckpoint(): Promise<void> {
@@ -1572,8 +1647,8 @@ export class MatchProcess {
     this.assertCommonPlayingCheckpointState(true);
     if (
       this.readyResolve === null ||
-      this.readyTimer === null ||
-      this.readyDeadline === null
+      this.readyDeadline === null ||
+      (this.readyTimer === null && this.suspendedCommandTimer?.kind !== "ready")
     ) {
       this.checkpointUnsupported("ready timer is incomplete");
     }
@@ -1620,12 +1695,20 @@ export class MatchProcess {
       this.checkpointUnsupported("continue vote retains action state");
     }
     const savedAt = this.runtime.now();
+    const resolutionPending =
+      this.continueVote.some((vote) => vote === "no") ||
+      this.continueVote.every((vote) => vote === "yes");
+    const suspendedTimeoutArmed =
+      this.suspendedCommandTimer?.kind === "continue_vote" &&
+      this.suspendedCommandTimer.timeoutArmed;
     return PlayingContinueVoteCheckpointSchema.parse({
       ...this.playingCheckpointBase(savedAt),
       checkpointKind: "continue_vote",
       votes: [...this.continueVote],
       voteRemainingMs: Math.max(0, this.continueVoteDeadline - savedAt),
-      timeoutArmed: this.continueVoteTimer !== null,
+      timeoutArmed:
+        !resolutionPending &&
+        (this.continueVoteTimer !== null || suspendedTimeoutArmed),
       finalScores: this.continueVoteFinalScores,
     });
   }
@@ -1856,6 +1939,11 @@ export class MatchProcess {
       );
     }
     this.readyTimer?.cancel();
+    if (checkpoint.readyAcked.every(Boolean)) {
+      this.readyTimer = null;
+      this.finishReadyCheck();
+      return;
+    }
     this.readyTimer = this.runtime.schedule(
       () => {
         if (!this.isPaused) {
@@ -1898,6 +1986,16 @@ export class MatchProcess {
       );
     }
     this.continueVoteTimer?.cancel();
+    const hasNoVote = checkpoint.votes.some((vote) => vote === "no");
+    const allYes = checkpoint.votes.every((vote) => vote === "yes");
+    if (hasNoVote || allYes) {
+      this.continueVoteTimer = null;
+      if (hasNoVote) {
+        this.lastVoteReason = "vote_no";
+      }
+      this.finishContinueVote(allYes);
+      return;
+    }
     this.continueVoteTimer = checkpoint.timeoutArmed
       ? this.runtime.schedule(
           () => {
@@ -1942,7 +2040,7 @@ export class MatchProcess {
     );
   }
 
-  private runResultTransition(
+  private async runResultTransition(
     transitionKind: PlayingResultTransitionCheckpoint["transitionKind"],
     delayMs: number,
     nextReadyMs: number
@@ -1950,7 +2048,7 @@ export class MatchProcess {
     this.resultTransitionKind = transitionKind;
     this.resultTransitionDeadline = this.runtime.now() + delayMs;
     this.resultTransitionNextReadyMs = nextReadyMs;
-    return new Promise<void>((resolve) => {
+    const waiting = new Promise<void>((resolve) => {
       this.resultTransitionResolve = resolve;
       this.resultTransitionTimer = this.runtime.schedule(
         () => {
@@ -1960,6 +2058,8 @@ export class MatchProcess {
         { unref: true }
       );
     });
+    await this.commitOpenInputBoundary();
+    await waiting;
   }
 
   private finishResultTransition(): void {
@@ -2142,7 +2242,7 @@ export class MatchProcess {
     this.readyContinuationKind = continuation;
     this.readyDeadline = this.runtime.now() + ms;
     this.broadcastReadyCheck();
-    await new Promise<void>((resolve) => {
+    const waiting = new Promise<void>((resolve) => {
       this.readyResolve = resolve;
       this.readyTimer = this.runtime.schedule(
         () => {
@@ -2152,6 +2252,8 @@ export class MatchProcess {
         { unref: true }
       );
     });
+    await this.commitOpenInputBoundary();
+    await waiting;
   }
 
   /**
@@ -2159,21 +2261,38 @@ export class MatchProcess {
    * check immediately when all seats are acked. No-op when the
    * ready check has already finished.
    */
-  handleReady(seat: Seat): void {
-    if (this.isPaused) {
+  async handleReady(seat: Seat): Promise<void> {
+    const receivedAtSeq = this.nextSeq;
+    const activeTransaction = this.commandTransactionPromise;
+    if (activeTransaction !== null) {
+      if (!this.isAcceptedReady(seat)) {
+        return;
+      }
+      try {
+        await (this.commandBoundaryHandoffPromise ?? activeTransaction);
+      } catch {
+        // A failed transaction leaves the process paused or recovery-only.
+      }
+      if (this.commandTransactionPromise === activeTransaction) {
+        this.commandTransactionPromise = null;
+      }
+      if (!this.isPaused && this.nextSeq === receivedAtSeq) {
+        await this.handleReady(seat);
+      }
       return;
     }
-    if (this.readyResolve === null) {
+    if (this.isPaused || !this.isAcceptedReady(seat)) {
       return;
     }
-    if (this.readyAcked[seat]) {
-      return;
-    }
-    this.readyAcked[seat] = true;
-    if (this.readyAcked.every((a) => a)) {
-      this.finishReadyCheck();
-    } else {
-      this.broadcastReadyCheck();
+    const command: PendingMatchCommand = { type: "ready", seat };
+    const transaction = this.runCommandTransaction(command);
+    this.commandTransactionPromise = transaction;
+    try {
+      await transaction;
+    } finally {
+      if (this.commandTransactionPromise === transaction) {
+        this.commandTransactionPromise = null;
+      }
     }
   }
 
@@ -3276,57 +3395,119 @@ export class MatchProcess {
   private async runCommandTransaction(
     command: PendingMatchCommand
   ): Promise<void> {
-    const checkpoint = this.createCheckpoint();
-    this.freezeCheckpoint(checkpoint);
+    const transactionId = this.nextCommandTransactionId++;
+    this.activeCommandTransactionId = transactionId;
     try {
-      await this.repository.saveCommandTransaction({
-        matchId: this.matchId,
-        checkpoint,
-        command,
-      });
-    } catch (error) {
-      this.resumeCheckpoint(checkpoint);
-      throw error;
+      const checkpoint = this.createCheckpoint();
+      this.freezeCheckpoint(checkpoint);
+      try {
+        await this.repository.saveCommandTransaction({
+          matchId: this.matchId,
+          checkpoint,
+          command,
+        });
+      } catch (error) {
+        this.resumeCheckpoint(checkpoint);
+        throw error;
+      }
+      this.resumeCheckpointForCommand(checkpoint, command);
+      await this.executePersistedCommand(command);
+      if (!this.yieldedCommandTransactionIds.delete(transactionId)) {
+        await this.commitCommandState();
+      }
+    } finally {
+      this.yieldedCommandTransactionIds.delete(transactionId);
+      if (this.activeCommandTransactionId === transactionId) {
+        this.activeCommandTransactionId = null;
+      }
     }
-    this.resumeCheckpointForCommand(checkpoint, command.seat);
-    await this.executePersistedCommand(command);
-    await this.commitCommandState();
   }
 
   private async replayPendingCommand(
     command: PendingMatchCommand
   ): Promise<void> {
-    const checkpoint = this.createCheckpoint();
-    this.freezeCheckpoint(checkpoint);
-    this.resumeCheckpointForCommand(checkpoint, command.seat);
-    await this.executePersistedCommand(command);
-    await this.commitCommandState();
+    const transactionId = this.nextCommandTransactionId++;
+    this.activeCommandTransactionId = transactionId;
+    try {
+      const checkpoint = this.createCheckpoint();
+      this.freezeCheckpoint(checkpoint);
+      this.resumeCheckpointForCommand(checkpoint, command);
+      await this.executePersistedCommand(command);
+      if (!this.yieldedCommandTransactionIds.delete(transactionId)) {
+        await this.commitCommandState();
+      }
+    } finally {
+      this.yieldedCommandTransactionIds.delete(transactionId);
+      if (this.activeCommandTransactionId === transactionId) {
+        this.activeCommandTransactionId = null;
+      }
+    }
   }
 
   private resumeCheckpointForCommand(
     checkpoint: MatchCheckpoint,
-    seat: Seat
+    command: PendingMatchCommand
   ): void {
     this.resumeCheckpoint(checkpoint);
-    this.currentDeadlineTimer[seat]?.cancel();
-    this.currentDeadlineTimer[seat] = null;
-    this.deadlineEpoch[seat] += 1;
+    if (command.type === "act") {
+      this.currentDeadlineTimer[command.seat]?.cancel();
+      this.currentDeadlineTimer[command.seat] = null;
+      this.deadlineEpoch[command.seat] += 1;
+      return;
+    }
+    if (command.type === "ready") {
+      this.readyTimer?.cancel();
+      this.readyTimer = null;
+      this.suspendedCommandTimer = { kind: "ready" };
+      return;
+    }
+    const timeoutArmed = this.continueVoteTimer !== null;
+    this.continueVoteTimer?.cancel();
+    this.continueVoteTimer = null;
+    this.suspendedCommandTimer = { kind: "continue_vote", timeoutArmed };
   }
 
   private async executePersistedCommand(
     command: PendingMatchCommand
   ): Promise<void> {
-    if (!this.isAcceptedAction(command.seat, command.actionId)) {
-      this.commandRecoveryRequired = true;
-      throw new Error(
-        `MatchProcess: pending action ${command.actionId} is no longer legal for seat ${command.seat}`
-      );
-    }
     try {
-      await this.handleActDirect(command.seat, command.actionId);
+      if (command.type === "act") {
+        if (!this.isAcceptedAction(command.seat, command.actionId)) {
+          throw new Error(
+            `pending action ${command.actionId} is no longer legal for seat ${command.seat}`
+          );
+        }
+        await this.handleActDirect(command.seat, command.actionId);
+        return;
+      }
+      if (command.type === "ready") {
+        if (!this.isAcceptedReady(command.seat)) {
+          throw new Error(
+            `pending ready is no longer valid for seat ${command.seat}`
+          );
+        }
+        this.handleReadyDirect(command.seat);
+        return;
+      }
+      if (!this.isAcceptedContinueVote(command.seat, command.vote)) {
+        throw new Error(
+          `pending vote is no longer valid for seat ${command.seat}`
+        );
+      }
+      await this.handleVoteContinueDirect(command.seat, command.vote);
     } catch (error) {
+      if (error instanceof CommandBoundaryCommitError) {
+        throw error;
+      }
       this.commandRecoveryRequired = true;
-      throw error;
+      const recoveryError = new Error(
+        `MatchProcess: ${(error as Error).message}`,
+        {
+        cause: error,
+        }
+      );
+      this.commandRecoveryError = recoveryError;
+      throw recoveryError;
     }
   }
 
@@ -3337,12 +3518,96 @@ export class MatchProcess {
     const checkpoint = this.createCheckpoint();
     this.freezeCheckpoint(checkpoint);
     this.pendingCommandCommitCheckpoint = checkpoint;
-    await this.repository.saveCheckpoint({
-      matchId: this.matchId,
-      checkpoint,
+    const committing = this.persistPendingCommandCommit(checkpoint);
+    this.commandCommitRetryPromise = committing;
+    await committing;
+  }
+
+  private commitOpenInputBoundary(): Promise<void> {
+    const transactionId = this.activeCommandTransactionId;
+    if (this.commandTransactionPromise === null || transactionId === null) {
+      return Promise.resolve();
+    }
+    if (this.commandBoundaryHandoffPromise !== null) {
+      return this.commandBoundaryHandoffPromise;
+    }
+    const handingOff = this.persistOpenInputBoundary(transactionId);
+    this.commandBoundaryHandoffPromise = handingOff;
+    return handingOff;
+  }
+
+  private async persistOpenInputBoundary(
+    transactionId: number
+  ): Promise<void> {
+    try {
+      await this.commitCommandState();
+    } catch (error) {
+      this.pendingCommandCommitRestoresContinuation = true;
+      this.commandTransactionPromise = null;
+      if (this.activeCommandTransactionId === transactionId) {
+        this.activeCommandTransactionId = null;
+      }
+      this.signalCommandBoundary();
+      throw new CommandBoundaryCommitError(error);
+    } finally {
+      this.commandBoundaryHandoffPromise = null;
+    }
+    this.yieldedCommandTransactionIds.add(transactionId);
+    this.commandTransactionPromise = null;
+    if (this.activeCommandTransactionId === transactionId) {
+      this.activeCommandTransactionId = null;
+    }
+    this.signalCommandBoundary();
+  }
+
+  private isAcceptedReady(seat: Seat): boolean {
+    const player = this.players.get(seat);
+    return (
+      this.readyResolve !== null &&
+      player !== null &&
+      player !== undefined &&
+      !player.isBot &&
+      !this.readyAcked[seat]
+    );
+  }
+
+  private handleReadyDirect(seat: Seat): void {
+    this.readyAcked[seat] = true;
+    if (!this.readyAcked.every(Boolean)) {
+      this.broadcastReadyCheck();
+    }
+  }
+
+  private isAcceptedContinueVote(
+    seat: Seat,
+    vote: "yes" | "no"
+  ): boolean {
+    const player = this.players.get(seat);
+    return (
+      this.continueVoteResolve !== null &&
+      player !== null &&
+      player !== undefined &&
+      !player.isBot &&
+      !this.continueVote.some((current) => current === "no") &&
+      !this.continueVote.every((current) => current === "yes") &&
+      this.continueVote[seat] !== vote
+    );
+  }
+
+  private async handleVoteContinueDirect(
+    seat: Seat,
+    vote: "yes" | "no"
+  ): Promise<void> {
+    this.continueVote[seat] = vote;
+    await this.emitEvent({
+      type: "session_vote_update",
+      votes: [...this.continueVote] as [
+        "yes" | "no" | null,
+        "yes" | "no" | null,
+        "yes" | "no" | null,
+        "yes" | "no" | null,
+      ],
     });
-    this.pendingCommandCommitCheckpoint = null;
-    this.resumeCheckpoint(checkpoint);
   }
 
   private async handleActDirect(seat: Seat, actionId: string): Promise<void> {
@@ -4997,7 +5262,7 @@ export class MatchProcess {
    * false to end.
    */
   private async runContinueVote(finalScores: FinalScore[]): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
+    const voting = new Promise<boolean>((resolve) => {
       this.continueVote = [null, null, null, null];
       this.continueVoteFinalScores = finalScores.map((score) => ({ ...score }));
       this.lastVoteReason = null;
@@ -5045,6 +5310,10 @@ export class MatchProcess {
         );
       }
     });
+    if (this.continueVoteResolve !== null) {
+      await this.commitOpenInputBoundary();
+    }
+    return voting;
   }
 
   /**
@@ -5053,27 +5322,45 @@ export class MatchProcess {
    * change their mind freely (yes ↔ no) until the window
    * resolves.
    */
-  handleVoteContinue(seat: Seat, vote: "yes" | "no"): void {
-    if (this.isPaused) {
+  async handleVoteContinue(
+    seat: Seat,
+    vote: "yes" | "no"
+  ): Promise<void> {
+    const activeTransaction = this.commandTransactionPromise;
+    if (activeTransaction !== null) {
+      if (!this.isAcceptedContinueVote(seat, vote)) {
+        return;
+      }
+      try {
+        await (this.commandBoundaryHandoffPromise ?? activeTransaction);
+      } catch {
+        // A failed transaction leaves the process paused or recovery-only.
+      }
+      if (this.commandTransactionPromise === activeTransaction) {
+        this.commandTransactionPromise = null;
+      }
+      if (!this.isPaused) {
+        await this.handleVoteContinue(seat, vote);
+      }
       return;
     }
-    if (this.continueVoteResolve === null) {
+    if (this.isPaused || !this.isAcceptedContinueVote(seat, vote)) {
       return;
     }
-    if (this.continueVote[seat] === vote) {
-      return;
+    const command: PendingMatchCommand = {
+      type: "vote_continue",
+      seat,
+      vote,
+    };
+    const transaction = this.runCommandTransaction(command);
+    this.commandTransactionPromise = transaction;
+    try {
+      await transaction;
+    } finally {
+      if (this.commandTransactionPromise === transaction) {
+        this.commandTransactionPromise = null;
+      }
     }
-    this.continueVote[seat] = vote;
-    void this.emitEvent({
-      type: "session_vote_update",
-      votes: [...this.continueVote] as [
-        "yes" | "no" | null,
-        "yes" | "no" | null,
-        "yes" | "no" | null,
-        "yes" | "no" | null,
-      ],
-    });
-    this.tallyContinueVote();
   }
 
   private tallyContinueVote(): void {
@@ -5656,12 +5943,10 @@ export class MatchProcess {
     // their dispatch timer for this freshly appended event. No-op
     // when there are no delayed sessions.
     this.notifyDelayedSpectators();
-    // Durability lives entirely in the in-process `eventLog` until
-    // `match_end`, at which point `archiveCurrentGame` writes the
-    // full archived form to Mongo via `archiveMatch`. Resync (live
-    // and spectator) reads from the same `eventLog`. No per-event
-    // database writes in this path — see `persist.ts` for the
-    // durability story.
+    // Resync (live and spectator) reads from this in-process log.
+    // There is no per-event database write; recovery checkpoints
+    // snapshot the complete log at command/input boundaries, and
+    // `archiveCurrentGame` writes the final public archive at match end.
   }
 
   /**

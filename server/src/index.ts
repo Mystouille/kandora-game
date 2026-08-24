@@ -952,7 +952,7 @@ async function handleClientFrame(
       return;
     }
     case "ready": {
-      match.handleReady(seat);
+      await match.handleReady(seat);
       return;
     }
     case "resync": {
@@ -1018,7 +1018,7 @@ async function handleClientFrame(
       return;
     }
     case "vote_continue": {
-      match.handleVoteContinue(seat, parsed.data.vote);
+      await match.handleVoteContinue(seat, parsed.data.vote);
       return;
     }
     case "hello": {

@@ -123,23 +123,37 @@ write rebases the saved durations onto the current runtime and resumes the same
 process without charging the I/O interval. `restoreSavedCheckpoint()` loads and
 validates through the repository.
 
-Accepted gameplay `act` frames use a write-ahead recovery record. Before
-authority mutates, `MatchProcess` freezes the current action/call window and
-atomically stores that checkpoint together with the seat and legal action ID.
-After the action, bot continuations, and pacing complete, the next quiescent
-checkpoint atomically replaces the pending record. Recovery validates that the
-command belonged to its stored window, restores the pre-state, replays it once,
-and commits the resulting checkpoint. Concurrent action frames serialize; a
-queued frame is reconsidered only if no game event advanced while it waited.
+Accepted `act`, `ready`, and `vote_continue` frames use a write-ahead recovery
+record. Before authority mutates, `MatchProcess` freezes the current input
+window and atomically stores its checkpoint together with the seat and command
+payload. Recovery validates the command against that exact action, ready, or
+vote window, restores the pre-state, replays it once, and atomically replaces
+the pending record with the resulting checkpoint. Concurrent frames serialize;
+queued gameplay actions are reconsidered only if no game event advanced while
+they waited, while ready/vote commands revalidate their synchronization window.
+
+The final ready acknowledgment and a resolving Buu vote commit a completed
+window checkpoint before starting their asynchronous continuation. Installing
+that checkpoint, either after the commit or during recovery, consumes the
+continuation: deal/start the hand, begin the next Buu game, or finalize the
+session. This makes a crash on either side of the continuation deterministic.
+Likewise, a gameplay command that reaches a staged result reveal, ready check,
+or Buu vote commits that open boundary and releases command ownership before
+waiting. Recovery therefore returns a usable match at the boundary instead of
+blocking on input that can only arrive after reconnection. Frames arriving
+while the boundary write is in flight wait for that write, not for the parent
+command whose continuation depends on those frames.
 
 A failed write-ahead save mutates nothing and resumes the original timers. A
-failed post-action commit leaves the advanced process paused and the durable
+failed post-command commit leaves the advanced process paused and the durable
 pre-state/command intact; `retryPendingCommandCommit()` commits that captured
 post-state before input resumes. Terminalization replaces either form with the
-same tombstone. This first transaction slice covers player `act` frames
-(discard, call/pass, kan, win, and riichi). Ready/vote/AFK/start/leave control
-frames and server-driven AFK/deadline defaults are not command-logged yet;
-disconnected action windows therefore remain explicitly uncheckpointable.
+same tombstone. A detached replay continuation that fails after recovery has
+returned also pauses the process and exposes its cause through
+`pendingCommandRecoveryError`. Transactional gameplay covers discard,
+call/pass, kan, win, and riichi. AFK/start/leave frames and server-driven
+AFK/deadline defaults are not command-logged yet; disconnected action windows
+therefore remain explicitly uncheckpointable.
 
 Before emitting terminal `session_end`, `MatchProcess` atomically replaces any
 existing checkpoint with a retained terminal tombstone. Loads then return no

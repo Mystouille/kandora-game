@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPRNG, type MatchState } from "~/game/rules";
 import { getPreset, presetToRuleSet } from "~/game/rules/presets";
+import type { LegalAction } from "~/game/protocol/messages";
 import {
   MATCH_CHECKPOINT_SCHEMA_VERSION,
   parseMatchCheckpoint,
@@ -277,7 +278,7 @@ describe("MatchProcess checkpoints", () => {
         readyContinuation: "initial_hand",
       });
     });
-    match.handleReady(0);
+    await match.handleReady(0);
     const checkpoint = match.createCheckpoint();
     if (
       checkpoint.status !== "playing" ||
@@ -293,8 +294,8 @@ describe("MatchProcess checkpoints", () => {
       runtime: restoredRuntime,
     });
     for (const seat of [1, 2, 3] as const) {
-      match.handleReady(seat);
-      restored.handleReady(seat);
+      await match.handleReady(seat);
+      await restored.handleReady(seat);
     }
     await starting;
     await vi.waitFor(() => {
@@ -314,6 +315,383 @@ describe("MatchProcess checkpoints", () => {
     expect(restoredRuntime.captureRandomState()).toBe(
       originalRuntime.captureRandomState()
     );
+  });
+
+  it("does not acknowledge ready until the command is durable", async () => {
+    const storage = createMemoryMatchRepository();
+    const gate = deferred();
+    let captured:
+      | Parameters<MatchRepository["saveCommandTransaction"]>[0]
+      | null = null;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCommandTransaction: async (args) => {
+        captured = args;
+        await gate.promise;
+        await storage.saveCommandTransaction(args);
+      },
+    };
+    const runtime = controlledRuntime(75_000, 1051);
+    const match = new MatchProcess(
+      "checkpoint-ready-write-ahead",
+      611,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(5_000);
+    setDelayAfterDiscardMs(0);
+    const starting = match.start();
+    await vi.waitFor(() => {
+      expect(match.createCheckpoint()).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+      });
+    });
+
+    const acknowledging = match.handleReady(0);
+    await Promise.resolve();
+
+    expect(captured).toMatchObject({
+      matchId: match.matchId,
+      command: { type: "ready", seat: 0 },
+    });
+    expect(match.createCheckpoint()).toMatchObject({
+      checkpointKind: "ready_check",
+      readyAcked: [false, false, false, false],
+    });
+    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
+
+    gate.resolve();
+    await acknowledging;
+
+    expect(match.createCheckpoint()).toMatchObject({
+      checkpointKind: "ready_check",
+      readyAcked: [true, false, false, false],
+    });
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      pendingCommand: null,
+    });
+    for (const seat of [1, 2, 3] as const) {
+      await match.handleReady(seat);
+    }
+    await starting;
+  });
+
+  it("retries a failed ready-command commit before resuming its timer", async () => {
+    const storage = createMemoryMatchRepository();
+    const retryGate = deferred();
+    let commitAttempts = 0;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        commitAttempts += 1;
+        if (commitAttempts === 1) {
+          throw new Error("ready command commit failed");
+        }
+        if (commitAttempts === 2) {
+          await retryGate.promise;
+        }
+        await storage.saveCheckpoint(args);
+      },
+    };
+    const runtime = controlledRuntime(75_500, 1056);
+    const match = new MatchProcess(
+      "checkpoint-ready-commit-retry",
+      613,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(5_000);
+    setDelayAfterDiscardMs(0);
+    const starting = match.start();
+    await vi.waitFor(() => {
+      expect(match.createCheckpoint()).toMatchObject({
+        checkpointKind: "ready_check",
+      });
+    });
+
+    await expect(match.handleReady(0)).rejects.toThrow(
+      "ready command commit failed"
+    );
+
+    expect(match.isPaused).toBe(true);
+    expect(match.hasPendingCommandCommit).toBe(true);
+    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      checkpoint: { readyAcked: [false, false, false, false] },
+      pendingCommand: { type: "ready", seat: 0 },
+    });
+
+    const retrying = match.retryPendingCommandCommit();
+    expect(match.retryPendingCommandCommit()).toBe(retrying);
+    expect(commitAttempts).toBe(2);
+    retryGate.resolve();
+    await expect(retrying).resolves.toBe(true);
+    expect(commitAttempts).toBe(2);
+    const committed = match.createCheckpoint();
+    if (
+      committed.status !== "playing" ||
+      committed.checkpointKind !== "ready_check"
+    ) {
+      throw new Error("expected a committed ready checkpoint");
+    }
+    expect(committed.readyAcked).toEqual([true, false, false, false]);
+    expect(runtime.scheduledDelays().at(-1)).toBe(
+      committed.readyRemainingMs
+    );
+    for (const seat of [1, 2, 3] as const) {
+      await match.handleReady(seat);
+    }
+    await starting;
+  });
+
+  it("accepts ready while a parent command boundary is still saving", async () => {
+    const storage = createMemoryMatchRepository();
+    const gate = deferred();
+    let boundarySaveStarted = false;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        if (!boundarySaveStarted) {
+          boundarySaveStarted = true;
+          await gate.promise;
+        }
+        await storage.saveCheckpoint(args);
+      },
+    };
+    const runtime = controlledRuntime(75_750, 1058);
+    const match = new MatchProcess(
+      "checkpoint-ready-boundary-race",
+      615,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    setNextHandDelayMs(5_000);
+    const internals = match as unknown as {
+      state: MatchState;
+      afterHandEnd: () => Promise<void>;
+      commandTransactionPromise: Promise<void> | null;
+      activeCommandTransactionId: number | null;
+    };
+    internals.state.phase = "hand_ended";
+    internals.state.lastHandResult = {
+      reason: "exhaustive_draw",
+      winner: null,
+      loser: null,
+      delta: [0, 0, 0, 0],
+      tenpai: [false, false, false, false],
+      abortKind: null,
+      winHan: null,
+      winYakuman: null,
+    };
+    internals.commandTransactionPromise = new Promise<void>(() => undefined);
+    internals.activeCommandTransactionId = 999;
+    const advancing = internals.afterHandEnd();
+    await vi.waitFor(() => {
+      expect(boundarySaveStarted).toBe(true);
+    });
+
+    const acknowledging = match.handleReady(0);
+    await Promise.resolve();
+    expect(match.createCheckpoint()).toMatchObject({
+      checkpointKind: "ready_check",
+      readyAcked: [false, false, false, false],
+    });
+
+    gate.resolve();
+    await acknowledging;
+    expect(match.createCheckpoint()).toMatchObject({
+      checkpointKind: "ready_check",
+      readyAcked: [true, false, false, false],
+    });
+    for (const seat of [1, 2, 3] as const) {
+      await match.handleReady(seat);
+    }
+    await advancing;
+    expect(match.createCheckpoint()).toMatchObject({
+      checkpointKind: "action_window",
+    });
+  });
+
+  it("replays ready and resumes a completed ready checkpoint once", async () => {
+    const repository = createMemoryMatchRepository();
+    const originalRuntime = controlledRuntime(76_000, 1061);
+    const match = new MatchProcess(
+      "checkpoint-ready-command-replay",
+      612,
+      humanPlayers(),
+      { repository, runtime: originalRuntime }
+    );
+    setReadyCheckMs(5_000);
+    setDelayAfterDiscardMs(0);
+    void match.start();
+    await vi.waitFor(() => {
+      expect(match.createCheckpoint()).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+      });
+    });
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "ready_check"
+    ) {
+      throw new Error("expected a ready checkpoint");
+    }
+    await repository.saveCommandTransaction({
+      matchId: match.matchId,
+      checkpoint,
+      command: { type: "ready", seat: 0 },
+    });
+
+    const restoredRuntime = controlledRuntime(1_060_000, 1062);
+    const restored = await MatchProcess.restoreSavedCheckpoint(match.matchId, {
+      repository,
+      runtime: restoredRuntime,
+    });
+    if (!restored) {
+      throw new Error("expected a restored ready command");
+    }
+    expect(restored.createCheckpoint()).toMatchObject({
+      checkpointKind: "ready_check",
+      readyAcked: [true, false, false, false],
+    });
+    for (const seat of [1, 2, 3] as const) {
+      await restored.handleReady(seat);
+    }
+    const completed = await repository.loadRecoveryRecord(match.matchId);
+    expect(completed).toMatchObject({
+      checkpoint: {
+        checkpointKind: "ready_check",
+        readyAcked: [true, true, true, true],
+      },
+      pendingCommand: null,
+    });
+
+    const recoveredRuntime = controlledRuntime(1_060_000, 1063);
+    const recovered = await MatchProcess.restoreSavedCheckpoint(match.matchId, {
+      repository,
+      runtime: recoveredRuntime,
+    });
+    if (!recovered) {
+      throw new Error("expected a completed ready recovery");
+    }
+    await vi.waitFor(() => {
+      expect(restored.createCheckpoint()).toMatchObject({
+        checkpointKind: "action_window",
+      });
+      expect(recovered.createCheckpoint()).toMatchObject({
+        checkpointKind: "action_window",
+      });
+    });
+    expect(recovered.replayFromBuffer(0, 0)).toEqual(
+      restored.replayFromBuffer(0, 0)
+    );
+  });
+
+  it("returns recovery when a pending win reaches result transition", async () => {
+    const repository = createMemoryMatchRepository();
+    const originalRuntime = controlledRuntime(77_000, 1071);
+    const match = new MatchProcess(
+      "checkpoint-win-command-boundary",
+      614,
+      humanPlayers(),
+      { repository, runtime: originalRuntime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    setNextHandDelayMs(5_000);
+    const internals = match as unknown as {
+      state: MatchState;
+      buildDiscardLegals: (seat: 0) => LegalAction[];
+      setSeatLegals: (seat: 0, actions: LegalAction[]) => void;
+    };
+    internals.state.hands[0] = [
+      "1m",
+      "1m",
+      "1m",
+      "1m",
+      "2m",
+      "3m",
+      "2p",
+      "3p",
+      "4p",
+      "2s",
+      "3s",
+      "4s",
+      "2z",
+      "2z",
+    ];
+    internals.state.turn = 0;
+    internals.state.phase = "awaiting_discard";
+    internals.state.lastDrawn = ["2z", null, null, null];
+    internals.state.liveWall = [];
+    internals.setSeatLegals(0, internals.buildDiscardLegals(0));
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const tsumo = checkpoint.actionWindow.legalActions.find(
+      (action) => action.type === "tsumo"
+    );
+    if (!tsumo) {
+      throw new Error("expected a legal tsumo");
+    }
+    await repository.saveCommandTransaction({
+      matchId: match.matchId,
+      checkpoint,
+      command: { type: "act", seat: 0, actionId: tsumo.id },
+    });
+
+    const restoredRuntime = controlledRuntime(1_070_000, 1072);
+    const restored = await MatchProcess.restoreSavedCheckpoint(match.matchId, {
+      repository,
+      runtime: restoredRuntime,
+    });
+    if (!restored) {
+      throw new Error("expected a recovered win command");
+    }
+    const transition = restored.createCheckpoint();
+    if (
+      transition.status !== "playing" ||
+      transition.checkpointKind !== "result_transition"
+    ) {
+      throw new Error("expected recovery at result transition");
+    }
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      checkpoint: { checkpointKind: "result_transition" },
+      pendingCommand: null,
+    });
+
+    restoredRuntime.advance(transition.transitionRemainingMs);
+    restoredRuntime.runNextTimer();
+    await vi.waitFor(() => {
+      expect(restored.createCheckpoint()).toMatchObject({
+        checkpointKind: "ready_check",
+      });
+    });
+    for (const seat of [0, 1, 2, 3] as const) {
+      await restored.handleReady(seat);
+    }
+    await vi.waitFor(() => {
+      expect(restored.createCheckpoint()).toMatchObject({
+        checkpointKind: "action_window",
+      });
+    });
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      checkpoint: {
+        checkpointKind: "ready_check",
+        readyAcked: [true, true, true, true],
+      },
+      pendingCommand: null,
+    });
   });
 
   it("restores a partially-acknowledged post-hand ready check", async () => {
@@ -355,7 +733,7 @@ describe("MatchProcess checkpoints", () => {
         readyContinuation: "next_hand",
       });
     });
-    match.handleReady(0);
+    await match.handleReady(0);
     const checkpoint = match.createCheckpoint();
     if (
       checkpoint.status !== "playing" ||
@@ -370,8 +748,8 @@ describe("MatchProcess checkpoints", () => {
       runtime: restoredRuntime,
     });
     for (const seat of [1, 2, 3] as const) {
-      match.handleReady(seat);
-      restored.handleReady(seat);
+      await match.handleReady(seat);
+      await restored.handleReady(seat);
     }
     await advancing;
     await vi.waitFor(() => {
@@ -458,8 +836,8 @@ describe("MatchProcess checkpoints", () => {
     });
 
     for (const seat of [0, 1, 2, 3] as const) {
-      match.handleReady(seat);
-      restored.handleReady(seat);
+      await match.handleReady(seat);
+      await restored.handleReady(seat);
     }
     await advancing;
     await vi.waitFor(() => {
@@ -479,11 +857,19 @@ describe("MatchProcess checkpoints", () => {
   it("rearms the post-hand reveal after checkpoint save failure", async () => {
     const gate = deferred();
     const capturedCheckpoints: MatchCheckpoint[] = [];
+    const storage = createMemoryMatchRepository();
+    let failNextSave = true;
     const repository: MatchRepository = {
-      ...createMemoryMatchRepository(),
-      saveCheckpoint: async ({ checkpoint }) => {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        const { checkpoint } = args;
         capturedCheckpoints.push(checkpoint);
-        await gate.promise;
+        if (failNextSave) {
+          failNextSave = false;
+          await gate.promise;
+          return;
+        }
+        await storage.saveCheckpoint(args);
       },
     };
     const runtime = controlledRuntime(87_000, 1161);
@@ -543,7 +929,7 @@ describe("MatchProcess checkpoints", () => {
       });
     });
     for (const seat of [0, 1, 2, 3] as const) {
-      match.handleReady(seat);
+      await match.handleReady(seat);
     }
     await advancing;
     expect(match.createCheckpoint()).toMatchObject({
@@ -599,11 +985,19 @@ describe("MatchProcess checkpoints", () => {
   it("rearms a ready continuation after checkpoint save failure", async () => {
     const gate = deferred();
     const capturedCheckpoints: MatchCheckpoint[] = [];
+    const storage = createMemoryMatchRepository();
+    let failNextSave = true;
     const repository: MatchRepository = {
-      ...createMemoryMatchRepository(),
-      saveCheckpoint: async ({ checkpoint }) => {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        const { checkpoint } = args;
         capturedCheckpoints.push(checkpoint);
-        await gate.promise;
+        if (failNextSave) {
+          failNextSave = false;
+          await gate.promise;
+          return;
+        }
+        await storage.saveCheckpoint(args);
       },
     };
     const runtime = controlledRuntime(90_000, 1201);
@@ -633,7 +1027,7 @@ describe("MatchProcess checkpoints", () => {
       throw new Error("expected a captured ready checkpoint");
     }
     expect(match.isPaused).toBe(true);
-    match.handleReady(0);
+    await match.handleReady(0);
     expect(match.createCheckpoint()).toEqual(captured);
     expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
     runtime.advance(30_000);
@@ -643,7 +1037,7 @@ describe("MatchProcess checkpoints", () => {
     expect(match.isPaused).toBe(false);
     expect(runtime.scheduledDelays().at(-1)).toBe(captured.readyRemainingMs);
     for (const seat of [0, 1, 2, 3] as const) {
-      match.handleReady(seat);
+      await match.handleReady(seat);
     }
     await starting;
     expect(match.createCheckpoint()).toMatchObject({

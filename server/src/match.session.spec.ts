@@ -33,6 +33,7 @@ import {
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
 import { parseMatchCheckpoint } from "./checkpoint";
 import {
+  createMemoryMatchRepository,
   ephemeralMatchRepository,
   type MatchRepository,
 } from "./repository";
@@ -102,6 +103,8 @@ interface MatchInternals {
   gameIndex: number;
   players: Map<number, { userId: string; displayName: string; isBot: boolean }>;
   continueVote: Array<"yes" | "no" | null>;
+  commandTransactionPromise: Promise<void> | null;
+  activeCommandTransactionId: number | null;
 }
 
 /**
@@ -276,7 +279,14 @@ describe("MatchProcess — Buu multi-game session", () => {
         ...checkpoint,
         votes: ["no", "yes", "yes", "yes"],
       })
-    ).toThrow(/no vote must resolve immediately/i);
+    ).not.toThrow();
+    expect(() =>
+      parseMatchCheckpoint({
+        ...checkpoint,
+        votes: ["no", "yes", "yes", "yes"],
+        timeoutArmed: true,
+      })
+    ).toThrow(/resolved continue vote cannot retain an armed timeout/i);
     expect(() =>
       parseMatchCheckpoint({
         ...checkpoint,
@@ -291,8 +301,8 @@ describe("MatchProcess — Buu multi-game session", () => {
     });
 
     // Cast the human's yes vote → unanimous → next game starts.
-    m.handleVoteContinue(0, "yes");
-    restored.handleVoteContinue(0, "yes");
+    await m.handleVoteContinue(0, "yes");
+    await restored.handleVoteContinue(0, "yes");
     await done;
     await vi.waitFor(() => {
       expect(
@@ -362,8 +372,8 @@ describe("MatchProcess — Buu multi-game session", () => {
       repository: ephemeralMatchRepository,
     });
 
-    m.handleVoteContinue(0, "no");
-    restored.handleVoteContinue(0, "no");
+    await m.handleVoteContinue(0, "no");
+    await restored.handleVoteContinue(0, "no");
     await done;
     await vi.waitFor(() => {
       expect(restored.status).toBe("finished");
@@ -422,10 +432,14 @@ describe("MatchProcess — Buu multi-game session", () => {
 
   it("Buu vote resumes after checkpoint save failure", async () => {
     setContinueVoteMs(10_000);
+    let failNextSave = true;
     const repository: MatchRepository = {
       ...ephemeralMatchRepository,
       saveCheckpoint: async () => {
-        throw new Error("vote checkpoint write failed");
+        if (failNextSave) {
+          failNextSave = false;
+          throw new Error("vote checkpoint write failed");
+        }
       },
     };
     const m = makeMatch({ seed: 15, buu: true, repository });
@@ -459,13 +473,61 @@ describe("MatchProcess — Buu multi-game session", () => {
     expect(rolledBack.timeoutArmed).toBe(true);
     expect(rolledBack.voteRemainingMs).toBeGreaterThan(0);
 
-    m.handleVoteContinue(0, "no");
+    await m.handleVoteContinue(0, "no");
     await done;
     const sessionEnd = events.find((entry) => entry.event.type === "session_end");
     expect(sessionEnd?.event).toMatchObject({
       type: "session_end",
       reason: "vote_no",
     });
+  });
+
+  it("restores the vote continuation after a failed command handoff", async () => {
+    setContinueVoteMs(10_000);
+    const storage = createMemoryMatchRepository();
+    let saveAttempts = 0;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        saveAttempts += 1;
+        if (saveAttempts === 1) {
+          throw new Error("vote boundary write failed");
+        }
+        await storage.saveCheckpoint(args);
+      },
+    };
+    const m = makeMatch({ seed: 16, buu: true, repository });
+    await m.start();
+    forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
+    const internals = m as unknown as MatchInternals;
+    internals.commandTransactionPromise = new Promise<void>(() => undefined);
+    internals.activeCommandTransactionId = 999;
+
+    await expect(internals.afterHandEnd()).rejects.toThrow(
+      "failed to commit command input boundary"
+    );
+
+    expect(m.isPaused).toBe(true);
+    expect(m.hasPendingCommandCommit).toBe(true);
+    expect(await repository.loadRecoveryRecord(m.matchId)).toBeNull();
+
+    await expect(m.retryPendingCommandCommit()).resolves.toBe(true);
+    expect(saveAttempts).toBe(2);
+    expect(m.createCheckpoint()).toMatchObject({
+      checkpointKind: "continue_vote",
+      votes: [null, "yes", "yes", "yes"],
+    });
+
+    await m.handleVoteContinue(0, "no");
+    await vi.waitFor(() => {
+      expect(m.status).toBe("finished");
+    });
+    expect(await repository.loadRecoveryRecord(m.matchId)).toBeNull();
+    expect(
+      m.replayFromBuffer(0, 0).filter(
+        ({ event }) => event.type === "session_end"
+      )
+    ).toHaveLength(1);
   });
 
   it("restores a partially-completed multi-human continue vote", async () => {
@@ -480,7 +542,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
     const done = (m as unknown as MatchInternals).afterHandEnd();
     await new Promise((r) => setImmediate(r));
-    m.handleVoteContinue(0, "yes");
+    await m.handleVoteContinue(0, "yes");
 
     const checkpoint = m.createCheckpoint();
     if (
@@ -494,8 +556,8 @@ describe("MatchProcess — Buu multi-game session", () => {
       repository: ephemeralMatchRepository,
     });
 
-    m.handleVoteContinue(1, "yes");
-    restored.handleVoteContinue(1, "yes");
+    await m.handleVoteContinue(1, "yes");
+    await restored.handleVoteContinue(1, "yes");
     await done;
     await vi.waitFor(() => {
       expect((restored as unknown as MatchInternals).gameIndex).toBe(1);
@@ -507,6 +569,152 @@ describe("MatchProcess — Buu multi-game session", () => {
     expect((restored as unknown as MatchInternals).sessionChips).toEqual(
       (m as unknown as MatchInternals).sessionChips
     );
+  });
+
+  it("replays a final yes vote and resumes its completed checkpoint", async () => {
+    setContinueVoteMs(10_000);
+    const repository = createMemoryMatchRepository();
+    const m = makeMatch({ seed: 18, buu: true, repository });
+    await m.start();
+    forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
+    void (m as unknown as MatchInternals).afterHandEnd();
+    await new Promise((resolve) => setImmediate(resolve));
+    const checkpoint = m.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "continue_vote"
+    ) {
+      throw new Error("expected a continue-vote checkpoint");
+    }
+    await repository.saveCommandTransaction({
+      matchId: m.matchId,
+      checkpoint,
+      command: { type: "vote_continue", seat: 0, vote: "yes" },
+    });
+
+    const restored = await MatchProcess.restoreSavedCheckpoint(m.matchId, {
+      repository,
+    });
+    if (!restored) {
+      throw new Error("expected a restored vote command");
+    }
+    const completed = await repository.loadRecoveryRecord(m.matchId);
+    expect(completed).toMatchObject({
+      checkpoint: {
+        checkpointKind: "continue_vote",
+        votes: ["yes", "yes", "yes", "yes"],
+        timeoutArmed: false,
+      },
+      pendingCommand: null,
+    });
+
+    const recovered = await MatchProcess.restoreSavedCheckpoint(m.matchId, {
+      repository,
+    });
+    if (!recovered) {
+      throw new Error("expected a completed vote recovery");
+    }
+    await vi.waitFor(() => {
+      expect((restored as unknown as MatchInternals).gameIndex).toBe(1);
+      expect((recovered as unknown as MatchInternals).gameIndex).toBe(1);
+      expect(restored.createCheckpoint()).toMatchObject({
+        checkpointKind: "action_window",
+      });
+      expect(recovered.createCheckpoint()).toMatchObject({
+        checkpointKind: "action_window",
+      });
+    });
+    expect(recovered.replayFromBuffer(0, 0)).toEqual(
+      restored.replayFromBuffer(0, 0)
+    );
+  });
+
+  it("retries a failed vote-command commit with its timeout armed", async () => {
+    setContinueVoteMs(10_000);
+    const storage = createMemoryMatchRepository();
+    let commitAttempts = 0;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        commitAttempts += 1;
+        if (commitAttempts === 1) {
+          throw new Error("vote command commit failed");
+        }
+        await storage.saveCheckpoint(args);
+      },
+    };
+    const m = makeMatch({
+      seed: 181,
+      buu: true,
+      humans: [0, 1],
+      repository,
+    });
+    await m.start();
+    forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
+    const done = (m as unknown as MatchInternals).afterHandEnd();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await expect(m.handleVoteContinue(0, "yes")).rejects.toThrow(
+      "vote command commit failed"
+    );
+
+    expect(m.isPaused).toBe(true);
+    expect(m.hasPendingCommandCommit).toBe(true);
+    expect(await repository.loadRecoveryRecord(m.matchId)).toMatchObject({
+      checkpoint: { votes: [null, null, "yes", "yes"] },
+      pendingCommand: { type: "vote_continue", seat: 0, vote: "yes" },
+    });
+
+    await expect(m.retryPendingCommandCommit()).resolves.toBe(true);
+    const committed = m.createCheckpoint();
+    if (
+      committed.status !== "playing" ||
+      committed.checkpointKind !== "continue_vote"
+    ) {
+      throw new Error("expected a committed continue-vote checkpoint");
+    }
+    expect(committed.votes).toEqual(["yes", null, "yes", "yes"]);
+    expect(committed.timeoutArmed).toBe(true);
+    await m.handleVoteContinue(1, "yes");
+    await done;
+  });
+
+  it("replays a no vote into one terminal session", async () => {
+    setContinueVoteMs(10_000);
+    const repository = createMemoryMatchRepository();
+    const m = makeMatch({ seed: 19, buu: true, repository });
+    await m.start();
+    forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
+    void (m as unknown as MatchInternals).afterHandEnd();
+    await new Promise((resolve) => setImmediate(resolve));
+    const checkpoint = m.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "continue_vote"
+    ) {
+      throw new Error("expected a continue-vote checkpoint");
+    }
+    await repository.saveCommandTransaction({
+      matchId: m.matchId,
+      checkpoint,
+      command: { type: "vote_continue", seat: 0, vote: "no" },
+    });
+
+    const restored = await MatchProcess.restoreSavedCheckpoint(m.matchId, {
+      repository,
+    });
+    if (!restored) {
+      throw new Error("expected a restored no vote");
+    }
+    await vi.waitFor(() => {
+      expect(restored.status).toBe("finished");
+    });
+    expect(await repository.loadRecoveryRecord(m.matchId)).toBeNull();
+    expect(
+      restored
+        .replayFromBuffer(0, 0)
+        .filter(({ event }) => event.type === "session_end")
+    ).toHaveLength(1);
   });
 
   it("Buu next-game: winner becomes seat 0 and carries chips/dabuken", async () => {
@@ -529,7 +737,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     events.length = 0;
     const done = internals.afterHandEnd();
     await new Promise((r) => setImmediate(r));
-    m.handleVoteContinue(0, "yes");
+    await m.handleVoteContinue(0, "yes");
     await done;
 
     // After permutation: new seat 0 = old seat 2 (winner).

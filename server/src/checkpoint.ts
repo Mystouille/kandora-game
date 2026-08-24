@@ -459,13 +459,6 @@ export const PlayingReadyCheckpointSchema = z
         message: `${checkpoint.readyContinuation} ready check requires ${expectedPhase}`,
       });
     }
-    if (checkpoint.readyAcked.every(Boolean)) {
-      context.addIssue({
-        code: "custom",
-        path: ["readyAcked"],
-        message: "Ready checkpoint requires at least one pending human",
-      });
-    }
     checkpoint.seats.forEach((player, seat) => {
       if (player.isBot && !checkpoint.readyAcked[seat]) {
         context.addIssue({
@@ -547,18 +540,14 @@ export const PlayingContinueVoteCheckpointSchema = z
         message: "Continue-vote checkpoint requires match_ended",
       });
     }
-    if (checkpoint.votes.every((vote) => vote !== null)) {
+    const resolutionPending =
+      checkpoint.votes.some((vote) => vote === "no") ||
+      checkpoint.votes.every((vote) => vote === "yes");
+    if (resolutionPending && checkpoint.timeoutArmed) {
       context.addIssue({
         code: "custom",
-        path: ["votes"],
-        message: "Open continue vote requires a pending seat",
-      });
-    }
-    if (checkpoint.votes.some((vote) => vote === "no")) {
-      context.addIssue({
-        code: "custom",
-        path: ["votes"],
-        message: "A no vote must resolve immediately",
+        path: ["timeoutArmed"],
+        message: "Resolved continue vote cannot retain an armed timeout",
       });
     }
     checkpoint.seats.forEach((player, seat) => {

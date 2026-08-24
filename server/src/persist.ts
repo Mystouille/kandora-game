@@ -3,8 +3,8 @@
  *
  * Design:
  *
- *   - **Events remain in RAM; accepted actions are transactional.** Mongo is
- *     not touched per event. Before a client action mutates authority, one
+ *   - **Events remain in RAM; accepted input is transactional.** Mongo is
+ *     not touched per event. Before a supported client command mutates authority, one
  *     record atomically stores its quiescent checkpoint plus the pending
  *     command. The resulting checkpoint atomically replaces that record when
  *     the action finishes. Explicit lifecycle pauses use the same collection.
@@ -63,17 +63,23 @@ export async function createMatchDoc(args: {
   sessionId?: string;
   gameIndex?: number;
 }): Promise<void> {
-  await MatchModel.create({
-    _id: args.matchId,
-    seed: args.seed,
-    players: args.players,
-    status: "playing",
-    startedAt: new Date(),
-    events: [],
-    nextSeq: 0,
-    ...(args.sessionId ? { sessionId: args.sessionId } : {}),
-    ...(args.gameIndex !== undefined ? { gameIndex: args.gameIndex } : {}),
-  });
+  await MatchModel.updateOne(
+    { _id: args.matchId },
+    {
+      $setOnInsert: {
+        _id: args.matchId,
+        seed: args.seed,
+        players: args.players,
+        status: "playing",
+        startedAt: new Date(),
+        events: [],
+        nextSeq: 0,
+        ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+        ...(args.gameIndex !== undefined ? { gameIndex: args.gameIndex } : {}),
+      },
+    },
+    { upsert: true }
+  );
 }
 
 /**
