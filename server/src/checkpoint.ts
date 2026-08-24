@@ -476,11 +476,107 @@ export const PlayingReadyCheckpointSchema = z
 export type PlayingReadyCheckpoint = z.infer<
   typeof PlayingReadyCheckpointSchema
 >;
+
+const FinalScoreSchema = z
+  .object({
+    seat: SeatSchema,
+    score: z.number().int(),
+    place: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  })
+  .strict();
+
+export const PlayingContinueVoteCheckpointSchema = z
+  .object({
+    ...PlayingCheckpointBaseShape,
+    checkpointKind: z.literal("continue_vote"),
+    votes: z.tuple([
+      z.enum(["yes", "no"]).nullable(),
+      z.enum(["yes", "no"]).nullable(),
+      z.enum(["yes", "no"]).nullable(),
+      z.enum(["yes", "no"]).nullable(),
+    ]),
+    voteRemainingMs: z.number().int().nonnegative(),
+    timeoutArmed: z.boolean(),
+    finalScores: z.tuple([
+      FinalScoreSchema,
+      FinalScoreSchema,
+      FinalScoreSchema,
+      FinalScoreSchema,
+    ]),
+  })
+  .strict()
+  .superRefine((checkpoint, context) => {
+    if (!checkpoint.state.ruleSet.buuMode) {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "ruleSet", "buuMode"],
+        message: "Continue-vote checkpoint requires Buu mode",
+      });
+    }
+    if (checkpoint.state.phase !== "match_ended") {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "phase"],
+        message: "Continue-vote checkpoint requires match_ended",
+      });
+    }
+    if (checkpoint.votes.every((vote) => vote !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["votes"],
+        message: "Open continue vote requires a pending seat",
+      });
+    }
+    if (checkpoint.votes.some((vote) => vote === "no")) {
+      context.addIssue({
+        code: "custom",
+        path: ["votes"],
+        message: "A no vote must resolve immediately",
+      });
+    }
+    checkpoint.seats.forEach((player, seat) => {
+      if (player.isBot && checkpoint.votes[seat] !== "yes") {
+        context.addIssue({
+          code: "custom",
+          path: ["votes", seat],
+          message: "Bot seats must pre-vote yes",
+        });
+      }
+    });
+    const seats = new Set(checkpoint.finalScores.map((score) => score.seat));
+    const places = new Set(checkpoint.finalScores.map((score) => score.place));
+    if (seats.size !== 4 || places.size !== 4) {
+      context.addIssue({
+        code: "custom",
+        path: ["finalScores"],
+        message: "Final standings must contain every seat and place once",
+      });
+    }
+    if (checkpoint.gameStartLogIdx > checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["gameStartLogIdx"],
+        message: "Game log start cannot exceed the event log length",
+      });
+    }
+    if (checkpoint.nextSeq !== checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextSeq"],
+        message: "Next sequence must equal the contiguous event log length",
+      });
+    }
+  });
+
+export type PlayingContinueVoteCheckpoint = z.infer<
+  typeof PlayingContinueVoteCheckpointSchema
+>;
 export const MatchCheckpointSchema = z.union([
   WaitingRoomCheckpointSchema,
   PlayingActionCheckpointSchema,
   PlayingCallCheckpointSchema,
   PlayingReadyCheckpointSchema,
+  PlayingContinueVoteCheckpointSchema,
 ]);
 export type MatchCheckpoint = z.infer<typeof MatchCheckpointSchema>;
 

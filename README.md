@@ -95,20 +95,21 @@ consumes the same `PortalAdapter`.
 ## Checkpoints
 
 `MatchProcess.createCheckpoint()` and `MatchProcess.restoreCheckpoint()`
-support `waiting` rooms and three quiescent in-progress boundaries: a human
+support `waiting` rooms and four quiescent in-progress boundaries: a human
 discard/action window; one or more call decisions after a discard/shouminkan;
-or an initial/post-hand ready check. The versioned schema stores exact rules,
-occupants, private engine state, event/sequence state, PRNG state, session
-ledgers, captured human/bot call intents, ready acknowledgements/continuation,
-and every remaining deadline duration. Wall-clock timestamps are restored
-relative to the new runtime so time spent suspended does not consume any
-seat's clock.
+an initial/post-hand ready check; or a Buu continue vote after a completed game.
+The versioned schema stores exact rules, occupants, private engine state,
+event/sequence state, PRNG state, session ledgers, captured human/bot call
+intents, ready/vote state and continuations, final standings needed for Buu
+reseating, and every remaining deadline duration. Wall-clock timestamps are
+restored relative to the new runtime so time spent suspended does not consume
+any seat's clock.
 
 Sockets and liveness probes are process-local and are never serialized; restored
 players reconnect through the normal claim/attach flow. Result transitions,
-Buu continue votes, the internal win→chombo display pause, relays, delayed
-spectators, and disconnect/AFK policy state still fail checkpoint creation
-explicitly rather than producing a partial recovery record.
+the internal win→chombo display pause, relays, delayed spectators, and
+disconnect/AFK policy state still fail checkpoint creation explicitly rather
+than producing a partial recovery record.
 
 `pauseAndSaveCheckpoint()` freezes mutation and cancels the active action timer
 before awaiting `MatchRepository.saveCheckpoint()`. Concurrent pause calls share

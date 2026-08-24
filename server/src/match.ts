@@ -59,12 +59,14 @@ import {
   MATCH_CHECKPOINT_SCHEMA_VERSION,
   PlayingActionCheckpointSchema,
   PlayingCallCheckpointSchema,
+  PlayingContinueVoteCheckpointSchema,
   PlayingReadyCheckpointSchema,
   WaitingRoomCheckpointSchema,
   parseMatchCheckpoint,
   type MatchCheckpoint,
   type PlayingActionCheckpoint,
   type PlayingCallCheckpoint,
+  type PlayingContinueVoteCheckpoint,
   type PlayingReadyCheckpoint,
   type WaitingRoomCheckpoint,
 } from "./checkpoint";
@@ -84,6 +86,12 @@ export interface MatchPlayerInit {
   displayName: string;
   isBot: boolean;
 }
+
+type FinalScore = {
+  seat: Seat;
+  score: number;
+  place: 1 | 2 | 3 | 4;
+};
 
 export interface MatchProcessDependencies {
   repository: MatchRepository;
@@ -949,6 +957,7 @@ export class MatchProcess {
   private continueVoteDeadline: number | null = null;
   private continueVoteTimer: MatchTimer | null = null;
   private continueVoteResolve: ((cont: boolean) => void) | null = null;
+  private continueVoteFinalScores: FinalScore[] | null = null;
   /**
    * Reason recorded for the most recent vote resolution. Drives
    * the eventual `session_end.reason`. Reset on every
@@ -1080,6 +1089,9 @@ export class MatchProcess {
       return this.createWaitingRoomCheckpoint();
     }
     if (this.statusValue === "playing") {
+      if (this.continueVoteResolve !== null) {
+        return this.createPlayingContinueVoteCheckpoint();
+      }
       if (this.readyResolve !== null) {
         return this.createPlayingReadyCheckpoint();
       }
@@ -1110,7 +1122,10 @@ export class MatchProcess {
     const checkpoint = this.createCheckpoint();
     this.pausedCheckpoint = checkpoint;
     if (checkpoint.status === "playing") {
-      if (checkpoint.checkpointKind === "ready_check") {
+      if (checkpoint.checkpointKind === "continue_vote") {
+        this.continueVoteTimer?.cancel();
+        this.continueVoteTimer = null;
+      } else if (checkpoint.checkpointKind === "ready_check") {
         this.readyTimer?.cancel();
         this.readyTimer = null;
       } else {
@@ -1148,8 +1163,10 @@ export class MatchProcess {
           this.installCheckpointActionWindow(checkpoint);
         } else if (checkpoint.checkpointKind === "call_window") {
           this.installCheckpointCallWindows(checkpoint);
-        } else {
+        } else if (checkpoint.checkpointKind === "ready_check") {
           this.installCheckpointReadyCheck(checkpoint, false);
+        } else {
+          this.installCheckpointContinueVote(checkpoint, false);
         }
       }
       throw error;
@@ -1235,11 +1252,17 @@ export class MatchProcess {
     );
   }
 
-  private assertCommonPlayingCheckpointState(allowReady = false): void {
+  private assertCommonPlayingCheckpointState(
+    allowReady = false,
+    allowVote = false
+  ): void {
     if (this.relayMode) {
       this.checkpointUnsupported("relay match");
     }
-    if (this.continueVoteResolve !== null || this.continueVoteTimer !== null) {
+    if (
+      !allowVote &&
+      (this.continueVoteResolve !== null || this.continueVoteTimer !== null)
+    ) {
       this.checkpointUnsupported("vote continuation");
     }
     if (
@@ -1263,7 +1286,7 @@ export class MatchProcess {
     }
     if (
       this.pendingWinRevealMs !== 0 ||
-      this.finalized ||
+      (!allowVote && this.finalized) ||
       this.sessionFinalized
     ) {
       this.checkpointUnsupported("result or finalization work");
@@ -1464,6 +1487,35 @@ export class MatchProcess {
     });
   }
 
+  private createPlayingContinueVoteCheckpoint(): PlayingContinueVoteCheckpoint {
+    this.assertCommonPlayingCheckpointState(false, true);
+    if (
+      this.continueVoteResolve === null ||
+      this.continueVoteDeadline === null ||
+      this.continueVoteFinalScores === null
+    ) {
+      this.checkpointUnsupported("continue vote is incomplete");
+    }
+    if (
+      this.readyResolve !== null ||
+      this.readyTimer !== null ||
+      this.callWindow.some((window) => window !== null) ||
+      this.legalActions.some((actions) => actions.length > 0) ||
+      this.currentDeadlineTimer.some((timer) => timer !== null)
+    ) {
+      this.checkpointUnsupported("continue vote retains action state");
+    }
+    const savedAt = this.runtime.now();
+    return PlayingContinueVoteCheckpointSchema.parse({
+      ...this.playingCheckpointBase(savedAt),
+      checkpointKind: "continue_vote",
+      votes: [...this.continueVote],
+      voteRemainingMs: Math.max(0, this.continueVoteDeadline - savedAt),
+      timeoutArmed: this.continueVoteTimer !== null,
+      finalScores: this.continueVoteFinalScores,
+    });
+  }
+
   /** Restore validated state with every network attachment detached. */
   static restoreCheckpoint(
     input: unknown,
@@ -1529,8 +1581,10 @@ export class MatchProcess {
       match.installCheckpointActionWindow(checkpoint);
     } else if (checkpoint.checkpointKind === "call_window") {
       match.installCheckpointCallWindows(checkpoint);
-    } else {
+    } else if (checkpoint.checkpointKind === "ready_check") {
       match.installCheckpointReadyCheck(checkpoint, true);
+    } else {
+      match.installCheckpointContinueVote(checkpoint, true);
     }
     return match;
   }
@@ -1670,6 +1724,42 @@ export class MatchProcess {
     } else {
       await this.beginNextHandAfterReady();
     }
+  }
+
+  private installCheckpointContinueVote(
+    checkpoint: PlayingContinueVoteCheckpoint,
+    restored: boolean
+  ): void {
+    const finalScores = checkpoint.finalScores.map((score) => ({ ...score }));
+    this.continueVote = [...checkpoint.votes];
+    this.continueVoteDeadline =
+      this.runtime.now() + checkpoint.voteRemainingMs;
+    this.continueVoteFinalScores = finalScores;
+    this.lastVoteReason = null;
+    this.finalized = true;
+    if (restored) {
+      this.continueVoteResolve = (cont) => {
+        void this.continueAfterVote(cont, finalScores);
+      };
+    } else if (this.continueVoteResolve === null) {
+      throw new Error(
+        "MatchProcess.installCheckpointContinueVote: missing live continuation"
+      );
+    }
+    this.continueVoteTimer?.cancel();
+    this.continueVoteTimer = checkpoint.timeoutArmed
+      ? this.runtime.schedule(
+          () => {
+            if (this.isPaused) {
+              return;
+            }
+            this.lastVoteReason = "vote_timeout";
+            this.finishContinueVote(false);
+          },
+          checkpoint.voteRemainingMs,
+          { unref: true }
+        )
+      : null;
   }
 
   // -------------------------------------------------------------------------
@@ -4461,12 +4551,8 @@ export class MatchProcess {
       if (MATCH_END_DISPLAY_MS > 0) {
         await this.runtime.sleep(MATCH_END_DISPLAY_MS);
       }
-      const cont = await this.runContinueVote();
-      if (cont) {
-        await this.startNextGame(finalScores);
-        return;
-      }
-      await this.finalizeSession(this.lastVoteReason ?? "vote_no");
+      const cont = await this.runContinueVote(finalScores);
+      await this.continueAfterVote(cont, finalScores);
       return;
     }
     await this.finalizeSession(
@@ -4539,9 +4625,10 @@ export class MatchProcess {
    * disconnected humans are auto-no. Resolves true to continue,
    * false to end.
    */
-  private async runContinueVote(): Promise<boolean> {
+  private async runContinueVote(finalScores: FinalScore[]): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       this.continueVote = [null, null, null, null];
+      this.continueVoteFinalScores = finalScores.map((score) => ({ ...score }));
       this.lastVoteReason = null;
       for (let s = 0; s < 4; s++) {
         const p = this.players.get(s as Seat);
@@ -4634,6 +4721,9 @@ export class MatchProcess {
   }
 
   private finishContinueVote(cont: boolean): void {
+    if (this.isPaused) {
+      return;
+    }
     if (this.continueVoteTimer) {
       this.continueVoteTimer.cancel();
       this.continueVoteTimer = null;
@@ -4641,9 +4731,21 @@ export class MatchProcess {
     const resolve = this.continueVoteResolve;
     this.continueVoteResolve = null;
     this.continueVoteDeadline = null;
+    this.continueVoteFinalScores = null;
     if (resolve) {
       resolve(cont);
     }
+  }
+
+  private async continueAfterVote(
+    cont: boolean,
+    finalScores: FinalScore[]
+  ): Promise<void> {
+    if (cont) {
+      await this.startNextGame(finalScores);
+      return;
+    }
+    await this.finalizeSession(this.lastVoteReason ?? "vote_no");
   }
 
   /**
@@ -4655,7 +4757,7 @@ export class MatchProcess {
    * starting value.
    */
   private async startNextGame(
-    finalScores: Array<{ seat: Seat; score: number; place: 1 | 2 | 3 | 4 }>
+    finalScores: FinalScore[]
   ): Promise<void> {
     const winnerEntry = finalScores.find((f) => f.place === 1);
     if (!winnerEntry) {
