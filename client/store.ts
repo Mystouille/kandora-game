@@ -270,6 +270,8 @@ export interface MatchView {
    */
   lastHandResult: null | {
     reason: "exhaustive_draw" | "ron" | "tsumo" | "abort";
+    /** Dealer for the completed hand. Optional for legacy replay data. */
+    dealer?: Seat;
     abortKind?: "kyuushuu" | "suufon_renda" | "suucha_riichi" | "sanchahou";
     delta?: number[];
     tenpai?: boolean[];
@@ -951,7 +953,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
           return {
             ...next,
             lastHandResult: existing
-              ? { ...existing, wins }
+              ? {
+                  ...existing,
+                  dealer: existing.dealer ?? state.dealer,
+                  wins,
+                }
               : {
                   // Derive the win reason from `loser`: a ron win
                   // names the discarder, a tsumo win has none. The
@@ -959,6 +965,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
                   // authoritative reason, but until then we must
                   // not mislabel a ron as a tsumo.
                   reason: win.loser !== null ? "ron" : "tsumo",
+                  dealer: state.dealer,
                   wins,
                 },
           };
@@ -996,6 +1003,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ],
             lastHandResult: {
               reason: event.reason,
+              dealer: state.dealer,
               ...(event.abortKind ? { abortKind: event.abortKind } : {}),
               ...(event.delta ? { delta: [...event.delta] } : {}),
               ...(event.tenpai ? { tenpai: [...event.tenpai] } : {}),
@@ -1254,6 +1262,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             chips: [...event.chips] as [number, number, number, number],
             lastHandResult: {
               ...(existing ?? { reason: "abort" as const }),
+              dealer: existing?.dealer ?? state.dealer,
               buuChombo: {
                 seat: event.seat,
                 reason: event.reason,

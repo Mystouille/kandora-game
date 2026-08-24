@@ -7,6 +7,7 @@ import {
   canInteractWithFocusedHand,
   darkenTileTint,
   formatTableScore,
+  handResultDealerSeat,
   pointInsideRect,
   resolveSeatHandPresentation,
   riichiSelectionTileTint,
@@ -18,6 +19,21 @@ import {
   topmostHandHoverTargetIndex,
   winResultRevealKey,
 } from "./TableRenderer";
+
+describe("handResultDealerSeat", () => {
+  it("uses the completed hand dealer instead of the current dealer", () => {
+    expect(
+      handResultDealerSeat(
+        { reason: "ron", dealer: 2 },
+        1
+      )
+    ).toBe(2);
+  });
+
+  it("falls back for legacy results without a stored dealer", () => {
+    expect(handResultDealerSeat({ reason: "ron" }, 1)).toBe(1);
+  });
+});
 
 type ReplayTurnView = Pick<
   MatchView,

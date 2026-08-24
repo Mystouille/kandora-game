@@ -346,6 +346,13 @@ export function shouldStageWinReveal(
   return stagedRevealEnabled && !hasHandResultOverride;
 }
 
+export function handResultDealerSeat(
+  result: NonNullable<MatchView["lastHandResult"]>,
+  currentDealer: Seat
+): Seat {
+  return result.dealer ?? currentDealer;
+}
+
 export function shouldRevealWinScoreSummary(
   stageReveal: boolean,
   revealElapsedMs: number,
@@ -4417,10 +4424,11 @@ export class TableRenderer {
       // seat 3 (left): flush against inner left edge
       { x: inner.x + margin, y: cyInner, anchor: "w" },
     ];
+    const resultDealer = handResultDealerSeat(r, view.dealer);
     for (let seat = 0; seat < 4; seat++) {
       const pos = positions[seat];
       const name = view.seatNames?.[seat] || `Player ${seat + 1}`;
-      const isDealer = view.dealer === seat;
+      const isDealer = resultDealer === seat;
       const delta = r.delta[seat] ?? 0;
       const before = (view.scores[seat] ?? 0) - delta;
       this.drawScoreBox(

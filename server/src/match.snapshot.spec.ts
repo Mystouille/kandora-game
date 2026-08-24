@@ -136,6 +136,17 @@ describe("snapshot hydration", () => {
     expect(view.scores).toEqual([27000, 24000, 24000, 25000]);
   });
 
+  it("captures the completed hand dealer in the live result", () => {
+    useMatchStore.setState({ dealer: 3 });
+
+    useMatchStore.getState().applyEvent(
+      { type: "hand_end", reason: "exhaustive_draw" },
+      1
+    );
+
+    expect(useMatchStore.getState().lastHandResult?.dealer).toBe(3);
+  });
+
   it("snapshot includes furiten with only the recipient's own slot populated", async () => {
     const m = makeMatch(1);
     m.attachHuman(0, () => undefined);

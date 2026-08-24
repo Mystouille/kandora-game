@@ -136,6 +136,8 @@ export interface ReplayView {
    * optimistic-discard concerns. */
   lastHandResult: null | {
     reason: "exhaustive_draw" | "ron" | "tsumo" | "abort";
+    /** Dealer for the completed hand. Optional for legacy replay data. */
+    dealer?: Seat;
     abortKind?: "kyuushuu" | "suufon_renda" | "suucha_riichi" | "sanchahou";
     delta?: number[];
     tenpai?: boolean[];
@@ -637,6 +639,7 @@ export function applyReplayEvent(
         lastHandResult: existing
           ? {
               ...existing,
+              dealer: existing.dealer ?? view.dealer,
               wins: existing.wins ? [...existing.wins, win] : [win],
             }
           : {
@@ -645,6 +648,7 @@ export function applyReplayEvent(
               // both). Derive the reason from `loser`: a ron win
               // names the discarder, a tsumo win has none.
               reason: win.loser !== null ? "ron" : "tsumo",
+              dealer: view.dealer,
               wins: [win],
             },
       };
@@ -701,6 +705,7 @@ export function applyReplayEvent(
         riichiSticks: event.riichiSticks ?? view.riichiSticks,
         lastHandResult: {
           reason: event.reason,
+          dealer: view.dealer,
           ...(event.abortKind ? { abortKind: event.abortKind } : {}),
           ...(event.delta ? { delta: [...event.delta] } : {}),
           ...(event.tenpai ? { tenpai: [...event.tenpai] } : {}),
@@ -787,6 +792,7 @@ export function applyReplayEvent(
         chips: [...event.chips] as [number, number, number, number],
         lastHandResult: {
           ...(existing ?? { reason: "abort" as const }),
+          dealer: existing?.dealer ?? view.dealer,
           buuChombo: {
             seat: event.seat,
             reason: event.reason,
@@ -964,6 +970,7 @@ export function rotateHandResult(
   ];
   return {
     ...result,
+    dealer: result.dealer != null ? rot(result.dealer) : result.dealer,
     delta: result.delta ? perm4(result.delta) : result.delta,
     tenpai: result.tenpai ? perm4(result.tenpai) : result.tenpai,
     nagashi: result.nagashi ? perm4(result.nagashi) : result.nagashi,

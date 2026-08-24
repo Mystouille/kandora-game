@@ -115,6 +115,7 @@ describe("rotateHandResult", () => {
   it("rotates score transfers and winner seats into the viewer's frame", () => {
     const result: NonNullable<MatchView["lastHandResult"]> = {
       reason: "ron",
+      dealer: 2,
       delta: [8000, -8000, 0, 0],
       scores: [33000, 17000, 25000, 25000],
       wins: [
@@ -140,6 +141,7 @@ describe("rotateHandResult", () => {
 
     expect(rotated.delta).toEqual([-8000, 0, 0, 8000]);
     expect(rotated.scores).toEqual([17000, 25000, 25000, 33000]);
+    expect(rotated.dealer).toBe(1);
     expect(rotated.wins).toEqual([
       {
         seat: 3,
@@ -294,7 +296,7 @@ describe("replayReducer", () => {
       {
         type: "hand_start",
         round: 0,
-        dealer: 0,
+        dealer: 3,
         roundWind: "E",
         roundNumber: 1,
         startingHands: STARTING,
@@ -306,6 +308,7 @@ describe("replayReducer", () => {
     const view = replayReducer(makeLog(events), 3);
     expect(view.lastHandResult?.reason).toBe("abort");
     expect(view.lastHandResult?.abortKind).toBe("kyuushuu");
+    expect(view.lastHandResult?.dealer).toBe(3);
     const revealed = view.lastHandResult?.tenpaiHands;
     expect(revealed).toBeDefined();
     expect(revealed?.[2]).toEqual([...STARTING[2], "1m"]);
