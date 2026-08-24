@@ -48,8 +48,10 @@ import {
   type ReplaySeat,
 } from "~/game/replay/types";
 import { generateTenhouWalls, type TenhouWall } from "./wallGenerator";
-import { tenhouYakuIdToHan } from "~/core/yaku/platformYakuMaps";
-import { hanRomaji } from "~/core/i18n/hanRomaji";
+import {
+  tenhouYakuIdToLegacyHan,
+  tenhouYakuIdToRomaji,
+} from "~/game/rules";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 
 // ---------------------------------------------------------------------------
@@ -543,11 +545,11 @@ export function parseTenhouReplayElements(
         } else if (yakuId === 54) {
           akaDoraCount += han;
         }
-        const mapped = tenhouYakuIdToHan(yakuId);
+        const mapped = tenhouYakuIdToLegacyHan(yakuId);
         if (mapped !== undefined) {
           yakuHan.push(mapped);
         }
-        const display = hanRomaji(tenhouYakuIdToHan(yakuId)) ?? `y${yakuId}`;
+        const display = tenhouYakuIdToRomaji(yakuId) ?? `y${yakuId}`;
         yaku[display] = `${han}飜`;
       }
       let yakumanCount = 0;
@@ -563,10 +565,9 @@ export function parseTenhouReplayElements(
         // 26, …) so the existing display continues to render a
         // non-zero leading number.
         for (const yakumanId of yakumanIds) {
-          const display =
-            hanRomaji(tenhouYakuIdToHan(yakumanId)) ?? `y${yakumanId}`;
+          const display = tenhouYakuIdToRomaji(yakumanId) ?? `y${yakumanId}`;
           yaku[display] = "役満";
-          const mapped = tenhouYakuIdToHan(yakumanId);
+          const mapped = tenhouYakuIdToLegacyHan(yakumanId);
           if (mapped !== undefined) {
             yakuHan.push(mapped);
           }

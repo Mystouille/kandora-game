@@ -7,19 +7,30 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("./persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: vi.fn(async () => undefined),
-  archiveReplayLog: vi.fn(async () => undefined),
-}));
-
 import { MatchProcess } from "./match";
-import { archiveReplayLog } from "./persist";
+import {
+  ephemeralMatchRepository,
+  type MatchRepository,
+} from "./repository";
 import {
   GameEventSchema,
   type GameEvent,
   type ServerMessage,
 } from "~/game/protocol/messages";
+
+const archiveReplayLogMock = vi.fn(
+  async (
+    _args: Parameters<MatchRepository["archiveReplayLog"]>[0]
+  ): Promise<void> => undefined
+);
+const recordingRepository: MatchRepository = {
+  createMatch: async () => undefined,
+  archiveMatch: async () => undefined,
+  archiveReplayLog: archiveReplayLogMock,
+  saveCheckpoint: async () => undefined,
+  loadCheckpoint: async () => null,
+  deleteCheckpoint: async () => undefined,
+};
 
 function relayEvents(): GameEvent[] {
   return [
@@ -89,6 +100,7 @@ describe("MatchProcess relay", () => {
     const match = MatchProcess.createRelayMatch(
       "relay-1",
       "0E342071",
+      { repository: ephemeralMatchRepository },
       "tenhou"
     );
     expect(match.isRelay).toBe(true);
@@ -99,6 +111,7 @@ describe("MatchProcess relay", () => {
     const match = MatchProcess.createRelayMatch(
       "relay-2",
       "0E342071",
+      { repository: ephemeralMatchRepository },
       "tenhou"
     );
     const spec = makeSpectator();
@@ -121,6 +134,7 @@ describe("MatchProcess relay", () => {
     const match = MatchProcess.createRelayMatch(
       "relay-room-state",
       "0E342071",
+      { repository: ephemeralMatchRepository },
       "tenhou"
     );
     match.injectRelayEvent(relayEvents()[0]);
@@ -135,7 +149,11 @@ describe("MatchProcess relay", () => {
   });
 
   it("catches a late spectator up from the buffer", () => {
-    const match = MatchProcess.createRelayMatch("relay-3", "0E342071");
+    const match = MatchProcess.createRelayMatch(
+      "relay-3",
+      "0E342071",
+      { repository: ephemeralMatchRepository }
+    );
     for (const event of relayEvents()) {
       match.injectRelayEvent(event);
     }
@@ -149,6 +167,7 @@ describe("MatchProcess relay", () => {
     const match = MatchProcess.createRelayMatch(
       "relay-4",
       "0E342071",
+      { repository: recordingRepository },
       "tenhou"
     );
     for (const event of relayEvents()) {
@@ -157,8 +176,8 @@ describe("MatchProcess relay", () => {
     await match.closeRelay();
 
     expect(match.status).toBe("finished");
-    expect(archiveReplayLog).toHaveBeenCalledTimes(1);
-    const arg = vi.mocked(archiveReplayLog).mock.calls[0][0];
+    expect(archiveReplayLogMock).toHaveBeenCalledTimes(1);
+    const arg = archiveReplayLogMock.mock.calls[0][0];
     expect(arg.source).toBe("tenhou");
     expect(arg.sourceGameId).toBe("0E342071");
     expect(arg.events).toHaveLength(relayEvents().length);
@@ -167,7 +186,11 @@ describe("MatchProcess relay", () => {
   });
 
   it("ignores injections after close", async () => {
-    const match = MatchProcess.createRelayMatch("relay-5", "g");
+    const match = MatchProcess.createRelayMatch(
+      "relay-5",
+      "g",
+      { repository: ephemeralMatchRepository }
+    );
     match.injectRelayEvent(relayEvents()[0]);
     await match.closeRelay();
     const before = match.replaySpectatorBuffer(0).length;

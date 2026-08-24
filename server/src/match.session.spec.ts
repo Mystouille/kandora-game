@@ -22,11 +22,6 @@ const { createMatchDocMock, archiveMatchMock, archiveReplayLogMock } =
     archiveMatchMock: vi.fn(async () => undefined),
     archiveReplayLogMock: vi.fn(async () => undefined),
   }));
-vi.mock("./persist", () => ({
-  createMatchDoc: createMatchDocMock,
-  archiveMatch: archiveMatchMock,
-  archiveReplayLog: archiveReplayLogMock,
-}));
 
 import {
   MatchProcess,
@@ -36,6 +31,16 @@ import {
   setMatchEndDisplayMs,
 } from "./match";
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
+import type { MatchRepository } from "./repository";
+
+const recordingRepository: MatchRepository = {
+  createMatch: createMatchDocMock,
+  archiveMatch: archiveMatchMock,
+  archiveReplayLog: archiveReplayLogMock,
+  saveCheckpoint: async () => undefined,
+  loadCheckpoint: async () => null,
+  deleteCheckpoint: async () => undefined,
+};
 
 interface CapturedEvent {
   seq: number;
@@ -136,6 +141,7 @@ function makeMatch(opts: {
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
     seed,
     players,
+    { repository: recordingRepository },
     undefined,
     opts.buu
       ? {

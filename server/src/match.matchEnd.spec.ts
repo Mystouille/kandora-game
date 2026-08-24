@@ -20,11 +20,6 @@ const { archiveMatchMock, archiveReplayLogMock } = vi.hoisted(() => ({
   archiveMatchMock: vi.fn(async () => undefined),
   archiveReplayLogMock: vi.fn(async () => undefined),
 }));
-vi.mock("./persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: archiveMatchMock,
-  archiveReplayLog: archiveReplayLogMock,
-}));
 
 import {
   MatchProcess,
@@ -35,6 +30,16 @@ import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
 import { REPLAY_LOG_SCHEMA_VERSION } from "~/game/replay/types";
 import type { ReplayLog } from "~/game/replay/types";
 import { replayReducer } from "~/game/replay/player";
+import type { MatchRepository } from "./repository";
+
+const recordingRepository: MatchRepository = {
+  createMatch: async () => undefined,
+  archiveMatch: archiveMatchMock,
+  archiveReplayLog: archiveReplayLogMock,
+  saveCheckpoint: async () => undefined,
+  loadCheckpoint: async () => null,
+  deleteCheckpoint: async () => undefined,
+};
 
 interface CapturedEvent {
   seq: number;
@@ -65,7 +70,11 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u1", displayName: "Bot1", isBot: true },
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
-    ]
+    ],
+    { repository: recordingRepository },
+    undefined,
+    undefined,
+    "tenhou-hanchan"
   );
 }
 

@@ -22,7 +22,7 @@ export type {
   HandResult,
   Meld,
 } from "./state";
-export { createInitialState } from "./state";
+export { createInitialState, MatchStateSchema } from "./state";
 
 export type {
   Action,
@@ -76,6 +76,7 @@ export { buildRiichiInput, indicatorToDora, scoreHand } from "./score";
 export type { RuleSet, RuleSetOverride } from "./ruleSet";
 export {
   DEFAULT_RULE_SET,
+  RuleSetSchema,
   TONPUU_RULE_SET,
   isAkaDisabled,
   resolveRuleSet,
@@ -98,6 +99,15 @@ export {
   evaluateBuuEndOfGameChips,
   evaluateBuuHandEnd,
 } from "./buu";
+
+export {
+  RIICHI_LIB_YAKU_KANJI_BY_ROMAJI,
+  RIICHI_LIB_YAKU_ROMAJI,
+  TENHOU_YAKU,
+  riichiLibYakuToRomaji,
+  tenhouYakuIdToLegacyHan,
+  tenhouYakuIdToRomaji,
+} from "./yakuNames";
 
 export type { CallOption, SeatCallOptions } from "./calls";
 export { enumerateCalls } from "./calls";

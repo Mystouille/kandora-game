@@ -13,6 +13,10 @@
 export interface PRNG {
   /** Next uniform float in [0, 1). */
   next(): number;
+  /** Current unsigned 32-bit stream state. */
+  getState(): number;
+  /** Restore a previously captured unsigned 32-bit stream state. */
+  setState(state: number): void;
   /** Next integer in [0, max). */
   nextInt(max: number): number;
   /** Fisher-Yates in place. */
@@ -30,6 +34,12 @@ export function createPRNG(seed: number): PRNG {
   };
   return {
     next,
+    getState(): number {
+      return a;
+    },
+    setState(state: number): void {
+      a = state >>> 0;
+    },
     nextInt(max: number): number {
       return Math.floor(next() * max);
     },

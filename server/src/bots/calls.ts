@@ -103,6 +103,9 @@ export function chooseBotSelfKan(
   if (state.phase !== "awaiting_discard") {
     return null;
   }
+  if (state.liveWall.length === 0) {
+    return null;
+  }
   // Kan is only legal immediately after a draw (live wall or
   // rinshan), never after a chi/pon. The engine enforces this;
   // skip surfacing kan to the bot to avoid a rejected action.

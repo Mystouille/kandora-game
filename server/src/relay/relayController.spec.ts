@@ -4,13 +4,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: vi.fn(async () => undefined),
-  archiveReplayLog: vi.fn(async () => undefined),
-}));
-
 import { MatchProcess } from "../match";
+import { ephemeralMatchRepository } from "../repository";
 import { RelayController, RelayCapacityError } from "./relayController";
 import type {
   TenhouClientFactory,
@@ -46,6 +41,7 @@ function harness(idleGraceMs = 1000) {
     matches,
     closeSpectators: (matchId) => closedSpectators.push(matchId),
     createClient: factory,
+    repository: ephemeralMatchRepository,
     idleGraceMs,
   });
   const lastClient = (): FakeClient => {
@@ -165,6 +161,7 @@ describe("RelayController", () => {
       matches,
       closeSpectators: () => undefined,
       createClient: (watchId, handlers) => new FakeClient(watchId, handlers),
+      repository: ephemeralMatchRepository,
       maxConcurrent: 2,
     });
     controller.start("W-A");

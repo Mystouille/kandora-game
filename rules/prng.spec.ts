@@ -28,6 +28,18 @@ describe("createPRNG", () => {
     expect([...out].sort((a, b) => a - b)).toEqual(original);
   });
 
+  it("continues the exact stream after restoring captured state", () => {
+    const original = createPRNG(91);
+    original.next();
+    original.next();
+    const state = original.getState();
+    const expected = Array.from({ length: 5 }, () => original.next());
+
+    const restored = createPRNG(0);
+    restored.setState(state);
+    expect(Array.from({ length: 5 }, () => restored.next())).toEqual(expected);
+  });
+
   it("nextInt stays in [0, max)", () => {
     const rng = createPRNG(123);
     for (let i = 0; i < 1000; i++) {

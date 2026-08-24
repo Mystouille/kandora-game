@@ -1,12 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("./persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: vi.fn(async () => undefined),
-  archiveReplayLog: vi.fn(async () => undefined),
-}));
+import { describe, expect, it } from "vitest";
 
 import { MatchProcess } from "./match";
+import { ephemeralMatchRepository } from "./repository";
 import type { LegalAction, Tile } from "~/game/protocol/messages";
 import { createInitialState, type MatchState } from "~/game/rules/state";
 
@@ -33,7 +28,9 @@ describe("MatchProcess — last live-wall tile", () => {
       { userId: "u1", displayName: "Bot 1", isBot: true },
       { userId: "u2", displayName: "Bot 2", isBot: true },
       { userId: "u3", displayName: "Bot 3", isBot: true },
-    ]);
+    ], {
+      repository: ephemeralMatchRepository,
+    });
     const internals = match as unknown as {
       state: MatchState;
       buildDiscardLegals(seat: 0): LegalAction[];

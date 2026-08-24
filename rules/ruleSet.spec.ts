@@ -7,8 +7,13 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createInitialState, type MatchState } from "./state";
-import type { RuleSetOverride } from "./ruleSet";
+import {
+  MatchStateSchema,
+  createInitialState,
+  type MatchState,
+} from "./state";
+import { RuleSetSchema, type RuleSetOverride } from "./ruleSet";
+import { listPresets, presetToRuleSet } from "./presets";
 import { step } from "./step";
 import type { Tile } from "./types";
 
@@ -65,6 +70,18 @@ function craft(opts: {
 }
 
 describe("ruleSet — defaults", () => {
+  it("validates a fresh authoritative match state", () => {
+    const state = createInitialState(123);
+    expect(MatchStateSchema.parse(state)).toEqual(state);
+  });
+
+  it("validates every built-in preset as checkpoint-safe data", () => {
+    for (const preset of listPresets()) {
+      const ruleSet = presetToRuleSet(preset);
+      expect(RuleSetSchema.parse(ruleSet)).toEqual(ruleSet);
+    }
+  });
+
   it("createInitialState defaults to hanchan (roundWindCount=2)", () => {
     const s = createInitialState(0);
     expect(s.ruleSet.roundWindCount).toBe(2);

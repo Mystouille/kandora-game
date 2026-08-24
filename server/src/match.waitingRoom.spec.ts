@@ -18,16 +18,13 @@
  *   - `attachHuman` refuses unclaimed seats; bot seats stay
  *     unattachable as before.
  */
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("./persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: vi.fn(async () => undefined),
-  archiveReplayLog: vi.fn(async () => undefined),
-}));
+import { describe, expect, it } from "vitest";
 
 import { MatchProcess, waitingRoomSeatPermutation } from "./match";
+import { ephemeralMatchRepository } from "./repository";
 import type { Seat, ServerMessage } from "~/game/protocol/messages";
+
+const dependencies = { repository: ephemeralMatchRepository };
 
 function makeSink(): {
   send: (msg: ServerMessage) => void;
@@ -42,7 +39,11 @@ function makeSink(): {
 
 describe("MatchProcess waiting-room state machine", () => {
   it("keeps join positions stable but varies final East by match seed", () => {
-    const room = MatchProcess.createWaitingRoom("stable-joins", 42);
+    const room = MatchProcess.createWaitingRoom(
+      "stable-joins",
+      42,
+      dependencies
+    );
     expect(room.claimSeat("creator", "Creator")).toBe(0);
     expect(room.claimSeat("second", "Second")).toBe(1);
 
@@ -62,7 +63,11 @@ describe("MatchProcess waiting-room state machine", () => {
       throw new Error("expected a seed that moves waiting-room seat 0");
     }
     const finalSeat = waitingRoomSeatPermutation(seed).indexOf(0) as Seat;
-    const room = MatchProcess.createWaitingRoom("shuffle-on-start", seed);
+    const room = MatchProcess.createWaitingRoom(
+      "shuffle-on-start",
+      seed,
+      dependencies
+    );
     const waitingSeat = room.claimSeat("creator", "Creator") as Seat;
     expect(waitingSeat).toBe(0);
     const sink = makeSink();
@@ -98,7 +103,7 @@ describe("MatchProcess waiting-room state machine", () => {
   });
 
   it("creates an empty waiting room", () => {
-    const m = MatchProcess.createWaitingRoom("room-1", 42);
+    const m = MatchProcess.createWaitingRoom("room-1", 42, dependencies);
     expect(m.status).toBe("waiting");
     const rs = m.buildRoomState(null);
     expect(rs.status).toBe("waiting");
@@ -113,6 +118,7 @@ describe("MatchProcess waiting-room state machine", () => {
     const m = MatchProcess.createWaitingRoom(
       "room-m-league",
       42,
+      dependencies,
       undefined,
       undefined,
       "m-league"
@@ -121,7 +127,7 @@ describe("MatchProcess waiting-room state machine", () => {
   });
 
   it("claimSeat assigns an empty slot and is idempotent per userId", () => {
-    const m = MatchProcess.createWaitingRoom("room-2", 1);
+    const m = MatchProcess.createWaitingRoom("room-2", 1, dependencies);
     const seatA = m.claimSeat("user-1", "Alice");
     expect(seatA).not.toBeNull();
     // Reconnect: same userId returns the same seat.
@@ -139,7 +145,7 @@ describe("MatchProcess waiting-room state machine", () => {
   });
 
   it("releaseSeat clears the slot back to empty", () => {
-    const m = MatchProcess.createWaitingRoom("room-3", 2);
+    const m = MatchProcess.createWaitingRoom("room-3", 2, dependencies);
     const seat = m.claimSeat("user-1", "Alice");
     expect(seat).not.toBeNull();
     m.releaseSeat(seat as Seat);
@@ -149,7 +155,7 @@ describe("MatchProcess waiting-room state machine", () => {
   });
 
   it("fillBots populates remaining empty slots", () => {
-    const m = MatchProcess.createWaitingRoom("room-4", 3);
+    const m = MatchProcess.createWaitingRoom("room-4", 3, dependencies);
     const humanSeat = m.claimSeat("user-1", "Alice") as Seat;
     m.fillBots();
     const rs = m.buildRoomState(humanSeat);
@@ -167,7 +173,7 @@ describe("MatchProcess waiting-room state machine", () => {
   });
 
   it("broadcastRoomState pushes a per-seat frame to every attached human", () => {
-    const m = MatchProcess.createWaitingRoom("room-5", 4);
+    const m = MatchProcess.createWaitingRoom("room-5", 4, dependencies);
     const seatA = m.claimSeat("user-1", "Alice") as Seat;
     const seatB = m.claimSeat("user-2", "Bob") as Seat;
     const sinkA = makeSink();
@@ -201,13 +207,13 @@ describe("MatchProcess waiting-room state machine", () => {
   });
 
   it("attachHuman refuses unclaimed seats", () => {
-    const m = MatchProcess.createWaitingRoom("room-6", 5);
+    const m = MatchProcess.createWaitingRoom("room-6", 5, dependencies);
     const sink = makeSink();
     expect(() => m.attachHuman(0, sink.send)).toThrow(/unclaimed/);
   });
 
   it("claimSeat returns null when the room is full", () => {
-    const m = MatchProcess.createWaitingRoom("room-7", 6);
+    const m = MatchProcess.createWaitingRoom("room-7", 6, dependencies);
     expect(m.claimSeat("u1", "A")).not.toBeNull();
     expect(m.claimSeat("u2", "B")).not.toBeNull();
     expect(m.claimSeat("u3", "C")).not.toBeNull();

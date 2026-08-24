@@ -15,6 +15,7 @@
  * round-trips through Mongo / WebSocket without conversion.
  */
 
+import { z } from "zod";
 import { DEFAULT_PRESET_ID, getPreset, presetToRuleSet } from "./presets";
 
 export interface RuleSet {
@@ -249,6 +250,68 @@ export interface RuleSet {
    */
   startingChips: number;
 }
+
+export const RuleSetSchema: z.ZodType<RuleSet> = z
+  .object({
+    roundWindCount: z.union([z.literal(1), z.literal(2), z.literal(4)]),
+    roundLimit: z.number().int().positive(),
+    startingScore: z.number().int(),
+    nbRedFiveManzu: z.number().int().min(0).max(4),
+    nbRedFivePinzu: z.number().int().min(0).max(4),
+    nbRedFiveSouzu: z.number().int().min(0).max(4),
+    kuitan: z.boolean(),
+    doubleRiichi: z.boolean(),
+    renhou: z.boolean(),
+    ippatsu: z.boolean(),
+    uraDora: z.boolean(),
+    kanDora: z.boolean(),
+    instantlyRevealDoraForMinkan: z.boolean(),
+    instantlyRevealDoraForAnkan: z.boolean(),
+    nagashiMangan: z.boolean(),
+    aborts: z
+      .object({
+        kyuushuu: z.boolean(),
+        suufonRenda: z.boolean(),
+        suuchaRiichi: z.boolean(),
+        sanchahou: z.boolean(),
+      })
+      .strict(),
+    atamahane: z.boolean(),
+    bustedScore: z.number().int().nullable(),
+    bustedStrict: z.boolean(),
+    agariYame: z.boolean(),
+    tenpaiYame: z.boolean(),
+    buuMode: z.boolean(),
+    riichiBetValue: z.number().int().positive(),
+    honbaPayments: z.boolean(),
+    tenpaiPayments: z.boolean(),
+    tenpaiRenchan: z.boolean(),
+    kiriageMangan: z.boolean(),
+    scoreCap: z
+      .enum(["mangan", "haneman", "baiman", "sanbaiman"])
+      .nullable(),
+    chipPayouts: z
+      .object({
+        sankoro: z.number().int().nonnegative(),
+        nikoro: z.number().int().nonnegative(),
+        chinmai: z.number().int().nonnegative(),
+      })
+      .strict(),
+    sinkThreshold: z.number().int(),
+    winnerThreshold: z.number().int().nullable(),
+    immediateSankoroOnYakuman: z.boolean(),
+    illegalVictoryRules: z
+      .object({
+        sinkingWinNotFloating: z.boolean(),
+        gameEndingWinNotFirst: z.boolean(),
+        gameEndingChinmai: z.boolean(),
+      })
+      .strict(),
+    illegalVictoryAllLastOff: z.boolean(),
+    chipChomboPenalty: z.number().int().nullable(),
+    startingChips: z.number().int().nonnegative(),
+  })
+  .strict();
 
 /**
  * Tenhou-default rule set, loaded from `presets/tenhou-hanchan.json`.

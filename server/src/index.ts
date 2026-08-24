@@ -46,7 +46,7 @@ import {
 } from "~/game/protocol/messages";
 import { MatchProcess, setReadyCheckMs } from "./match";
 import { connectGameDb } from "./db";
-import { getMatchStatus } from "./persist";
+import { getMatchStatus, mongoMatchRepository } from "./persist";
 import { RelayController, RelayCapacityError } from "./relay/relayController";
 import { createWsTenhouClient } from "./relay/tenhouClient";
 
@@ -139,6 +139,7 @@ const relayController = new RelayController({
   matches,
   closeSpectators: closeRelaySpectators,
   createClient: createWsTenhouClient,
+  repository: mongoMatchRepository,
   maxConcurrent: RELAY_MAX_CONCURRENT,
 });
 
@@ -373,6 +374,7 @@ async function handleCreateRoom(
   const match = MatchProcess.createWaitingRoom(
     matchId,
     hashStringToSeed(matchId),
+    { repository: mongoMatchRepository },
     parsedDebug,
     presetToRuleSet(getPreset(presetId)),
     presetId
@@ -550,6 +552,7 @@ async function handleRelayOpen(
     MatchProcess.createRelayMatch(
       matchId,
       sourceGameId,
+      { repository: mongoMatchRepository },
       typeof ruleSet === "string" ? ruleSet : undefined
     )
   );

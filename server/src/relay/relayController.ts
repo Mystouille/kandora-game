@@ -9,6 +9,7 @@
  */
 import { nanoid } from "nanoid";
 import { MatchProcess } from "../match";
+import type { MatchRepository } from "../repository";
 import { TenhouSpectateDecoder } from "~/game/adapters/tenhou/spectateDecoder";
 import type { TenhouClientFactory, TenhouSpectateClient } from "./tenhouClient";
 
@@ -37,6 +38,7 @@ export interface RelayControllerOptions {
   /** Close + drop the spectator sockets for a match (index.ts owns them). */
   closeSpectators: (matchId: string) => void;
   createClient: TenhouClientFactory;
+  repository: MatchRepository;
   /** Grace period with zero spectators before a relay tears down. */
   idleGraceMs?: number;
   /** Max concurrent live relays (upstream Tenhou connections). Default 20. */
@@ -70,7 +72,11 @@ export class RelayController {
       throw new RelayCapacityError(this.maxConcurrent);
     }
     const matchId = nanoid(12);
-    const match = MatchProcess.createRelayMatch(matchId, watchId);
+    const match = MatchProcess.createRelayMatch(
+      matchId,
+      watchId,
+      { repository: this.opts.repository }
+    );
     this.opts.matches.set(matchId, match);
     const session: RelaySession = {
       watchId,

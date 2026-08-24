@@ -9,16 +9,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: vi.fn(async () => undefined),
-}));
-
 import {
   MatchProcess,
   setNextHandDelayMs,
   setDelayAfterDiscardMs,
 } from "./match";
+import { ephemeralMatchRepository } from "./repository";
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
 
 interface CapturedEvent {
@@ -56,7 +52,8 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u1", displayName: "Bot1", isBot: true },
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
-    ]
+    ],
+    { repository: ephemeralMatchRepository }
   );
 }
 

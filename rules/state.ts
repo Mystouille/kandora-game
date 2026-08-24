@@ -26,8 +26,14 @@
  *     actions are accepted.
  */
 
+import { z } from "zod";
 import { dealMatch, type DealtMatch, type WallOptions } from "./wall";
-import { type RuleSet, type RuleSetOverride, resolveRuleSet } from "./ruleSet";
+import {
+  RuleSetSchema,
+  type RuleSet,
+  type RuleSetOverride,
+  resolveRuleSet,
+} from "./ruleSet";
 import type { Seat, Tile, Wind } from "./types";
 
 export type MatchPhase =
@@ -247,6 +253,106 @@ export interface MatchState {
    */
   dabuken: [boolean, boolean, boolean, boolean];
 }
+
+const StateTileSchema = z.string().regex(/^([0-9][mps]|[1-7]z)$/);
+const StateSeatSchema = z.union([
+  z.literal(0),
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+]);
+const NumberTuple4Schema = z.tuple([
+  z.number().int(),
+  z.number().int(),
+  z.number().int(),
+  z.number().int(),
+]);
+const BooleanTuple4Schema = z.tuple([
+  z.boolean(),
+  z.boolean(),
+  z.boolean(),
+  z.boolean(),
+]);
+
+const StateMeldSchema: z.ZodType<Meld> = z
+  .object({
+    type: z.enum(["chi", "pon", "daiminkan", "ankan", "shouminkan"]),
+    tiles: z.array(StateTileSchema),
+    claimedTile: StateTileSchema.nullable(),
+    from: StateSeatSchema.nullable(),
+  })
+  .strict();
+
+const HandResultSchema: z.ZodType<HandResult> = z
+  .object({
+    reason: z.enum(["tsumo", "ron", "exhaustive_draw", "abort"]),
+    winner: StateSeatSchema.nullable(),
+    loser: StateSeatSchema.nullable(),
+    delta: NumberTuple4Schema,
+    tenpai: BooleanTuple4Schema.nullable(),
+    abortKind: z
+      .enum(["kyuushuu", "suufon_renda", "suucha_riichi", "sanchahou"])
+      .nullable(),
+    nagashi: BooleanTuple4Schema.nullable().optional(),
+    winHan: z.number().int().nullable(),
+    winYakuman: z.boolean().nullable(),
+  })
+  .strict();
+
+export const MatchStateSchema: z.ZodType<MatchState> = z
+  .object({
+    seed: z.number().int(),
+    ruleSet: RuleSetSchema,
+    hands: z.array(z.array(StateTileSchema)).length(4),
+    discards: z.array(z.array(StateTileSchema)).length(4),
+    liveWall: z.array(StateTileSchema),
+    deadWall: z.array(StateTileSchema),
+    doraIndicators: z.array(StateTileSchema),
+    turn: StateSeatSchema,
+    lastDrawn: z.array(StateTileSchema.nullable()).length(4),
+    lastDrawFromDeadWall: z.boolean(),
+    lastDiscard: z
+      .object({ seat: StateSeatSchema, tile: StateTileSchema })
+      .strict()
+      .nullable(),
+    phase: z.enum([
+      "awaiting_draw",
+      "awaiting_discard",
+      "awaiting_chankan",
+      "hand_ended",
+      "match_ended",
+    ]),
+    dealer: StateSeatSchema,
+    roundWind: z.enum(["E", "S", "W", "N"]),
+    roundNumber: z.number().int().positive(),
+    roundLimit: z.number().int().positive(),
+    honba: z.number().int().nonnegative(),
+    riichiSticks: z.number().int().nonnegative(),
+    scores: NumberTuple4Schema,
+    riichiDeclared: BooleanTuple4Schema,
+    doubleRiichi: BooleanTuple4Schema,
+    ippatsuEligible: BooleanTuple4Schema,
+    furitenLocked: BooleanTuple4Schema,
+    furitenTemp: BooleanTuple4Schema,
+    paoDaisangen: z.array(StateSeatSchema.nullable()).length(4),
+    paoDaisuushii: z.array(StateSeatSchema.nullable()).length(4),
+    melds: z.array(z.array(StateMeldSchema)).length(4),
+    pendingShouminkan: z
+      .object({
+        seat: StateSeatSchema,
+        tile: StateTileSchema,
+        ponIdx: z.number().int().nonnegative(),
+      })
+      .strict()
+      .nullable(),
+    uraDoraIndicators: z.array(StateTileSchema),
+    pendingKanDora: z.array(StateTileSchema),
+    pendingKanUraDora: z.array(StateTileSchema),
+    lastHandResult: HandResultSchema.nullable(),
+    chips: NumberTuple4Schema,
+    dabuken: BooleanTuple4Schema,
+  })
+  .strict();
 
 export function createInitialState(
   seed: number,

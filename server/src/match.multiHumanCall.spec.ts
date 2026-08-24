@@ -34,12 +34,6 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: vi.fn(async () => undefined),
-  archiveReplayLog: vi.fn(async () => undefined),
-}));
-
 import {
   MatchProcess,
   setNextHandDelayMs,
@@ -47,6 +41,7 @@ import {
   setActionTimeoutMs,
   setReadyCheckMs,
 } from "./match";
+import { ephemeralMatchRepository } from "./repository";
 import type {
   GameEvent,
   LegalAction,
@@ -104,7 +99,8 @@ function makeFourHumanMatch(seed: number): MatchProcess {
       { userId: "u1", displayName: "H1", isBot: false },
       { userId: "u2", displayName: "H2", isBot: false },
       { userId: "u3", displayName: "H3", isBot: false },
-    ]
+    ],
+    { repository: ephemeralMatchRepository }
   );
 }
 

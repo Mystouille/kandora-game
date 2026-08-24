@@ -36,12 +36,14 @@ import {
   enumerateCalls,
   isAkaDisabled,
   isFuritenForRon,
+  resolveRuleSet,
   scoreHand,
   seatWind,
   step,
   waits,
   applyChipDelta,
   evaluateBuuEndOfGameChips,
+  riichiLibYakuToRomaji,
   type CallOption,
   type DiscardSource,
   type EngineEvent,
@@ -53,15 +55,35 @@ import {
 } from "~/game/rules";
 import { randomBotDiscard } from "./bots/random";
 import { chooseBotCall, chooseBotSelfKan } from "./bots/calls";
+import {
+  MATCH_CHECKPOINT_SCHEMA_VERSION,
+  PlayingActionCheckpointSchema,
+  WaitingRoomCheckpointSchema,
+  parseMatchCheckpoint,
+  type MatchCheckpoint,
+  type PlayingActionCheckpoint,
+  type WaitingRoomCheckpoint,
+} from "./checkpoint";
 import { projectEvent, projectPublicEvent } from "./projection";
-import { archiveMatch, archiveReplayLog, createMatchDoc } from "./persist";
-import { riichiLibYakuToRomaji } from "~/core/yaku/platformYakuMaps";
-import type { MatchPlayer } from "~/core/models/game/Match";
+import {
+  type MatchRepository,
+  type PersistedMatchPlayer,
+} from "./repository";
+import {
+  type MatchRuntime,
+  type MatchTimer,
+} from "./runtime";
+import { createSystemMatchRuntime } from "./runtime";
 
 export interface MatchPlayerInit {
   userId: string;
   displayName: string;
   isBot: boolean;
+}
+
+export interface MatchProcessDependencies {
+  repository: MatchRepository;
+  runtime?: MatchRuntime;
 }
 
 type Send = (msg: ServerMessage) => void;
@@ -86,7 +108,7 @@ interface DelayedSpectatorSession {
   seq: number;
   /** Pending `setTimeout` ref; non-null only when a future
    * unripe event is waiting for its `emittedAt + delayMs`. */
-  timer: ReturnType<typeof setTimeout> | null;
+  timer: MatchTimer | null;
   closed: boolean;
 }
 
@@ -510,7 +532,7 @@ export class MatchProcess {
    * `setSeatLegals` call for that seat so stale callbacks can
    * never apply a default after the state has moved on.
    */
-  private currentDeadlineTimer: (NodeJS.Timeout | null)[] = [
+  private currentDeadlineTimer: (MatchTimer | null)[] = [
     null,
     null,
     null,
@@ -584,7 +606,7 @@ export class MatchProcess {
     false,
   ];
   private readyDeadline: number | null = null;
-  private readyTimer: NodeJS.Timeout | null = null;
+  private readyTimer: MatchTimer | null = null;
   private readyResolve: (() => void) | null = null;
 
   /**
@@ -636,8 +658,8 @@ export class MatchProcess {
   private dice: [number, number] = [1, 1];
 
   private rollDice(): [number, number] {
-    const a = 1 + Math.floor(Math.random() * 6);
-    const b = 1 + Math.floor(Math.random() * 6);
+    const a = 1 + Math.floor(this.runtime.random() * 6);
+    const b = 1 + Math.floor(this.runtime.random() * 6);
     this.dice = [a, b];
     return [a, b];
   }
@@ -697,7 +719,7 @@ export class MatchProcess {
   private readonly eventLog: Array<{
     seq: number;
     event: GameEvent;
-    /** Wall-clock time (`Date.now()`) at which this event was
+    /** Runtime wall-clock time at which this event was
      * appended to the log. Used by the delayed-spectator scheduler
      * to gate dispatch (`emittedAt + delayMs <= now`). */
     emittedAt: number;
@@ -918,7 +940,7 @@ export class MatchProcess {
     "yes" | "no" | null,
   ] = [null, null, null, null];
   private continueVoteDeadline: number | null = null;
-  private continueVoteTimer: NodeJS.Timeout | null = null;
+  private continueVoteTimer: MatchTimer | null = null;
   private continueVoteResolve: ((cont: boolean) => void) | null = null;
   /**
    * Reason recorded for the most recent vote resolution. Drives
@@ -926,11 +948,26 @@ export class MatchProcess {
    * `openContinueVote`.
    */
   private lastVoteReason: "vote_no" | "vote_timeout" | null = null;
+  private readonly runtime: MatchRuntime;
+  private readonly repository: MatchRepository;
+  private pausedCheckpoint: MatchCheckpoint | null = null;
+  private checkpointSavePromise: Promise<MatchCheckpoint> | null = null;
+
+  get isPaused(): boolean {
+    return this.pausedCheckpoint !== null;
+  }
+
+  private assertNotPaused(operation: string): void {
+    if (this.isPaused) {
+      throw new Error(`MatchProcess.${operation}: match is paused`);
+    }
+  }
 
   constructor(
     matchId: string,
     seed: number,
     players: MatchPlayerInit[],
+    dependencies: MatchProcessDependencies,
     debug?: MatchDebug,
     ruleSetOverride?: RuleSetOverride,
     presetId = "tenhou-hanchan"
@@ -946,6 +983,8 @@ export class MatchProcess {
     this.debug = debug;
     this.ruleSetOverride = ruleSetOverride;
     this.presetId = presetId;
+    this.runtime = dependencies.runtime ?? createSystemMatchRuntime(seed);
+    this.repository = dependencies.repository;
   }
 
   /**
@@ -957,6 +996,7 @@ export class MatchProcess {
   static createWaitingRoom(
     matchId: string,
     seed: number,
+    dependencies: MatchProcessDependencies,
     debug?: MatchDebug,
     ruleSetOverride?: RuleSetOverride,
     presetId = "tenhou-hanchan"
@@ -976,6 +1016,7 @@ export class MatchProcess {
       matchId,
       seed,
       placeholders,
+      dependencies,
       debug,
       ruleSetOverride,
       presetId
@@ -995,6 +1036,7 @@ export class MatchProcess {
   static createRelayMatch(
     matchId: string,
     sourceGameId: string,
+    dependencies: MatchProcessDependencies,
     ruleSet = "tenhou-default"
   ): MatchProcess {
     const placeholders: MatchPlayerInit[] = [
@@ -1003,13 +1045,385 @@ export class MatchProcess {
       { userId: "__relay__:2", displayName: "", isBot: true },
       { userId: "__relay__:3", displayName: "", isBot: true },
     ];
-    const m = new MatchProcess(matchId, 0, placeholders);
+    const m = new MatchProcess(
+      matchId,
+      0,
+      placeholders,
+      dependencies,
+      undefined,
+      undefined,
+      "tenhou-hanchan"
+    );
     m.relayMode = true;
     m.statusValue = "playing";
-    m.startedAt = new Date();
+    m.startedAt = new Date(m.runtime.now());
     m.relaySourceGameId = sourceGameId;
     m.relayRuleSet = ruleSet;
     return m;
+  }
+
+  /** Serialize durable state at a supported quiescent boundary. */
+  createCheckpoint(): MatchCheckpoint {
+    if (this.pausedCheckpoint !== null) {
+      return parseMatchCheckpoint(
+        JSON.parse(JSON.stringify(this.pausedCheckpoint))
+      );
+    }
+    if (this.statusValue === "waiting") {
+      return this.createWaitingRoomCheckpoint();
+    }
+    if (this.statusValue === "playing") {
+      return this.createPlayingActionCheckpoint();
+    }
+    throw new Error(
+      `MatchProcess.createCheckpoint: status "${this.statusValue}" is not supported`
+    );
+  }
+
+  /**
+   * Freeze authoritative mutation before awaiting an atomic repository write.
+   * A successful save leaves this process paused; callers may discard it and
+   * restore through {@link restoreSavedCheckpoint}. A failed write rolls the
+   * same process back to its pre-save action window with clocks still frozen
+   * across the failed I/O interval.
+   */
+  pauseAndSaveCheckpoint(): Promise<MatchCheckpoint> {
+    if (this.checkpointSavePromise !== null) {
+      return this.checkpointSavePromise;
+    }
+    if (this.pausedCheckpoint !== null) {
+      return Promise.resolve(this.createCheckpoint());
+    }
+    const checkpoint = this.createCheckpoint();
+    this.pausedCheckpoint = checkpoint;
+    if (checkpoint.status === "playing") {
+      const seat = checkpoint.actionWindow.seat;
+      this.currentDeadlineTimer[seat]?.cancel();
+      this.currentDeadlineTimer[seat] = null;
+      this.deadlineEpoch[seat] += 1;
+    }
+    const saving = this.persistPausedCheckpoint(checkpoint);
+    this.checkpointSavePromise = saving;
+    return saving;
+  }
+
+  private async persistPausedCheckpoint(
+    checkpoint: MatchCheckpoint
+  ): Promise<MatchCheckpoint> {
+    try {
+      await this.repository.saveCheckpoint({
+        matchId: this.matchId,
+        checkpoint,
+      });
+      return this.createCheckpoint();
+    } catch (error) {
+      this.pausedCheckpoint = null;
+      if (checkpoint.status === "playing") {
+        this.installCheckpointActionWindow(checkpoint);
+      }
+      throw error;
+    } finally {
+      this.checkpointSavePromise = null;
+    }
+  }
+
+  static async restoreSavedCheckpoint(
+    matchId: string,
+    dependencies: MatchProcessDependencies
+  ): Promise<MatchProcess | null> {
+    const checkpoint = await dependencies.repository.loadCheckpoint(matchId);
+    if (checkpoint === null) {
+      return null;
+    }
+    if (checkpoint.matchId !== matchId) {
+      throw new Error(
+        `MatchProcess.restoreSavedCheckpoint: expected ${matchId}, got ${checkpoint.matchId}`
+      );
+    }
+    return MatchProcess.restoreCheckpoint(checkpoint, dependencies);
+  }
+
+  async deleteSavedCheckpoint(): Promise<void> {
+    await this.repository.deleteCheckpoint(this.matchId);
+  }
+
+  private checkpointPlayers(
+    requireFull: true
+  ): PlayingActionCheckpoint["seats"];
+  private checkpointPlayers(
+    requireFull: false
+  ): WaitingRoomCheckpoint["seats"];
+  private checkpointPlayers(
+    requireFull: boolean
+  ):
+    | PlayingActionCheckpoint["seats"]
+    | WaitingRoomCheckpoint["seats"] {
+    const seats = [0, 1, 2, 3].map((seat) => {
+      const player = this.players.get(seat as Seat) ?? null;
+      return player === null ? null : { ...player };
+    });
+    if (requireFull && seats.some((player) => player === null)) {
+      throw new Error(
+        "MatchProcess.createCheckpoint: playing match has an empty seat"
+      );
+    }
+    return seats as
+      | PlayingActionCheckpoint["seats"]
+      | WaitingRoomCheckpoint["seats"];
+  }
+
+  private createWaitingRoomCheckpoint(): WaitingRoomCheckpoint {
+    return WaitingRoomCheckpointSchema.parse({
+      schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
+      status: "waiting",
+      savedAt: this.runtime.now(),
+      matchId: this.matchId,
+      seed: this.seed,
+      presetId: this.presetId,
+      ruleSet: resolveRuleSet(this.ruleSetOverride),
+      debug: this.debug
+        ? {
+            ...(this.debug.humanHand
+              ? { humanHand: [...this.debug.humanHand] }
+              : {}),
+            ...(this.debug.humanDraws
+              ? { humanDraws: [...this.debug.humanDraws] }
+              : {}),
+            ...(this.debug.leftDiscards
+              ? { leftDiscards: [...this.debug.leftDiscards] }
+              : {}),
+          }
+        : undefined,
+      seats: this.checkpointPlayers(false),
+    });
+  }
+
+  private createPlayingActionCheckpoint(): PlayingActionCheckpoint {
+    const unsupported = (reason: string): never => {
+      throw new Error(
+        `MatchProcess.createCheckpoint: playing state is not quiescent (${reason})`
+      );
+    };
+    if (this.relayMode) {
+      return unsupported("relay match");
+    }
+    if (this.state.phase !== "awaiting_discard") {
+      return unsupported(`engine phase ${this.state.phase}`);
+    }
+    if (
+      this.readyResolve !== null ||
+      this.readyTimer !== null ||
+      this.continueVoteResolve !== null ||
+      this.continueVoteTimer !== null
+    ) {
+      return unsupported("ready or vote continuation");
+    }
+    if (
+      this.callWindow.some((window) => window !== null) ||
+      this.pendingHumanCallActions.some((action) => action !== null) ||
+      this.pendingBotRons.length > 0 ||
+      this.pendingBotCalls.length > 0
+    ) {
+      return unsupported("call resolution");
+    }
+    if (
+      this.delayedSpectators.size > 0 ||
+      this.livenessProbeInflight.some(Boolean)
+    ) {
+      return unsupported("delayed spectator or liveness work");
+    }
+    if (
+      this.disconnected.some(Boolean) ||
+      this.afkSelfReported.some(Boolean) ||
+      this.livenessProbeMisses.some((misses) => misses > 0)
+    ) {
+      return unsupported("disconnect or AFK policy state");
+    }
+    if (
+      this.pendingWinRevealMs !== 0 ||
+      this.finalized ||
+      this.sessionFinalized
+    ) {
+      return unsupported("result or finalization work");
+    }
+
+    const seat = this.state.turn;
+    const player = this.players.get(seat);
+    if (!player || player.isBot) {
+      return unsupported("active seat is not human");
+    }
+    const legalActions = this.legalActions[seat];
+    if (
+      legalActions.length === 0 ||
+      this.legalActions.some(
+        (actions, candidate) => candidate !== seat && actions.length > 0
+      )
+    ) {
+      return unsupported("expected exactly one legal-action window");
+    }
+    const actionStartedAt = this.currentActionStartMs[seat];
+    const visibleDeadline = this.currentDeadline[seat];
+    if (
+      actionStartedAt === null ||
+      visibleDeadline === null ||
+      this.currentDeadlineTimer[seat] === null
+    ) {
+      return unsupported("action timer is not active");
+    }
+
+    const savedAt = this.runtime.now();
+    const elapsedMs = Math.max(0, savedAt - actionStartedAt);
+    const expiryRemainingMs = Math.max(
+      0,
+      BASE_ACTION_MS +
+        this.bufferMs[seat] +
+        ACTION_GRACE_MS -
+        elapsedMs
+    );
+    return PlayingActionCheckpointSchema.parse({
+      schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
+      status: "playing",
+      checkpointKind: "action_window",
+      savedAt,
+      matchId: this.matchId,
+      seed: this.seed,
+      presetId: this.presetId,
+      seats: this.checkpointPlayers(true),
+      state: this.state,
+      startedAgoMs: Math.max(
+        0,
+        savedAt - (this.startedAt?.getTime() ?? savedAt)
+      ),
+      randomState: this.runtime.captureRandomState(),
+      eventLog: this.eventLog.map((entry) => ({
+        seq: entry.seq,
+        event: entry.event,
+        emittedAgoMs: Math.max(0, savedAt - entry.emittedAt),
+      })),
+      nextSeq: this.nextSeq,
+      seatSeq: [...this.seatSeq],
+      spectatorSeq: this.spectatorSeq,
+      handStartLiveWall: this.handStartLiveWall
+        ? [...this.handStartLiveWall]
+        : null,
+      gameStartLogIdx: this.gameStartLogIdx,
+      gameIndex: this.gameIndex,
+      sessionChips: [...this.sessionChips],
+      gameStartChips: [...this.gameStartChips],
+      sessionDabuken: [...this.sessionDabuken],
+      dice: [...this.dice],
+      riichiTileIdx: [...this.riichiTileIdx],
+      humanDrawQueue: [...this.humanDrawQueue],
+      leftDiscardQueue: [...this.leftDiscardQueue],
+      bufferMs: [...this.bufferMs],
+      lastEngineEventType: this.lastEngineEventType,
+      actionWindow: {
+        seat,
+        legalActions,
+        elapsedMs,
+        visibleRemainingMs: Math.max(0, visibleDeadline - savedAt),
+        expiryRemainingMs,
+      },
+    });
+  }
+
+  /** Restore validated state with every network attachment detached. */
+  static restoreCheckpoint(
+    input: unknown,
+    dependencies: MatchProcessDependencies
+  ): MatchProcess {
+    const checkpoint = parseMatchCheckpoint(input);
+    if (checkpoint.status === "waiting") {
+      const match = MatchProcess.createWaitingRoom(
+        checkpoint.matchId,
+        checkpoint.seed,
+        dependencies,
+        checkpoint.debug,
+        checkpoint.ruleSet,
+        checkpoint.presetId
+      );
+      for (let seat = 0; seat < 4; seat++) {
+        const player = checkpoint.seats[seat];
+        match.players.set(seat as Seat, player === null ? null : { ...player });
+      }
+      return match;
+    }
+
+    const match = new MatchProcess(
+      checkpoint.matchId,
+      checkpoint.seed,
+      checkpoint.seats.map((player) => ({ ...player })),
+      dependencies,
+      undefined,
+      checkpoint.state.ruleSet,
+      checkpoint.presetId
+    );
+    const restoredAt = match.runtime.now();
+    match.statusValue = "playing";
+    match.state = checkpoint.state;
+    match.startedAt = new Date(restoredAt - checkpoint.startedAgoMs);
+    match.runtime.restoreRandomState(checkpoint.randomState);
+    for (const entry of checkpoint.eventLog) {
+      match.eventLog.push({
+        seq: entry.seq,
+        event: entry.event,
+        emittedAt: restoredAt - entry.emittedAgoMs,
+      });
+    }
+    match.nextSeq = checkpoint.nextSeq;
+    match.seatSeq = [...checkpoint.seatSeq];
+    match.spectatorSeq = checkpoint.spectatorSeq;
+    match.handStartLiveWall = checkpoint.handStartLiveWall
+      ? [...checkpoint.handStartLiveWall]
+      : null;
+    match.gameStartLogIdx = checkpoint.gameStartLogIdx;
+    match.gameIndex = checkpoint.gameIndex;
+    match.sessionChips = [...checkpoint.sessionChips];
+    match.gameStartChips = [...checkpoint.gameStartChips];
+    match.sessionDabuken = [...checkpoint.sessionDabuken];
+    match.dice = [...checkpoint.dice];
+    match.riichiTileIdx = [...checkpoint.riichiTileIdx];
+    match.humanDrawQueue = [...checkpoint.humanDrawQueue];
+    match.leftDiscardQueue = [...checkpoint.leftDiscardQueue];
+    match.bufferMs = [...checkpoint.bufferMs];
+    match.lastEngineEventType = checkpoint.lastEngineEventType;
+
+    match.installCheckpointActionWindow(checkpoint);
+    return match;
+  }
+
+  private installCheckpointActionWindow(
+    checkpoint: PlayingActionCheckpoint
+  ): void {
+    const restoredAt = this.runtime.now();
+    const { actionWindow } = checkpoint;
+    const seat = actionWindow.seat;
+    this.currentDeadlineTimer[seat]?.cancel();
+    this.legalActions = [[], [], [], []];
+    this.legalActions[seat] = actionWindow.legalActions.map((action) => ({
+      ...action,
+      ...(action.tiles ? { tiles: [...action.tiles] } : {}),
+    }));
+    this.bufferMs = [...checkpoint.bufferMs];
+    this.currentActionStartMs = [null, null, null, null];
+    this.currentDeadline = [null, null, null, null];
+    this.currentDeadlineTimer = [null, null, null, null];
+    this.currentActionStartMs[seat] = restoredAt - actionWindow.elapsedMs;
+    this.currentDeadline[seat] =
+      restoredAt + actionWindow.visibleRemainingMs;
+    this.deadlineEpoch[seat] += 1;
+    const epoch = this.deadlineEpoch[seat];
+    this.currentDeadlineTimer[seat] = this.runtime.schedule(
+      () => {
+        this.currentDeadlineTimer[seat] = null;
+        if (this.deadlineEpoch[seat] !== epoch || this.isPaused) {
+          return;
+        }
+        void this.handleDeadlineExpiry(seat);
+      },
+      actionWindow.expiryRemainingMs,
+      { unref: true }
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1017,6 +1431,7 @@ export class MatchProcess {
   // -------------------------------------------------------------------------
 
   async start(): Promise<void> {
+    this.assertNotPaused("start");
     if (this.statusValue !== "waiting") {
       throw new Error(
         `MatchProcess.start: cannot start from status "${this.statusValue}"`
@@ -1030,7 +1445,7 @@ export class MatchProcess {
       }
     }
     this.statusValue = "playing";
-    this.startedAt = new Date();
+    this.startedAt = new Date(this.runtime.now());
     this.state = createInitialState(this.seed, {
       ruleSet: this.ruleSetOverride,
     });
@@ -1063,7 +1478,7 @@ export class MatchProcess {
         : [];
     }
 
-    const matchPlayers: MatchPlayer[] = [];
+    const matchPlayers: PersistedMatchPlayer[] = [];
     for (const [seat, p] of this.players) {
       if (p === null) {
         // Already asserted above; satisfies the type narrower.
@@ -1077,7 +1492,7 @@ export class MatchProcess {
       });
     }
     const isBuu = this.state.ruleSet.buuMode;
-    await createMatchDoc({
+    await this.repository.createMatch({
       matchId: this.currentGameMongoId(),
       seed: this.seed,
       players: matchPlayers,
@@ -1156,14 +1571,17 @@ export class MatchProcess {
       this.readyDeadline = null;
       return;
     }
-    this.readyDeadline = Date.now() + ms;
+    this.readyDeadline = this.runtime.now() + ms;
     this.broadcastReadyCheck();
     await new Promise<void>((resolve) => {
       this.readyResolve = resolve;
-      this.readyTimer = setTimeout(() => {
-        this.finishReadyCheck();
-      }, ms);
-      this.readyTimer.unref?.();
+      this.readyTimer = this.runtime.schedule(
+        () => {
+          this.finishReadyCheck();
+        },
+        ms,
+        { unref: true }
+      );
     });
   }
 
@@ -1173,6 +1591,9 @@ export class MatchProcess {
    * ready check has already finished.
    */
   handleReady(seat: Seat): void {
+    if (this.isPaused) {
+      return;
+    }
     if (this.readyResolve === null) {
       return;
     }
@@ -1189,7 +1610,7 @@ export class MatchProcess {
 
   private finishReadyCheck(): void {
     if (this.readyTimer) {
-      clearTimeout(this.readyTimer);
+      this.readyTimer.cancel();
       this.readyTimer = null;
     }
     const resolve = this.readyResolve;
@@ -1328,6 +1749,11 @@ export class MatchProcess {
     this.humanSockets[seat] = null;
     this.livenessProbes[seat] = null;
     this.livenessProbeInflight[seat] = false;
+    if (this.isPaused) {
+      this.broadcastRoomState();
+      this.broadcastViewerState();
+      return true;
+    }
     // Network-disconnected seats are treated as AFK for the
     // skip/auto-discard machinery. A future re-attach with a
     // working socket auto-clears the flag (see `attachHuman`).
@@ -1398,19 +1824,22 @@ export class MatchProcess {
    * holds AFTER this call returns.
    */
   async abortAbandoned(): Promise<void> {
+    if (this.isPaused) {
+      return;
+    }
     if (this.statusValue === "finished" || this.sessionFinalized) {
       return;
     }
     // Cancel any pending ready-check timer.
     if (this.readyTimer) {
-      clearTimeout(this.readyTimer);
+      this.readyTimer.cancel();
       this.readyTimer = null;
     }
     // Cancel any per-seat action deadline timers.
     for (let s = 0; s < 4; s++) {
       const t = this.currentDeadlineTimer[s];
       if (t) {
-        clearTimeout(t);
+        t.cancel();
         this.currentDeadlineTimer[s] = null;
       }
     }
@@ -1433,6 +1862,9 @@ export class MatchProcess {
    * was already scheduled against).
    */
   handleAfk(seat: Seat, afk: boolean): void {
+    if (this.isPaused) {
+      return;
+    }
     if (this.disconnected[seat] === afk) {
       // Even when the disconnect flag itself doesn't move, an
       // explicit `afk: false` from the client should clear the
@@ -1530,7 +1962,7 @@ export class MatchProcess {
   detachDelayedSpectator(session: DelayedSpectatorSession): void {
     session.closed = true;
     if (session.timer !== null) {
-      clearTimeout(session.timer);
+      session.timer.cancel();
       session.timer = null;
     }
     this.delayedSpectators.delete(session);
@@ -1556,10 +1988,10 @@ export class MatchProcess {
       return;
     }
     if (session.timer !== null) {
-      clearTimeout(session.timer);
+      session.timer.cancel();
       session.timer = null;
     }
-    const now = Date.now();
+    const now = this.runtime.now();
     const batch: GameEvent[] = [];
     let lastSeq = -1;
     while (session.nextCursor < this.eventLog.length) {
@@ -1602,9 +2034,9 @@ export class MatchProcess {
       const nextEntry = this.eventLog[session.nextCursor];
       const waitMs = Math.max(
         0,
-        nextEntry.emittedAt + session.delayMs - Date.now()
+        nextEntry.emittedAt + session.delayMs - this.runtime.now()
       );
-      session.timer = setTimeout(() => {
+      session.timer = this.runtime.schedule(() => {
         session.timer = null;
         this.dispatchDelayedSpectator(session, /* batched */ false);
       }, waitMs);
@@ -1639,7 +2071,7 @@ export class MatchProcess {
   replayDelayedSpectatorBuffer(
     fromSeq: number,
     delayMs: number,
-    now: number = Date.now()
+    now: number = this.runtime.now()
   ): Array<{ seq: number; event: GameEvent }> {
     const out: Array<{ seq: number; event: GameEvent }> = [];
     let seq = 0;
@@ -1674,6 +2106,7 @@ export class MatchProcess {
    * after a transient disconnect.
    */
   claimSeat(userId: string, displayName: string): Seat | null {
+    this.assertNotPaused("claimSeat");
     // Reconnect path: same userId already has a seat.
     for (const [seat, p] of this.players) {
       if (p !== null && !p.isBot && p.userId === userId) {
@@ -1707,6 +2140,7 @@ export class MatchProcess {
    * for reconnection). Detaches any live socket on that seat.
    */
   releaseSeat(seat: Seat): void {
+    this.assertNotPaused("releaseSeat");
     if (this.statusValue !== "waiting") {
       throw new Error(
         `releaseSeat: cannot release seat in status "${this.statusValue}"`
@@ -1728,6 +2162,7 @@ export class MatchProcess {
    * — they exist only inside the orchestrator + replay log.
    */
   fillBots(): void {
+    this.assertNotPaused("fillBots");
     if (this.statusValue !== "waiting") {
       throw new Error(
         `fillBots: cannot fill bots in status "${this.statusValue}"`
@@ -1782,6 +2217,7 @@ export class MatchProcess {
    * the same promise as `start()`.
    */
   async fillBotsAndStart(): Promise<void> {
+    this.assertNotPaused("fillBotsAndStart");
     if (this.statusValue !== "waiting") {
       throw new Error(
         `fillBotsAndStart: cannot start from status "${this.statusValue}"`
@@ -2217,6 +2653,9 @@ export class MatchProcess {
   // -------------------------------------------------------------------------
 
   async handleAct(seat: Seat, actionId: string): Promise<void> {
+    if (this.isPaused) {
+      return;
+    }
     if (
       this.state.phase === "hand_ended" ||
       this.state.phase === "match_ended"
@@ -2344,11 +2783,11 @@ export class MatchProcess {
         ? WIN_REACTION_DELAY_MS
         : remainingWinReactionDelayMs(
             triggerEmittedAt,
-            Date.now(),
+            this.runtime.now(),
             WIN_REACTION_DELAY_MS
           );
     if (remaining > 0) {
-      await new Promise((resolve) => setTimeout(resolve, remaining));
+      await this.runtime.sleep(remaining);
     }
   }
 
@@ -2373,9 +2812,7 @@ export class MatchProcess {
     // including the human's after a bot discards. Disabled during
     // tests via `setDelayAfterDiscardMs(0)`.
     if (DELAY_AFTER_DISCARD_MS > 0) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, DELAY_AFTER_DISCARD_MS)
-      );
+      await this.runtime.sleep(DELAY_AFTER_DISCARD_MS);
     }
 
     const drawRes = step(this.state, { type: "draw", seat: this.state.turn });
@@ -2412,9 +2849,7 @@ export class MatchProcess {
     // can play and the user can see the drawn tile briefly before
     // it's discarded.
     if (DRAW_TO_DISCARD_DELAY_MS > 0) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, DRAW_TO_DISCARD_DELAY_MS)
-      );
+      await this.runtime.sleep(DRAW_TO_DISCARD_DELAY_MS);
     }
     // Self-kan check (yakuhai-only policy). The bot may declare an
     // ankan or shouminkan instead of discarding. After a successful
@@ -2472,6 +2907,7 @@ export class MatchProcess {
       const picked = randomBotDiscard({
         hand: this.state.hands[seat],
         drawn,
+        random: () => this.runtime.random(),
       });
       tile = picked.tile;
       discardSource = picked.discardSource;
@@ -3131,9 +3567,7 @@ export class MatchProcess {
       // _DELAY_MS` so a riichi'd seat ticks at the same cadence
       // as every other auto-played seat.
       if (DRAW_TO_DISCARD_DELAY_MS > 0) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, DRAW_TO_DISCARD_DELAY_MS)
-        );
+        await this.runtime.sleep(DRAW_TO_DISCARD_DELAY_MS);
       }
       await this.applyDiscard(seat, tile, legals[0].discardSource);
       await this.afterDiscard();
@@ -3386,12 +3820,12 @@ export class MatchProcess {
     this.legalActions[seat] = actions;
     const existing = this.currentDeadlineTimer[seat];
     if (existing !== null) {
-      clearTimeout(existing);
+      existing.cancel();
       this.currentDeadlineTimer[seat] = null;
     }
     this.deadlineEpoch[seat] += 1;
     if (actions.length > 0 && BASE_ACTION_MS > 0) {
-      const now = Date.now();
+      const now = this.runtime.now();
       this.currentActionStartMs[seat] = now;
       this.currentDeadline[seat] = now + BASE_ACTION_MS;
       // Disconnected / AFK seats skip the human think pool: they
@@ -3404,16 +3838,17 @@ export class MatchProcess {
         ? DRAW_TO_DISCARD_DELAY_MS
         : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
       const epoch = this.deadlineEpoch[seat];
-      const timer = setTimeout(() => {
-        this.currentDeadlineTimer[seat] = null;
-        if (epoch !== this.deadlineEpoch[seat]) {
-          return;
-        }
-        void this.handleDeadlineExpiry(seat);
-      }, totalMs);
-      // Don't keep the node process alive solely on a pending
-      // turn timer (matters for tests + graceful shutdown).
-      timer.unref?.();
+      const timer = this.runtime.schedule(
+        () => {
+          this.currentDeadlineTimer[seat] = null;
+          if (epoch !== this.deadlineEpoch[seat]) {
+            return;
+          }
+          void this.handleDeadlineExpiry(seat);
+        },
+        totalMs,
+        { unref: true }
+      );
       this.currentDeadlineTimer[seat] = timer;
     } else {
       this.currentDeadline[seat] = null;
@@ -3434,7 +3869,7 @@ export class MatchProcess {
     if (startMs === null) {
       return;
     }
-    const elapsed = Date.now() - startMs;
+    const elapsed = this.runtime.now() - startMs;
     const overage = elapsed - BASE_ACTION_MS - ACTION_GRACE_MS;
     if (overage > 0) {
       let next = Math.max(0, this.bufferMs[seat] - overage);
@@ -3470,6 +3905,9 @@ export class MatchProcess {
    * for an AFK player would be worse than the missed turn.
    */
   private async handleDeadlineExpiry(seat: Seat): Promise<void> {
+    if (this.isPaused) {
+      return;
+    }
     // Buffer-exhausted human seats get one liveness ping before
     // we fire the auto-default. If the WS doesn't pong back in
     // time, the seat is flagged disconnected — future windows
@@ -3608,7 +4046,7 @@ export class MatchProcess {
       const revealMs = this.pendingWinRevealMs;
       this.pendingWinRevealMs = 0;
       if (revealMs > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, revealMs));
+        await this.runtime.sleep(revealMs);
       }
       await this.runReadyCheck(NEXT_HAND_DELAY_MS);
     } else {
@@ -3756,7 +4194,7 @@ export class MatchProcess {
       // Hold the "match ended" screen for a moment before the
       // continue-vote overlay opens and covers it.
       if (MATCH_END_DISPLAY_MS > 0) {
-        await new Promise<void>((res) => setTimeout(res, MATCH_END_DISPLAY_MS));
+        await this.runtime.sleep(MATCH_END_DISPLAY_MS);
       }
       const cont = await this.runContinueVote();
       if (cont) {
@@ -3783,7 +4221,7 @@ export class MatchProcess {
   ): Promise<void> {
     const gameEvents = this.eventLog.slice(this.gameStartLogIdx);
     const docId = this.currentGameMongoId();
-    await archiveMatch({
+    await this.repository.archiveMatch({
       matchId: docId,
       events: gameEvents,
       finalScores: finalScores.map((f) => ({
@@ -3793,11 +4231,11 @@ export class MatchProcess {
       })),
     });
     try {
-      const startedAt = this.startedAt ?? new Date();
-      await archiveReplayLog({
+      const startedAt = this.startedAt ?? new Date(this.runtime.now());
+      await this.repository.archiveReplayLog({
         matchId: docId,
         startedAt,
-        endedAt: new Date(),
+        endedAt: new Date(this.runtime.now()),
         ruleSet: this.state.ruleSet.buuMode ? "buu-east" : "tenhou-default",
         events: gameEvents.map((e) => e.event),
         seats: finalScores.map((f) => {
@@ -3851,7 +4289,7 @@ export class MatchProcess {
           this.continueVote[s] = "no";
         }
       }
-      this.continueVoteDeadline = Date.now() + CONTINUE_VOTE_MS;
+      this.continueVoteDeadline = this.runtime.now() + CONTINUE_VOTE_MS;
       this.continueVoteResolve = resolve;
       // Fire-and-forget: the broadcast emits a normal wire event
       // and persists into the omniscient log.
@@ -3874,11 +4312,14 @@ export class MatchProcess {
         return;
       }
       if (CONTINUE_VOTE_MS > 0) {
-        this.continueVoteTimer = setTimeout(() => {
-          this.lastVoteReason = "vote_timeout";
-          this.finishContinueVote(false);
-        }, CONTINUE_VOTE_MS);
-        this.continueVoteTimer.unref?.();
+        this.continueVoteTimer = this.runtime.schedule(
+          () => {
+            this.lastVoteReason = "vote_timeout";
+            this.finishContinueVote(false);
+          },
+          CONTINUE_VOTE_MS,
+          { unref: true }
+        );
       }
     });
   }
@@ -3890,6 +4331,9 @@ export class MatchProcess {
    * resolves.
    */
   handleVoteContinue(seat: Seat, vote: "yes" | "no"): void {
+    if (this.isPaused) {
+      return;
+    }
     if (this.continueVoteResolve === null) {
       return;
     }
@@ -3926,7 +4370,7 @@ export class MatchProcess {
 
   private finishContinueVote(cont: boolean): void {
     if (this.continueVoteTimer) {
-      clearTimeout(this.continueVoteTimer);
+      this.continueVoteTimer.cancel();
       this.continueVoteTimer = null;
     }
     const resolve = this.continueVoteResolve;
@@ -4025,7 +4469,7 @@ export class MatchProcess {
       this.setSeatLegals(s as Seat, []);
     }
 
-    const matchPlayers: MatchPlayer[] = [];
+    const matchPlayers: PersistedMatchPlayer[] = [];
     for (const [seat, p] of this.players) {
       if (p === null) {
         continue;
@@ -4038,7 +4482,7 @@ export class MatchProcess {
       });
     }
 
-    await createMatchDoc({
+    await this.repository.createMatch({
       matchId: this.currentGameMongoId(),
       seed: nextSeed,
       players: matchPlayers,
@@ -4168,9 +4612,7 @@ export class MatchProcess {
       this.lastEngineEventType === "win" &&
       WIN_TO_PANEL_DELAY_MS > 0
     ) {
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, WIN_TO_PANEL_DELAY_MS)
-      );
+      await this.runtime.sleep(WIN_TO_PANEL_DELAY_MS);
     }
     this.lastEngineEventType = e.type;
     if (e.type === "draw") {
@@ -4431,7 +4873,7 @@ export class MatchProcess {
     this.eventLog.push({
       seq: omniSeq,
       event: archived,
-      emittedAt: Date.now(),
+      emittedAt: this.runtime.now(),
     });
     // Live broadcast — per recipient. Each seat's per-seat seq is
     // assigned inside `sendToSeat`, only when the projection emits
@@ -4475,7 +4917,7 @@ export class MatchProcess {
     this.eventLog.push({
       seq: this.nextSeq++,
       event,
-      emittedAt: Date.now(),
+      emittedAt: this.runtime.now(),
     });
     if (event.type === "match_start") {
       this.relaySeats = event.seats.map((s) => ({
@@ -4522,12 +4964,12 @@ export class MatchProcess {
       };
     });
     try {
-      await archiveReplayLog({
+      await this.repository.archiveReplayLog({
         matchId: this.matchId,
         source: "tenhou",
         sourceGameId: this.relaySourceGameId ?? this.matchId,
-        startedAt: this.startedAt ?? new Date(),
-        endedAt: new Date(),
+        startedAt: this.startedAt ?? new Date(this.runtime.now()),
+        endedAt: new Date(this.runtime.now()),
         ruleSet: this.relayRuleSet,
         events: this.eventLog.map((e) => e.event),
         seats,

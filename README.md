@@ -44,12 +44,13 @@ Game code in `app/game/**` and `game-server/**` must follow these rules:
   - `~/game/portal-adapter/**` — the single integration seam.
   - `config` — only via `~/game/feature-gate` (the `config` import is
     blocked everywhere else in the game subtree).
-- **All cross-cutting concerns go through `PortalAdapter`.** Auth
-  verification, user profile lookups, optional match-end notifications.
-  See [`portal-adapter/types.ts`](./portal-adapter/types.ts) for the
-  interface, [`portal.ts`](./portal-adapter/portal.ts) for the
-  portal-backed implementation, and [`standalone.ts`](./portal-adapter/standalone.ts)
-  for the stub that documents what the standalone build must do.
+- **Host concerns use explicit ports.** Auth verification, user profile
+  lookups, and optional match-end notifications go through `PortalAdapter`.
+  Authoritative session persistence goes through `MatchRepository`, while
+  wall time, scheduling, and randomness go through `MatchRuntime`. The Node
+  composition root injects Mongo and system-runtime implementations; portable
+  hosts can inject SQLite and lifecycle-aware implementations without changing
+  match behavior.
 - **No UI imports from portal components.** Game UI lives entirely under
   `app/game/components/` and may reuse the shared design tokens
   (Tailwind config, CSS variables) but not concrete portal components.
@@ -76,6 +77,12 @@ app/game/
     standalone.ts              ← stub for the future standalone build
   protocol/                    ← WS message types, shared with game-server
   rules/                       ← pure rules engine (no I/O)
+  server/src/
+    match.ts                   ← portable authoritative session
+    checkpoint.ts              ← versioned checkpoint validation
+    repository.ts              ← persistence contract + explicit ephemeral impl
+    runtime.ts                 ← clock / scheduling / randomness contract
+    persist.ts                 ← Node/Mongo repository implementation
   components/                  ← table UI, replay viewer, lobby
   routes/                      ← portal-side React Router entries
   README.md                    ← this file
@@ -84,3 +91,26 @@ app/game/
 `game-server/` is a sibling top-level directory: the standalone Node
 process that runs match sessions. It speaks the same `protocol/` and
 consumes the same `PortalAdapter`.
+
+## Checkpoints
+
+`MatchProcess.createCheckpoint()` and `MatchProcess.restoreCheckpoint()`
+support `waiting` rooms and one quiescent in-progress boundary: a human player's
+own discard/action window. The versioned schema stores exact rules, occupants,
+private engine state, event/sequence state, PRNG state, session ledgers, and the
+remaining visible/buffer deadline durations. Wall-clock timestamps are restored
+relative to the new runtime so time spent suspended does not consume the clock.
+
+Sockets and liveness probes are process-local and are never serialized; restored
+players reconnect through the normal claim/attach flow. Call/chankan windows,
+ready checks, result transitions, continue votes, relays, delayed spectators, and
+disconnect/AFK policy state still fail checkpoint creation explicitly rather
+than producing a partial recovery record.
+
+`pauseAndSaveCheckpoint()` freezes mutation and cancels the active action timer
+before awaiting `MatchRepository.saveCheckpoint()`. Concurrent pause calls share
+one write. Success leaves the old process frozen for disposal; a failed atomic
+write rebases the saved durations onto the current runtime and resumes the same
+process without charging the I/O interval. `restoreSavedCheckpoint()` loads and
+validates through the repository. The Node adapter stores checkpoints separately
+in `game_match_checkpoints`; mobile will provide the corresponding SQLite adapter.

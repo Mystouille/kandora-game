@@ -12,6 +12,7 @@ export interface RandomBotInput {
   hand: Tile[];
   /** The tile the bot just drew (must be in `hand`). */
   drawn: Tile | null;
+  random: () => number;
 }
 
 export interface RandomBotDiscard {
@@ -22,11 +23,11 @@ export interface RandomBotDiscard {
 }
 
 export function randomBotDiscard(input: RandomBotInput): RandomBotDiscard {
-  const { hand, drawn } = input;
+  const { hand, drawn, random } = input;
   if (hand.length === 0) {
     throw new Error("RandomBot: empty hand");
   }
-  const idx = Math.floor(Math.random() * hand.length);
+  const idx = Math.floor(random() * hand.length);
   const tile = hand[idx];
   const tsumogiri =
     drawn !== null && idx === hand.length - 1 && tile === drawn;

@@ -3,28 +3,47 @@
  *
  * Design:
  *
- *   - **Mid-match durability lives in RAM.** The per-match
- *     `MatchProcess` holds the live event log in memory; Mongo is
- *     not in the per-event hot path.
+ *   - **The event hot path lives in RAM.** The per-match `MatchProcess`
+ *     holds the live event log in memory; Mongo is not touched per event.
+ *     An explicit lifecycle pause may atomically replace one versioned
+ *     checkpoint in `game_match_checkpoints` for crash/app-suspend recovery.
  *   - **Mongo is the archive.** We write exactly two times per
  *     match: `createMatchDoc` at start (so lobby/portal can see
  *     "match X exists, status playing") and `archiveMatch` at end
  *     (writes the full event log + final scores in one shot).
- *   - **No crash recovery.** A game-server restart drops every
- *     in-flight `MatchProcess`. Reconnects to a no-longer-resident
- *     match are refused by the WS upgrade handler (it consults
- *     `getMatchStatus` and returns `match_lost`). This trade keeps
- *     the architecture simple; the cost is bounded by restart
- *     frequency.
+ *   - **Recovery is host-driven.** This module can save/load/delete
+ *     checkpoints, but the current Node bootstrap does not automatically
+ *     pause rooms or restore them at startup. Mobile/local composition owns
+ *     that lifecycle; cloud startup recovery remains a later integration.
  *
  * Reading: `loadMatchEvents` returns the finished-match event log
  * (or `[]` for an in-progress match — those events live only in
  * the resident `MatchProcess`).
  */
+import mongoose, { Schema } from "mongoose";
 import { MatchModel, type MatchPlayer } from "~/core/models/game/Match";
 import { ReplayLogModel } from "~/core/models/game/ReplayLog";
 import type { GameEvent } from "~/game/protocol/messages";
 import { REPLAY_LOG_SCHEMA_VERSION } from "~/game/replay/types";
+import type { MatchRepository } from "./repository";
+import {
+  parseMatchCheckpoint,
+  type MatchCheckpoint,
+} from "./checkpoint";
+
+const MatchCheckpointModel =
+  mongoose.models.GameMatchCheckpoint ??
+  mongoose.model(
+    "GameMatchCheckpoint",
+    new Schema(
+      {
+        _id: { type: String, required: true },
+        checkpoint: { type: Schema.Types.Mixed, required: true },
+      },
+      { timestamps: true, _id: false }
+    ),
+    "game_match_checkpoints"
+  );
 
 export async function createMatchDoc(args: {
   matchId: string;
@@ -124,6 +143,42 @@ export async function archiveReplayLog(args: {
     { upsert: true }
   );
 }
+
+export async function saveMatchCheckpoint(args: {
+  matchId: string;
+  checkpoint: MatchCheckpoint;
+}): Promise<void> {
+  const checkpoint = parseMatchCheckpoint(args.checkpoint);
+  await MatchCheckpointModel.updateOne(
+    { _id: args.matchId },
+    { $set: { checkpoint } },
+    { upsert: true }
+  );
+}
+
+export async function loadMatchCheckpoint(
+  matchId: string
+): Promise<MatchCheckpoint | null> {
+  const stored = (await MatchCheckpointModel.findById(matchId).lean()) as
+    | { checkpoint?: unknown }
+    | null;
+  return stored?.checkpoint === undefined
+    ? null
+    : parseMatchCheckpoint(stored.checkpoint);
+}
+
+export async function deleteMatchCheckpoint(matchId: string): Promise<void> {
+  await MatchCheckpointModel.deleteOne({ _id: matchId });
+}
+
+export const mongoMatchRepository: MatchRepository = {
+  createMatch: (args) => createMatchDoc(args),
+  archiveMatch: (args) => archiveMatch(args),
+  archiveReplayLog: (args) => archiveReplayLog(args),
+  saveCheckpoint: (args) => saveMatchCheckpoint(args),
+  loadCheckpoint: (matchId) => loadMatchCheckpoint(matchId),
+  deleteCheckpoint: (matchId) => deleteMatchCheckpoint(matchId),
+};
 
 /**
  * Read finished-match events with `seq >= fromSeq`. Returns `[]`

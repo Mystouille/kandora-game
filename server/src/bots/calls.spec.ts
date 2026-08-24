@@ -226,6 +226,31 @@ describe("chooseBotSelfKan — yakuhai-only policy", () => {
     expect(chooseBotSelfKan(state, 1)).toBeNull();
   });
 
+  it("does NOT declare a self-kan after the final live-wall draw", () => {
+    const state = craftSelfKan({
+      seat: 1,
+      hand: [
+        "7z",
+        "7z",
+        "7z",
+        "7z",
+        "1m",
+        "2m",
+        "3m",
+        "4m",
+        "5m",
+        "6m",
+        "7m",
+        "8m",
+        "9m",
+        "1p",
+      ],
+    });
+    state.liveWall = [];
+
+    expect(chooseBotSelfKan(state, 1)).toBeNull();
+  });
+
   it("does NOT shouminkan during riichi", () => {
     const ponMeld: Meld = {
       type: "pon",

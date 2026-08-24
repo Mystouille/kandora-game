@@ -52,8 +52,7 @@
 
 import type { GameEvent, ReplayLog } from "~/game/replay/types";
 import type { Meld, Tile } from "~/game/protocol/messages";
-import { HAN_ROMAJI } from "~/core/i18n/hanRomaji";
-import { RIICHI_LIB_YAKU_TO_HAN } from "~/core/yaku/platformYakuMaps";
+import { RIICHI_LIB_YAKU_KANJI_BY_ROMAJI } from "~/game/rules";
 
 // ---------------------------------------------------------------------------
 // Output shape — kept identical to the majsoul converter so both
@@ -126,12 +125,9 @@ const WINDS = [41, 42, 43, 44]; // 1z..4z
 const DRAGS = [45, 46, 47]; // 5z..7z (haku/hatsu/chun)
 const WIND_NAMES = ["東", "南", "西", "北"] as const;
 
-const TENHOU_YAKU_BY_ROMAJI = Object.entries(RIICHI_LIB_YAKU_TO_HAN).reduce<
-  Record<string, string>
->((names, [japanese, han]) => {
-  names[HAN_ROMAJI[han]] = japanese;
-  return names;
-}, {});
+const TENHOU_YAKU_BY_ROMAJI: Record<string, string> = {
+  ...RIICHI_LIB_YAKU_KANJI_BY_ROMAJI,
+};
 
 Object.assign(TENHOU_YAKU_BY_ROMAJI, {
   Haku: "役牌 白",

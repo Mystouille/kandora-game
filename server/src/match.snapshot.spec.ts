@@ -10,12 +10,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./persist", () => ({
-  createMatchDoc: vi.fn(async () => undefined),
-  archiveMatch: vi.fn(async () => undefined),
-}));
-
 import { MatchProcess, setDelayAfterDiscardMs } from "./match";
+import { ephemeralMatchRepository } from "./repository";
 import { ServerMessageSchema } from "~/game/protocol/messages";
 import { useMatchStore } from "~/game/client/store";
 
@@ -28,7 +24,8 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u1", displayName: "Bot1", isBot: true },
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
-    ]
+    ],
+    { repository: ephemeralMatchRepository }
   );
 }
 
