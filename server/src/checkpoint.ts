@@ -598,12 +598,57 @@ export const PlayingContinueVoteCheckpointSchema = z
 export type PlayingContinueVoteCheckpoint = z.infer<
   typeof PlayingContinueVoteCheckpointSchema
 >;
+
+export const PlayingResultTransitionCheckpointSchema = z
+  .object({
+    ...PlayingCheckpointBaseShape,
+    checkpointKind: z.literal("result_transition"),
+    transitionKind: z.literal("post_hand_reveal"),
+    transitionRemainingMs: z.number().int().nonnegative(),
+    nextReadyMs: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((checkpoint, context) => {
+    if (checkpoint.state.phase !== "hand_ended") {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "phase"],
+        message: "Post-hand reveal transition requires hand_ended",
+      });
+    }
+    if (checkpoint.state.lastHandResult === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "lastHandResult"],
+        message: "Post-hand reveal transition requires a hand result",
+      });
+    }
+    if (checkpoint.gameStartLogIdx > checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["gameStartLogIdx"],
+        message: "Game log start cannot exceed the event log length",
+      });
+    }
+    if (checkpoint.nextSeq !== checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextSeq"],
+        message: "Next sequence must equal the contiguous event log length",
+      });
+    }
+  });
+
+export type PlayingResultTransitionCheckpoint = z.infer<
+  typeof PlayingResultTransitionCheckpointSchema
+>;
 export const MatchCheckpointSchema = z.union([
   WaitingRoomCheckpointSchema,
   PlayingActionCheckpointSchema,
   PlayingCallCheckpointSchema,
   PlayingReadyCheckpointSchema,
   PlayingContinueVoteCheckpointSchema,
+  PlayingResultTransitionCheckpointSchema,
 ]);
 export type MatchCheckpoint = z.infer<typeof MatchCheckpointSchema>;
 

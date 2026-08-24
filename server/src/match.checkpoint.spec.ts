@@ -390,6 +390,212 @@ describe("MatchProcess checkpoints", () => {
     );
   });
 
+  it("restores the remaining post-hand reveal before opening ready", async () => {
+    const originalRuntime = controlledRuntime(85_000, 1151);
+    const match = new MatchProcess(
+      "checkpoint-post-hand-reveal",
+      64,
+      humanPlayers(),
+      {
+        repository: ephemeralMatchRepository,
+        runtime: originalRuntime,
+      }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    setNextHandDelayMs(5_000);
+    const internals = match as unknown as {
+      state: MatchState;
+      pendingWinRevealMs: number;
+      afterHandEnd: () => Promise<void>;
+    };
+    internals.state.phase = "hand_ended";
+    internals.state.lastHandResult = {
+      reason: "tsumo",
+      winner: 0,
+      loser: null,
+      delta: [3000, -1000, -1000, -1000],
+      tenpai: null,
+      abortKind: null,
+      winHan: 1,
+      winYakuman: false,
+    };
+    internals.pendingWinRevealMs = 3_000;
+    const advancing = internals.afterHandEnd();
+    originalRuntime.advance(1_000);
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "result_transition"
+    ) {
+      throw new Error("expected a result-transition checkpoint");
+    }
+    expect(checkpoint.transitionKind).toBe("post_hand_reveal");
+    expect(checkpoint.transitionRemainingMs).toBe(2_000);
+    expect(checkpoint.nextReadyMs).toBe(5_000);
+
+    const restoredRuntime = controlledRuntime(1_150_000, 1152);
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: restoredRuntime,
+    });
+    originalRuntime.advance(checkpoint.transitionRemainingMs);
+    restoredRuntime.advance(checkpoint.transitionRemainingMs);
+    originalRuntime.runNextTimer();
+    restoredRuntime.runNextTimer();
+    await vi.waitFor(() => {
+      expect(match.createCheckpoint()).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+        readyContinuation: "next_hand",
+      });
+      expect(restored.createCheckpoint()).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+        readyContinuation: "next_hand",
+      });
+    });
+
+    for (const seat of [0, 1, 2, 3] as const) {
+      match.handleReady(seat);
+      restored.handleReady(seat);
+    }
+    await advancing;
+    await vi.waitFor(() => {
+      expect(restored.createCheckpoint()).toMatchObject({
+        status: "playing",
+        checkpointKind: "action_window",
+      });
+    });
+    expect(restored.replayFromBuffer(0, 0)).toEqual(
+      match.replayFromBuffer(0, 0)
+    );
+    expect(comparableSnapshot(restored, 0, restoredRuntime)).toEqual(
+      comparableSnapshot(match, 0, originalRuntime)
+    );
+  });
+
+  it("rearms the post-hand reveal after checkpoint save failure", async () => {
+    const gate = deferred();
+    const capturedCheckpoints: MatchCheckpoint[] = [];
+    const repository: MatchRepository = {
+      ...createMemoryMatchRepository(),
+      saveCheckpoint: async ({ checkpoint }) => {
+        capturedCheckpoints.push(checkpoint);
+        await gate.promise;
+      },
+    };
+    const runtime = controlledRuntime(87_000, 1161);
+    const match = new MatchProcess(
+      "checkpoint-post-hand-reveal-failure",
+      65,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    setNextHandDelayMs(5_000);
+    const internals = match as unknown as {
+      state: MatchState;
+      pendingWinRevealMs: number;
+      afterHandEnd: () => Promise<void>;
+    };
+    internals.state.phase = "hand_ended";
+    internals.state.lastHandResult = {
+      reason: "tsumo",
+      winner: 0,
+      loser: null,
+      delta: [3000, -1000, -1000, -1000],
+      tenpai: null,
+      abortKind: null,
+      winHan: 1,
+      winYakuman: false,
+    };
+    internals.pendingWinRevealMs = 3_000;
+    const advancing = internals.afterHandEnd();
+    runtime.advance(1_000);
+
+    const saving = match.pauseAndSaveCheckpoint();
+    const captured = capturedCheckpoints[0];
+    if (
+      captured?.status !== "playing" ||
+      captured.checkpointKind !== "result_transition"
+    ) {
+      throw new Error("expected a captured result transition");
+    }
+    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
+    runtime.advance(30_000);
+    gate.reject(new Error("result checkpoint write failed"));
+    await expect(saving).rejects.toThrow("result checkpoint write failed");
+
+    expect(match.isPaused).toBe(false);
+    expect(runtime.scheduledDelays().at(-1)).toBe(
+      captured.transitionRemainingMs
+    );
+    runtime.advance(captured.transitionRemainingMs);
+    runtime.runNextTimer();
+    await vi.waitFor(() => {
+      expect(match.createCheckpoint()).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+      });
+    });
+    for (const seat of [0, 1, 2, 3] as const) {
+      match.handleReady(seat);
+    }
+    await advancing;
+    expect(match.createCheckpoint()).toMatchObject({
+      status: "playing",
+      checkpointKind: "action_window",
+    });
+  });
+
+  it("rejects checkpoint writes during an unmodeled win-reaction sleep", async () => {
+    const gate = deferred();
+    let saveCount = 0;
+    const repository: MatchRepository = {
+      ...ephemeralMatchRepository,
+      saveCheckpoint: async () => {
+        saveCount += 1;
+      },
+    };
+    const runtime = controlledRuntime(88_000, 1171);
+    runtime.sleep = async () => gate.promise;
+    const match = new MatchProcess(
+      "checkpoint-win-reaction-guard",
+      66,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    setDelayAfterDiscardMs(1_000);
+    const sleeping = (
+      match as unknown as {
+        waitForWinReaction: (trigger: "draw") => Promise<void>;
+      }
+    ).waitForWinReaction("draw");
+    await Promise.resolve();
+
+    expect(() => match.createCheckpoint()).toThrow(
+      /transition win_reaction/
+    );
+    expect(() => match.pauseAndSaveCheckpoint()).toThrow(
+      /transition win_reaction/
+    );
+    expect(saveCount).toBe(0);
+
+    gate.resolve();
+    await sleeping;
+    expect(match.createCheckpoint()).toMatchObject({
+      status: "playing",
+      checkpointKind: "action_window",
+    });
+  });
+
   it("rearms a ready continuation after checkpoint save failure", async () => {
     const gate = deferred();
     const capturedCheckpoints: MatchCheckpoint[] = [];

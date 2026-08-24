@@ -95,23 +95,26 @@ consumes the same `PortalAdapter`.
 ## Checkpoints
 
 `MatchProcess.createCheckpoint()` and `MatchProcess.restoreCheckpoint()`
-support `waiting` rooms and four quiescent in-progress boundaries: a human
+support `waiting` rooms and five quiescent in-progress boundaries: a human
 discard/action window; one or more call decisions after a discard/shouminkan;
-an initial/post-hand ready check; or a Buu continue vote after a completed game.
-The versioned schema stores exact rules, occupants, private engine state,
-event/sequence state, PRNG state, session ledgers, captured human/bot call
-intents, ready/vote state and continuations, final standings needed for Buu
-reseating, per-seat disconnect/explicit-AFK/liveness-strike policy, and every
-remaining deadline duration. Wall-clock timestamps are restored relative to
-the new runtime so time spent suspended does not consume any seat's clock.
+an initial/post-hand ready check; a staged post-hand result reveal; or a Buu
+continue vote after a completed game. The versioned schema stores exact rules,
+occupants, private engine state, event/sequence state, PRNG state, session
+ledgers, captured human/bot call intents, result/ready/vote continuations, final
+standings needed for Buu reseating, per-seat disconnect/explicit-AFK/liveness-
+strike policy, and every remaining deadline duration. Wall-clock timestamps are
+restored relative to the new runtime so suspended time consumes no clock.
 
 Sockets, liveness probe callbacks, and in-flight probes are process-local and
 are never serialized; restored players reconnect through the normal
 claim/attach flow. A network-only disconnect clears on a fresh attachment,
 whereas explicit AFK survives reattachment until `afk:false`. A disconnected or
 AFK seat that currently owns an action/call window remains fail-closed because
-its auto-default may already be advancing. Result transitions, the internal
-win→chombo display pause, relays, and delayed spectators also remain unsupported.
+its auto-default may already be advancing. Remaining short pacing sleeps (win
+reaction, turn/draw-to-discard pacing, match-end display, win-to-panel), the
+internal win→chombo display pause, relays, and delayed spectators are explicitly
+marked uncheckpointable so an accepted command cannot be saved as stale
+pre-command state.
 
 `pauseAndSaveCheckpoint()` freezes mutation and cancels every active phase timer
 before awaiting `MatchRepository.saveCheckpoint()`. Concurrent pause calls share

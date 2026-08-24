@@ -61,6 +61,7 @@ import {
   PlayingCallCheckpointSchema,
   PlayingContinueVoteCheckpointSchema,
   PlayingReadyCheckpointSchema,
+  PlayingResultTransitionCheckpointSchema,
   WaitingRoomCheckpointSchema,
   parseMatchCheckpoint,
   type MatchCheckpoint,
@@ -68,6 +69,7 @@ import {
   type PlayingCallCheckpoint,
   type PlayingContinueVoteCheckpoint,
   type PlayingReadyCheckpoint,
+  type PlayingResultTransitionCheckpoint,
   type WaitingRoomCheckpoint,
 } from "./checkpoint";
 import { projectEvent, projectPublicEvent } from "./projection";
@@ -645,6 +647,21 @@ export class MatchProcess {
    * non-win hand endings (exhaustive draw, abort).
    */
   private pendingWinRevealMs = 0;
+  private resultTransitionKind:
+    | PlayingResultTransitionCheckpoint["transitionKind"]
+    | null = null;
+  private resultTransitionDeadline: number | null = null;
+  private resultTransitionNextReadyMs = 0;
+  private resultTransitionTimer: MatchTimer | null = null;
+  private resultTransitionResolve: (() => void) | null = null;
+  private uncheckpointableTransition:
+    | "win_reaction"
+    | "turn_pacing"
+    | "bot_discard_pacing"
+    | "auto_riichi_pacing"
+    | "match_end_display"
+    | "win_to_panel"
+    | null = null;
 
   /**
    * Wall-clock match start time, captured in `start()`. Used by
@@ -1100,6 +1117,14 @@ export class MatchProcess {
       return this.createWaitingRoomCheckpoint();
     }
     if (this.statusValue === "playing") {
+      if (this.uncheckpointableTransition !== null) {
+        this.checkpointUnsupported(
+          `transition ${this.uncheckpointableTransition}`
+        );
+      }
+      if (this.resultTransitionResolve !== null) {
+        return this.createPlayingResultTransitionCheckpoint();
+      }
       if (this.continueVoteResolve !== null) {
         return this.createPlayingContinueVoteCheckpoint();
       }
@@ -1133,7 +1158,10 @@ export class MatchProcess {
     const checkpoint = this.createCheckpoint();
     this.pausedCheckpoint = checkpoint;
     if (checkpoint.status === "playing") {
-      if (checkpoint.checkpointKind === "continue_vote") {
+      if (checkpoint.checkpointKind === "result_transition") {
+        this.resultTransitionTimer?.cancel();
+        this.resultTransitionTimer = null;
+      } else if (checkpoint.checkpointKind === "continue_vote") {
         this.continueVoteTimer?.cancel();
         this.continueVoteTimer = null;
       } else if (checkpoint.checkpointKind === "ready_check") {
@@ -1176,8 +1204,10 @@ export class MatchProcess {
           this.installCheckpointCallWindows(checkpoint);
         } else if (checkpoint.checkpointKind === "ready_check") {
           this.installCheckpointReadyCheck(checkpoint, false);
-        } else {
+        } else if (checkpoint.checkpointKind === "continue_vote") {
           this.installCheckpointContinueVote(checkpoint, false);
+        } else {
+          this.installCheckpointResultTransition(checkpoint, false);
         }
       }
       throw error;
@@ -1261,6 +1291,25 @@ export class MatchProcess {
     throw new Error(
       `MatchProcess.createCheckpoint: playing state is not quiescent (${reason})`
     );
+  }
+
+  private async runUncheckpointableTransition(
+    transition: NonNullable<MatchProcess["uncheckpointableTransition"]>,
+    delayMs: number
+  ): Promise<void> {
+    if (this.uncheckpointableTransition !== null) {
+      throw new Error(
+        `MatchProcess: nested transition ${transition} during ${this.uncheckpointableTransition}`
+      );
+    }
+    this.uncheckpointableTransition = transition;
+    try {
+      await this.runtime.sleep(delayMs);
+    } finally {
+      if (this.uncheckpointableTransition === transition) {
+        this.uncheckpointableTransition = null;
+      }
+    }
   }
 
   private assertCommonPlayingCheckpointState(
@@ -1531,6 +1580,38 @@ export class MatchProcess {
     });
   }
 
+  private createPlayingResultTransitionCheckpoint(): PlayingResultTransitionCheckpoint {
+    this.assertCommonPlayingCheckpointState();
+    if (
+      this.resultTransitionResolve === null ||
+      this.resultTransitionTimer === null ||
+      this.resultTransitionDeadline === null ||
+      this.resultTransitionKind === null
+    ) {
+      this.checkpointUnsupported("result transition is incomplete");
+    }
+    if (
+      this.readyResolve !== null ||
+      this.continueVoteResolve !== null ||
+      this.callWindow.some((window) => window !== null) ||
+      this.legalActions.some((actions) => actions.length > 0) ||
+      this.currentDeadlineTimer.some((timer) => timer !== null)
+    ) {
+      this.checkpointUnsupported("result transition retains input state");
+    }
+    const savedAt = this.runtime.now();
+    return PlayingResultTransitionCheckpointSchema.parse({
+      ...this.playingCheckpointBase(savedAt),
+      checkpointKind: "result_transition",
+      transitionKind: this.resultTransitionKind,
+      transitionRemainingMs: Math.max(
+        0,
+        this.resultTransitionDeadline - savedAt
+      ),
+      nextReadyMs: this.resultTransitionNextReadyMs,
+    });
+  }
+
   /** Restore validated state with every network attachment detached. */
   static restoreCheckpoint(
     input: unknown,
@@ -1603,8 +1684,10 @@ export class MatchProcess {
       match.installCheckpointCallWindows(checkpoint);
     } else if (checkpoint.checkpointKind === "ready_check") {
       match.installCheckpointReadyCheck(checkpoint, true);
-    } else {
+    } else if (checkpoint.checkpointKind === "continue_vote") {
       match.installCheckpointContinueVote(checkpoint, true);
+    } else {
+      match.installCheckpointResultTransition(checkpoint, true);
     }
     return match;
   }
@@ -1780,6 +1863,79 @@ export class MatchProcess {
           { unref: true }
         )
       : null;
+  }
+
+  private installCheckpointResultTransition(
+    checkpoint: PlayingResultTransitionCheckpoint,
+    restored: boolean
+  ): void {
+    const transitionKind = checkpoint.transitionKind;
+    const nextReadyMs = checkpoint.nextReadyMs;
+    this.resultTransitionKind = transitionKind;
+    this.resultTransitionDeadline =
+      this.runtime.now() + checkpoint.transitionRemainingMs;
+    this.resultTransitionNextReadyMs = nextReadyMs;
+    if (restored) {
+      this.resultTransitionResolve = () => {
+        void this.resumeResultTransition(transitionKind, nextReadyMs);
+      };
+    } else if (this.resultTransitionResolve === null) {
+      throw new Error(
+        "MatchProcess.installCheckpointResultTransition: missing live continuation"
+      );
+    }
+    this.resultTransitionTimer?.cancel();
+    this.resultTransitionTimer = this.runtime.schedule(
+      () => {
+        this.finishResultTransition();
+      },
+      checkpoint.transitionRemainingMs,
+      { unref: true }
+    );
+  }
+
+  private runResultTransition(
+    transitionKind: PlayingResultTransitionCheckpoint["transitionKind"],
+    delayMs: number,
+    nextReadyMs: number
+  ): Promise<void> {
+    this.resultTransitionKind = transitionKind;
+    this.resultTransitionDeadline = this.runtime.now() + delayMs;
+    this.resultTransitionNextReadyMs = nextReadyMs;
+    return new Promise<void>((resolve) => {
+      this.resultTransitionResolve = resolve;
+      this.resultTransitionTimer = this.runtime.schedule(
+        () => {
+          this.finishResultTransition();
+        },
+        delayMs,
+        { unref: true }
+      );
+    });
+  }
+
+  private finishResultTransition(): void {
+    if (this.isPaused) {
+      return;
+    }
+    this.resultTransitionTimer?.cancel();
+    this.resultTransitionTimer = null;
+    const resolve = this.resultTransitionResolve;
+    this.resultTransitionResolve = null;
+    this.resultTransitionDeadline = null;
+    this.resultTransitionKind = null;
+    this.resultTransitionNextReadyMs = 0;
+    resolve?.();
+  }
+
+  private async resumeResultTransition(
+    transitionKind: PlayingResultTransitionCheckpoint["transitionKind"],
+    nextReadyMs: number
+  ): Promise<void> {
+    if (transitionKind === "post_hand_reveal" && nextReadyMs > 0) {
+      await this.runReadyCheck(nextReadyMs, "next_hand");
+    }
+    await this.beginNextHandAfterReady();
   }
 
   // -------------------------------------------------------------------------
@@ -3158,7 +3314,7 @@ export class MatchProcess {
             WIN_REACTION_DELAY_MS
           );
     if (remaining > 0) {
-      await this.runtime.sleep(remaining);
+      await this.runUncheckpointableTransition("win_reaction", remaining);
     }
   }
 
@@ -3183,7 +3339,10 @@ export class MatchProcess {
     // including the human's after a bot discards. Disabled during
     // tests via `setDelayAfterDiscardMs(0)`.
     if (DELAY_AFTER_DISCARD_MS > 0) {
-      await this.runtime.sleep(DELAY_AFTER_DISCARD_MS);
+      await this.runUncheckpointableTransition(
+        "turn_pacing",
+        DELAY_AFTER_DISCARD_MS
+      );
     }
 
     const drawRes = step(this.state, { type: "draw", seat: this.state.turn });
@@ -3220,7 +3379,10 @@ export class MatchProcess {
     // can play and the user can see the drawn tile briefly before
     // it's discarded.
     if (DRAW_TO_DISCARD_DELAY_MS > 0) {
-      await this.runtime.sleep(DRAW_TO_DISCARD_DELAY_MS);
+      await this.runUncheckpointableTransition(
+        "bot_discard_pacing",
+        DRAW_TO_DISCARD_DELAY_MS
+      );
     }
     // Self-kan check (yakuhai-only policy). The bot may declare an
     // ankan or shouminkan instead of discarding. After a successful
@@ -3938,7 +4100,10 @@ export class MatchProcess {
       // _DELAY_MS` so a riichi'd seat ticks at the same cadence
       // as every other auto-played seat.
       if (DRAW_TO_DISCARD_DELAY_MS > 0) {
-        await this.runtime.sleep(DRAW_TO_DISCARD_DELAY_MS);
+        await this.runUncheckpointableTransition(
+          "auto_riichi_pacing",
+          DRAW_TO_DISCARD_DELAY_MS
+        );
       }
       await this.applyDiscard(seat, tile, legals[0].discardSource);
       await this.afterDiscard();
@@ -4417,7 +4582,11 @@ export class MatchProcess {
       const revealMs = this.pendingWinRevealMs;
       this.pendingWinRevealMs = 0;
       if (revealMs > 0) {
-        await this.runtime.sleep(revealMs);
+        await this.runResultTransition(
+          "post_hand_reveal",
+          revealMs,
+          NEXT_HAND_DELAY_MS
+        );
       }
       await this.runReadyCheck(NEXT_HAND_DELAY_MS, "next_hand");
     } else {
@@ -4569,7 +4738,10 @@ export class MatchProcess {
       // Hold the "match ended" screen for a moment before the
       // continue-vote overlay opens and covers it.
       if (MATCH_END_DISPLAY_MS > 0) {
-        await this.runtime.sleep(MATCH_END_DISPLAY_MS);
+        await this.runUncheckpointableTransition(
+          "match_end_display",
+          MATCH_END_DISPLAY_MS
+        );
       }
       const cont = await this.runContinueVote(finalScores);
       await this.continueAfterVote(cont, finalScores);
@@ -5019,7 +5191,10 @@ export class MatchProcess {
       this.lastEngineEventType === "win" &&
       WIN_TO_PANEL_DELAY_MS > 0
     ) {
-      await this.runtime.sleep(WIN_TO_PANEL_DELAY_MS);
+      await this.runUncheckpointableTransition(
+        "win_to_panel",
+        WIN_TO_PANEL_DELAY_MS
+      );
     }
     this.lastEngineEventType = e.type;
     if (e.type === "draw") {
