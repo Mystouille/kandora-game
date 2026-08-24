@@ -38,6 +38,7 @@ import {
   type LivePlayMenuFlags,
 } from "~/game/client/LivePlayMenu";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
+import { findNoCallAutoPass } from "~/game/client/callPrompt";
 import { rotateHandResult, rotateMatchView } from "~/game/replay/player";
 import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
@@ -712,6 +713,9 @@ export default function GameMatchRoute({
         // buttons disappear immediately when the toggle flips on.
         rendererRef.current.setAutoWinEnabled(next.autoWin);
       }
+      if (next.noCall !== prev.noCall && rendererRef.current !== null) {
+        rendererRef.current.setNoCallEnabled(next.noCall);
+      }
       return next;
     });
   }, []);
@@ -738,6 +742,11 @@ export default function GameMatchRoute({
       rendererRef.current.setAutoWinEnabled(liveMenuFlags.autoWin);
     }
   }, [liveMenuFlags.autoWin]);
+  useEffect(() => {
+    if (rendererRef.current !== null) {
+      rendererRef.current.setNoCallEnabled(liveMenuFlags.noCall);
+    }
+  }, [liveMenuFlags.noCall]);
   // Dedupe ref for auto-action dispatch: tracks the last
   // legal-action id we fired so the effect doesn't re-fire on
   // unrelated store mutations that arrive before the server's
@@ -788,18 +797,10 @@ export default function GameMatchRoute({
     // 2) No-calls — pass on any chi / pon / daiminkan decision
     //    window. Suppressed when a win is also available so the
     //    player doesn't unintentionally skip a ron alongside.
-    if (liveMenuFlags.noCall && !hasWin) {
-      const hasCall = actions.some(
-        (a) =>
-          a.type === "chi" ||
-          a.type === "pon" ||
-          (a.type === "kan" && a.kanKind === "daiminkan")
-      );
-      const pass = actions.find((a) => a.type === "pass");
-      if (hasCall && pass) {
-        fire(pass.id);
-        return;
-      }
+    const noCallPass = findNoCallAutoPass(actions, liveMenuFlags.noCall);
+    if (noCallPass) {
+      fire(noCallPass.id);
+      return;
     }
     // 3) Auto-discard — tsumogiri the drawn tile. Triggered
     //    either by the `autoDiscard` toggle or because the seat
@@ -1100,6 +1101,7 @@ export default function GameMatchRoute({
           // off here.
           renderer.setAutoSort(liveMenuFlags.autoSort);
           renderer.setAutoWinEnabled(liveMenuFlags.autoWin);
+          renderer.setNoCallEnabled(liveMenuFlags.noCall);
           const debugSearch = new URLSearchParams(window.location.search);
           renderer.setSeatEnrichment(
             import.meta.env.DEV && debugSearch.get("debugTeamLogos") === "1"

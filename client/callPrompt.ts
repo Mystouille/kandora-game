@@ -12,12 +12,46 @@ function hasCallPrompt(actions: readonly LegalAction[]): boolean {
   return actions.some((action) => CALL_PROMPT_ACTION_TYPES.has(action.type));
 }
 
+function isAutoPassableCall(action: LegalAction): boolean {
+  return (
+    action.type === "chi" ||
+    action.type === "pon" ||
+    (action.type === "kan" && action.kanKind === "daiminkan")
+  );
+}
+
 function hasAutoPassableCall(actions: readonly LegalAction[]): boolean {
+  return actions.some(isAutoPassableCall);
+}
+
+function hasWin(actions: readonly LegalAction[]): boolean {
   return actions.some(
+    (action) => action.type === "ron" || action.type === "tsumo"
+  );
+}
+
+export function findNoCallAutoPass(
+  actions: readonly LegalAction[],
+  noCallEnabled: boolean
+): LegalAction | undefined {
+  if (!noCallEnabled || hasWin(actions) || !hasAutoPassableCall(actions)) {
+    return undefined;
+  }
+  return actions.find((action) => action.type === "pass");
+}
+
+export function filterNoCallActionButtons(
+  actions: readonly LegalAction[],
+  noCallEnabled: boolean
+): LegalAction[] {
+  if (!noCallEnabled || !hasAutoPassableCall(actions)) {
+    return [...actions];
+  }
+  const autoPass = findNoCallAutoPass(actions, noCallEnabled);
+  return actions.filter(
     (action) =>
-      action.type === "chi" ||
-      action.type === "pon" ||
-      (action.type === "kan" && action.kanKind === "daiminkan")
+      !isAutoPassableCall(action) &&
+      !(autoPass !== undefined && action.id === autoPass.id)
   );
 }
 
@@ -31,10 +65,7 @@ export function shouldPlayCallPrompt(
   if (!noCallEnabled) {
     return true;
   }
-  const hasWin = actions.some(
-    (action) => action.type === "ron" || action.type === "tsumo"
-  );
-  return hasWin || !hasAutoPassableCall(actions);
+  return hasWin(actions) || !hasAutoPassableCall(actions);
 }
 
 export function shouldTriggerCallPrompt(

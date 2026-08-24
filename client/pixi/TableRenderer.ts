@@ -31,6 +31,7 @@ import type { MatchView } from "../store";
 import type { LegalAction, Meld } from "~/game/protocol/messages";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 import { playGameSound } from "../sound";
+import { filterNoCallActionButtons } from "../callPrompt";
 import {
   tableLayoutFromConfig,
   validateTableLayoutConfig,
@@ -679,6 +680,13 @@ export class TableRenderer {
    * the button would otherwise flash in-and-out every draw.
    */
   private autoWinEnabled = false;
+  /**
+   * Mirrors the host route's "No call" toggle. Passable chi, pon,
+   * daiminkan, and the corresponding automatic Pass are removed
+   * before the action strip is drawn, avoiding a flash while the
+   * host effect sends Pass to the server.
+   */
+  private noCallEnabled = false;
   /** Last non-touch pointer position, used to restore hover after redraws. */
   private focusedHandPointerClient: { x: number; y: number } | null = null;
   /** Current frame's focused-hand sprites in visual paint order. */
@@ -1853,6 +1861,14 @@ export class TableRenderer {
       return;
     }
     this.autoWinEnabled = flag;
+    this.requestRender();
+  }
+
+  setNoCallEnabled(flag: boolean): void {
+    if (this.noCallEnabled === flag) {
+      return;
+    }
+    this.noCallEnabled = flag;
     this.requestRender();
   }
 
@@ -6709,7 +6725,10 @@ export class TableRenderer {
     // Pull every non-discard legal action — these are the call /
     // riichi / win decisions that need explicit buttons. Discards
     // are tile-driven (click a tile in the hand).
-    const raw = view.legalActions.filter((a) => {
+    const raw = filterNoCallActionButtons(
+      view.legalActions,
+      this.noCallEnabled
+    ).filter((a) => {
       if (a.type === "discard" || a.type === "draw") {
         return false;
       }
