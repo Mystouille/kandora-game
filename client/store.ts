@@ -540,6 +540,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
       ...state,
       roomState,
       mySeat: roomState?.mySeat ?? state.mySeat,
+      seatNames: roomState
+        ? (roomState.seats.map(({ occupant }) =>
+            occupant.kind === "empty" ? "" : occupant.displayName
+          ) as [string, string, string, string])
+        : state.seatNames,
     }));
   },
 

@@ -146,6 +146,90 @@ describe("MatchProcess waiting-room state machine", () => {
     expect(rs.hostSeat).toBe(seatA);
   });
 
+  it("replaces the first waiting-room bot before claiming an empty seat", () => {
+    const m = MatchProcess.createWaitingRoom(
+      "replace-waiting-bot",
+      11,
+      dependencies
+    );
+    const hostSeat = m.claimSeat("host", "Host") as Seat;
+    const botSeat = m.addWaitingRoomBot(hostSeat);
+
+    const joinedSeat = m.claimSeat("guest", "Guest");
+
+    expect(joinedSeat).toBe(botSeat);
+    expect(m.buildRoomState(joinedSeat).seats[botSeat].occupant).toMatchObject({
+      kind: "human",
+      userId: "guest",
+      displayName: "Guest",
+    });
+    expect(
+      m.buildRoomState(joinedSeat).seats.filter(
+        ({ occupant }) => occupant.kind === "empty"
+      )
+    ).toHaveLength(2);
+    expect(
+      m.buildRoomState(joinedSeat).seats.some(
+        ({ occupant }) => occupant.kind === "bot"
+      )
+    ).toBe(false);
+  });
+
+  it("replaces the first bot when joining a match already in progress", async () => {
+    const m = MatchProcess.createWaitingRoom(
+      "replace-playing-bot",
+      12,
+      dependencies
+    );
+    const originalSeat = m.claimSeat("original", "Original") as Seat;
+    m.attachHuman(originalSeat, makeSink().send);
+    await m.fillBotsAndStart();
+    const playingRoom = m.buildRoomState(null);
+    const firstBotSeat = playingRoom.seats.find(
+      ({ occupant }) => occupant.kind === "bot"
+    )?.seat;
+    if (firstBotSeat === undefined) {
+      throw new Error("expected a bot seat after starting the match");
+    }
+
+    const joinedSeat = m.claimSeat("late-player", "Late Player");
+
+    expect(joinedSeat).toBe(firstBotSeat);
+    expect(m.isHumanSeat(firstBotSeat)).toBe(true);
+    expect(
+      m.buildRoomState(joinedSeat).seats[firstBotSeat].occupant
+    ).toMatchObject({
+      kind: "human",
+      userId: "late-player",
+      displayName: "Late Player",
+    });
+    const lateSink = makeSink();
+    m.attachHuman(firstBotSeat, lateSink.send);
+    const snapshot = m.buildSnapshotForSeat(firstBotSeat);
+    if (snapshot.type !== "snapshot") {
+      throw new Error("expected a private snapshot for the replacement player");
+    }
+    expect(snapshot.state.mySeat).toBe(firstBotSeat);
+    expect(snapshot.state.seatNames?.[firstBotSeat]).toBe("Late Player");
+    expect(snapshot.state.hands[firstBotSeat].some((tile) => tile !== null)).toBe(
+      true
+    );
+  });
+
+  it("does not replace a human in a full match already in progress", async () => {
+    const m = MatchProcess.createWaitingRoom(
+      "full-human-match",
+      13,
+      dependencies
+    );
+    for (let player = 0; player < 4; player++) {
+      m.claimSeat(`human-${player}`, `Human ${player}`);
+    }
+    await m.fillBotsAndStart();
+
+    expect(m.claimSeat("fifth-human", "Fifth Human")).toBeNull();
+  });
+
   it("toggles readiness and only lets the first human start", async () => {
     const m = MatchProcess.createWaitingRoom("ready-room", 7, dependencies);
     const hostSeat = m.claimSeat("host", "Host") as Seat;

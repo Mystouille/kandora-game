@@ -2843,14 +2843,14 @@ export class MatchProcess {
   // -------------------------------------------------------------------------
 
   /**
-   * Reclaim an existing human seat (matches by `userId`) or claim
-    * the first empty placeholder. Returns the assigned `Seat`, or `null`
-   * when the room is `playing`/`finished` and the user has no
-   * prior claim (a spectator situation we currently refuse).
+    * Reclaim an existing human seat (matches by `userId`), replace
+    * the first bot, or claim the first empty waiting-room placeholder.
+    * Returns the assigned `Seat`, or `null` when no replaceable seat
+    * exists.
    *
-   * Only valid in `waiting` for new claims. Reconnect-by-userId
-   * works in any status so a human can rejoin a `playing` match
-   * after a transient disconnect.
+    * Bot replacement is valid in `waiting` and `playing`; final winds
+    * stay fixed during play. Reconnect-by-userId works in any status
+    * so a human can rejoin after a transient disconnect.
    */
   claimSeat(userId: string, displayName: string): Seat | null {
     this.assertNotPaused("claimSeat");
@@ -2858,6 +2858,29 @@ export class MatchProcess {
     for (const [seat, p] of this.players) {
       if (p !== null && !p.isBot && p.userId === userId) {
         return seat;
+      }
+    }
+    if (this.statusValue === "waiting" || this.statusValue === "playing") {
+      for (const [seat, player] of this.players) {
+        if (player?.isBot) {
+          this.players.set(seat, { userId, displayName, isBot: false });
+          this.waitingRoomReady[seat] = false;
+          if (this.statusValue === "waiting") {
+            this.compactWaitingRoomSeats();
+          } else if (this.readyResolve !== null) {
+            this.readyAcked[seat] = false;
+          }
+          const assigned = [...this.players.entries()].find(
+            ([, occupant]) => occupant?.userId === userId
+          )?.[0];
+          if (assigned === undefined) {
+            throw new Error(
+              "claimSeat: replacement player disappeared during compaction"
+            );
+          }
+          this.broadcastRoomState();
+          return assigned;
+        }
       }
     }
     if (this.statusValue !== "waiting") {
@@ -4120,14 +4143,7 @@ export class MatchProcess {
       return;
     }
 
-    if (this.isHumanSeat(this.state.turn)) {
-      // Human seat: surface legal discards, then wait for `act`.
-      const turnSeat = this.state.turn;
-      this.setSeatLegals(turnSeat, this.buildDiscardLegals(turnSeat));
-      if (await this.maybeAutoRiichiDiscard()) {
-        return;
-      }
-      this.flushLegalsToSeat(turnSeat);
+    if (await this.openHumanDiscardWindow(this.state.turn)) {
       return;
     }
 
@@ -4143,6 +4159,12 @@ export class MatchProcess {
         "bot_discard_pacing",
         DRAW_TO_DISCARD_DELAY_MS
       );
+    }
+    // A human may have joined during the pacing delay and replaced
+    // this bot. Surface the already-drawn hand instead of letting the
+    // retired bot choose a discard for the new player.
+    if (await this.openHumanDiscardWindow(seat)) {
+      return;
     }
     // Self-kan check (yakuhai-only policy). The bot may declare an
     // ankan or shouminkan instead of discarding. After a successful
@@ -4207,6 +4229,18 @@ export class MatchProcess {
     }
     await this.applyDiscard(seat, tile, discardSource);
     await this.afterDiscard();
+  }
+
+  private async openHumanDiscardWindow(seat: Seat): Promise<boolean> {
+    if (!this.isHumanSeat(seat)) {
+      return false;
+    }
+    this.setSeatLegals(seat, this.buildDiscardLegals(seat));
+    if (await this.maybeAutoRiichiDiscard()) {
+      return true;
+    }
+    this.flushLegalsToSeat(seat);
+    return true;
   }
 
   /**

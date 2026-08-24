@@ -796,8 +796,9 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   // Claim a seat. `claimSeat` is idempotent per userId — a
   // reconnecting human gets their existing seat back even if the
   // room has already transitioned to `playing`/`finished`. A null
-  // result means: room is full (waiting) or the user has no
-  // claim and the room is no longer accepting new players.
+  // result means there is neither an empty waiting slot nor a bot
+  // seat available for replacement. A running all-human table sends
+  // the new user to live spectating below.
   const assignedSeat = match.claimSeat(verified.userId, profile.displayName);
   if (assignedSeat === null) {
     if (match.status === "waiting") {
