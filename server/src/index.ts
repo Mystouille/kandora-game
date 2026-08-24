@@ -845,7 +845,13 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     if (currentSeat === null) {
       return;
     }
-    void handleClientFrame(raw, match, currentSeat, send, sendError);
+    void handleClientFrame(raw, match, currentSeat, send, sendError).catch(
+      (error: unknown) => {
+        // eslint-disable-next-line no-console
+        console.error("[game-server] client frame failed", error);
+        sendError("command_failed", "The command could not be processed.");
+      }
+    );
   });
   ws.on("close", () => {
     const currentSeat = match.humanSeatFor(send);

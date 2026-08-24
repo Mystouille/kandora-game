@@ -123,6 +123,24 @@ write rebases the saved durations onto the current runtime and resumes the same
 process without charging the I/O interval. `restoreSavedCheckpoint()` loads and
 validates through the repository.
 
+Accepted gameplay `act` frames use a write-ahead recovery record. Before
+authority mutates, `MatchProcess` freezes the current action/call window and
+atomically stores that checkpoint together with the seat and legal action ID.
+After the action, bot continuations, and pacing complete, the next quiescent
+checkpoint atomically replaces the pending record. Recovery validates that the
+command belonged to its stored window, restores the pre-state, replays it once,
+and commits the resulting checkpoint. Concurrent action frames serialize; a
+queued frame is reconsidered only if no game event advanced while it waited.
+
+A failed write-ahead save mutates nothing and resumes the original timers. A
+failed post-action commit leaves the advanced process paused and the durable
+pre-state/command intact; `retryPendingCommandCommit()` commits that captured
+post-state before input resumes. Terminalization replaces either form with the
+same tombstone. This first transaction slice covers player `act` frames
+(discard, call/pass, kan, win, and riichi). Ready/vote/AFK/start/leave control
+frames and server-driven AFK/deadline defaults are not command-logged yet;
+disconnected action windows therefore remain explicitly uncheckpointable.
+
 Before emitting terminal `session_end`, `MatchProcess` atomically replaces any
 existing checkpoint with a retained terminal tombstone. Loads then return no
 resumable match and stale writers cannot overwrite the marker. A failed marker

@@ -75,6 +75,7 @@ import {
 import { projectEvent, projectPublicEvent } from "./projection";
 import {
   type MatchRepository,
+  type PendingMatchCommand,
   type PersistedMatchPlayer,
 } from "./repository";
 import {
@@ -744,9 +745,9 @@ export class MatchProcess {
    * separate ring buffer needed — a full match is ~400 KB worst
    * case, scanning is microseconds) and (b) the payload archived
    * to Mongo in one shot from `finalizeMatch` via `archiveMatch`.
-   * There is no durable mid-match tier: this in-RAM array is the
-   * only live log, so a game-server restart drops the in-flight
-   * match. It also seeds the final archive write.
+    * Durable recovery stores this log inside quiescent checkpoints
+    * and write-ahead action records; the standalone Match archive
+    * still receives the complete log only at game completion.
    */
   private readonly eventLog: Array<{
     seq: number;
@@ -996,9 +997,16 @@ export class MatchProcess {
   private readonly repository: MatchRepository;
   private pausedCheckpoint: MatchCheckpoint | null = null;
   private checkpointSavePromise: Promise<MatchCheckpoint> | null = null;
+  private commandTransactionPromise: Promise<void> | null = null;
+  private pendingCommandCommitCheckpoint: MatchCheckpoint | null = null;
+  private commandRecoveryRequired = false;
 
   get isPaused(): boolean {
-    return this.pausedCheckpoint !== null;
+    return this.pausedCheckpoint !== null || this.commandRecoveryRequired;
+  }
+
+  get hasPendingCommandCommit(): boolean {
+    return this.pendingCommandCommitCheckpoint !== null;
   }
 
   private assertNotPaused(operation: string): void {
@@ -1113,6 +1121,11 @@ export class MatchProcess {
         JSON.parse(JSON.stringify(this.pausedCheckpoint))
       );
     }
+    if (this.commandRecoveryRequired) {
+      throw new Error(
+        "MatchProcess.createCheckpoint: pending command must be recovered from durable pre-state"
+      );
+    }
     if (this.statusValue === "waiting") {
       return this.createWaitingRoomCheckpoint();
     }
@@ -1156,7 +1169,18 @@ export class MatchProcess {
       return Promise.resolve(this.createCheckpoint());
     }
     const checkpoint = this.createCheckpoint();
+    this.freezeCheckpoint(checkpoint);
+    const saving = this.persistPausedCheckpoint(checkpoint);
+    this.checkpointSavePromise = saving;
+    return saving;
+  }
+
+  private freezeCheckpoint(checkpoint: MatchCheckpoint): void {
     this.pausedCheckpoint = checkpoint;
+    this.cancelCheckpointTimers(checkpoint);
+  }
+
+  private cancelCheckpointTimers(checkpoint: MatchCheckpoint): void {
     if (checkpoint.status === "playing") {
       if (checkpoint.checkpointKind === "result_transition") {
         this.resultTransitionTimer?.cancel();
@@ -1181,9 +1205,29 @@ export class MatchProcess {
         }
       }
     }
-    const saving = this.persistPausedCheckpoint(checkpoint);
-    this.checkpointSavePromise = saving;
-    return saving;
+  }
+
+  private resumeCheckpoint(
+    checkpoint: MatchCheckpoint,
+    armTimers = true
+  ): void {
+    this.pausedCheckpoint = null;
+    if (checkpoint.status === "playing") {
+      if (checkpoint.checkpointKind === "action_window") {
+        this.installCheckpointActionWindow(checkpoint);
+      } else if (checkpoint.checkpointKind === "call_window") {
+        this.installCheckpointCallWindows(checkpoint);
+      } else if (checkpoint.checkpointKind === "ready_check") {
+        this.installCheckpointReadyCheck(checkpoint, false);
+      } else if (checkpoint.checkpointKind === "continue_vote") {
+        this.installCheckpointContinueVote(checkpoint, false);
+      } else {
+        this.installCheckpointResultTransition(checkpoint, false);
+      }
+      if (!armTimers) {
+        this.cancelCheckpointTimers(checkpoint);
+      }
+    }
   }
 
   private async persistPausedCheckpoint(
@@ -1196,20 +1240,7 @@ export class MatchProcess {
       });
       return this.createCheckpoint();
     } catch (error) {
-      this.pausedCheckpoint = null;
-      if (checkpoint.status === "playing") {
-        if (checkpoint.checkpointKind === "action_window") {
-          this.installCheckpointActionWindow(checkpoint);
-        } else if (checkpoint.checkpointKind === "call_window") {
-          this.installCheckpointCallWindows(checkpoint);
-        } else if (checkpoint.checkpointKind === "ready_check") {
-          this.installCheckpointReadyCheck(checkpoint, false);
-        } else if (checkpoint.checkpointKind === "continue_vote") {
-          this.installCheckpointContinueVote(checkpoint, false);
-        } else {
-          this.installCheckpointResultTransition(checkpoint, false);
-        }
-      }
+      this.resumeCheckpoint(checkpoint);
       throw error;
     } finally {
       this.checkpointSavePromise = null;
@@ -1220,16 +1251,35 @@ export class MatchProcess {
     matchId: string,
     dependencies: MatchProcessDependencies
   ): Promise<MatchProcess | null> {
-    const checkpoint = await dependencies.repository.loadCheckpoint(matchId);
-    if (checkpoint === null) {
+    const recovery = await dependencies.repository.loadRecoveryRecord(matchId);
+    if (recovery === null) {
       return null;
     }
+    const checkpoint = recovery.checkpoint;
     if (checkpoint.matchId !== matchId) {
       throw new Error(
         `MatchProcess.restoreSavedCheckpoint: expected ${matchId}, got ${checkpoint.matchId}`
       );
     }
-    return MatchProcess.restoreCheckpoint(checkpoint, dependencies);
+    const match = MatchProcess.restoreCheckpoint(checkpoint, dependencies);
+    if (recovery.pendingCommand !== null) {
+      await match.replayPendingCommand(recovery.pendingCommand);
+    }
+    return match;
+  }
+
+  async retryPendingCommandCommit(): Promise<boolean> {
+    const checkpoint = this.pendingCommandCommitCheckpoint;
+    if (checkpoint === null) {
+      return false;
+    }
+    await this.repository.saveCheckpoint({
+      matchId: this.matchId,
+      checkpoint,
+    });
+    this.pendingCommandCommitCheckpoint = null;
+    this.resumeCheckpoint(checkpoint);
+    return true;
   }
 
   async deleteSavedCheckpoint(): Promise<void> {
@@ -1715,7 +1765,6 @@ export class MatchProcess {
     const epoch = this.deadlineEpoch[seat];
     this.currentDeadlineTimer[seat] = this.runtime.schedule(
       () => {
-        this.currentDeadlineTimer[seat] = null;
         if (this.deadlineEpoch[seat] !== epoch || this.isPaused) {
           return;
         }
@@ -1778,7 +1827,6 @@ export class MatchProcess {
       const epoch = this.deadlineEpoch[seat];
       this.currentDeadlineTimer[seat] = this.runtime.schedule(
         () => {
-          this.currentDeadlineTimer[seat] = null;
           if (this.deadlineEpoch[seat] !== epoch || this.isPaused) {
             return;
           }
@@ -3178,6 +3226,126 @@ export class MatchProcess {
   // -------------------------------------------------------------------------
 
   async handleAct(seat: Seat, actionId: string): Promise<void> {
+    const receivedAtSeq = this.nextSeq;
+    const activeTransaction = this.commandTransactionPromise;
+    if (activeTransaction !== null) {
+      try {
+        await activeTransaction;
+      } catch {
+        // A failed transaction leaves the process paused or recovery-only.
+      }
+      if (this.commandTransactionPromise === activeTransaction) {
+        this.commandTransactionPromise = null;
+      }
+      if (!this.isPaused && this.nextSeq === receivedAtSeq) {
+        await this.handleAct(seat, actionId);
+      }
+      return;
+    }
+    if (this.isPaused || !this.isAcceptedAction(seat, actionId)) {
+      return;
+    }
+    const command: PendingMatchCommand = { type: "act", seat, actionId };
+    const transaction = this.runCommandTransaction(command);
+    this.commandTransactionPromise = transaction;
+    try {
+      await transaction;
+    } finally {
+      if (this.commandTransactionPromise === transaction) {
+        this.commandTransactionPromise = null;
+      }
+    }
+  }
+
+  private isAcceptedAction(seat: Seat, actionId: string): boolean {
+    if (
+      this.state.phase === "hand_ended" ||
+      this.state.phase === "match_ended"
+    ) {
+      return false;
+    }
+    if (this.callWindow[seat] !== null) {
+      return this.legalActions[seat].some((action) => action.id === actionId);
+    }
+    return (
+      seat === this.state.turn &&
+      this.legalActions[seat].some((action) => action.id === actionId)
+    );
+  }
+
+  private async runCommandTransaction(
+    command: PendingMatchCommand
+  ): Promise<void> {
+    const checkpoint = this.createCheckpoint();
+    this.freezeCheckpoint(checkpoint);
+    try {
+      await this.repository.saveCommandTransaction({
+        matchId: this.matchId,
+        checkpoint,
+        command,
+      });
+    } catch (error) {
+      this.resumeCheckpoint(checkpoint);
+      throw error;
+    }
+    this.resumeCheckpointForCommand(checkpoint, command.seat);
+    await this.executePersistedCommand(command);
+    await this.commitCommandState();
+  }
+
+  private async replayPendingCommand(
+    command: PendingMatchCommand
+  ): Promise<void> {
+    const checkpoint = this.createCheckpoint();
+    this.freezeCheckpoint(checkpoint);
+    this.resumeCheckpointForCommand(checkpoint, command.seat);
+    await this.executePersistedCommand(command);
+    await this.commitCommandState();
+  }
+
+  private resumeCheckpointForCommand(
+    checkpoint: MatchCheckpoint,
+    seat: Seat
+  ): void {
+    this.resumeCheckpoint(checkpoint);
+    this.currentDeadlineTimer[seat]?.cancel();
+    this.currentDeadlineTimer[seat] = null;
+    this.deadlineEpoch[seat] += 1;
+  }
+
+  private async executePersistedCommand(
+    command: PendingMatchCommand
+  ): Promise<void> {
+    if (!this.isAcceptedAction(command.seat, command.actionId)) {
+      this.commandRecoveryRequired = true;
+      throw new Error(
+        `MatchProcess: pending action ${command.actionId} is no longer legal for seat ${command.seat}`
+      );
+    }
+    try {
+      await this.handleActDirect(command.seat, command.actionId);
+    } catch (error) {
+      this.commandRecoveryRequired = true;
+      throw error;
+    }
+  }
+
+  private async commitCommandState(): Promise<void> {
+    if (this.statusValue === "finished") {
+      return;
+    }
+    const checkpoint = this.createCheckpoint();
+    this.freezeCheckpoint(checkpoint);
+    this.pendingCommandCommitCheckpoint = checkpoint;
+    await this.repository.saveCheckpoint({
+      matchId: this.matchId,
+      checkpoint,
+    });
+    this.pendingCommandCommitCheckpoint = null;
+    this.resumeCheckpoint(checkpoint);
+  }
+
+  private async handleActDirect(seat: Seat, actionId: string): Promise<void> {
     if (this.isPaused) {
       return;
     }
@@ -4376,7 +4544,6 @@ export class MatchProcess {
       const epoch = this.deadlineEpoch[seat];
       const timer = this.runtime.schedule(
         () => {
-          this.currentDeadlineTimer[seat] = null;
           if (epoch !== this.deadlineEpoch[seat]) {
             return;
           }
@@ -4441,6 +4608,18 @@ export class MatchProcess {
    * for an AFK player would be worse than the missed turn.
    */
   private async handleDeadlineExpiry(seat: Seat): Promise<void> {
+    const activeTransaction = this.commandTransactionPromise;
+    if (activeTransaction !== null) {
+      try {
+        await activeTransaction;
+      } catch {
+        // A failed client transaction leaves the process blocked.
+      }
+      if (!this.isPaused) {
+        await this.handleDeadlineExpiry(seat);
+      }
+      return;
+    }
     if (this.isPaused) {
       return;
     }
@@ -4490,7 +4669,7 @@ export class MatchProcess {
     if (actionId === null) {
       return;
     }
-    await this.handleAct(seat, actionId);
+    await this.handleActDirect(seat, actionId);
   }
 
   private pickDefaultActionId(seat: Seat): string | null {

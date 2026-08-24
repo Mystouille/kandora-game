@@ -44,6 +44,7 @@ import {
 } from "./match";
 import { parseMatchCheckpoint } from "./checkpoint";
 import {
+  createMemoryMatchRepository,
   ephemeralMatchRepository,
   type MatchRepository,
 } from "./repository";
@@ -222,7 +223,7 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     vi.clearAllMocks();
     setNextHandDelayMs(0);
     setDelayAfterDiscardMs(0);
-    setActionTimeoutMs(0);
+    setActionTimeoutMs(30_000);
     setReadyCheckMs(0);
   });
   afterEach(() => {
@@ -394,6 +395,54 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     }
   });
 
+  it("queues a concurrent call response behind the active command write", async () => {
+    const storage = createMemoryMatchRepository();
+    let releaseSeatOne = (): void => undefined;
+    const seatOneGate = new Promise<void>((resolve) => {
+      releaseSeatOne = resolve;
+    });
+    let seatOneWriteStarted = false;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCommandTransaction: async (args) => {
+        if (args.command.seat === 1 && !seatOneWriteStarted) {
+          seatOneWriteStarted = true;
+          await seatOneGate;
+        }
+        await storage.saveCommandTransaction(args);
+      },
+    };
+    const m = makeFourHumanMatch(242, repository);
+    await m.start();
+    const internals = plantThreeRonScenario(m);
+    await m.handleAct(0, "discard:4m");
+    const seat2Ron = internals.legalActions[2].find(
+      (action) => action.type === "ron"
+    );
+    if (!seat2Ron) {
+      throw new Error("expected seat 2 ron");
+    }
+
+    const seatOnePass = m.handleAct(1, "pass");
+    await vi.waitFor(() => {
+      expect(seatOneWriteStarted).toBe(true);
+    });
+    const seatTwoRon = m.handleAct(2, seat2Ron.id);
+
+    releaseSeatOne();
+    await Promise.all([seatOnePass, seatTwoRon]);
+
+    expect(internals.legalActions[1]).toEqual([]);
+    expect(internals.legalActions[2]).toEqual([]);
+    expect(internals.legalActions[3]).not.toEqual([]);
+    await m.handleAct(3, "pass");
+    const win = m
+      .replayFromBuffer(0, 0)
+      .map(({ event }) => event)
+      .find((event) => event.type === "win");
+    expect(win).toMatchObject({ type: "win", seat: 2, loser: 0 });
+  });
+
   it("restores a partially-answered multi-ron call window", async () => {
     setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
     const m = makeFourHumanMatch(142);
@@ -462,10 +511,15 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
 
   it("rearms a partially-answered call window after save failure", async () => {
     setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
+    const storage = createMemoryMatchRepository();
+    let failCheckpointSave = false;
     const repository: MatchRepository = {
-      ...ephemeralMatchRepository,
-      saveCheckpoint: async () => {
-        throw new Error("call checkpoint write failed");
+      ...storage,
+      saveCheckpoint: async (args) => {
+        if (failCheckpointSave) {
+          throw new Error("call checkpoint write failed");
+        }
+        await storage.saveCheckpoint(args);
       },
     };
     const m = makeFourHumanMatch(144, repository);
@@ -474,9 +528,11 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     await m.handleAct(0, "discard:4m");
     await m.handleAct(1, "pass");
 
+    failCheckpointSave = true;
     await expect(m.pauseAndSaveCheckpoint()).rejects.toThrow(
       "call checkpoint write failed"
     );
+    failCheckpointSave = false;
     expect(m.isPaused).toBe(false);
     const rolledBack = m.createCheckpoint();
     if (
@@ -542,6 +598,12 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     };
     internals.state = chankanState;
     internals.setSeatLegals(0, [
+      {
+        id: "discard:draw:3m",
+        type: "discard",
+        tile: "3m",
+        discardSource: "draw",
+      },
       {
         id: "kan:shouminkan:3m",
         type: "kan",

@@ -3,17 +3,17 @@
  *
  * Design:
  *
- *   - **The event hot path lives in RAM.** The per-match `MatchProcess`
- *     holds the live event log in memory; Mongo is not touched per event.
- *     An explicit lifecycle pause may atomically replace one versioned
- *     checkpoint in `game_match_checkpoints` for crash/app-suspend recovery.
- *     Session completion replaces an existing checkpoint with a terminal
+ *   - **Events remain in RAM; accepted actions are transactional.** Mongo is
+ *     not touched per event. Before a client action mutates authority, one
+ *     record atomically stores its quiescent checkpoint plus the pending
+ *     command. The resulting checkpoint atomically replaces that record when
+ *     the action finishes. Explicit lifecycle pauses use the same collection.
+ *   - **Mongo also owns the final archive.** `createMatchDoc` advertises the
+ *     playing match; `archiveMatch` writes the complete event log and scores
+ *     at game end. Recovery writes are separate from this public archive.
+ *   - Session completion replaces an existing recovery record with a terminal
  *     tombstone before clients receive `session_end`; the marker prevents a
  *     delayed stale writer from resurrecting the match.
- *   - **Mongo is the archive.** We write exactly two times per
- *     match: `createMatchDoc` at start (so lobby/portal can see
- *     "match X exists, status playing") and `archiveMatch` at end
- *     (writes the full event log + final scores in one shot).
  *   - **Recovery is host-driven.** This module can save/load/delete
  *     checkpoints, but the current Node bootstrap does not automatically
  *     pause rooms or restore them at startup. Mobile/local composition owns
@@ -28,7 +28,13 @@ import { MatchModel, type MatchPlayer } from "~/core/models/game/Match";
 import { ReplayLogModel } from "~/core/models/game/ReplayLog";
 import type { GameEvent } from "~/game/protocol/messages";
 import { REPLAY_LOG_SCHEMA_VERSION } from "~/game/replay/types";
-import type { MatchRepository } from "./repository";
+import {
+  parseMatchRecoveryRecord,
+  PendingMatchCommandSchema,
+  type MatchRecoveryRecord,
+  type MatchRepository,
+  type PendingMatchCommand,
+} from "./repository";
 import {
   parseMatchCheckpoint,
   type MatchCheckpoint,
@@ -42,6 +48,7 @@ const MatchCheckpointModel =
       {
         _id: { type: String, required: true },
         checkpoint: { type: Schema.Types.Mixed, required: false },
+        pendingCommand: { type: Schema.Types.Mixed, required: false },
         terminalAt: { type: Date, required: false },
       },
       { timestamps: true, _id: false }
@@ -155,20 +162,48 @@ export async function saveMatchCheckpoint(args: {
   const checkpoint = parseMatchCheckpoint(args.checkpoint);
   await MatchCheckpointModel.updateOne(
     { _id: args.matchId, terminalAt: { $exists: false } },
-    { $set: { checkpoint } },
+    { $set: { checkpoint }, $unset: { pendingCommand: "" } },
     { upsert: true }
   );
+}
+
+export async function saveMatchCommandTransaction(args: {
+  matchId: string;
+  checkpoint: MatchCheckpoint;
+  command: PendingMatchCommand;
+}): Promise<void> {
+  const checkpoint = parseMatchCheckpoint(args.checkpoint);
+  const command = PendingMatchCommandSchema.parse(args.command);
+  parseMatchRecoveryRecord({ checkpoint, pendingCommand: command });
+  await MatchCheckpointModel.updateOne(
+    { _id: args.matchId, terminalAt: { $exists: false } },
+    { $set: { checkpoint, pendingCommand: command } },
+    { upsert: true }
+  );
+}
+
+export async function loadMatchRecoveryRecord(
+  matchId: string
+): Promise<MatchRecoveryRecord | null> {
+  const stored = (await MatchCheckpointModel.findById(matchId).lean()) as
+    | {
+        checkpoint?: unknown;
+        pendingCommand?: unknown;
+        terminalAt?: Date;
+      }
+    | null;
+  return stored?.terminalAt !== undefined || stored?.checkpoint === undefined
+    ? null
+    : parseMatchRecoveryRecord({
+        checkpoint: stored.checkpoint,
+        pendingCommand: stored.pendingCommand ?? null,
+      });
 }
 
 export async function loadMatchCheckpoint(
   matchId: string
 ): Promise<MatchCheckpoint | null> {
-  const stored = (await MatchCheckpointModel.findById(matchId).lean()) as
-    | { checkpoint?: unknown; terminalAt?: Date }
-    | null;
-  return stored?.terminalAt !== undefined || stored?.checkpoint === undefined
-    ? null
-    : parseMatchCheckpoint(stored.checkpoint);
+  return (await loadMatchRecoveryRecord(matchId))?.checkpoint ?? null;
 }
 
 export async function markMatchCheckpointTerminal(args: {
@@ -179,7 +214,7 @@ export async function markMatchCheckpointTerminal(args: {
     { _id: args.matchId },
     {
       $set: { terminalAt: new Date(args.finishedAt) },
-      $unset: { checkpoint: "" },
+      $unset: { checkpoint: "", pendingCommand: "" },
     }
   );
 }
@@ -193,7 +228,9 @@ export const mongoMatchRepository: MatchRepository = {
   archiveMatch: (args) => archiveMatch(args),
   archiveReplayLog: (args) => archiveReplayLog(args),
   saveCheckpoint: (args) => saveMatchCheckpoint(args),
+  saveCommandTransaction: (args) => saveMatchCommandTransaction(args),
   loadCheckpoint: (matchId) => loadMatchCheckpoint(matchId),
+  loadRecoveryRecord: (matchId) => loadMatchRecoveryRecord(matchId),
   markCheckpointTerminal: (args) => markMatchCheckpointTerminal(args),
   deleteCheckpoint: (matchId) => deleteMatchCheckpoint(matchId),
 };

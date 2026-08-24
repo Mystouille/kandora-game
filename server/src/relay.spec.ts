@@ -28,7 +28,9 @@ const recordingRepository: MatchRepository = {
   archiveMatch: async () => undefined,
   archiveReplayLog: archiveReplayLogMock,
   saveCheckpoint: async () => undefined,
+  saveCommandTransaction: async () => undefined,
   loadCheckpoint: async () => null,
+  loadRecoveryRecord: async () => null,
   markCheckpointTerminal: async () => undefined,
   deleteCheckpoint: async () => undefined,
 };

@@ -967,9 +967,9 @@ describe("MatchProcess checkpoints", () => {
     const eventCount = match.replayFromBuffer(0, 0).length;
 
     const saving = match.pauseAndSaveCheckpoint();
-  expect(match.pauseAndSaveCheckpoint()).toBe(saving);
+    expect(match.pauseAndSaveCheckpoint()).toBe(saving);
     expect(match.isPaused).toBe(true);
-  const captured = capturedCheckpoints[0];
+    const captured = capturedCheckpoints[0];
     if (
       captured?.status !== "playing" ||
       captured.checkpointKind !== "action_window"
@@ -1010,11 +1010,19 @@ describe("MatchProcess checkpoints", () => {
   it("rolls back a failed save without consuming action time", async () => {
     const gate = deferred();
     const capturedCheckpoints: MatchCheckpoint[] = [];
+    const storage = createMemoryMatchRepository();
+    let failNextSave = true;
     const repository: MatchRepository = {
-      ...createMemoryMatchRepository(),
-      saveCheckpoint: async ({ checkpoint }) => {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        const { checkpoint } = args;
         capturedCheckpoints.push(checkpoint);
-        await gate.promise;
+        if (failNextSave) {
+          failNextSave = false;
+          await gate.promise;
+          return;
+        }
+        await storage.saveCheckpoint(args);
       },
     };
     const runtime = controlledRuntime(60_000, 222);
@@ -1030,7 +1038,7 @@ describe("MatchProcess checkpoints", () => {
     runtime.advance(2_000);
 
     const saving = match.pauseAndSaveCheckpoint();
-  const captured = capturedCheckpoints[0];
+    const captured = capturedCheckpoints[0];
     if (
       captured?.status !== "playing" ||
       captured.checkpointKind !== "action_window"
@@ -1059,6 +1067,204 @@ describe("MatchProcess checkpoints", () => {
     }
     await match.handleAct(captured.actionWindow.seat, discard.id);
     expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(beforeCount);
+  });
+
+  it("does not mutate until the pending action is durable", async () => {
+    const storage = createMemoryMatchRepository();
+    const gate = deferred();
+    let captured: Parameters<MatchRepository["saveCommandTransaction"]>[0] | null =
+      null;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCommandTransaction: async (args) => {
+        captured = args;
+        await gate.promise;
+        await storage.saveCommandTransaction(args);
+      },
+    };
+    const runtime = controlledRuntime(70_000, 223);
+    const match = new MatchProcess(
+      "checkpoint-command-write-ahead",
+      52,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const discard = checkpoint.actionWindow.legalActions.find(
+      (action) => action.type === "discard"
+    );
+    if (!discard) {
+      throw new Error("expected a legal discard");
+    }
+    const beforeEvents = match.replayFromBuffer(0, 0);
+
+    const acting = match.handleAct(checkpoint.actionWindow.seat, discard.id);
+    await Promise.resolve();
+
+    expect(captured).toMatchObject({
+      matchId: match.matchId,
+      checkpoint,
+      command: {
+        type: "act",
+        seat: checkpoint.actionWindow.seat,
+        actionId: discard.id,
+      },
+    });
+    expect(match.isPaused).toBe(true);
+    expect(match.replayFromBuffer(0, 0)).toEqual(beforeEvents);
+    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
+
+    gate.resolve();
+    await acting;
+
+    expect(match.isPaused).toBe(false);
+    expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(
+      beforeEvents.length
+    );
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      pendingCommand: null,
+    });
+  });
+
+  it("replays a durable pending action after process loss", async () => {
+    const repository = createMemoryMatchRepository();
+    const originalRuntime = controlledRuntime(80_000, 224);
+    const match = new MatchProcess(
+      "checkpoint-command-replay",
+      53,
+      humanPlayers(),
+      { repository, runtime: originalRuntime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const discard = checkpoint.actionWindow.legalActions.find(
+      (action) => action.type === "discard"
+    );
+    if (!discard) {
+      throw new Error("expected a legal discard");
+    }
+    await repository.saveCommandTransaction({
+      matchId: match.matchId,
+      checkpoint,
+      command: {
+        type: "act",
+        seat: checkpoint.actionWindow.seat,
+        actionId: discard.id,
+      },
+    });
+
+    const expectedRuntime = controlledRuntime(900_000, 225);
+    const expected = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: expectedRuntime,
+    });
+    await expected.handleAct(checkpoint.actionWindow.seat, discard.id);
+
+    const restoredRuntime = controlledRuntime(900_000, 226);
+    const restored = await MatchProcess.restoreSavedCheckpoint(match.matchId, {
+      repository,
+      runtime: restoredRuntime,
+    });
+    if (!restored) {
+      throw new Error("expected a recovered match");
+    }
+
+    expect(restored.replayFromBuffer(0, 0)).toEqual(
+      expected.replayFromBuffer(0, 0)
+    );
+    expect(comparableSnapshot(restored, 0, restoredRuntime)).toEqual(
+      comparableSnapshot(expected, 0, expectedRuntime)
+    );
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      pendingCommand: null,
+    });
+  });
+
+  it("stays paused until a failed command commit is retried", async () => {
+    const storage = createMemoryMatchRepository();
+    let commitAttempts = 0;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        commitAttempts += 1;
+        if (commitAttempts === 1) {
+          throw new Error("command commit failed");
+        }
+        await storage.saveCheckpoint(args);
+      },
+    };
+    const runtime = controlledRuntime(90_000, 227);
+    const match = new MatchProcess(
+      "checkpoint-command-commit-retry",
+      54,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const discard = checkpoint.actionWindow.legalActions.find(
+      (action) => action.type === "discard"
+    );
+    if (!discard) {
+      throw new Error("expected a legal discard");
+    }
+    const beforeCount = match.replayFromBuffer(0, 0).length;
+
+    await expect(
+      match.handleAct(checkpoint.actionWindow.seat, discard.id)
+    ).rejects.toThrow("command commit failed");
+
+    expect(match.isPaused).toBe(true);
+    expect(match.hasPendingCommandCommit).toBe(true);
+    expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(beforeCount);
+    const pendingRecovery = await repository.loadRecoveryRecord(match.matchId);
+    expect(pendingRecovery).toMatchObject({
+      checkpoint: {
+        matchId: checkpoint.matchId,
+        status: "playing",
+        checkpointKind: "action_window",
+        nextSeq: checkpoint.nextSeq,
+      },
+      pendingCommand: {
+        type: "act",
+        seat: checkpoint.actionWindow.seat,
+        actionId: discard.id,
+      },
+    });
+
+    await expect(match.retryPendingCommandCommit()).resolves.toBe(true);
+    expect(commitAttempts).toBe(2);
+    expect(match.isPaused).toBe(false);
+    expect(match.hasPendingCommandCommit).toBe(false);
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      pendingCommand: null,
+    });
+    await expect(match.retryPendingCommandCommit()).resolves.toBe(false);
   });
 
   it("replaces a saved checkpoint with a terminal tombstone", async () => {

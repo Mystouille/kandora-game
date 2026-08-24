@@ -1,8 +1,70 @@
+import { z } from "zod";
 import type { GameEvent, Seat } from "~/game/protocol/messages";
 import {
+  MatchCheckpointSchema,
   parseMatchCheckpoint,
   type MatchCheckpoint,
 } from "./checkpoint";
+
+const SeatSchema = z.union([
+  z.literal(0),
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+]);
+
+export const PendingMatchCommandSchema = z
+  .object({
+    type: z.literal("act"),
+    seat: SeatSchema,
+    actionId: z.string().min(1),
+  })
+  .strict();
+export type PendingMatchCommand = z.infer<typeof PendingMatchCommandSchema>;
+
+export const MatchRecoveryRecordSchema = z
+  .object({
+    checkpoint: MatchCheckpointSchema,
+    pendingCommand: PendingMatchCommandSchema.nullable(),
+  })
+  .strict()
+  .superRefine((record, context) => {
+    const command = record.pendingCommand;
+    if (command === null) {
+      return;
+    }
+    const checkpoint = record.checkpoint;
+    let legalActionIds: string[] = [];
+    if (
+      checkpoint.status === "playing" &&
+      checkpoint.checkpointKind === "action_window" &&
+      checkpoint.actionWindow.seat === command.seat
+    ) {
+      legalActionIds = checkpoint.actionWindow.legalActions.map(
+        (action) => action.id
+      );
+    } else if (
+      checkpoint.status === "playing" &&
+      checkpoint.checkpointKind === "call_window"
+    ) {
+      legalActionIds =
+        checkpoint.callTimers[command.seat]?.legalActions.map(
+          (action) => action.id
+        ) ?? [];
+    }
+    if (!legalActionIds.includes(command.actionId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["pendingCommand", "actionId"],
+        message: "Pending action must be legal in its checkpoint window",
+      });
+    }
+  });
+export type MatchRecoveryRecord = z.infer<typeof MatchRecoveryRecordSchema>;
+
+export function parseMatchRecoveryRecord(input: unknown): MatchRecoveryRecord {
+  return MatchRecoveryRecordSchema.parse(input);
+}
 
 export interface PersistedMatchPlayer {
   userId: string;
@@ -55,7 +117,14 @@ export interface MatchRepository {
     matchId: string;
     checkpoint: MatchCheckpoint;
   }): Promise<void>;
+  /** Atomically save pre-command authority and the command to replay. */
+  saveCommandTransaction(args: {
+    matchId: string;
+    checkpoint: MatchCheckpoint;
+    command: PendingMatchCommand;
+  }): Promise<void>;
   loadCheckpoint(matchId: string): Promise<MatchCheckpoint | null>;
+  loadRecoveryRecord(matchId: string): Promise<MatchRecoveryRecord | null>;
   /** Atomically replace an existing checkpoint with a terminal tombstone. */
   markCheckpointTerminal(args: {
     matchId: string;
@@ -73,7 +142,9 @@ export const ephemeralMatchRepository: MatchRepository = {
   archiveMatch: async () => undefined,
   archiveReplayLog: async () => undefined,
   saveCheckpoint: async () => undefined,
+  saveCommandTransaction: async () => undefined,
   loadCheckpoint: async () => null,
+  loadRecoveryRecord: async () => null,
   markCheckpointTerminal: async () => undefined,
   deleteCheckpoint: async () => undefined,
 };
@@ -81,7 +152,7 @@ export const ephemeralMatchRepository: MatchRepository = {
 export function createMemoryMatchRepository(): MatchRepository {
   const records = new Map<
     string,
-    | { kind: "checkpoint"; checkpoint: MatchCheckpoint }
+    | { kind: "checkpoint"; recovery: MatchRecoveryRecord }
     | { kind: "terminal"; finishedAt: number }
   >();
   return {
@@ -94,13 +165,37 @@ export function createMemoryMatchRepository(): MatchRepository {
       }
       records.set(matchId, {
         kind: "checkpoint",
-        checkpoint: parseMatchCheckpoint(JSON.parse(JSON.stringify(checkpoint))),
+        recovery: parseMatchRecoveryRecord(
+          JSON.parse(JSON.stringify({ checkpoint, pendingCommand: null }))
+        ),
       });
+    },
+    saveCommandTransaction: async ({ matchId, checkpoint, command }) => {
+      if (records.get(matchId)?.kind === "terminal") {
+        throw new Error(`Cannot save command for terminal match ${matchId}`);
+      }
+      records.set(
+        matchId,
+        {
+          kind: "checkpoint",
+          recovery: parseMatchRecoveryRecord(
+            JSON.parse(JSON.stringify({ checkpoint, pendingCommand: command }))
+          ),
+        }
+      );
     },
     loadCheckpoint: async (matchId) => {
       const record = records.get(matchId);
       return record?.kind === "checkpoint"
-        ? parseMatchCheckpoint(JSON.parse(JSON.stringify(record.checkpoint)))
+        ? parseMatchCheckpoint(
+            JSON.parse(JSON.stringify(record.recovery.checkpoint))
+          )
+        : null;
+    },
+    loadRecoveryRecord: async (matchId) => {
+      const record = records.get(matchId);
+      return record?.kind === "checkpoint"
+        ? parseMatchRecoveryRecord(JSON.parse(JSON.stringify(record.recovery)))
         : null;
     },
     markCheckpointTerminal: async ({ matchId, finishedAt }) => {
