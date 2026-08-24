@@ -17,6 +17,7 @@ import {
   type MatchDebug,
   type ServerMessage,
 } from "~/game/protocol/messages";
+import { dispatchServerMessage } from "./dispatchServerMessage";
 import { useMatchStore } from "./store";
 
 export interface GameWSOptions {
@@ -410,56 +411,16 @@ export class GameWS {
   }
 
   private dispatch(msg: ServerMessage): void {
-    const store = useMatchStore.getState();
-    switch (msg.type) {
-      case "snapshot": {
-        // Authoritative recipient view from the server. Hydrate the
-        // store so a mid-match reconnect renders correctly even if
-        // the ring buffer dropped events older than `snapshot.seq`.
-        store.hydrateSnapshot(msg.state, msg.seq);
-        store.setLegalActions(msg.legalActions);
-        store.setActionDeadline(msg.deadline ?? null);
-        store.setActionBufferMs(msg.bufferMs ?? null);
-        return;
-      }
-      case "event": {
-        // Events may arrive in batches; apply in order, advancing `seq`.
-        // `applyEvent` publishes to the store's event bus so side-
-        // effect subscribers (sound, future haptics) react without
-        // a coupling back into this transport layer.
-        const startSeq = msg.seq - msg.events.length + 1;
-        msg.events.forEach((ev, i) => {
-          store.applyEvent(ev, startSeq + i);
-        });
-        store.setLegalActions(msg.legalActions);
-        store.setActionDeadline(msg.deadline ?? null);
-        store.setActionBufferMs(msg.bufferMs ?? null);
-        return;
-      }
-      case "error": {
-        if (this.opts.spectate && TERMINAL_SPECTATOR_ERRORS.has(msg.code)) {
-          this.intentionallyClosed = true;
-        }
-        this.reportError(msg.code, msg.message);
-        return;
-      }
-      case "ready_check": {
-        store.setReadyCheck({ deadline: msg.deadline, acked: msg.acked });
-        return;
-      }
-      case "ready_check_end": {
-        store.setReadyCheck(null);
-        return;
-      }
-      case "room_state": {
-        store.setRoomState(msg);
-        return;
-      }
-      case "viewer_state": {
-        store.setViewers(msg.viewers);
-        return;
-      }
+    if (
+      msg.type === "error" &&
+      this.opts.spectate &&
+      TERMINAL_SPECTATOR_ERRORS.has(msg.code)
+    ) {
+      this.intentionallyClosed = true;
     }
+    dispatchServerMessage(msg, {
+      onError: (code, message) => this.reportError(code, message),
+    });
   }
 
   private reportError(code: string, message: string): void {

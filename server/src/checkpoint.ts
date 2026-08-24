@@ -5,7 +5,8 @@ import {
   MatchDebugSchema,
   TileSchema,
 } from "~/game/protocol/messages";
-import { MatchStateSchema, RuleSetSchema } from "~/game/rules";
+import { MatchStateSchema } from "~/game/rules/state";
+import { RuleSetSchema } from "~/game/rules/ruleSet";
 
 export const MATCH_CHECKPOINT_SCHEMA_VERSION = 1 as const;
 

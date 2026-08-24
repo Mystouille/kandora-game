@@ -135,10 +135,16 @@ if (
   typeof process.versions?.node === "string"
 ) {
   try {
-    const { readFileSync } = await import("node:fs");
-    const { fileURLToPath } = await import("node:url");
+    const nodeFsSpecifier = ["node", "fs"].join(":");
+    const nodeUrlSpecifier = ["node", "url"].join(":");
+    const { readFileSync } = (await import(
+      /* @vite-ignore */ nodeFsSpecifier
+    )) as typeof import("node:fs");
+    const { fileURLToPath } = (await import(
+      /* @vite-ignore */ nodeUrlSpecifier
+    )) as typeof import("node:url");
     const path = fileURLToPath(
-      new URL("./shanten-suit-table.bin", import.meta.url)
+      new URL([".", "shanten-suit-table.bin"].join("/"), import.meta.url)
     );
     const buf = new Uint8Array(readFileSync(path));
     if (buf.length === 2 * 5 ** 9) {

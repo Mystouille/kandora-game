@@ -1,12 +1,13 @@
-# Kandora Game (in-portal)
+# Kandora Game
 
 This subtree hosts the **in-app Kandora mahjong game**: the lobby, the
 table UI, the replay viewer, the WS protocol shared with `game-server/`,
 and the rules engine.
 
-It ships inside the portal today but is **designed to be extracted** into
-its own repo. Read [docs/mahjong-game-plan.md](../../docs/mahjong-game-plan.md)
-for the master plan; this README captures the boundary contract.
+The portal and the standalone Capacitor shell both consume this source today;
+it remains **designed to be extracted** into its own repo. Read
+[docs/mahjong-game-plan.md](../../docs/mahjong-game-plan.md) for the master
+plan; this README captures the boundary contract.
 
 ## Feature gate
 
@@ -91,6 +92,35 @@ app/game/
 `game-server/` is a sibling top-level directory: the standalone Node
 process that runs match sessions. It speaks the same `protocol/` and
 consumes the same `PortalAdapter`.
+
+## Mobile host
+
+The source under [`mobile/`](../../mobile/) is a standalone React/Vite entry,
+not a route inside the server-rendered portal. Its `~` alias resolves directly
+to `app/`, so the production Pixi renderer, event protocol, replay reducer,
+checkpoint schemas, and repository contract compile from this subtree without
+copies. Vite writes a self-contained offline document to `build/mobile`, and
+[Capacitor](../../capacitor.config.ts) copies it into the generated `android/`
+and `ios/` projects.
+
+```sh
+npm run mobile:dev
+npm run mobile:typecheck
+npm run mobile:build
+npm run mobile:sync
+```
+
+The current shell renders the real table, validates/imports shared `ReplayLog`
+JSON, and initializes a native SQLite `MatchRepository`. SQLite atomically
+stores checkpoints, pending commands, terminal tombstones, completed matches,
+and replay archives; browser development injects the in-memory implementation.
+The mobile loopback controller hosts one human plus three bots in-process and
+dispatches `ServerMessage` objects through the same client-store function as
+`GameWS`. Native background/foreground and manual Pause/Resume replace the
+frozen process from SQLite rather than mutating it after save. Android debug
+compilation is verified with Java 21/API 36. The iOS project is generated and
+synchronized, but compilation/signing requires macOS and Xcode. Cloud and
+multi-phone Nearby host/join remain pending transport adapters.
 
 ## Checkpoints
 

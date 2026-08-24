@@ -641,6 +641,7 @@ export class TableRenderer {
   private showLayoutDebug = false;
   /** Wall-only zone overlay for visually checking stack bounds. */
   private showWallZonesDebug = false;
+  private showConnectionDiagnostics = true;
   /** Replay-viewer overlay toggles. The renderer is render-pure
    * (no internal animation loop), so toggles take effect on the
    * next `render()` call. Defaults match `defaultReplayOverlayState`
@@ -1429,6 +1430,10 @@ export class TableRenderer {
   /** Toggle a translucent overlay for only the four wall zones. */
   setShowWallZonesDebug(flag: boolean): void {
     this.showWallZonesDebug = flag;
+  }
+
+  setConnectionDiagnosticsVisible(flag: boolean): void {
+    this.showConnectionDiagnostics = flag;
   }
 
   /** Render each tenpai seat's wait tiles. Driven by
@@ -2233,7 +2238,7 @@ export class TableRenderer {
     const conn = view.conn;
     const wall = Math.max(0, 70 - view.drawsTaken);
     const seq = view.lastSeq;
-    if (conn === "replay") {
+    if (conn === "replay" || !this.showConnectionDiagnostics) {
       this.hudText.text = "";
       this.actionDeadline = null;
       this.actionBufferMs = null;
