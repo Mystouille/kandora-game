@@ -597,6 +597,7 @@ describe("MatchProcess checkpoints", () => {
         runtime: originalRuntime,
       }
     );
+
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
     await match.start();
@@ -632,6 +633,106 @@ describe("MatchProcess checkpoints", () => {
     expect(restoredRuntime.captureRandomState()).toBe(
       originalRuntime.captureRandomState()
     );
+  });
+
+  it("preserves explicit AFK until the restored player opts back in", async () => {
+    const originalRuntime = controlledRuntime(45_000, 801);
+    const match = new MatchProcess(
+      "checkpoint-explicit-afk",
+      32,
+      humanPlayers(),
+      {
+        repository: ephemeralMatchRepository,
+        runtime: originalRuntime,
+      }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    match.handleAfk(1, true);
+
+    const checkpoint = match.createCheckpoint();
+    if (checkpoint.status !== "playing") {
+      throw new Error("expected a playing checkpoint");
+    }
+    expect(checkpoint.connectionPolicy.disconnected[1]).toBe(true);
+    expect(checkpoint.connectionPolicy.afkSelfReported[1]).toBe(true);
+
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: controlledRuntime(800_000, 802),
+    });
+    restored.attachHuman(1, () => undefined);
+    expect(restored.buildRoomState(1).seats[1].occupant).toMatchObject({
+      kind: "human",
+      connected: false,
+    });
+
+    restored.handleAfk(1, false);
+    expect(restored.buildRoomState(1).seats[1].occupant).toMatchObject({
+      kind: "human",
+      connected: true,
+    });
+    const resumed = restored.createCheckpoint();
+    if (resumed.status !== "playing") {
+      throw new Error("expected a resumed playing checkpoint");
+    }
+    expect(resumed.connectionPolicy.disconnected[1]).toBe(false);
+    expect(resumed.connectionPolicy.afkSelfReported[1]).toBe(false);
+  });
+
+  it("restores network disconnect policy and clears it on reattach", async () => {
+    const originalRuntime = controlledRuntime(46_000, 811);
+    const match = new MatchProcess(
+      "checkpoint-network-disconnect",
+      33,
+      humanPlayers(),
+      {
+        repository: ephemeralMatchRepository,
+        runtime: originalRuntime,
+      }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const oldSocket = (): void => undefined;
+    match.attachHuman(2, oldSocket);
+    const internals = match as unknown as {
+      livenessProbeMisses: [number, number, number, number];
+    };
+    internals.livenessProbeMisses[2] = 1;
+    match.detachHuman(2, oldSocket);
+
+    const checkpoint = match.createCheckpoint();
+    if (checkpoint.status !== "playing") {
+      throw new Error("expected a playing checkpoint");
+    }
+    expect(checkpoint.connectionPolicy.disconnected[2]).toBe(true);
+    expect(checkpoint.connectionPolicy.afkSelfReported[2]).toBe(false);
+    expect(checkpoint.connectionPolicy.livenessProbeMisses[2]).toBe(1);
+
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: controlledRuntime(810_000, 812),
+    });
+    const restoredBeforeAttach = restored.createCheckpoint();
+    if (restoredBeforeAttach.status !== "playing") {
+      throw new Error("expected a restored playing checkpoint");
+    }
+    expect(restoredBeforeAttach.connectionPolicy.disconnected[2]).toBe(true);
+    expect(restoredBeforeAttach.connectionPolicy.livenessProbeMisses[2]).toBe(1);
+
+    restored.attachHuman(2, () => undefined, async () => true);
+    expect(restored.buildRoomState(2).seats[2].occupant).toMatchObject({
+      kind: "human",
+      connected: true,
+    });
+    const restoredAfterAttach = restored.createCheckpoint();
+    if (restoredAfterAttach.status !== "playing") {
+      throw new Error("expected an attached playing checkpoint");
+    }
+    expect(restoredAfterAttach.connectionPolicy.disconnected[2]).toBe(false);
+    expect(restoredAfterAttach.connectionPolicy.livenessProbeMisses[2]).toBe(0);
   });
 
   it("atomically pauses while saving and restores from the repository", async () => {
@@ -876,6 +977,17 @@ describe("MatchProcess checkpoints", () => {
         state: { ...checkpoint.state, phase: "awaiting_draw" },
       })
     ).toThrow(/require awaiting_discard/);
+    const disconnected = [...checkpoint.connectionPolicy.disconnected];
+    disconnected[checkpoint.actionWindow.seat] = true;
+    expect(() =>
+      parseMatchCheckpoint({
+        ...checkpoint,
+        connectionPolicy: {
+          ...checkpoint.connectionPolicy,
+          disconnected,
+        },
+      })
+    ).toThrow(/owner must be active/);
   });
 
   it("rejects a call window attached to the wrong engine phase", async () => {

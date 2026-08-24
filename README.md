@@ -101,15 +101,17 @@ an initial/post-hand ready check; or a Buu continue vote after a completed game.
 The versioned schema stores exact rules, occupants, private engine state,
 event/sequence state, PRNG state, session ledgers, captured human/bot call
 intents, ready/vote state and continuations, final standings needed for Buu
-reseating, and every remaining deadline duration. Wall-clock timestamps are
-restored relative to the new runtime so time spent suspended does not consume
-any seat's clock.
+reseating, per-seat disconnect/explicit-AFK/liveness-strike policy, and every
+remaining deadline duration. Wall-clock timestamps are restored relative to
+the new runtime so time spent suspended does not consume any seat's clock.
 
-Sockets and liveness probes are process-local and are never serialized; restored
-players reconnect through the normal claim/attach flow. Result transitions,
-the internal win→chombo display pause, relays, delayed spectators, and
-disconnect/AFK policy state still fail checkpoint creation explicitly rather
-than producing a partial recovery record.
+Sockets, liveness probe callbacks, and in-flight probes are process-local and
+are never serialized; restored players reconnect through the normal
+claim/attach flow. A network-only disconnect clears on a fresh attachment,
+whereas explicit AFK survives reattachment until `afk:false`. A disconnected or
+AFK seat that currently owns an action/call window remains fail-closed because
+its auto-default may already be advancing. Result transitions, the internal
+win→chombo display pause, relays, and delayed spectators also remain unsupported.
 
 `pauseAndSaveCheckpoint()` freezes mutation and cancels every active phase timer
 before awaiting `MatchRepository.saveCheckpoint()`. Concurrent pause calls share

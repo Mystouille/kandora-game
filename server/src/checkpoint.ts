@@ -128,6 +128,13 @@ const PlayingCheckpointBaseShape = {
   humanDrawQueue: z.array(TileSchema),
   leftDiscardQueue: z.array(TileSchema),
   bufferMs: NonnegativeNumberTuple4Schema,
+  connectionPolicy: z
+    .object({
+      disconnected: BooleanTuple4Schema,
+      afkSelfReported: BooleanTuple4Schema,
+      livenessProbeMisses: NonnegativeNumberTuple4Schema,
+    })
+    .strict(),
   lastEngineEventType: z
     .enum([
       "draw",
@@ -212,6 +219,16 @@ export const PlayingActionCheckpointSchema = z
         code: "custom",
         path: ["seats", seat, "isBot"],
         message: "Action-window seat must be human",
+      });
+    }
+    if (
+      checkpoint.connectionPolicy.disconnected[seat] ||
+      checkpoint.connectionPolicy.afkSelfReported[seat]
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["connectionPolicy", "disconnected", seat],
+        message: "Action-window owner must be active",
       });
     }
     if (!legalActions.some((action) => action.type === "discard")) {
@@ -345,6 +362,16 @@ export const PlayingCallCheckpointSchema = z
             code: "custom",
             path: ["seats", seat, "isBot"],
             message: "Open call window seat must be human",
+          });
+        }
+        if (
+          checkpoint.connectionPolicy.disconnected[seat] ||
+          checkpoint.connectionPolicy.afkSelfReported[seat]
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["connectionPolicy", "disconnected", seat],
+            message: "Open call-window owner must be active",
           });
         }
         if (timer === null) {

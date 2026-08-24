@@ -1289,13 +1289,6 @@ export class MatchProcess {
       this.checkpointUnsupported("delayed spectator or liveness work");
     }
     if (
-      this.disconnected.some(Boolean) ||
-      this.afkSelfReported.some(Boolean) ||
-      this.livenessProbeMisses.some((misses) => misses > 0)
-    ) {
-      this.checkpointUnsupported("disconnect or AFK policy state");
-    }
-    if (
       this.pendingWinRevealMs !== 0 ||
       (!allowVote && this.finalized) ||
       this.sessionFinalized
@@ -1340,6 +1333,11 @@ export class MatchProcess {
       humanDrawQueue: [...this.humanDrawQueue],
       leftDiscardQueue: [...this.leftDiscardQueue],
       bufferMs: [...this.bufferMs],
+      connectionPolicy: {
+        disconnected: [...this.disconnected],
+        afkSelfReported: [...this.afkSelfReported],
+        livenessProbeMisses: [...this.livenessProbeMisses],
+      },
       lastEngineEventType: this.lastEngineEventType,
     };
   }
@@ -1363,6 +1361,9 @@ export class MatchProcess {
     const player = this.players.get(seat);
     if (!player || player.isBot) {
       this.checkpointUnsupported("active seat is not human");
+    }
+    if (this.disconnected[seat] || this.afkSelfReported[seat]) {
+      this.checkpointUnsupported("active seat is disconnected or AFK");
     }
     const legalActions = this.legalActions[seat];
     if (
@@ -1429,6 +1430,9 @@ export class MatchProcess {
         return null;
       }
       const seat = seatIndex as Seat;
+      if (this.disconnected[seat] || this.afkSelfReported[seat]) {
+        this.checkpointUnsupported("open call seat is disconnected or AFK");
+      }
       const startedAt = this.currentActionStartMs[seat];
       const deadline = this.currentDeadline[seat];
       if (
@@ -1587,6 +1591,11 @@ export class MatchProcess {
     match.leftDiscardQueue = [...checkpoint.leftDiscardQueue];
     match.bufferMs = [...checkpoint.bufferMs];
     match.lastEngineEventType = checkpoint.lastEngineEventType;
+    match.disconnected = [...checkpoint.connectionPolicy.disconnected];
+    match.afkSelfReported = [...checkpoint.connectionPolicy.afkSelfReported];
+    match.livenessProbeMisses = [
+      ...checkpoint.connectionPolicy.livenessProbeMisses,
+    ];
 
     if (checkpoint.checkpointKind === "action_window") {
       match.installCheckpointActionWindow(checkpoint);

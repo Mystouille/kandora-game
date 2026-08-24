@@ -42,6 +42,7 @@ import {
   setActionTimeoutMs,
   setReadyCheckMs,
 } from "./match";
+import { parseMatchCheckpoint } from "./checkpoint";
 import {
   ephemeralMatchRepository,
   type MatchRepository,
@@ -412,6 +413,17 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(checkpoint.pendingHumanCallActions[1]?.type).toBe("pass");
     expect(checkpoint.callWindows[2]).not.toBeNull();
     expect(checkpoint.callWindows[3]).not.toBeNull();
+    const disconnected = [...checkpoint.connectionPolicy.disconnected];
+    disconnected[2] = true;
+    expect(() =>
+      parseMatchCheckpoint({
+        ...checkpoint,
+        connectionPolicy: {
+          ...checkpoint.connectionPolicy,
+          disconnected,
+        },
+      })
+    ).toThrow(/owner must be active/);
 
     const restored = MatchProcess.restoreCheckpoint(
       JSON.parse(JSON.stringify(checkpoint)),
