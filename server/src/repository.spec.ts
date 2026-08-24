@@ -62,6 +62,19 @@ describe("memory match checkpoint repository", () => {
         },
       })
     ).rejects.toThrow(/must be legal in its checkpoint window/);
+
+    await expect(
+      repository.saveCommandTransaction({
+        matchId: match.matchId,
+        checkpoint,
+        command: {
+          type: "afk",
+          seat: checkpoint.actionWindow.seat,
+          afk: true,
+          defaultActionId: "not-the-safe-default",
+        },
+      })
+    ).rejects.toThrow(/wrong safe default action/);
   });
 
   it("tombstones a checkpoint and blocks stale resurrection", async () => {

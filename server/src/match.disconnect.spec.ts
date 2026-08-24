@@ -116,7 +116,7 @@ describe("MatchProcess — disconnect / AFK", () => {
     const before = s.events.filter(
       (e) => e.type === "discard" && e.seat === 0
     ).length;
-    m.handleAfk(0, true);
+    await m.handleAfk(0, true);
     // The seat's own socket should receive a room_state whose
     // own occupant is now `connected: false`.
     const last = s.rooms[s.rooms.length - 1];
@@ -139,8 +139,8 @@ describe("MatchProcess — disconnect / AFK", () => {
     const s = sink();
     m.attachHuman(0, s.send);
     await m.start();
-    m.handleAfk(0, true);
-    m.handleAfk(0, false);
+    await m.handleAfk(0, true);
+    await m.handleAfk(0, false);
     const last = s.rooms[s.rooms.length - 1];
     expect(last).toBeDefined();
     const occ = last.seats[0].occupant;
@@ -230,7 +230,7 @@ describe("MatchProcess — disconnect / AFK", () => {
     const s = sink();
     m.attachHuman(0, s.send);
     await m.start();
-    m.handleAfk(0, true);
+    await m.handleAfk(0, true);
     // Socket bounces; the explicit AFK choice should NOT be
     // auto-cleared by the new attach.
     m.detachHuman(0);
@@ -254,7 +254,7 @@ describe("MatchProcess — disconnect / AFK", () => {
     setActionTimeoutMs(5_000);
     m.attachHuman(0, s.send);
     await m.start();
-    m.handleAfk(0, true);
+    await m.handleAfk(0, true);
     await wait(80);
     const discards = s.events.filter(
       (e) => e.type === "discard" && e.seat === 0
@@ -272,7 +272,7 @@ describe("MatchProcess — disconnect / AFK", () => {
     // Spectator gets an initial room_state on attach.
     expect(spec.rooms.length).toBeGreaterThan(0);
     spec.rooms.length = 0;
-    m.handleAfk(0, true);
+    await m.handleAfk(0, true);
     expect(spec.rooms.length).toBeGreaterThan(0);
     const occ = spec.rooms[spec.rooms.length - 1].seats[0].occupant;
     expect(occ.kind).toBe("human");

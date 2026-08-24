@@ -882,11 +882,10 @@ const LeaveSeatMsg = z.object({
 /**
  * Self-reported AFK status. The client sends `afk: true` after a
  * 25s idle window on its own call/discard prompt (no click input);
- * the server flags the seat as disconnected and auto-defaults its
- * actions until the user clicks the "Reconnect" overlay, which
- * sends `afk: false`. Mid-action arrival is fine: the server's
- * auto-default path is idempotent against an already-resolved
- * window.
+ * the server durably records the sticky flag together with that
+ * window's safe default before applying either. Future unavailable
+ * windows retain short resumable auto-default deadlines until the
+ * user clicks the "Reconnect" overlay, which sends `afk: false`.
  */
 const AfkMsg = z.object({
   type: z.literal("afk"),

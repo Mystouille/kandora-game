@@ -1016,6 +1016,10 @@ export class MatchProcess {
   private commandBoundaryResolve: (() => void) | null = null;
   private commandBoundaryPromise: Promise<void> | null = null;
   private commandBoundaryHandoffPromise: Promise<void> | null = null;
+  private automaticDefaultInFlight = false;
+  private automaticDefaultPromise: Promise<void> | null = null;
+  private automaticDefaultHandoffPromise: Promise<void> | null = null;
+  private automaticDefaultHandoffResolve: (() => void) | null = null;
   private suspendedCommandTimer:
     | { kind: "ready" }
     | { kind: "continue_vote"; timeoutArmed: boolean }
@@ -1154,6 +1158,9 @@ export class MatchProcess {
       return this.createWaitingRoomCheckpoint();
     }
     if (this.statusValue === "playing") {
+      if (this.automaticDefaultInFlight) {
+        this.checkpointUnsupported("automatic default action is in flight");
+      }
       if (this.uncheckpointableTransition !== null) {
         this.checkpointUnsupported(
           `transition ${this.uncheckpointableTransition}`
@@ -1456,11 +1463,8 @@ export class MatchProcess {
     ) {
       this.checkpointUnsupported("ready continuation");
     }
-    if (
-      this.delayedSpectators.size > 0 ||
-      this.livenessProbeInflight.some(Boolean)
-    ) {
-      this.checkpointUnsupported("delayed spectator or liveness work");
+    if (this.delayedSpectators.size > 0) {
+      this.checkpointUnsupported("delayed spectator work");
     }
     if (
       this.pendingWinRevealMs !== 0 ||
@@ -1536,9 +1540,6 @@ export class MatchProcess {
     if (!player || player.isBot) {
       this.checkpointUnsupported("active seat is not human");
     }
-    if (this.disconnected[seat] || this.afkSelfReported[seat]) {
-      this.checkpointUnsupported("active seat is disconnected or AFK");
-    }
     const legalActions = this.legalActions[seat];
     if (
       legalActions.length === 0 ||
@@ -1560,12 +1561,12 @@ export class MatchProcess {
 
     const savedAt = this.runtime.now();
     const elapsedMs = Math.max(0, savedAt - actionStartedAt);
+    const expiryDurationMs = this.disconnected[seat]
+      ? DRAW_TO_DISCARD_DELAY_MS
+      : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
     const expiryRemainingMs = Math.max(
       0,
-      BASE_ACTION_MS +
-        this.bufferMs[seat] +
-        ACTION_GRACE_MS -
-        elapsedMs
+      expiryDurationMs - elapsedMs
     );
     return PlayingActionCheckpointSchema.parse({
       ...this.playingCheckpointBase(savedAt),
@@ -1604,9 +1605,6 @@ export class MatchProcess {
         return null;
       }
       const seat = seatIndex as Seat;
-      if (this.disconnected[seat] || this.afkSelfReported[seat]) {
-        this.checkpointUnsupported("open call seat is disconnected or AFK");
-      }
       const startedAt = this.currentActionStartMs[seat];
       const deadline = this.currentDeadline[seat];
       if (
@@ -1618,16 +1616,16 @@ export class MatchProcess {
         this.checkpointUnsupported("open call window timer is incomplete");
       }
       const elapsedMs = Math.max(0, savedAt - startedAt);
+      const expiryDurationMs = this.disconnected[seat]
+        ? DRAW_TO_DISCARD_DELAY_MS
+        : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
       return {
         legalActions: this.legalActions[seat],
         elapsedMs,
         visibleRemainingMs: Math.max(0, deadline - savedAt),
         expiryRemainingMs: Math.max(
           0,
-          BASE_ACTION_MS +
-            this.bufferMs[seat] +
-            ACTION_GRACE_MS -
-            elapsedMs
+          expiryDurationMs - elapsedMs
         ),
       };
     });
@@ -2263,6 +2261,19 @@ export class MatchProcess {
    */
   async handleReady(seat: Seat): Promise<void> {
     const receivedAtSeq = this.nextSeq;
+    const activeAutomaticDefault = this.automaticDefaultPromise;
+    if (activeAutomaticDefault !== null) {
+      if (!this.isAcceptedReady(seat)) {
+        return;
+      }
+      await (
+        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
+      );
+      if (!this.isPaused && this.nextSeq === receivedAtSeq) {
+        await this.handleReady(seat);
+      }
+      return;
+    }
     const activeTransaction = this.commandTransactionPromise;
     if (activeTransaction !== null) {
       if (!this.isAcceptedReady(seat)) {
@@ -2553,28 +2564,64 @@ export class MatchProcess {
    * just rejoined; their remaining buffer is whatever the timer
    * was already scheduled against).
    */
-  handleAfk(seat: Seat, afk: boolean): void {
-    if (this.isPaused) {
+  async handleAfk(seat: Seat, afk: boolean): Promise<void> {
+    if (this.statusValue !== "playing") {
       return;
     }
-    if (this.disconnected[seat] === afk) {
-      // Even when the disconnect flag itself doesn't move, an
-      // explicit `afk: false` from the client should clear the
-      // self-reported sticky bit so a subsequent network blip
-      // can be auto-recovered by `attachHuman`.
-      if (!afk) {
-        this.afkSelfReported[seat] = false;
+    const activeAutomaticDefault = this.automaticDefaultPromise;
+    if (activeAutomaticDefault !== null) {
+      const defaultActionId = afk ? this.pickDefaultActionId(seat) : null;
+      if (!this.isAcceptedAfk(seat, afk, defaultActionId)) {
+        return;
+      }
+      await (
+        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
+      );
+      if (!this.isPaused) {
+        await this.handleAfk(seat, afk);
       }
       return;
     }
-    this.disconnected[seat] = afk;
-    this.afkSelfReported[seat] = afk;
-    if (!afk) {
-      this.livenessProbeMisses[seat] = 0;
+    const activeTransaction = this.commandTransactionPromise;
+    if (activeTransaction !== null) {
+      const defaultActionId = afk ? this.pickDefaultActionId(seat) : null;
+      if (!this.isAcceptedAfk(seat, afk, defaultActionId)) {
+        return;
+      }
+      try {
+        await (this.commandBoundaryHandoffPromise ?? activeTransaction);
+      } catch {
+        // A failed transaction leaves the process paused or recovery-only.
+      }
+      if (this.commandTransactionPromise === activeTransaction) {
+        this.commandTransactionPromise = null;
+      }
+      if (!this.isPaused) {
+        await this.handleAfk(seat, afk);
+      }
+      return;
     }
-    this.broadcastRoomState();
-    if (afk && this.legalActions[seat].length > 0) {
-      void this.handleDeadlineExpiry(seat);
+    if (this.isPaused) {
+      return;
+    }
+    const defaultActionId = afk ? this.pickDefaultActionId(seat) : null;
+    if (!this.isAcceptedAfk(seat, afk, defaultActionId)) {
+      return;
+    }
+    const command: PendingMatchCommand = {
+      type: "afk",
+      seat,
+      afk,
+      defaultActionId,
+    };
+    const transaction = this.runCommandTransaction(command);
+    this.commandTransactionPromise = transaction;
+    try {
+      await transaction;
+    } finally {
+      if (this.commandTransactionPromise === transaction) {
+        this.commandTransactionPromise = null;
+      }
     }
   }
 
@@ -3346,6 +3393,19 @@ export class MatchProcess {
 
   async handleAct(seat: Seat, actionId: string): Promise<void> {
     const receivedAtSeq = this.nextSeq;
+    const activeAutomaticDefault = this.automaticDefaultPromise;
+    if (activeAutomaticDefault !== null) {
+      if (!this.isAcceptedAction(seat, actionId)) {
+        return;
+      }
+      await (
+        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
+      );
+      if (!this.isPaused && this.nextSeq === receivedAtSeq) {
+        await this.handleAct(seat, actionId);
+      }
+      return;
+    }
     const activeTransaction = this.commandTransactionPromise;
     if (activeTransaction !== null) {
       try {
@@ -3461,6 +3521,14 @@ export class MatchProcess {
       this.suspendedCommandTimer = { kind: "ready" };
       return;
     }
+    if (command.type === "afk") {
+      if (command.defaultActionId !== null) {
+        this.currentDeadlineTimer[command.seat]?.cancel();
+        this.currentDeadlineTimer[command.seat] = null;
+        this.deadlineEpoch[command.seat] += 1;
+      }
+      return;
+    }
     const timeoutArmed = this.continueVoteTimer !== null;
     this.continueVoteTimer?.cancel();
     this.continueVoteTimer = null;
@@ -3487,6 +3555,25 @@ export class MatchProcess {
           );
         }
         this.handleReadyDirect(command.seat);
+        return;
+      }
+      if (command.type === "afk") {
+        if (
+          !this.isAcceptedAfk(
+            command.seat,
+            command.afk,
+            command.defaultActionId
+          )
+        ) {
+          throw new Error(
+            `pending AFK state is no longer valid for seat ${command.seat}`
+          );
+        }
+        await this.handleAfkDirect(
+          command.seat,
+          command.afk,
+          command.defaultActionId
+        );
         return;
       }
       if (!this.isAcceptedContinueVote(command.seat, command.vote)) {
@@ -3526,6 +3613,14 @@ export class MatchProcess {
   private commitOpenInputBoundary(): Promise<void> {
     const transactionId = this.activeCommandTransactionId;
     if (this.commandTransactionPromise === null || transactionId === null) {
+      if (this.automaticDefaultInFlight) {
+        this.automaticDefaultInFlight = false;
+        this.automaticDefaultPromise = null;
+        const resolve = this.automaticDefaultHandoffResolve;
+        this.automaticDefaultHandoffPromise = null;
+        this.automaticDefaultHandoffResolve = null;
+        resolve?.();
+      }
       return Promise.resolve();
     }
     if (this.commandBoundaryHandoffPromise !== null) {
@@ -3575,6 +3670,46 @@ export class MatchProcess {
     this.readyAcked[seat] = true;
     if (!this.readyAcked.every(Boolean)) {
       this.broadcastReadyCheck();
+    }
+  }
+
+  private isAcceptedAfk(
+    seat: Seat,
+    afk: boolean,
+    defaultActionId: string | null
+  ): boolean {
+    const player = this.players.get(seat);
+    if (
+      this.statusValue !== "playing" ||
+      player === null ||
+      player === undefined ||
+      player.isBot
+    ) {
+      return false;
+    }
+    const changesState = afk
+      ? !this.disconnected[seat] || !this.afkSelfReported[seat]
+      : this.disconnected[seat] || this.afkSelfReported[seat];
+    if (!changesState) {
+      return false;
+    }
+    const expectedDefault = afk ? this.pickDefaultActionId(seat) : null;
+    return defaultActionId === expectedDefault;
+  }
+
+  private async handleAfkDirect(
+    seat: Seat,
+    afk: boolean,
+    defaultActionId: string | null
+  ): Promise<void> {
+    this.disconnected[seat] = afk;
+    this.afkSelfReported[seat] = afk;
+    if (!afk) {
+      this.livenessProbeMisses[seat] = 0;
+    }
+    this.broadcastRoomState();
+    if (defaultActionId !== null) {
+      await this.handleActDirect(seat, defaultActionId);
     }
   }
 
@@ -4885,6 +5020,18 @@ export class MatchProcess {
       }
       return;
     }
+    const activeAutomaticDefault = this.automaticDefaultPromise;
+    if (activeAutomaticDefault !== null) {
+      try {
+        await activeAutomaticDefault;
+      } catch {
+        // A failed automatic action leaves the current authority unchanged.
+      }
+      if (!this.isPaused) {
+        await this.handleDeadlineExpiry(seat);
+      }
+      return;
+    }
     if (this.isPaused) {
       return;
     }
@@ -4930,11 +5077,46 @@ export class MatchProcess {
         }
       }
     }
+    if (this.isPaused) {
+      return;
+    }
+    const automaticAfterProbe = this.automaticDefaultPromise;
+    if (automaticAfterProbe !== null) {
+      try {
+        await automaticAfterProbe;
+      } catch {
+        // Re-evaluate this window after the active automatic action settles.
+      }
+      if (!this.isPaused) {
+        await this.handleDeadlineExpiry(seat);
+      }
+      return;
+    }
     const actionId = this.pickDefaultActionId(seat);
     if (actionId === null) {
       return;
     }
-    await this.handleActDirect(seat, actionId);
+    const handoff = new Promise<void>((resolve) => {
+      this.automaticDefaultHandoffResolve = resolve;
+    });
+    this.automaticDefaultHandoffPromise = handoff;
+    this.automaticDefaultInFlight = true;
+    const applying = this.handleActDirect(seat, actionId);
+    this.automaticDefaultPromise = applying;
+    try {
+      await applying;
+    } finally {
+      if (this.automaticDefaultPromise === applying) {
+        this.automaticDefaultPromise = null;
+        this.automaticDefaultInFlight = false;
+      }
+      if (this.automaticDefaultHandoffPromise === handoff) {
+        const resolve = this.automaticDefaultHandoffResolve;
+        this.automaticDefaultHandoffPromise = null;
+        this.automaticDefaultHandoffResolve = null;
+        resolve?.();
+      }
+    }
   }
 
   private pickDefaultActionId(seat: Seat): string | null {
@@ -5326,6 +5508,19 @@ export class MatchProcess {
     seat: Seat,
     vote: "yes" | "no"
   ): Promise<void> {
+    const activeAutomaticDefault = this.automaticDefaultPromise;
+    if (activeAutomaticDefault !== null) {
+      if (!this.isAcceptedContinueVote(seat, vote)) {
+        return;
+      }
+      await (
+        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
+      );
+      if (!this.isPaused) {
+        await this.handleVoteContinue(seat, vote);
+      }
+      return;
+    }
     const activeTransaction = this.commandTransactionPromise;
     if (activeTransaction !== null) {
       if (!this.isAcceptedContinueVote(seat, vote)) {

@@ -221,16 +221,6 @@ export const PlayingActionCheckpointSchema = z
         message: "Action-window seat must be human",
       });
     }
-    if (
-      checkpoint.connectionPolicy.disconnected[seat] ||
-      checkpoint.connectionPolicy.afkSelfReported[seat]
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["connectionPolicy", "disconnected", seat],
-        message: "Action-window owner must be active",
-      });
-    }
     if (!legalActions.some((action) => action.type === "discard")) {
       context.addIssue({
         code: "custom",
@@ -362,16 +352,6 @@ export const PlayingCallCheckpointSchema = z
             code: "custom",
             path: ["seats", seat, "isBot"],
             message: "Open call window seat must be human",
-          });
-        }
-        if (
-          checkpoint.connectionPolicy.disconnected[seat] ||
-          checkpoint.connectionPolicy.afkSelfReported[seat]
-        ) {
-          context.addIssue({
-            code: "custom",
-            path: ["connectionPolicy", "disconnected", seat],
-            message: "Open call-window owner must be active",
           });
         }
         if (timer === null) {

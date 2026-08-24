@@ -1014,7 +1014,7 @@ async function handleClientFrame(
       return;
     }
     case "afk": {
-      match.handleAfk(seat, parsed.data.afk);
+      await match.handleAfk(seat, parsed.data.afk);
       return;
     }
     case "vote_continue": {

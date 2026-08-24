@@ -34,8 +34,49 @@ export const PendingMatchCommandSchema = z.discriminatedUnion("type", [
       vote: z.enum(["yes", "no"]),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("afk"),
+      seat: SeatSchema,
+      afk: z.boolean(),
+      defaultActionId: z.string().min(1).nullable(),
+    })
+    .strict(),
 ]);
 export type PendingMatchCommand = z.infer<typeof PendingMatchCommandSchema>;
+
+function checkpointDefaultActionId(
+  checkpoint: MatchCheckpoint,
+  seat: Seat
+): string | null {
+  if (checkpoint.status !== "playing") {
+    return null;
+  }
+  if (
+    checkpoint.checkpointKind === "action_window" &&
+    checkpoint.actionWindow.seat === seat
+  ) {
+    const legals = checkpoint.actionWindow.legalActions;
+    const drawn = checkpoint.state.lastDrawn[seat];
+    const tsumogiri = legals.find(
+      (action) =>
+        action.type === "discard" &&
+        action.tile === drawn &&
+        (action.discardSource === "draw" || action.discardSource === undefined)
+    );
+    return (
+      tsumogiri ?? legals.find((action) => action.type === "discard")
+    )?.id ?? null;
+  }
+  if (checkpoint.checkpointKind === "call_window") {
+    return (
+      checkpoint.callTimers[seat]?.legalActions.find(
+        (action) => action.type === "pass"
+      )?.id ?? null
+    );
+  }
+  return null;
+}
 
 export const MatchRecoveryRecordSchema = z
   .object({
@@ -77,6 +118,37 @@ export const MatchRecoveryRecordSchema = z
           code: "custom",
           path: ["pendingCommand", "vote"],
           message: "Pending vote command requires an unresolved human vote",
+        });
+      }
+      return;
+    }
+    if (command.type === "afk") {
+      const playing = checkpoint.status === "playing";
+      const player = playing ? checkpoint.seats[command.seat] : null;
+      const policy = playing ? checkpoint.connectionPolicy : null;
+      const changesState = command.afk
+        ? policy !== null &&
+          (!policy.disconnected[command.seat] ||
+            !policy.afkSelfReported[command.seat])
+        : policy !== null &&
+          (policy.disconnected[command.seat] ||
+            policy.afkSelfReported[command.seat]);
+      if (!playing || player?.isBot !== false || !changesState) {
+        context.addIssue({
+          code: "custom",
+          path: ["pendingCommand", "afk"],
+          message: "Pending AFK command requires a playing human state change",
+        });
+        return;
+      }
+      const expectedDefault = command.afk
+        ? checkpointDefaultActionId(checkpoint, command.seat)
+        : null;
+      if (command.defaultActionId !== expectedDefault) {
+        context.addIssue({
+          code: "custom",
+          path: ["pendingCommand", "defaultActionId"],
+          message: "Pending AFK command has the wrong safe default action",
         });
       }
       return;

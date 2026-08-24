@@ -108,13 +108,15 @@ restored relative to the new runtime so suspended time consumes no clock.
 Sockets, liveness probe callbacks, and in-flight probes are process-local and
 are never serialized; restored players reconnect through the normal
 claim/attach flow. A network-only disconnect clears on a fresh attachment,
-whereas explicit AFK survives reattachment until `afk:false`. A disconnected or
-AFK seat that currently owns an action/call window remains fail-closed because
-its auto-default may already be advancing. Remaining short pacing sleeps (win
-reaction, turn/draw-to-discard pacing, match-end display, win-to-panel), the
-internal win→chombo display pause, relays, and delayed spectators are explicitly
-marked uncheckpointable so an accepted command cannot be saved as stale
-pre-command state.
+whereas explicit AFK survives reattachment until `afk:false`. An in-flight
+liveness probe may be checkpointed; the old callback re-checks pause/connection
+generation before mutating and restored processes start with no probe. A
+disconnected/AFK action or call owner is stored with the remaining short
+auto-default deadline and resumes that safe discard/pass after restoration.
+Checkpoint creation still fails while the automatic action itself is mutating.
+Remaining pacing sleeps (win reaction, turn/draw-to-discard pacing, match-end
+display, win-to-panel), the internal win→chombo display pause, relays, and
+delayed spectators remain explicitly uncheckpointable.
 
 `pauseAndSaveCheckpoint()` freezes mutation and cancels every active phase timer
 before awaiting `MatchRepository.saveCheckpoint()`. Concurrent pause calls share
@@ -123,14 +125,14 @@ write rebases the saved durations onto the current runtime and resumes the same
 process without charging the I/O interval. `restoreSavedCheckpoint()` loads and
 validates through the repository.
 
-Accepted `act`, `ready`, and `vote_continue` frames use a write-ahead recovery
-record. Before authority mutates, `MatchProcess` freezes the current input
-window and atomically stores its checkpoint together with the seat and command
-payload. Recovery validates the command against that exact action, ready, or
-vote window, restores the pre-state, replays it once, and atomically replaces
-the pending record with the resulting checkpoint. Concurrent frames serialize;
-queued gameplay actions are reconsidered only if no game event advanced while
-they waited, while ready/vote commands revalidate their synchronization window.
+Accepted `act`, `ready`, `vote_continue`, and self-reported `afk` frames use a
+write-ahead recovery record. Before authority mutates, `MatchProcess` freezes
+the current input window and atomically stores its checkpoint together with the
+seat and command payload. An `afk:true` record also carries the exact safe
+default selected from that window (`pass` or tsumogiri/fallback discard), so the
+sticky flag and default are one crash-safe command. Recovery validates every
+command against its exact action/ready/vote window, restores the pre-state,
+replays once, and replaces the pending record with the resulting checkpoint.
 
 The final ready acknowledgment and a resolving Buu vote commit a completed
 window checkpoint before starting their asynchronous continuation. Installing
@@ -151,9 +153,11 @@ post-state before input resumes. Terminalization replaces either form with the
 same tombstone. A detached replay continuation that fails after recovery has
 returned also pauses the process and exposes its cause through
 `pendingCommandRecoveryError`. Transactional gameplay covers discard,
-call/pass, kan, win, and riichi. AFK/start/leave frames and server-driven
-AFK/deadline defaults are not command-logged yet; disconnected action windows
-therefore remain explicitly uncheckpointable.
+call/pass, kan, win, riichi, and explicit AFK opt-out/opt-in. `start_match`,
+`leave_seat`, raw network detach, and ordinary server deadline/liveness defaults
+do not write their own command record yet. Automatic defaults serialize against
+client input and are replayable from the latest disconnected-window checkpoint,
+but only a later command or explicit lifecycle save advances durable storage.
 
 Before emitting terminal `session_end`, `MatchProcess` atomically replaces any
 existing checkpoint with a retained terminal tombstone. Loads then return no

@@ -464,15 +464,17 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(checkpoint.callWindows[3]).not.toBeNull();
     const disconnected = [...checkpoint.connectionPolicy.disconnected];
     disconnected[2] = true;
-    expect(() =>
-      parseMatchCheckpoint({
+    const disconnectedCheckpoint = parseMatchCheckpoint({
         ...checkpoint,
         connectionPolicy: {
           ...checkpoint.connectionPolicy,
           disconnected,
         },
-      })
-    ).toThrow(/owner must be active/);
+      });
+    expect(disconnectedCheckpoint).toMatchObject({
+      checkpointKind: "call_window",
+      connectionPolicy: { disconnected },
+    });
 
     const restored = MatchProcess.restoreCheckpoint(
       JSON.parse(JSON.stringify(checkpoint)),

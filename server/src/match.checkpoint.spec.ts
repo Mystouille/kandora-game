@@ -1249,7 +1249,7 @@ describe("MatchProcess checkpoints", () => {
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
     await match.start();
-    match.handleAfk(1, true);
+    await match.handleAfk(1, true);
 
     const checkpoint = match.createCheckpoint();
     if (checkpoint.status !== "playing") {
@@ -1268,7 +1268,7 @@ describe("MatchProcess checkpoints", () => {
       connected: false,
     });
 
-    restored.handleAfk(1, false);
+    await restored.handleAfk(1, false);
     expect(restored.buildRoomState(1).seats[1].occupant).toMatchObject({
       kind: "human",
       connected: true,
@@ -1279,6 +1279,387 @@ describe("MatchProcess checkpoints", () => {
     }
     expect(resumed.connectionPolicy.disconnected[1]).toBe(false);
     expect(resumed.connectionPolicy.afkSelfReported[1]).toBe(false);
+  });
+
+  it("does not mark AFK or apply its default before the command is durable", async () => {
+    const storage = createMemoryMatchRepository();
+    const gate = deferred();
+    let captured:
+      | Parameters<MatchRepository["saveCommandTransaction"]>[0]
+      | null = null;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCommandTransaction: async (args) => {
+        captured = args;
+        await gate.promise;
+        await storage.saveCommandTransaction(args);
+      },
+    };
+    const runtime = controlledRuntime(45_500, 805);
+    const match = new MatchProcess(
+      "checkpoint-afk-write-ahead",
+      321,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const seat = checkpoint.actionWindow.seat;
+    const drawn = checkpoint.state.lastDrawn[seat];
+    const safeDefault =
+      checkpoint.actionWindow.legalActions.find(
+        (action) =>
+          action.type === "discard" &&
+          action.tile === drawn &&
+          (action.discardSource === "draw" ||
+            action.discardSource === undefined)
+      ) ??
+      checkpoint.actionWindow.legalActions.find(
+        (action) => action.type === "discard"
+      );
+    if (!safeDefault) {
+      throw new Error("expected a safe discard default");
+    }
+    const beforeEvents = match.replayFromBuffer(0, 0);
+
+    const markingAfk = match.handleAfk(seat, true);
+    await Promise.resolve();
+
+    expect(captured).toMatchObject({
+      matchId: match.matchId,
+      checkpoint,
+      command: {
+        type: "afk",
+        seat,
+        afk: true,
+        defaultActionId: safeDefault.id,
+      },
+    });
+    const frozen = match.createCheckpoint();
+    if (frozen.status !== "playing") {
+      throw new Error("expected frozen playing authority");
+    }
+    expect(frozen.connectionPolicy.disconnected[seat]).toBe(false);
+    expect(frozen.connectionPolicy.afkSelfReported[seat]).toBe(false);
+    expect(match.replayFromBuffer(0, 0)).toEqual(beforeEvents);
+    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
+
+    gate.resolve();
+    await markingAfk;
+
+    const committed = match.createCheckpoint();
+    if (committed.status !== "playing") {
+      throw new Error("expected a playing AFK checkpoint");
+    }
+    expect(committed.connectionPolicy.disconnected[seat]).toBe(true);
+    expect(committed.connectionPolicy.afkSelfReported[seat]).toBe(true);
+    expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(
+      beforeEvents.length
+    );
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      pendingCommand: null,
+    });
+  });
+
+  it("replays a durable AFK default after process loss", async () => {
+    const repository = createMemoryMatchRepository();
+    const originalRuntime = controlledRuntime(45_750, 806);
+    const match = new MatchProcess(
+      "checkpoint-afk-command-replay",
+      322,
+      humanPlayers(),
+      { repository, runtime: originalRuntime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const seat = checkpoint.actionWindow.seat;
+    const drawn = checkpoint.state.lastDrawn[seat];
+    const safeDefault =
+      checkpoint.actionWindow.legalActions.find(
+        (action) =>
+          action.type === "discard" &&
+          action.tile === drawn &&
+          (action.discardSource === "draw" ||
+            action.discardSource === undefined)
+      ) ??
+      checkpoint.actionWindow.legalActions.find(
+        (action) => action.type === "discard"
+      );
+    if (!safeDefault) {
+      throw new Error("expected a safe discard default");
+    }
+    await repository.saveCommandTransaction({
+      matchId: match.matchId,
+      checkpoint,
+      command: {
+        type: "afk",
+        seat,
+        afk: true,
+        defaultActionId: safeDefault.id,
+      },
+    });
+
+    const expectedRuntime = controlledRuntime(900_000, 807);
+    const expected = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: expectedRuntime,
+    });
+    await expected.handleAfk(seat, true);
+    const restoredRuntime = controlledRuntime(900_000, 808);
+    const restored = await MatchProcess.restoreSavedCheckpoint(match.matchId, {
+      repository,
+      runtime: restoredRuntime,
+    });
+    if (!restored) {
+      throw new Error("expected a restored AFK command");
+    }
+
+    expect(restored.replayFromBuffer(0, 0)).toEqual(
+      expected.replayFromBuffer(0, 0)
+    );
+    expect(comparableSnapshot(restored, 0, restoredRuntime)).toEqual(
+      comparableSnapshot(expected, 0, expectedRuntime)
+    );
+    const restoredCheckpoint = restored.createCheckpoint();
+    if (restoredCheckpoint.status !== "playing") {
+      throw new Error("expected a restored playing checkpoint");
+    }
+    expect(restoredCheckpoint.connectionPolicy.disconnected[seat]).toBe(true);
+    expect(restoredCheckpoint.connectionPolicy.afkSelfReported[seat]).toBe(
+      true
+    );
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      pendingCommand: null,
+    });
+  });
+
+  it("retries a failed AFK command commit", async () => {
+    const storage = createMemoryMatchRepository();
+    let commitAttempts = 0;
+    const repository: MatchRepository = {
+      ...storage,
+      saveCheckpoint: async (args) => {
+        commitAttempts += 1;
+        if (commitAttempts === 1) {
+          throw new Error("AFK command commit failed");
+        }
+        await storage.saveCheckpoint(args);
+      },
+    };
+    const runtime = controlledRuntime(45_900, 811);
+    const match = new MatchProcess(
+      "checkpoint-afk-commit-retry",
+      324,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const seat = checkpoint.actionWindow.seat;
+
+    await expect(match.handleAfk(seat, true)).rejects.toThrow(
+      "AFK command commit failed"
+    );
+
+    expect(match.isPaused).toBe(true);
+    expect(match.hasPendingCommandCommit).toBe(true);
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      checkpoint: { checkpointKind: "action_window" },
+      pendingCommand: { type: "afk", seat, afk: true },
+    });
+
+    await expect(match.retryPendingCommandCommit()).resolves.toBe(true);
+    expect(commitAttempts).toBe(2);
+    const committed = match.createCheckpoint();
+    if (committed.status !== "playing") {
+      throw new Error("expected a committed AFK checkpoint");
+    }
+    expect(committed.connectionPolicy.disconnected[seat]).toBe(true);
+    expect(committed.connectionPolicy.afkSelfReported[seat]).toBe(true);
+  });
+
+  it("does not apply a liveness default after the match is paused", async () => {
+    const repository = createMemoryMatchRepository();
+    const runtime = controlledRuntime(45_950, 812);
+    const match = new MatchProcess(
+      "checkpoint-liveness-pause",
+      325,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    let resolveProbe!: (alive: boolean) => void;
+    const probe = new Promise<boolean>((resolve) => {
+      resolveProbe = resolve;
+    });
+    const seat = match.createCheckpoint();
+    if (
+      seat.status !== "playing" ||
+      seat.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    match.attachHuman(seat.actionWindow.seat, () => undefined, () => probe);
+    const internals = match as unknown as {
+      bufferMs: [number, number, number, number];
+      handleDeadlineExpiry: (seat: 0 | 1 | 2 | 3) => Promise<void>;
+      livenessProbeInflight: [boolean, boolean, boolean, boolean];
+    };
+    internals.bufferMs[seat.actionWindow.seat] = 0;
+    const beforeCount = match.replayFromBuffer(0, 0).length;
+    const expiring = internals.handleDeadlineExpiry(seat.actionWindow.seat);
+    await vi.waitFor(() => {
+      expect(internals.livenessProbeInflight[seat.actionWindow.seat]).toBe(
+        true
+      );
+    });
+
+    await match.pauseAndSaveCheckpoint();
+    resolveProbe(false);
+    await expiring;
+
+    expect(match.isPaused).toBe(true);
+    expect(match.replayFromBuffer(0, 0)).toHaveLength(beforeCount);
+    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
+      checkpoint: { checkpointKind: "action_window" },
+      pendingCommand: null,
+    });
+  });
+
+  it("serializes a client action behind an automatic default", async () => {
+    const gate = deferred();
+    const runtime = controlledRuntime(45_975, 813);
+    const match = new MatchProcess(
+      "checkpoint-automatic-action-race",
+      326,
+      humanPlayers(),
+      { repository: ephemeralMatchRepository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected an action checkpoint");
+    }
+    const seat = checkpoint.actionWindow.seat;
+    const drawn = checkpoint.state.lastDrawn[seat];
+    const safeDefault =
+      checkpoint.actionWindow.legalActions.find(
+        (action) =>
+          action.type === "discard" &&
+          action.tile === drawn &&
+          (action.discardSource === "draw" ||
+            action.discardSource === undefined)
+      ) ??
+      checkpoint.actionWindow.legalActions.find(
+        (action) => action.type === "discard"
+      );
+    if (!safeDefault) {
+      throw new Error("expected a safe discard default");
+    }
+    const beforeDiscards = match
+      .replayFromBuffer(0, 0)
+      .filter(({ event }) => event.type === "discard").length;
+    const internals = match as unknown as {
+      handleActDirect: (
+        seat: 0 | 1 | 2 | 3,
+        actionId: string
+      ) => Promise<void>;
+      automaticDefaultInFlight: boolean;
+      automaticDefaultPromise: Promise<void> | null;
+      automaticDefaultHandoffPromise: Promise<void> | null;
+    };
+
+    internals.automaticDefaultInFlight = true;
+    internals.automaticDefaultPromise = new Promise<void>(() => undefined);
+    internals.automaticDefaultHandoffPromise = gate.promise;
+    let clientSettled = false;
+    const clientAction = match.handleAct(seat, safeDefault.id).finally(() => {
+      clientSettled = true;
+    });
+    await Promise.resolve();
+    expect(clientSettled).toBe(false);
+
+    await internals.handleActDirect(seat, safeDefault.id);
+    gate.resolve();
+    await clientAction;
+
+    const afterDiscards = match
+      .replayFromBuffer(0, 0)
+      .filter(({ event }) => event.type === "discard").length;
+    expect(afterDiscards).toBe(beforeDiscards + 1);
+  });
+
+  it("restores a disconnected action owner into its automatic deadline", async () => {
+    const originalRuntime = controlledRuntime(46_000, 809);
+    const match = new MatchProcess(
+      "checkpoint-disconnected-action",
+      323,
+      oneHumanPlayers(),
+      {
+        repository: ephemeralMatchRepository,
+        runtime: originalRuntime,
+      }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    await match.handleAfk(0, true);
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected a disconnected action checkpoint");
+    }
+    expect(checkpoint.actionWindow.seat).toBe(0);
+    expect(checkpoint.connectionPolicy.disconnected[0]).toBe(true);
+
+    const restoredRuntime = controlledRuntime(910_000, 810);
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: restoredRuntime,
+    });
+    expect(restoredRuntime.scheduledDelays().at(-1)).toBe(
+      checkpoint.actionWindow.expiryRemainingMs
+    );
+    const beforeCount = checkpoint.eventLog.length;
+    restoredRuntime.runNextTimer();
+    await vi.waitFor(() => {
+      expect(restored.replayFromBuffer(0, 0).length).toBeGreaterThan(
+        beforeCount
+      );
+    });
   });
 
   it("restores network disconnect policy and clears it on reattach", async () => {
@@ -1785,15 +2166,17 @@ describe("MatchProcess checkpoints", () => {
     ).toThrow(/require awaiting_discard/);
     const disconnected = [...checkpoint.connectionPolicy.disconnected];
     disconnected[checkpoint.actionWindow.seat] = true;
-    expect(() =>
-      parseMatchCheckpoint({
+    const disconnectedCheckpoint = parseMatchCheckpoint({
         ...checkpoint,
         connectionPolicy: {
           ...checkpoint.connectionPolicy,
           disconnected,
         },
-      })
-    ).toThrow(/owner must be active/);
+      });
+    expect(disconnectedCheckpoint).toMatchObject({
+      checkpointKind: "action_window",
+      connectionPolicy: { disconnected },
+    });
   });
 
   it("rejects a call window attached to the wrong engine phase", async () => {
