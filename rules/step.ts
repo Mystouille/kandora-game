@@ -1381,7 +1381,10 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (state.riichiDeclared[action.seat]) {
       return noop(state);
     }
-    if (state.scores[action.seat] < state.ruleSet.riichiBetValue) {
+    if (
+      state.ruleSet.bustedScore !== null &&
+      state.scores[action.seat] < state.ruleSet.riichiBetValue
+    ) {
       return noop(state);
     }
     // Concealed-hand rule: any open meld (chi / pon / daiminkan /

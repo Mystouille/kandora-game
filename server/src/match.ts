@@ -5039,8 +5039,9 @@ export class MatchProcess {
     // Riichi: enumerate the discardable tiles whose post-discard
     // 13-tile hand leaves the seat in tenpai. The engine's `step`
     // returns an empty event list when the riichi declaration is
-    // rejected (already declared, < 1000 score, < 4 wall, open hand,
-    // hand not tenpai after discard, etc.), so a non-zero event
+    // rejected (already declared, cannot cover the stick under bust
+    // rules, < 4 wall, open hand, hand not tenpai after discard,
+    // etc.), so a non-zero event
     // count is sufficient to surface the option.
     if (!this.state.riichiDeclared[seat]) {
       const discardChoices = out.filter(

@@ -36,6 +36,7 @@ function craft(opts: {
   doraIndicators?: Tile[];
   uraDoraIndicators?: Tile[];
   scores?: [number, number, number, number];
+  ruleSet?: Partial<MatchState["ruleSet"]>;
   discards?: Tile[][];
   riichiDeclared?: [boolean, boolean, boolean, boolean];
   ippatsuEligible?: [boolean, boolean, boolean, boolean];
@@ -44,6 +45,7 @@ function craft(opts: {
   const dealer = opts.dealer ?? 0;
   return {
     ...base,
+    ruleSet: { ...base.ruleSet, ...opts.ruleSet },
     hands: opts.hands.map((h) => [...h]),
     discards: opts.discards ?? [[], [], [], []],
     liveWall: opts.liveWall ?? Array.from({ length: 20 }, () => "1m" as Tile),
@@ -180,7 +182,7 @@ describe("step — riichi declaration", () => {
     expect(r.state.doubleRiichi[0]).toBe(false);
   });
 
-  it("rejects riichi when scores < 1000", () => {
+  it("rejects riichi below the stick value when bust is enabled", () => {
     const handTenpai = tiles("11m22p33s44m55p66s7z");
     const drawn: Tile = "9m";
     const state = craft({
@@ -192,6 +194,26 @@ describe("step — riichi declaration", () => {
     });
     const r = step(state, { type: "riichi", seat: 0, tile: drawn });
     expect(r.events).toEqual([]);
+  });
+
+  it("allows riichi into negative points when bust is disabled", () => {
+    const handTenpai = tiles("11m22p33s44m55p66s7z");
+    const drawn: Tile = "9m";
+    const state = craft({
+      hands: [[...handTenpai, drawn], FILLER, FILLER, FILLER],
+      turn: 0,
+      phase: "awaiting_discard",
+      lastDrawn: drawn,
+      scores: [-100, 25000, 25000, 25000],
+      ruleSet: { bustedScore: null },
+    });
+
+    const r = step(state, { type: "riichi", seat: 0, tile: drawn });
+
+    expect(r.events).toHaveLength(1);
+    expect(r.state.riichiDeclared[0]).toBe(true);
+    expect(r.state.scores[0]).toBe(-1100);
+    expect(r.state.riichiSticks).toBe(1);
   });
 
   it("rejects riichi when live wall < 4", () => {
