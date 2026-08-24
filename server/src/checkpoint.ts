@@ -81,68 +81,105 @@ export type WaitingRoomCheckpoint = z.infer<
   typeof WaitingRoomCheckpointSchema
 >;
 
+const PlayingCheckpointBaseShape = {
+  schemaVersion: z.literal(MATCH_CHECKPOINT_SCHEMA_VERSION),
+  status: z.literal("playing"),
+  savedAt: z.number().int().nonnegative(),
+  matchId: z.string().min(1),
+  seed: z.number().int(),
+  presetId: z.string().min(1),
+  seats: z.tuple([
+    CheckpointPlayerSchema,
+    CheckpointPlayerSchema,
+    CheckpointPlayerSchema,
+    CheckpointPlayerSchema,
+  ]),
+  state: MatchStateSchema,
+  startedAgoMs: z.number().int().nonnegative(),
+  randomState: z.number().int().min(0).max(0xffffffff),
+  eventLog: z.array(
+    z
+      .object({
+        seq: z.number().int().nonnegative(),
+        event: GameEventSchema,
+        emittedAgoMs: z.number().int().nonnegative(),
+      })
+      .strict()
+  ),
+  nextSeq: z.number().int().nonnegative(),
+  seatSeq: NonnegativeNumberTuple4Schema,
+  spectatorSeq: z.number().int().nonnegative(),
+  handStartLiveWall: z.array(TileSchema).nullable(),
+  gameStartLogIdx: z.number().int().nonnegative(),
+  gameIndex: z.number().int().nonnegative(),
+  sessionChips: NumberTuple4Schema,
+  gameStartChips: NumberTuple4Schema,
+  sessionDabuken: BooleanTuple4Schema,
+  dice: z.tuple([
+    z.number().int().min(1).max(6),
+    z.number().int().min(1).max(6),
+  ]),
+  riichiTileIdx: z.tuple([
+    z.number().int().nonnegative().nullable(),
+    z.number().int().nonnegative().nullable(),
+    z.number().int().nonnegative().nullable(),
+    z.number().int().nonnegative().nullable(),
+  ]),
+  humanDrawQueue: z.array(TileSchema),
+  leftDiscardQueue: z.array(TileSchema),
+  bufferMs: NonnegativeNumberTuple4Schema,
+  lastEngineEventType: z
+    .enum([
+      "draw",
+      "discard",
+      "win",
+      "hand_end",
+      "buu_chombo",
+      "call",
+      "new_dora",
+      "hand_start",
+      "match_end",
+    ])
+    .nullable(),
+} as const;
+
+const CallOptionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("chi"),
+      tiles: z.tuple([TileSchema, TileSchema]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pon"),
+      tiles: z.tuple([TileSchema, TileSchema]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("daiminkan"),
+      tiles: z.tuple([TileSchema, TileSchema, TileSchema]),
+    })
+    .strict(),
+  z.object({ kind: z.literal("ron") }).strict(),
+]);
+
+const CallOptionsSlotSchema = z.array(CallOptionSchema).min(1).nullable();
+const CallTimerSlotSchema = z
+  .object({
+    legalActions: z.array(LegalActionSchema).min(1),
+    elapsedMs: z.number().int().nonnegative(),
+    visibleRemainingMs: z.number().int().nonnegative(),
+    expiryRemainingMs: z.number().int().nonnegative(),
+  })
+  .strict()
+  .nullable();
+
 export const PlayingActionCheckpointSchema = z
   .object({
-    schemaVersion: z.literal(MATCH_CHECKPOINT_SCHEMA_VERSION),
-    status: z.literal("playing"),
+    ...PlayingCheckpointBaseShape,
     checkpointKind: z.literal("action_window"),
-    savedAt: z.number().int().nonnegative(),
-    matchId: z.string().min(1),
-    seed: z.number().int(),
-    presetId: z.string().min(1),
-    seats: z.tuple([
-      CheckpointPlayerSchema,
-      CheckpointPlayerSchema,
-      CheckpointPlayerSchema,
-      CheckpointPlayerSchema,
-    ]),
-    state: MatchStateSchema,
-    startedAgoMs: z.number().int().nonnegative(),
-    randomState: z.number().int().min(0).max(0xffffffff),
-    eventLog: z.array(
-      z
-        .object({
-          seq: z.number().int().nonnegative(),
-          event: GameEventSchema,
-          emittedAgoMs: z.number().int().nonnegative(),
-        })
-        .strict()
-    ),
-    nextSeq: z.number().int().nonnegative(),
-    seatSeq: NonnegativeNumberTuple4Schema,
-    spectatorSeq: z.number().int().nonnegative(),
-    handStartLiveWall: z.array(TileSchema).nullable(),
-    gameStartLogIdx: z.number().int().nonnegative(),
-    gameIndex: z.number().int().nonnegative(),
-    sessionChips: NumberTuple4Schema,
-    gameStartChips: NumberTuple4Schema,
-    sessionDabuken: BooleanTuple4Schema,
-    dice: z.tuple([
-      z.number().int().min(1).max(6),
-      z.number().int().min(1).max(6),
-    ]),
-    riichiTileIdx: z.tuple([
-      z.number().int().nonnegative().nullable(),
-      z.number().int().nonnegative().nullable(),
-      z.number().int().nonnegative().nullable(),
-      z.number().int().nonnegative().nullable(),
-    ]),
-    humanDrawQueue: z.array(TileSchema),
-    leftDiscardQueue: z.array(TileSchema),
-    bufferMs: NonnegativeNumberTuple4Schema,
-    lastEngineEventType: z
-      .enum([
-        "draw",
-        "discard",
-        "win",
-        "hand_end",
-        "buu_chombo",
-        "call",
-        "new_dora",
-        "hand_start",
-        "match_end",
-      ])
-      .nullable(),
     actionWindow: z
       .object({
         seat: SeatSchema,
@@ -212,9 +249,171 @@ export const PlayingActionCheckpointSchema = z
 export type PlayingActionCheckpoint = z.infer<
   typeof PlayingActionCheckpointSchema
 >;
+
+export const PlayingCallCheckpointSchema = z
+  .object({
+    ...PlayingCheckpointBaseShape,
+    checkpointKind: z.literal("call_window"),
+    callWindows: z.tuple([
+      CallOptionsSlotSchema,
+      CallOptionsSlotSchema,
+      CallOptionsSlotSchema,
+      CallOptionsSlotSchema,
+    ]),
+    pendingHumanCallActions: z.tuple([
+      LegalActionSchema.nullable(),
+      LegalActionSchema.nullable(),
+      LegalActionSchema.nullable(),
+      LegalActionSchema.nullable(),
+    ]),
+    pendingBotRons: z.array(SeatSchema),
+    pendingBotCalls: z.array(
+      z
+        .object({ seat: SeatSchema, option: CallOptionSchema })
+        .strict()
+    ),
+    pendingChankanBotRons: z.array(SeatSchema),
+    callTimers: z.tuple([
+      CallTimerSlotSchema,
+      CallTimerSlotSchema,
+      CallTimerSlotSchema,
+      CallTimerSlotSchema,
+    ]),
+  })
+  .strict()
+  .superRefine((checkpoint, context) => {
+    if (
+      checkpoint.state.phase !== "awaiting_draw" &&
+      checkpoint.state.phase !== "awaiting_chankan"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "phase"],
+        message: "Call checkpoints require awaiting_draw or awaiting_chankan",
+      });
+    }
+    if (
+      checkpoint.state.phase === "awaiting_draw" &&
+      checkpoint.state.lastDiscard === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "lastDiscard"],
+        message: "Discard call window requires a last discard",
+      });
+    }
+    if (
+      checkpoint.state.phase === "awaiting_chankan" &&
+      checkpoint.state.pendingShouminkan === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "pendingShouminkan"],
+        message: "Chankan window requires a pending shouminkan",
+      });
+    }
+    if (
+      checkpoint.state.phase === "awaiting_draw" &&
+      checkpoint.pendingChankanBotRons.length > 0
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["pendingChankanBotRons"],
+        message: "Discard call window cannot carry chankan candidates",
+      });
+    }
+    if (
+      checkpoint.state.phase === "awaiting_chankan" &&
+      (checkpoint.pendingBotRons.length > 0 ||
+        checkpoint.pendingBotCalls.length > 0)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["pendingBotRons"],
+        message: "Chankan window cannot carry ordinary discard-call intents",
+      });
+    }
+    let openCount = 0;
+    for (let seat = 0; seat < 4; seat++) {
+      const options = checkpoint.callWindows[seat];
+      const timer = checkpoint.callTimers[seat];
+      const pending = checkpoint.pendingHumanCallActions[seat];
+      if (options !== null) {
+        openCount += 1;
+        if (checkpoint.seats[seat].isBot) {
+          context.addIssue({
+            code: "custom",
+            path: ["seats", seat, "isBot"],
+            message: "Open call window seat must be human",
+          });
+        }
+        if (timer === null) {
+          context.addIssue({
+            code: "custom",
+            path: ["callTimers", seat],
+            message: "Open call window requires an active timer",
+          });
+        } else if (!timer.legalActions.some((action) => action.type === "pass")) {
+          context.addIssue({
+            code: "custom",
+            path: ["callTimers", seat, "legalActions"],
+            message: "Open call window must include pass",
+          });
+        }
+        if (pending !== null) {
+          context.addIssue({
+            code: "custom",
+            path: ["pendingHumanCallActions", seat],
+            message: "Open call window cannot already have a response",
+          });
+        }
+      } else if (timer !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["callTimers", seat],
+          message: "Closed call window cannot retain a timer",
+        });
+      }
+    }
+    if (openCount === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["callWindows"],
+        message: "Call checkpoint requires at least one open window",
+      });
+    }
+    if (checkpoint.gameStartLogIdx > checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["gameStartLogIdx"],
+        message: "Game log start cannot exceed the event log length",
+      });
+    }
+    if (checkpoint.nextSeq !== checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextSeq"],
+        message: "Next sequence must equal the contiguous event log length",
+      });
+    }
+    checkpoint.eventLog.forEach((entry, index) => {
+      if (entry.seq !== index) {
+        context.addIssue({
+          code: "custom",
+          path: ["eventLog", index, "seq"],
+          message: "Event log sequence must be contiguous from zero",
+        });
+      }
+    });
+  });
+
+export type PlayingCallCheckpoint = z.infer<
+  typeof PlayingCallCheckpointSchema
+>;
 export const MatchCheckpointSchema = z.union([
   WaitingRoomCheckpointSchema,
   PlayingActionCheckpointSchema,
+  PlayingCallCheckpointSchema,
 ]);
 export type MatchCheckpoint = z.infer<typeof MatchCheckpointSchema>;
 

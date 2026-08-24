@@ -290,7 +290,10 @@ describe("MatchProcess checkpoints", () => {
     originalRuntime.advance(2_000);
 
     const checkpoint = match.createCheckpoint();
-    if (checkpoint.status !== "playing") {
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
       throw new Error("expected a playing checkpoint");
     }
     const restoredRuntime = controlledRuntime(500_000, 999);
@@ -356,7 +359,10 @@ describe("MatchProcess checkpoints", () => {
     await match.start();
     originalRuntime.advance(2_000);
     const checkpoint = match.createCheckpoint();
-    if (checkpoint.status !== "playing") {
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
       throw new Error("expected a playing checkpoint");
     }
 
@@ -402,7 +408,10 @@ describe("MatchProcess checkpoints", () => {
     setDelayAfterDiscardMs(0);
     await match.start();
     const checkpoint = match.createCheckpoint();
-    if (checkpoint.status !== "playing") {
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
       throw new Error("expected a playing checkpoint");
     }
 
@@ -461,7 +470,10 @@ describe("MatchProcess checkpoints", () => {
   expect(match.pauseAndSaveCheckpoint()).toBe(saving);
     expect(match.isPaused).toBe(true);
   const captured = capturedCheckpoints[0];
-  if (captured?.status !== "playing") {
+    if (
+      captured?.status !== "playing" ||
+      captured.checkpointKind !== "action_window"
+    ) {
       throw new Error("expected the repository to receive a playing checkpoint");
     }
     const discard = captured.actionWindow.legalActions.find(
@@ -519,7 +531,10 @@ describe("MatchProcess checkpoints", () => {
 
     const saving = match.pauseAndSaveCheckpoint();
   const captured = capturedCheckpoints[0];
-  if (captured?.status !== "playing") {
+    if (
+      captured?.status !== "playing" ||
+      captured.checkpointKind !== "action_window"
+    ) {
       throw new Error("expected a captured playing checkpoint");
     }
     runtime.advance(30_000);
@@ -560,7 +575,10 @@ describe("MatchProcess checkpoints", () => {
     setDelayAfterDiscardMs(0);
     await match.start();
     const checkpoint = match.createCheckpoint();
-    if (checkpoint.status !== "playing") {
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "action_window"
+    ) {
       throw new Error("expected a playing checkpoint");
     }
 
@@ -575,7 +593,7 @@ describe("MatchProcess checkpoints", () => {
     ).toThrow(/require awaiting_discard/);
   });
 
-  it("rejects non-quiescent playing state", async () => {
+  it("rejects a call window attached to the wrong engine phase", async () => {
     const match = new MatchProcess(
       "checkpoint-unsafe",
       12,
@@ -591,7 +609,7 @@ describe("MatchProcess checkpoints", () => {
     internals.callWindow[1] = [];
 
     expect(() => match.createCheckpoint()).toThrow(
-      /playing state is not quiescent \(call resolution\)/
+      /playing state is not quiescent \(engine phase awaiting_discard\)/
     );
   });
 });

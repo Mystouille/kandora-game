@@ -58,10 +58,12 @@ import { chooseBotCall, chooseBotSelfKan } from "./bots/calls";
 import {
   MATCH_CHECKPOINT_SCHEMA_VERSION,
   PlayingActionCheckpointSchema,
+  PlayingCallCheckpointSchema,
   WaitingRoomCheckpointSchema,
   parseMatchCheckpoint,
   type MatchCheckpoint,
   type PlayingActionCheckpoint,
+  type PlayingCallCheckpoint,
   type WaitingRoomCheckpoint,
 } from "./checkpoint";
 import { projectEvent, projectPublicEvent } from "./projection";
@@ -1073,6 +1075,9 @@ export class MatchProcess {
       return this.createWaitingRoomCheckpoint();
     }
     if (this.statusValue === "playing") {
+      if (this.callWindow.some((window) => window !== null)) {
+        return this.createPlayingCallCheckpoint();
+      }
       return this.createPlayingActionCheckpoint();
     }
     throw new Error(
@@ -1097,10 +1102,17 @@ export class MatchProcess {
     const checkpoint = this.createCheckpoint();
     this.pausedCheckpoint = checkpoint;
     if (checkpoint.status === "playing") {
-      const seat = checkpoint.actionWindow.seat;
-      this.currentDeadlineTimer[seat]?.cancel();
-      this.currentDeadlineTimer[seat] = null;
-      this.deadlineEpoch[seat] += 1;
+      const seats =
+        checkpoint.checkpointKind === "action_window"
+          ? [checkpoint.actionWindow.seat]
+          : checkpoint.callWindows.flatMap((window, seat) =>
+              window === null ? [] : [seat as Seat]
+            );
+      for (const seat of seats) {
+        this.currentDeadlineTimer[seat]?.cancel();
+        this.currentDeadlineTimer[seat] = null;
+        this.deadlineEpoch[seat] += 1;
+      }
     }
     const saving = this.persistPausedCheckpoint(checkpoint);
     this.checkpointSavePromise = saving;
@@ -1119,7 +1131,11 @@ export class MatchProcess {
     } catch (error) {
       this.pausedCheckpoint = null;
       if (checkpoint.status === "playing") {
-        this.installCheckpointActionWindow(checkpoint);
+        if (checkpoint.checkpointKind === "action_window") {
+          this.installCheckpointActionWindow(checkpoint);
+        } else {
+          this.installCheckpointCallWindows(checkpoint);
+        }
       }
       throw error;
     } finally {
@@ -1198,17 +1214,15 @@ export class MatchProcess {
     });
   }
 
-  private createPlayingActionCheckpoint(): PlayingActionCheckpoint {
-    const unsupported = (reason: string): never => {
-      throw new Error(
-        `MatchProcess.createCheckpoint: playing state is not quiescent (${reason})`
-      );
-    };
+  private checkpointUnsupported(reason: string): never {
+    throw new Error(
+      `MatchProcess.createCheckpoint: playing state is not quiescent (${reason})`
+    );
+  }
+
+  private assertCommonPlayingCheckpointState(): void {
     if (this.relayMode) {
-      return unsupported("relay match");
-    }
-    if (this.state.phase !== "awaiting_discard") {
-      return unsupported(`engine phase ${this.state.phase}`);
+      this.checkpointUnsupported("relay match");
     }
     if (
       this.readyResolve !== null ||
@@ -1216,74 +1230,34 @@ export class MatchProcess {
       this.continueVoteResolve !== null ||
       this.continueVoteTimer !== null
     ) {
-      return unsupported("ready or vote continuation");
-    }
-    if (
-      this.callWindow.some((window) => window !== null) ||
-      this.pendingHumanCallActions.some((action) => action !== null) ||
-      this.pendingBotRons.length > 0 ||
-      this.pendingBotCalls.length > 0
-    ) {
-      return unsupported("call resolution");
+      this.checkpointUnsupported("ready or vote continuation");
     }
     if (
       this.delayedSpectators.size > 0 ||
       this.livenessProbeInflight.some(Boolean)
     ) {
-      return unsupported("delayed spectator or liveness work");
+      this.checkpointUnsupported("delayed spectator or liveness work");
     }
     if (
       this.disconnected.some(Boolean) ||
       this.afkSelfReported.some(Boolean) ||
       this.livenessProbeMisses.some((misses) => misses > 0)
     ) {
-      return unsupported("disconnect or AFK policy state");
+      this.checkpointUnsupported("disconnect or AFK policy state");
     }
     if (
       this.pendingWinRevealMs !== 0 ||
       this.finalized ||
       this.sessionFinalized
     ) {
-      return unsupported("result or finalization work");
+      this.checkpointUnsupported("result or finalization work");
     }
+  }
 
-    const seat = this.state.turn;
-    const player = this.players.get(seat);
-    if (!player || player.isBot) {
-      return unsupported("active seat is not human");
-    }
-    const legalActions = this.legalActions[seat];
-    if (
-      legalActions.length === 0 ||
-      this.legalActions.some(
-        (actions, candidate) => candidate !== seat && actions.length > 0
-      )
-    ) {
-      return unsupported("expected exactly one legal-action window");
-    }
-    const actionStartedAt = this.currentActionStartMs[seat];
-    const visibleDeadline = this.currentDeadline[seat];
-    if (
-      actionStartedAt === null ||
-      visibleDeadline === null ||
-      this.currentDeadlineTimer[seat] === null
-    ) {
-      return unsupported("action timer is not active");
-    }
-
-    const savedAt = this.runtime.now();
-    const elapsedMs = Math.max(0, savedAt - actionStartedAt);
-    const expiryRemainingMs = Math.max(
-      0,
-      BASE_ACTION_MS +
-        this.bufferMs[seat] +
-        ACTION_GRACE_MS -
-        elapsedMs
-    );
-    return PlayingActionCheckpointSchema.parse({
+  private playingCheckpointBase(savedAt: number) {
+    return {
       schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
-      status: "playing",
-      checkpointKind: "action_window",
+      status: "playing" as const,
       savedAt,
       matchId: this.matchId,
       seed: this.seed,
@@ -1317,6 +1291,60 @@ export class MatchProcess {
       leftDiscardQueue: [...this.leftDiscardQueue],
       bufferMs: [...this.bufferMs],
       lastEngineEventType: this.lastEngineEventType,
+    };
+  }
+
+  private createPlayingActionCheckpoint(): PlayingActionCheckpoint {
+    this.assertCommonPlayingCheckpointState();
+    if (this.state.phase !== "awaiting_discard") {
+      this.checkpointUnsupported(`engine phase ${this.state.phase}`);
+    }
+    if (
+      this.callWindow.some((window) => window !== null) ||
+      this.pendingHumanCallActions.some((action) => action !== null) ||
+      this.pendingBotRons.length > 0 ||
+      this.pendingBotCalls.length > 0 ||
+      this.pendingChankanBotRons.length > 0
+    ) {
+      this.checkpointUnsupported("call resolution");
+    }
+
+    const seat = this.state.turn;
+    const player = this.players.get(seat);
+    if (!player || player.isBot) {
+      this.checkpointUnsupported("active seat is not human");
+    }
+    const legalActions = this.legalActions[seat];
+    if (
+      legalActions.length === 0 ||
+      this.legalActions.some(
+        (actions, candidate) => candidate !== seat && actions.length > 0
+      )
+    ) {
+      this.checkpointUnsupported("expected exactly one legal-action window");
+    }
+    const actionStartedAt = this.currentActionStartMs[seat];
+    const visibleDeadline = this.currentDeadline[seat];
+    if (
+      actionStartedAt === null ||
+      visibleDeadline === null ||
+      this.currentDeadlineTimer[seat] === null
+    ) {
+      this.checkpointUnsupported("action timer is not active");
+    }
+
+    const savedAt = this.runtime.now();
+    const elapsedMs = Math.max(0, savedAt - actionStartedAt);
+    const expiryRemainingMs = Math.max(
+      0,
+      BASE_ACTION_MS +
+        this.bufferMs[seat] +
+        ACTION_GRACE_MS -
+        elapsedMs
+    );
+    return PlayingActionCheckpointSchema.parse({
+      ...this.playingCheckpointBase(savedAt),
+      checkpointKind: "action_window",
       actionWindow: {
         seat,
         legalActions,
@@ -1324,6 +1352,66 @@ export class MatchProcess {
         visibleRemainingMs: Math.max(0, visibleDeadline - savedAt),
         expiryRemainingMs,
       },
+    });
+  }
+
+  private createPlayingCallCheckpoint(): PlayingCallCheckpoint {
+    this.assertCommonPlayingCheckpointState();
+    if (
+      this.state.phase !== "awaiting_draw" &&
+      this.state.phase !== "awaiting_chankan"
+    ) {
+      this.checkpointUnsupported(`engine phase ${this.state.phase}`);
+    }
+    const savedAt = this.runtime.now();
+    const callTimers = this.callWindow.map((options, seatIndex) => {
+      if (options === null) {
+        if (
+          this.currentDeadlineTimer[seatIndex] !== null ||
+          this.currentActionStartMs[seatIndex] !== null ||
+          this.currentDeadline[seatIndex] !== null ||
+          this.legalActions[seatIndex].length > 0
+        ) {
+          this.checkpointUnsupported(
+            "closed call window retains action state"
+          );
+        }
+        return null;
+      }
+      const seat = seatIndex as Seat;
+      const startedAt = this.currentActionStartMs[seat];
+      const deadline = this.currentDeadline[seat];
+      if (
+        startedAt === null ||
+        deadline === null ||
+        this.currentDeadlineTimer[seat] === null ||
+        this.legalActions[seat].length === 0
+      ) {
+        this.checkpointUnsupported("open call window timer is incomplete");
+      }
+      const elapsedMs = Math.max(0, savedAt - startedAt);
+      return {
+        legalActions: this.legalActions[seat],
+        elapsedMs,
+        visibleRemainingMs: Math.max(0, deadline - savedAt),
+        expiryRemainingMs: Math.max(
+          0,
+          BASE_ACTION_MS +
+            this.bufferMs[seat] +
+            ACTION_GRACE_MS -
+            elapsedMs
+        ),
+      };
+    });
+    return PlayingCallCheckpointSchema.parse({
+      ...this.playingCheckpointBase(savedAt),
+      checkpointKind: "call_window",
+      callWindows: this.callWindow,
+      pendingHumanCallActions: this.pendingHumanCallActions,
+      pendingBotRons: [...this.pendingBotRons],
+      pendingBotCalls: this.pendingBotCalls,
+      pendingChankanBotRons: [...this.pendingChankanBotRons],
+      callTimers,
     });
   }
 
@@ -1388,7 +1476,11 @@ export class MatchProcess {
     match.bufferMs = [...checkpoint.bufferMs];
     match.lastEngineEventType = checkpoint.lastEngineEventType;
 
-    match.installCheckpointActionWindow(checkpoint);
+    if (checkpoint.checkpointKind === "action_window") {
+      match.installCheckpointActionWindow(checkpoint);
+    } else {
+      match.installCheckpointCallWindows(checkpoint);
+    }
     return match;
   }
 
@@ -1424,6 +1516,70 @@ export class MatchProcess {
       actionWindow.expiryRemainingMs,
       { unref: true }
     );
+  }
+
+  private installCheckpointCallWindows(
+    checkpoint: PlayingCallCheckpoint
+  ): void {
+    const restoredAt = this.runtime.now();
+    this.callWindow = checkpoint.callWindows.map((options) =>
+      options === null
+        ? null
+        : options.map((option) =>
+            option.kind === "ron"
+              ? { kind: "ron" as const }
+              : { kind: option.kind, tiles: [...option.tiles] } as CallOption
+          )
+    );
+    this.pendingHumanCallActions = checkpoint.pendingHumanCallActions.map(
+      (action) =>
+        action === null
+          ? null
+          : {
+              ...action,
+              ...(action.tiles ? { tiles: [...action.tiles] } : {}),
+            }
+    );
+    this.pendingBotRons = [...checkpoint.pendingBotRons];
+    this.pendingBotCalls = checkpoint.pendingBotCalls.map(({ seat, option }) => ({
+      seat,
+      option:
+        option.kind === "ron"
+          ? { kind: "ron" }
+          : { kind: option.kind, tiles: [...option.tiles] } as CallOption,
+    }));
+    this.pendingChankanBotRons = [...checkpoint.pendingChankanBotRons];
+    this.bufferMs = [...checkpoint.bufferMs];
+    this.legalActions = [[], [], [], []];
+    this.currentActionStartMs = [null, null, null, null];
+    this.currentDeadline = [null, null, null, null];
+    this.currentDeadlineTimer = [null, null, null, null];
+    for (let seatIndex = 0; seatIndex < 4; seatIndex++) {
+      const timer = checkpoint.callTimers[seatIndex];
+      if (timer === null) {
+        continue;
+      }
+      const seat = seatIndex as Seat;
+      this.legalActions[seat] = timer.legalActions.map((action) => ({
+        ...action,
+        ...(action.tiles ? { tiles: [...action.tiles] } : {}),
+      }));
+      this.currentActionStartMs[seat] = restoredAt - timer.elapsedMs;
+      this.currentDeadline[seat] = restoredAt + timer.visibleRemainingMs;
+      this.deadlineEpoch[seat] += 1;
+      const epoch = this.deadlineEpoch[seat];
+      this.currentDeadlineTimer[seat] = this.runtime.schedule(
+        () => {
+          this.currentDeadlineTimer[seat] = null;
+          if (this.deadlineEpoch[seat] !== epoch || this.isPaused) {
+            return;
+          }
+          void this.handleDeadlineExpiry(seat);
+        },
+        timer.expiryRemainingMs,
+        { unref: true }
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2704,6 +2860,7 @@ export class MatchProcess {
       action.tiles &&
       action.tiles[0]
     ) {
+      this.setSeatLegals(seat, []);
       await this.applyEngineAction({
         type: "kan",
         seat,
@@ -2719,6 +2876,7 @@ export class MatchProcess {
       action.tiles &&
       action.tiles[0]
     ) {
+      this.setSeatLegals(seat, []);
       await this.applyEngineAction({
         type: "kan",
         seat,

@@ -38,16 +38,41 @@ import {
   MatchProcess,
   setNextHandDelayMs,
   setDelayAfterDiscardMs,
+  setActionTimingMs,
   setActionTimeoutMs,
   setReadyCheckMs,
 } from "./match";
-import { ephemeralMatchRepository } from "./repository";
+import {
+  ephemeralMatchRepository,
+  type MatchRepository,
+} from "./repository";
+import {
+  createInitialState,
+  type MatchState,
+  type Meld,
+} from "~/game/rules";
 import type {
   GameEvent,
   LegalAction,
   ServerMessage,
   Tile,
 } from "~/game/protocol/messages";
+
+function tiles(value: string): Tile[] {
+  const result: Tile[] = [];
+  let digits = "";
+  for (const character of value) {
+    if (character >= "0" && character <= "9") {
+      digits += character;
+      continue;
+    }
+    for (const digit of digits) {
+      result.push(`${digit}${character}` as Tile);
+    }
+    digits = "";
+  }
+  return result;
+}
 
 interface SinkHandle {
   send: (msg: ServerMessage) => void;
@@ -90,7 +115,10 @@ function makeSink(): SinkHandle {
   };
 }
 
-function makeFourHumanMatch(seed: number): MatchProcess {
+function makeFourHumanMatch(
+  seed: number,
+  repository: MatchRepository = ephemeralMatchRepository
+): MatchProcess {
   return new MatchProcess(
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
     seed,
@@ -100,7 +128,7 @@ function makeFourHumanMatch(seed: number): MatchProcess {
       { userId: "u2", displayName: "H2", isBot: false },
       { userId: "u3", displayName: "H3", isBot: false },
     ],
-    { repository: ephemeralMatchRepository }
+    { repository }
   );
 }
 
@@ -165,6 +193,28 @@ const DISCARDER_HAND: Tile[] = [
   "2z",
   "3z",
 ];
+
+function plantThreeRonScenario(m: MatchProcess): MatchInternals {
+  const internals = m as unknown as MatchInternals;
+  internals.state.hands[0] = [...DISCARDER_HAND, "4m"];
+  internals.state.hands[1] = [...TENPAI_HAND];
+  internals.state.hands[2] = [...TENPAI_HAND];
+  internals.state.hands[3] = [...TENPAI_HAND];
+  internals.state.lastDrawn = ["4m", null, null, null];
+  internals.state.discards = [[], [], [], []];
+  internals.state.melds = [[], [], [], []];
+  internals.state.lastDiscard = null;
+  internals.state.pendingShouminkan = null;
+  internals.state.riichiDeclared = [false, false, false, false];
+  internals.state.doubleRiichi = [false, false, false, false];
+  internals.state.ippatsuEligible = [false, false, false, false];
+  internals.state.furitenLocked = [false, false, false, false];
+  internals.state.furitenTemp = [false, false, false, false];
+  internals.setSeatLegals(0, [
+    { id: "discard:4m", type: "discard", tile: "4m" },
+  ]);
+  return internals;
+}
 
 describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
   beforeEach(() => {
@@ -341,6 +391,184 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
         expect(delta[3]).toBe(0);
       }
     }
+  });
+
+  it("restores a partially-answered multi-ron call window", async () => {
+    setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
+    const m = makeFourHumanMatch(142);
+    await m.start();
+    plantThreeRonScenario(m);
+
+    await m.handleAct(0, "discard:4m");
+    await m.handleAct(1, "pass");
+    const checkpoint = m.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "call_window"
+    ) {
+      throw new Error("expected a call-window checkpoint");
+    }
+    expect(checkpoint.callWindows[1]).toBeNull();
+    expect(checkpoint.pendingHumanCallActions[1]?.type).toBe("pass");
+    expect(checkpoint.callWindows[2]).not.toBeNull();
+    expect(checkpoint.callWindows[3]).not.toBeNull();
+
+    const restored = MatchProcess.restoreCheckpoint(
+      JSON.parse(JSON.stringify(checkpoint)),
+      { repository: ephemeralMatchRepository }
+    );
+    const seat2Ron = checkpoint.callTimers[2]?.legalActions.find(
+      (action) => action.type === "ron"
+    );
+    if (!seat2Ron) {
+      throw new Error("expected seat 2 ron");
+    }
+    await m.handleAct(2, seat2Ron.id);
+    await restored.handleAct(2, seat2Ron.id);
+    await m.handleAct(3, "pass");
+    await restored.handleAct(3, "pass");
+
+    expect(restored.replayFromBuffer(0, 0)).toEqual(
+      m.replayFromBuffer(0, 0)
+    );
+    for (const seat of [0, 1, 2, 3] as const) {
+      const originalSnapshot = m.buildSnapshotForSeat(seat);
+      const restoredSnapshot = restored.buildSnapshotForSeat(seat);
+      if (
+        originalSnapshot.type !== "snapshot" ||
+        restoredSnapshot.type !== "snapshot"
+      ) {
+        throw new Error("expected snapshots");
+      }
+      expect(restoredSnapshot.state).toEqual(originalSnapshot.state);
+      expect(restoredSnapshot.legalActions).toEqual(
+        originalSnapshot.legalActions
+      );
+      expect(restoredSnapshot.bufferMs).toBe(originalSnapshot.bufferMs);
+    }
+  });
+
+  it("rearms a partially-answered call window after save failure", async () => {
+    setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
+    const repository: MatchRepository = {
+      ...ephemeralMatchRepository,
+      saveCheckpoint: async () => {
+        throw new Error("call checkpoint write failed");
+      },
+    };
+    const m = makeFourHumanMatch(144, repository);
+    await m.start();
+    const internals = plantThreeRonScenario(m);
+    await m.handleAct(0, "discard:4m");
+    await m.handleAct(1, "pass");
+
+    await expect(m.pauseAndSaveCheckpoint()).rejects.toThrow(
+      "call checkpoint write failed"
+    );
+    expect(m.isPaused).toBe(false);
+    const rolledBack = m.createCheckpoint();
+    if (
+      rolledBack.status !== "playing" ||
+      rolledBack.checkpointKind !== "call_window"
+    ) {
+      throw new Error("expected a rolled-back call checkpoint");
+    }
+    expect(rolledBack.pendingHumanCallActions[1]?.type).toBe("pass");
+    expect(rolledBack.callTimers[2]).not.toBeNull();
+    expect(rolledBack.callTimers[3]).not.toBeNull();
+
+    const seat2Ron = internals.legalActions[2].find(
+      (action) => action.type === "ron"
+    );
+    if (!seat2Ron) {
+      throw new Error("expected seat 2 ron");
+    }
+    await m.handleAct(2, seat2Ron.id);
+    await m.handleAct(3, "pass");
+    const win = m
+      .replayFromBuffer(0, 0)
+      .map(({ event }) => event)
+      .find((event) => event.type === "win");
+    expect(win).toMatchObject({ type: "win", seat: 2, loser: 0 });
+  });
+
+  it("restores a chankan pass window and completes shouminkan", async () => {
+    setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
+    const m = makeFourHumanMatch(143);
+    await m.start();
+    const ponMeld: Meld = {
+      type: "pon",
+      tiles: ["3m", "3m", "3m"],
+      claimedTile: "3m",
+      from: 1,
+    };
+    const base = createInitialState(143);
+    const chankanState: MatchState = {
+      ...base,
+      hands: [
+        tiles("3m4p5p6p7p8p9p1s2s3s4s"),
+        tiles("1m1m2m2m4m4m5m5m6m6m7m7m3m"),
+        Array.from({ length: 13 }, () => "9p"),
+        Array.from({ length: 13 }, () => "9p"),
+      ],
+      discards: [[], [], [], []],
+      turn: 0,
+      phase: "awaiting_discard",
+      lastDrawn: ["3m", null, null, null],
+      lastDiscard: null,
+      dealer: 0,
+      riichiDeclared: [false, true, false, false],
+      doubleRiichi: [false, false, false, false],
+      ippatsuEligible: [false, false, false, false],
+      melds: [[ponMeld], [], [], []],
+      pendingShouminkan: null,
+      lastHandResult: null,
+    };
+    const internals = m as unknown as {
+      state: MatchState;
+      setSeatLegals: (seat: 0, actions: LegalAction[]) => void;
+    };
+    internals.state = chankanState;
+    internals.setSeatLegals(0, [
+      {
+        id: "kan:shouminkan:3m",
+        type: "kan",
+        kanKind: "shouminkan",
+        tiles: ["3m"],
+      },
+    ]);
+
+    await m.handleAct(0, "kan:shouminkan:3m");
+    const checkpoint = m.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "call_window"
+    ) {
+      throw new Error("expected a chankan checkpoint");
+    }
+    expect(checkpoint.state.phase).toBe("awaiting_chankan");
+    expect(checkpoint.state.pendingShouminkan).toMatchObject({
+      seat: 0,
+      tile: "3m",
+    });
+    expect(checkpoint.callTimers[0]).toBeNull();
+    expect(checkpoint.callWindows[1]).toEqual([{ kind: "ron" }]);
+
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+    });
+    await m.handleAct(1, "pass");
+    await restored.handleAct(1, "pass");
+
+    const originalState = (m as unknown as { state: MatchState }).state;
+    const restoredState = (restored as unknown as { state: MatchState }).state;
+    expect(restoredState).toEqual(originalState);
+    expect(restoredState.phase).toBe("awaiting_discard");
+    expect(restoredState.pendingShouminkan).toBeNull();
+    expect(restoredState.melds[0][0].type).toBe("shouminkan");
+    expect(restored.replayFromBuffer(0, 0)).toEqual(
+      m.replayFromBuffer(0, 0)
+    );
   });
 
   it("atamahane: seat 2's ron auto-closes seat 3's still-open ron window (downstream head-bumped)", async () => {
