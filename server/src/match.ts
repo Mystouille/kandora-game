@@ -942,6 +942,17 @@ export class MatchProcess {
    * and cleared on `startNextGame`.
    */
   private sessionFinalized = false;
+  private pendingSessionEndReason:
+    | "vote_no"
+    | "vote_timeout"
+    | "single_game"
+    | "server_abort"
+    | null = null;
+  private sessionFinalizePromise: Promise<void> | null = null;
+
+  get hasPendingFinalization(): boolean {
+    return this.pendingSessionEndReason !== null && !this.sessionFinalized;
+  }
   /**
    * Per-seat continue-vote state during an open Buu vote window.
    * `null` means the seat has not voted yet. Reset to all-null
@@ -4898,20 +4909,55 @@ export class MatchProcess {
    * status to `finished`, and prevents any further game-level
    * resumption.
    */
-  private async finalizeSession(
+  private finalizeSession(
     reason: "vote_no" | "vote_timeout" | "single_game" | "server_abort"
   ): Promise<void> {
     if (this.sessionFinalized) {
+      return Promise.resolve();
+    }
+    if (this.sessionFinalizePromise !== null) {
+      return this.sessionFinalizePromise;
+    }
+    this.pendingSessionEndReason ??= reason;
+    const finalizing = this.persistTerminalAndFinalize();
+    this.sessionFinalizePromise = finalizing;
+    return finalizing;
+  }
+
+  private async persistTerminalAndFinalize(): Promise<void> {
+    const reason = this.pendingSessionEndReason;
+    if (reason === null) {
       return;
     }
-    this.sessionFinalized = true;
-    this.statusValue = "finished";
-    await this.emitEvent({
-      type: "session_end",
-      reason,
-      gamesPlayed: this.gameIndex + 1,
-      chips: [...this.sessionChips],
-    });
+    try {
+      await this.repository.markCheckpointTerminal({
+        matchId: this.matchId,
+        finishedAt: this.runtime.now(),
+      });
+      this.sessionFinalized = true;
+      this.statusValue = "finished";
+      await this.emitEvent({
+        type: "session_end",
+        reason,
+        gamesPlayed: this.gameIndex + 1,
+        chips: [...this.sessionChips],
+      });
+      this.pendingSessionEndReason = null;
+    } finally {
+      this.sessionFinalizePromise = null;
+    }
+  }
+
+  async retryPendingFinalization(): Promise<boolean> {
+    if (this.sessionFinalized) {
+      return true;
+    }
+    const reason = this.pendingSessionEndReason;
+    if (reason === null) {
+      return false;
+    }
+    await this.finalizeSession(reason);
+    return this.sessionFinalized;
   }
 
   /**

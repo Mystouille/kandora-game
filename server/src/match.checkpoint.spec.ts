@@ -754,6 +754,98 @@ describe("MatchProcess checkpoints", () => {
     expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(beforeCount);
   });
 
+  it("replaces a saved checkpoint with a terminal tombstone", async () => {
+    const repository = createMemoryMatchRepository();
+    const match = new MatchProcess(
+      "checkpoint-terminal",
+      71,
+      humanPlayers(),
+      { repository, runtime: controlledRuntime(120_000, 1701) }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    await repository.saveCheckpoint({ matchId: match.matchId, checkpoint });
+    const internals = match as unknown as {
+      finalizeSession: (reason: "single_game") => Promise<void>;
+    };
+
+    await internals.finalizeSession("single_game");
+
+    expect(match.status).toBe("finished");
+    expect(match.hasPendingFinalization).toBe(false);
+    expect(await repository.loadCheckpoint(match.matchId)).toBeNull();
+    await expect(
+      repository.saveCheckpoint({ matchId: match.matchId, checkpoint })
+    ).rejects.toThrow(/terminal match/);
+    const sessionEnds = match
+      .replayFromBuffer(0, 0)
+      .filter(({ event }) => event.type === "session_end");
+    expect(sessionEnds).toHaveLength(1);
+    await expect(match.retryPendingFinalization()).resolves.toBe(true);
+    expect(
+      match
+        .replayFromBuffer(0, 0)
+        .filter(({ event }) => event.type === "session_end")
+    ).toHaveLength(1);
+  });
+
+  it("keeps finalization pending until a failed tombstone can be retried", async () => {
+    const storage = createMemoryMatchRepository();
+    let terminalAttempts = 0;
+    const repository: MatchRepository = {
+      ...storage,
+      markCheckpointTerminal: async (args) => {
+        terminalAttempts += 1;
+        if (terminalAttempts === 1) {
+          throw new Error("terminal write failed");
+        }
+        await storage.markCheckpointTerminal(args);
+      },
+    };
+    const match = new MatchProcess(
+      "checkpoint-terminal-retry",
+      72,
+      humanPlayers(),
+      { repository, runtime: controlledRuntime(130_000, 1702) }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    await repository.saveCheckpoint({ matchId: match.matchId, checkpoint });
+    const internals = match as unknown as {
+      finalizeSession: (reason: "single_game") => Promise<void>;
+    };
+
+    await expect(internals.finalizeSession("single_game")).rejects.toThrow(
+      "terminal write failed"
+    );
+
+    expect(match.status).toBe("playing");
+    expect(match.hasPendingFinalization).toBe(true);
+    expect(await repository.loadCheckpoint(match.matchId)).toEqual(checkpoint);
+    expect(
+      match
+        .replayFromBuffer(0, 0)
+        .some(({ event }) => event.type === "session_end")
+    ).toBe(false);
+
+    await expect(match.retryPendingFinalization()).resolves.toBe(true);
+    expect(terminalAttempts).toBe(2);
+    expect(match.status).toBe("finished");
+    expect(match.hasPendingFinalization).toBe(false);
+    expect(await repository.loadCheckpoint(match.matchId)).toBeNull();
+    expect(
+      match
+        .replayFromBuffer(0, 0)
+        .filter(({ event }) => event.type === "session_end")
+    ).toHaveLength(1);
+    await expect(match.retryPendingFinalization()).resolves.toBe(true);
+    expect(terminalAttempts).toBe(2);
+  });
+
   it("rejects corrupted active sequence and phase state", async () => {
     const match = new MatchProcess(
       "checkpoint-corrupt",

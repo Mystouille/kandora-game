@@ -111,10 +111,18 @@ the internal win→chombo display pause, relays, delayed spectators, and
 disconnect/AFK policy state still fail checkpoint creation explicitly rather
 than producing a partial recovery record.
 
-`pauseAndSaveCheckpoint()` freezes mutation and cancels the active action timer
+`pauseAndSaveCheckpoint()` freezes mutation and cancels every active phase timer
 before awaiting `MatchRepository.saveCheckpoint()`. Concurrent pause calls share
 one write. Success leaves the old process frozen for disposal; a failed atomic
 write rebases the saved durations onto the current runtime and resumes the same
 process without charging the I/O interval. `restoreSavedCheckpoint()` loads and
-validates through the repository. The Node adapter stores checkpoints separately
-in `game_match_checkpoints`; mobile will provide the corresponding SQLite adapter.
+validates through the repository.
+
+Before emitting terminal `session_end`, `MatchProcess` atomically replaces any
+existing checkpoint with a retained terminal tombstone. Loads then return no
+resumable match and stale writers cannot overwrite the marker. A failed marker
+write leaves finalization pending, emits no `session_end`, and can be retried via
+`retryPendingFinalization()`. Sessions that never saved a checkpoint do not
+create tombstone rows. `deleteSavedCheckpoint()` is an explicit administrative
+purge, not normal completion cleanup. The Node adapter stores records in
+`game_match_checkpoints`; mobile will provide the corresponding SQLite adapter.

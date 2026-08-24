@@ -7,6 +7,9 @@
  *     holds the live event log in memory; Mongo is not touched per event.
  *     An explicit lifecycle pause may atomically replace one versioned
  *     checkpoint in `game_match_checkpoints` for crash/app-suspend recovery.
+ *     Session completion replaces an existing checkpoint with a terminal
+ *     tombstone before clients receive `session_end`; the marker prevents a
+ *     delayed stale writer from resurrecting the match.
  *   - **Mongo is the archive.** We write exactly two times per
  *     match: `createMatchDoc` at start (so lobby/portal can see
  *     "match X exists, status playing") and `archiveMatch` at end
@@ -38,7 +41,8 @@ const MatchCheckpointModel =
     new Schema(
       {
         _id: { type: String, required: true },
-        checkpoint: { type: Schema.Types.Mixed, required: true },
+        checkpoint: { type: Schema.Types.Mixed, required: false },
+        terminalAt: { type: Date, required: false },
       },
       { timestamps: true, _id: false }
     ),
@@ -150,7 +154,7 @@ export async function saveMatchCheckpoint(args: {
 }): Promise<void> {
   const checkpoint = parseMatchCheckpoint(args.checkpoint);
   await MatchCheckpointModel.updateOne(
-    { _id: args.matchId },
+    { _id: args.matchId, terminalAt: { $exists: false } },
     { $set: { checkpoint } },
     { upsert: true }
   );
@@ -160,11 +164,24 @@ export async function loadMatchCheckpoint(
   matchId: string
 ): Promise<MatchCheckpoint | null> {
   const stored = (await MatchCheckpointModel.findById(matchId).lean()) as
-    | { checkpoint?: unknown }
+    | { checkpoint?: unknown; terminalAt?: Date }
     | null;
-  return stored?.checkpoint === undefined
+  return stored?.terminalAt !== undefined || stored?.checkpoint === undefined
     ? null
     : parseMatchCheckpoint(stored.checkpoint);
+}
+
+export async function markMatchCheckpointTerminal(args: {
+  matchId: string;
+  finishedAt: number;
+}): Promise<void> {
+  await MatchCheckpointModel.updateOne(
+    { _id: args.matchId },
+    {
+      $set: { terminalAt: new Date(args.finishedAt) },
+      $unset: { checkpoint: "" },
+    }
+  );
 }
 
 export async function deleteMatchCheckpoint(matchId: string): Promise<void> {
@@ -177,6 +194,7 @@ export const mongoMatchRepository: MatchRepository = {
   archiveReplayLog: (args) => archiveReplayLog(args),
   saveCheckpoint: (args) => saveMatchCheckpoint(args),
   loadCheckpoint: (matchId) => loadMatchCheckpoint(matchId),
+  markCheckpointTerminal: (args) => markMatchCheckpointTerminal(args),
   deleteCheckpoint: (matchId) => deleteMatchCheckpoint(matchId),
 };
 

@@ -56,6 +56,11 @@ export interface MatchRepository {
     checkpoint: MatchCheckpoint;
   }): Promise<void>;
   loadCheckpoint(matchId: string): Promise<MatchCheckpoint | null>;
+  /** Atomically replace an existing checkpoint with a terminal tombstone. */
+  markCheckpointTerminal(args: {
+    matchId: string;
+    finishedAt: number;
+  }): Promise<void>;
   deleteCheckpoint(matchId: string): Promise<void>;
 }
 
@@ -69,29 +74,42 @@ export const ephemeralMatchRepository: MatchRepository = {
   archiveReplayLog: async () => undefined,
   saveCheckpoint: async () => undefined,
   loadCheckpoint: async () => null,
+  markCheckpointTerminal: async () => undefined,
   deleteCheckpoint: async () => undefined,
 };
 
 export function createMemoryMatchRepository(): MatchRepository {
-  const checkpoints = new Map<string, MatchCheckpoint>();
+  const records = new Map<
+    string,
+    | { kind: "checkpoint"; checkpoint: MatchCheckpoint }
+    | { kind: "terminal"; finishedAt: number }
+  >();
   return {
     createMatch: async () => undefined,
     archiveMatch: async () => undefined,
     archiveReplayLog: async () => undefined,
     saveCheckpoint: async ({ matchId, checkpoint }) => {
-      checkpoints.set(
-        matchId,
-        parseMatchCheckpoint(JSON.parse(JSON.stringify(checkpoint)))
-      );
+      if (records.get(matchId)?.kind === "terminal") {
+        throw new Error(`Cannot save checkpoint for terminal match ${matchId}`);
+      }
+      records.set(matchId, {
+        kind: "checkpoint",
+        checkpoint: parseMatchCheckpoint(JSON.parse(JSON.stringify(checkpoint))),
+      });
     },
     loadCheckpoint: async (matchId) => {
-      const checkpoint = checkpoints.get(matchId);
-      return checkpoint
-        ? parseMatchCheckpoint(JSON.parse(JSON.stringify(checkpoint)))
+      const record = records.get(matchId);
+      return record?.kind === "checkpoint"
+        ? parseMatchCheckpoint(JSON.parse(JSON.stringify(record.checkpoint)))
         : null;
     },
+    markCheckpointTerminal: async ({ matchId, finishedAt }) => {
+      if (records.has(matchId)) {
+        records.set(matchId, { kind: "terminal", finishedAt });
+      }
+    },
     deleteCheckpoint: async (matchId) => {
-      checkpoints.delete(matchId);
+      records.delete(matchId);
     },
   };
 }
