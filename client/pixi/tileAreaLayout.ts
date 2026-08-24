@@ -11,7 +11,13 @@
  * via the seat transform; tint and the last-discard animation stay in
  * the renderer.
  */
-import { isSideSeat, type Seat, type Size } from "./tableGeometry";
+import {
+  boundingBox,
+  isSideSeat,
+  type Rect,
+  type Seat,
+  type Size,
+} from "./tableGeometry";
 import {
   sideScreen,
   smallScreen,
@@ -158,6 +164,57 @@ export function layoutDiscards(
     out.push({ index: i, tile, atlasId, isRiichi, zIndex, wrap, sprite });
   });
   return out;
+}
+
+export function tilePlacementBounds(placement: TilePlacement): Rect {
+  const wrapCos = Math.cos(placement.wrap.rotation);
+  const wrapSin = Math.sin(placement.wrap.rotation);
+  const centerX =
+    placement.wrap.x +
+    placement.sprite.x * wrapCos -
+    placement.sprite.y * wrapSin;
+  const centerY =
+    placement.wrap.y +
+    placement.sprite.x * wrapSin +
+    placement.sprite.y * wrapCos;
+  const rotation = placement.wrap.rotation + placement.sprite.rotation;
+  const rotationCos = Math.abs(Math.cos(rotation));
+  const rotationSin = Math.abs(Math.sin(rotation));
+  const width =
+    placement.sprite.width * rotationCos +
+    placement.sprite.height * rotationSin;
+  const height =
+    placement.sprite.width * rotationSin +
+    placement.sprite.height * rotationCos;
+  return {
+    x: centerX - width / 2,
+    y: centerY - height / 2,
+    w: width,
+    h: height,
+  };
+}
+
+/** Worst-case local footprint for a full discard pond. The union includes
+ * every possible riichi-tile position because a sideways declaration changes
+ * both its own footprint and the row cursor used by following tiles. */
+export function potentialDiscardBounds(
+  design: TileDesign,
+  seat: Seat,
+  tileCount = 18
+): Rect {
+  if (!Number.isInteger(tileCount) || tileCount <= 0) {
+    throw new Error("tileCount must be a positive integer");
+  }
+  const tiles = new Array<string | null>(tileCount).fill(null);
+  const riichiIndices: Array<number | null> = [
+    null,
+    ...Array.from({ length: tileCount }, (_, index) => index),
+  ];
+  return boundingBox(
+    riichiIndices.flatMap((riichiIndex) =>
+      layoutDiscards(design, seat, tiles, riichiIndex).map(tilePlacementBounds)
+    )
+  );
 }
 
 /** Inputs for concealable-hand layout that depend on renderer state. */

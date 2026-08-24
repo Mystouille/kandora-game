@@ -158,10 +158,30 @@ describe("enumerateCalls — pon / daiminkan", () => {
     const pon = s2?.options.find((o) => o.kind === "pon");
     expect(pon).toBeDefined();
     if (pon?.kind === "pon") {
-      // Red 5 preferred — should appear in the meld tiles.
-      // (Red 5 of pinzu encodes as "0p".)
+      // With exactly two matching tiles there is one physical choice.
       expect(pon.tiles).toContain("0p");
     }
+  });
+
+  it("offers separate pon options with and without a red five", () => {
+    // The caller can consume 0p+5p or preserve the red by consuming 5p+5p.
+    const seat2 = tiles("05p5p1m2m3m4m5m6m7m8m9m1p");
+    const out = enumerateCalls(
+      craft({
+        hands: [FILLER, FILLER, seat2, FILLER],
+        discarder: 0,
+        tile: "5p",
+      })
+    );
+    const pons =
+      out
+        .find((option) => option.seat === 2)
+        ?.options.filter((option) => option.kind === "pon") ?? [];
+
+    expect(pons).toEqual([
+      { kind: "pon", tiles: ["0p", "5p"] },
+      { kind: "pon", tiles: ["5p", "5p"] },
+    ]);
   });
 
   it("never offers chi/pon/daiminkan to a seat in riichi", () => {

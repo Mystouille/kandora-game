@@ -2,12 +2,25 @@ import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import {
   activePlayerIndicatorSeat,
+  actionButtonLabel,
+  actionButtonStyle,
   ankanTilesForDisplay,
   buildResultYakuEntries,
   canInteractWithFocusedHand,
   darkenTileTint,
+  focusedHandTileMetrics,
   formatTableScore,
   handResultDealerSeat,
+  layoutMeldStripGroups,
+  layoutTouchingMeldColumn,
+  MOBILE_DORA_INDICATOR_GAP,
+  MOBILE_RIICHI_STICK,
+  fitCounterContentInCell,
+  mobileCenterInnerRect,
+  mobileCounterCells,
+  mobileDoraRowGeometry,
+  mobileDoraIndicatorSlots,
+  mobileRiichiStickPlacement,
   pointInsideRect,
   resolveSeatHandPresentation,
   riichiSelectionTileTint,
@@ -19,6 +32,8 @@ import {
   topmostHandHoverTargetIndex,
   winResultRevealKey,
 } from "./TableRenderer";
+import { mobileTableLayout } from "./layouts/mobileTableLayout";
+import { tableLayoutFromConfig } from "./tableLayout";
 
 describe("handResultDealerSeat", () => {
   it("uses the completed hand dealer instead of the current dealer", () => {
@@ -86,6 +101,25 @@ describe("activePlayerIndicatorSeat", () => {
   });
 });
 
+describe("mobile action buttons", () => {
+  it("uses larger translucent controls without changing desktop metrics", () => {
+    const desktop = actionButtonStyle("standard");
+    const mobile = actionButtonStyle("mobile");
+
+    expect(desktop.height).toBe(64);
+    expect(desktop.fillAlpha).toBe(1);
+    expect(mobile.height).toBe(108);
+    expect(mobile.height).toBeGreaterThan(desktop.height);
+    expect(mobile.minActionWidth).toBeGreaterThan(desktop.minActionWidth);
+    expect(mobile.fillAlpha).toBeGreaterThan(0);
+    expect(mobile.fillAlpha).toBeLessThan(1);
+  });
+
+  it("labels the pass transport action as Skip", () => {
+    expect(actionButtonLabel({ id: "pass", type: "pass" })).toBe("Skip");
+  });
+});
+
 describe("formatTableScore", () => {
   it("keeps absolute scores unchanged", () => {
     expect(formatTableScore(31500, 25000, false)).toBe("31500");
@@ -98,6 +132,143 @@ describe("formatTableScore", () => {
   it("does not prefix zero or negative relative scores", () => {
     expect(formatTableScore(25000, 25000, true)).toBe("0");
     expect(formatTableScore(18700, 25000, true)).toBe("-6300");
+  });
+});
+
+describe("mobile table presentation", () => {
+  const layout = tableLayoutFromConfig(mobileTableLayout);
+
+  it("caps the focused tiles so a full pond remains clear", () => {
+    const metrics = focusedHandTileMetrics(layout, "mobile");
+
+    expect(metrics.spriteH).toBeCloseTo(115);
+    expect(metrics.spriteH).toBeCloseTo(layout.hands[0].h);
+    expect(metrics.tile.w * 14 + 8).toBeLessThan(layout.hands[0].w);
+  });
+
+  it("shows five dead-wall indicator tops with unrevealed backs", () => {
+    expect(MOBILE_DORA_INDICATOR_GAP).toBe(0);
+    expect(mobileDoraIndicatorSlots(["4m"])).toEqual([
+      "4m",
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(
+      mobileDoraIndicatorSlots(["4m", "7p", "2s", "1z", "6m"])
+    ).toEqual(["4m", "7p", "2s", "1z", "6m"]);
+  });
+
+  it("fits the dora row directly between both side score cartridges", () => {
+    const center = layout.center;
+    const dora = mobileDoraRowGeometry(center, 5);
+
+    expect(dora.x).toBe(561);
+    expect(dora.width).toBe(158);
+    expect(dora.tileW * 5).toBeCloseTo(dora.width);
+    expect(dora.x + dora.width).toBe(719);
+  });
+
+  it("bounds all three counters inside the score-cartridge borders", () => {
+    const center = layout.center;
+    const inner = mobileCenterInnerRect(center);
+    const cells = mobileCounterCells(center, 3);
+
+    expect(inner).toEqual({ x: 561, y: 278, w: 158, h: 114 });
+    expect(cells).toHaveLength(3);
+    expect(cells[0].x).toBe(inner.x);
+    expect(cells[2].x + cells[2].w).toBeCloseTo(inner.x + inner.w);
+    for (let index = 0; index < cells.length - 1; index += 1) {
+      expect(cells[index].x + cells[index].w).toBeCloseTo(cells[index + 1].x);
+    }
+
+    const content = { minX: -9, minY: -10, maxX: 39, maxY: 10 };
+    for (const cell of cells) {
+      const fitted = fitCounterContentInCell(content, cell, 3);
+      expect(fitted.x + content.minX * fitted.scale).toBeGreaterThanOrEqual(
+        cell.x + 3
+      );
+      expect(fitted.x + content.maxX * fitted.scale).toBeLessThanOrEqual(
+        cell.x + cell.w - 3
+      );
+      expect(fitted.y + content.minY * fitted.scale).toBeGreaterThanOrEqual(
+        cell.y + 3
+      );
+      expect(fitted.y + content.maxY * fitted.scale).toBeLessThanOrEqual(
+        cell.y + cell.h - 3
+      );
+    }
+  });
+
+  it("places larger mobile riichi sticks just outside every discard mat", () => {
+    const discardPanels = [
+      { x: 504, y: 441, w: 272, h: 164 },
+      { x: 768, y: 212, w: 166, h: 237 },
+      { x: 504, y: 101, w: 272, h: 164 },
+      { x: 346, y: 212, w: 166, h: 237 },
+    ];
+
+    expect(MOBILE_RIICHI_STICK.width).toBeGreaterThan(90);
+    expect(MOBILE_RIICHI_STICK.height).toBeGreaterThan(8);
+    const placements = discardPanels.map((panel, seat) =>
+      mobileRiichiStickPlacement(panel, layout.center, seat as 0 | 1 | 2 | 3)
+    );
+    expect(placements[0].bounds.y + placements[0].bounds.h).toBe(
+      discardPanels[0].y - MOBILE_RIICHI_STICK.gap
+    );
+    expect(placements[1].bounds.x + placements[1].bounds.w).toBe(
+      discardPanels[1].x - MOBILE_RIICHI_STICK.gap
+    );
+    expect(placements[2].bounds.y).toBe(
+      discardPanels[2].y +
+        discardPanels[2].h +
+        MOBILE_RIICHI_STICK.gap
+    );
+    expect(placements[3].bounds.x).toBe(
+      discardPanels[3].x +
+        discardPanels[3].w +
+        MOBILE_RIICHI_STICK.gap
+    );
+  });
+
+  it("stacks four side meld groups into one touching player-relative column", () => {
+    const bounds = [
+      { minY: -8, maxY: 52 },
+      { minY: 0, maxY: 60 },
+      { minY: -4, maxY: 56 },
+      { minY: 2, maxY: 62 },
+    ];
+    const layout = layoutTouchingMeldColumn(
+      [80, 80, 80, 80],
+      bounds
+    );
+
+    expect(layout).toEqual({
+      width: 80,
+      placements: [
+        { x: 0, y: -170 },
+        { x: 0, y: -118 },
+        { x: 0, y: -54 },
+        { x: 0, y: 0 },
+      ],
+    });
+    for (let index = 0; index < bounds.length - 1; index += 1) {
+      expect(layout.placements[index].y + bounds[index].maxY).toBe(
+        layout.placements[index + 1].y + bounds[index + 1].minY
+      );
+    }
+  });
+
+  it("keeps ordinary meld strips on one row", () => {
+    expect(layoutMeldStripGroups([80, 80, 80], -16)).toEqual({
+      width: 208,
+      placements: [
+        { x: 0, y: 0 },
+        { x: 64, y: 0 },
+        { x: 128, y: 0 },
+      ],
+    });
   });
 });
 

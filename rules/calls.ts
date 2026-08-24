@@ -158,11 +158,25 @@ function pushPon(
   if (matches.length < 2) {
     return;
   }
-  // Two-tile pick: prefer including red 5 if it exists in the
-  // matches (real-world preference — caller would rather meld the
-  // red than keep it useless in hand).
-  matches.sort((a, b) => (a[0] === "0" ? -1 : b[0] === "0" ? 1 : 0));
-  out.push({ kind: "pon", tiles: [matches[0], matches[1]] });
+  // Physical red and normal fives are interchangeable by rank but not by
+  // value: with 0p,5p,5p the caller may consume either 0p+5p or 5p+5p.
+  // Keep red-consuming choices first to preserve the existing default order,
+  // while collapsing duplicate physical copies with the same tile string.
+  matches.sort(
+    (a, b) => Number(b[0] === "0") - Number(a[0] === "0")
+  );
+  const seen = new Set<string>();
+  for (let first = 0; first < matches.length - 1; first += 1) {
+    for (let second = first + 1; second < matches.length; second += 1) {
+      const tiles = [matches[first], matches[second]] as [Tile, Tile];
+      const key = tiles.join(",");
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      out.push({ kind: "pon", tiles });
+    }
+  }
 }
 
 function pushDaiminkan(

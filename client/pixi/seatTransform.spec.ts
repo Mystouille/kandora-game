@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SEATS, type Rect, type Seat } from "./tableGeometry";
 import {
+  localRectToTable,
   localToTable,
   SEAT_TRANSFORMS,
   seatTransform,
@@ -62,6 +63,34 @@ describe("seatTransform", () => {
         expect(tableToLocal(t, RECT, table)).toEqual(local);
       }
     }
+  });
+
+  it("maps local rectangles to table-space bounds for every quarter-turn", () => {
+    const local: Rect = { x: 5, y: 7, w: 20, h: 10 };
+    expect(localRectToTable(seatTransform(0), RECT, local)).toEqual({
+      x: 105,
+      y: 207,
+      w: 20,
+      h: 10,
+    });
+    expect(localRectToTable(seatTransform(1), RECT, local)).toEqual({
+      x: 107,
+      y: 315,
+      w: 10,
+      h: 20,
+    });
+    expect(localRectToTable(seatTransform(2), RECT, local)).toEqual({
+      x: 375,
+      y: 323,
+      w: 20,
+      h: 10,
+    });
+    expect(localRectToTable(seatTransform(3), RECT, local)).toEqual({
+      x: 383,
+      y: 205,
+      w: 10,
+      h: 20,
+    });
   });
 
   it("stacks side seats within a row and bottom/top by row", () => {

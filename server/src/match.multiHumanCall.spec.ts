@@ -155,6 +155,9 @@ interface MatchInternals {
     pendingShouminkan: unknown | null;
   };
   legalActions: LegalAction[][];
+  buildCallLegals: (
+    options: Array<{ kind: "pon"; tiles: [Tile, Tile] }>
+  ) => LegalAction[];
   buildDiscardLegals: (seat: number) => LegalAction[];
   setSeatLegals: (seat: number, actions: LegalAction[]) => void;
 }
@@ -231,6 +234,22 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     setDelayAfterDiscardMs(350);
     setActionTimeoutMs(30_000);
     setReadyCheckMs(8000);
+  });
+
+  it("projects red-five pon choices into distinct legal action ids", () => {
+    const m = makeFourHumanMatch(40);
+    const internals = m as unknown as MatchInternals;
+
+    expect(
+      internals.buildCallLegals([
+        { kind: "pon", tiles: ["0p", "5p"] },
+        { kind: "pon", tiles: ["5p", "5p"] },
+      ])
+    ).toEqual([
+      { id: "pon:0:0p,5p", type: "pon", tiles: ["0p", "5p"] },
+      { id: "pon:1:5p,5p", type: "pon", tiles: ["5p", "5p"] },
+      { id: "pass", type: "pass" },
+    ]);
   });
 
   it("broadcasts tedashi when a hand copy matches the drawn tile", async () => {

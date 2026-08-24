@@ -90,6 +90,25 @@ export function localToTable(t: SeatTransform, rect: Rect, local: Vec2): Vec2 {
   };
 }
 
+/** Transform a local axis-aligned rectangle into its table-space AABB. */
+export function localRectToTable(
+  transform: SeatTransform,
+  zone: Rect,
+  localRect: Rect
+): Rect {
+  const corners = [
+    { x: localRect.x, y: localRect.y },
+    { x: localRect.x + localRect.w, y: localRect.y },
+    { x: localRect.x, y: localRect.y + localRect.h },
+    { x: localRect.x + localRect.w, y: localRect.y + localRect.h },
+  ].map((point) => localToTable(transform, zone, point));
+  const minX = Math.min(...corners.map((point) => point.x));
+  const minY = Math.min(...corners.map((point) => point.y));
+  const maxX = Math.max(...corners.map((point) => point.x));
+  const maxY = Math.max(...corners.map((point) => point.y));
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
 /** Inverse of {@link localToTable}: table point → container-local. */
 export function tableToLocal(t: SeatTransform, rect: Rect, table: Vec2): Vec2 {
   const o = t.origin(rect);

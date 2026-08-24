@@ -4,7 +4,10 @@ import {
   layoutSideHand,
   layoutTopHand,
   meldTileDims,
+  potentialDiscardBounds,
+  tilePlacementBounds,
 } from "./tileAreaLayout";
+import { boundingBox, containsRect } from "./tableGeometry";
 import { sideScreen, smallScreen } from "./tiles/tileDesign";
 import { tenhouTileDesign as D } from "./tiles/designs/tenhouTileDesign";
 
@@ -138,6 +141,33 @@ describe("layoutDiscards", () => {
     const p = layoutDiscards(D, 0, tiles, null);
     expect(p.map((t) => t.tile)).toEqual(tiles);
     expect(p.map((t) => t.index)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("computes a tight worst-case 18-tile footprint for every seat", () => {
+    const expectedVertical = {
+      w: 5 * vLocalW + side.w,
+      h: 2 * vRowStride + vLocalH,
+    };
+    const expectedSide = {
+      w: 5 * (hLocalW - overlapH) + small.h,
+      h: 3 * hLocalH,
+    };
+
+    for (const seat of [0, 1, 2, 3] as const) {
+      const potential = potentialDiscardBounds(D, seat, 18);
+      const expected = seat % 2 === 0 ? expectedVertical : expectedSide;
+      expect(potential.x).toBeCloseTo(0, 10);
+      expect(potential.y).toBeCloseTo(0, 10);
+      expect(potential.w).toBeCloseTo(expected.w, 10);
+      expect(potential.h).toBeCloseTo(expected.h, 10);
+
+      for (const riichiIndex of [null, ...Array.from({ length: 18 }, (_, i) => i)]) {
+        const actual = boundingBox(
+          layoutDiscards(D, seat, seq(18), riichiIndex).map(tilePlacementBounds)
+        );
+        expect(containsRect(potential, actual, 1e-9)).toBe(true);
+      }
+    }
   });
 });
 
