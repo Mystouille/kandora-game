@@ -1161,6 +1161,13 @@ export default function GameMatchRoute({
       // on first attach.
       debug: takeMatchDebug(matchId),
       onMessage: (message) => {
+        if (message.type === "spectate_redirect") {
+          void navigate(
+            `/spectate/${encodeURIComponent(message.matchId)}`,
+            { replace: true }
+          );
+          return;
+        }
         if (message.type === "room_kicked") {
           void navigate("/lobby", { replace: true });
         }

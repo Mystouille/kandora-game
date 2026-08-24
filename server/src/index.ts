@@ -802,10 +802,15 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   if (assignedSeat === null) {
     if (match.status === "waiting") {
       sendError("room_full", "This room is full.");
+    } else if (match.status === "playing") {
+      send({
+        type: "spectate_redirect",
+        matchId: match.matchId,
+      });
     } else {
       sendError(
         "room_locked",
-        "This match is already in progress and you don't have a seat."
+        "This match is no longer accepting players."
       );
     }
     ws.close();

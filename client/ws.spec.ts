@@ -270,4 +270,30 @@ describe("GameWS reconnect ownership", () => {
     ]);
     client.close();
   });
+
+  it("surfaces a live-spectate redirect to the message observer", async () => {
+    const onMessage = vi.fn();
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+      onMessage,
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+
+    socket.emitMessage(
+      JSON.stringify({
+        type: "spectate_redirect",
+        matchId: "match-1",
+      })
+    );
+
+    expect(onMessage).toHaveBeenCalledWith({
+      type: "spectate_redirect",
+      matchId: "match-1",
+    });
+    client.close();
+  });
 });

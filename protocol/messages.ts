@@ -772,6 +772,12 @@ const RoomKickedMsg = z.object({
   matchId: z.string(),
 });
 
+/** Directs a non-seated joiner from the match route to live spectating. */
+const SpectateRedirectMsg = z.object({
+  type: z.literal("spectate_redirect"),
+  matchId: z.string(),
+});
+
 export const ViewerPresenceSchema = z.object({
   userId: z.string(),
   displayName: z.string(),
@@ -797,6 +803,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   ReadyCheckEndMsg,
   RoomStateMsg,
   RoomKickedMsg,
+  SpectateRedirectMsg,
   ViewerStateMsg,
   KeepaliveMsg,
 ]);

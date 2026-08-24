@@ -51,6 +51,9 @@ export function dispatchServerMessage(
     case "room_kicked": {
       return;
     }
+    case "spectate_redirect": {
+      return;
+    }
     case "viewer_state": {
       store.setViewers(message.viewers);
       return;
