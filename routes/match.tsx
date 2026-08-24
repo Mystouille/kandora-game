@@ -22,7 +22,10 @@ import {
 import { findTileAction } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
-import { ViewerList } from "~/game/components/ViewerList";
+import {
+  ViewerList,
+  ViewerListToggle,
+} from "~/game/components/ViewerList";
 import {
   advancePostHandPeekDiscardCount,
   shouldHidePostHandPeek,
@@ -682,6 +685,7 @@ export default function GameMatchRoute({
   > | null>(null);
   const postHandDiscardCountRef = useRef(0);
   const [eyeHeld, setEyeHeld] = useState(false);
+  const [showViewerList, setShowViewerList] = useState(true);
   // Live-play options menu state. `autoSort` is persisted to
   // `localStorage` and reloaded on every fresh mount; the other
   // three "auto play" flags (autoWin / noCall / autoDiscard)
@@ -1286,13 +1290,23 @@ export default function GameMatchRoute({
             at design-pixel (16,16) inside the canvas). DOM overlay
             so the value is selectable / copy-pasteable for bug
             reports. */}
-        <span className="pointer-events-none absolute top-0 left-4 font-mono text-[10px] text-emerald-100/70 select-text">
-          match {matchId}
-        </span>
-        <ViewerList
-          viewers={view.viewers}
-          className="absolute left-4 top-5"
-        />
+        <div className="absolute top-0 left-4 z-30 flex h-5 items-center gap-1 font-mono text-[10px] text-emerald-100/70">
+          <span className="pointer-events-none select-text">
+            match {matchId}
+          </span>
+          <ViewerListToggle
+            visible={showViewerList}
+            onToggle={() => {
+              setShowViewerList((visible) => !visible);
+            }}
+          />
+        </div>
+        {showViewerList && (
+          <ViewerList
+            viewers={view.viewers}
+            className="absolute left-4 top-5"
+          />
+        )}
         {/* Reconnect overlay: shown whenever the server has
             flagged this seat as disconnected (network loss or a
             previous AFK self-report). The button sends

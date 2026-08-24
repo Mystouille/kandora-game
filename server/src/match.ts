@@ -2647,7 +2647,11 @@ export class MatchProcess {
   attachSpectator(send: Send, viewer?: ViewerPresence): void {
     this.spectatorSockets.add(send);
     if (viewer) {
-      this.spectatorViewers.set(send, viewer);
+      this.spectatorViewers.set(send, {
+        ...viewer,
+        role: "spectator",
+        delayMs: 0,
+      });
     }
     // Hydrate the spectator with the latest room composition so
     // disconnect badges paint correctly before the next public
@@ -2696,7 +2700,11 @@ export class MatchProcess {
     };
     this.delayedSpectators.add(session);
     if (viewer) {
-      this.spectatorViewers.set(send, viewer);
+      this.spectatorViewers.set(send, {
+        ...viewer,
+        role: "spectator",
+        delayMs,
+      });
     }
     // Immediate catch-up: drain all currently-ripe events as a
     // single batched `event` frame, then arm a timer for the
@@ -3256,25 +3264,29 @@ export class MatchProcess {
 
   /** Build a stable, deduplicated list of authenticated people present. */
   buildViewerState(): Extract<ServerMessage, { type: "viewer_state" }> {
-    const byUserId = new Map<string, ViewerPresence>();
-    for (let seat = 0; seat < 4; seat++) {
-      const player = this.players.get(seat as Seat);
-      if (player && !player.isBot && this.humanSockets[seat] !== null) {
-        byUserId.set(player.userId, {
-          userId: player.userId,
-          displayName: player.displayName,
-          role: "player",
-        });
+    const seatedUserIds = new Set<string>();
+    for (const player of this.players.values()) {
+      if (player !== null && !player.isBot) {
+        seatedUserIds.add(player.userId);
       }
     }
+    const byUserId = new Map<string, ViewerPresence>();
     for (const viewer of this.spectatorViewers.values()) {
-      if (!byUserId.has(viewer.userId)) {
+      if (seatedUserIds.has(viewer.userId)) {
+        continue;
+      }
+      const current = byUserId.get(viewer.userId);
+      const currentDelayMs = current?.delayMs ?? 0;
+      const nextDelayMs = viewer.delayMs ?? 0;
+      if (current === undefined || (currentDelayMs > 0 && nextDelayMs === 0)) {
         byUserId.set(viewer.userId, viewer);
       }
     }
     const viewers = [...byUserId.values()].sort((left, right) => {
-      if (left.role !== right.role) {
-        return left.role === "player" ? -1 : 1;
+      const leftDelayed = (left.delayMs ?? 0) > 0;
+      const rightDelayed = (right.delayMs ?? 0) > 0;
+      if (leftDelayed !== rightDelayed) {
+        return leftDelayed ? 1 : -1;
       }
       return left.displayName.localeCompare(right.displayName);
     });

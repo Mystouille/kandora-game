@@ -782,6 +782,8 @@ export const ViewerPresenceSchema = z.object({
   userId: z.string(),
   displayName: z.string(),
   role: z.enum(["player", "spectator"]),
+  /** Spectator stream delay. Zero/absent means live watching. */
+  delayMs: z.number().int().nonnegative().optional(),
 });
 export type ViewerPresence = z.infer<typeof ViewerPresenceSchema>;
 

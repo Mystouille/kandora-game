@@ -126,6 +126,7 @@ describe("MatchProcess delayed-spectator API", () => {
           userId: "viewer-1",
           displayName: "Viewer",
           role: "spectator",
+          delayMs: 5 * 60_000,
         },
       ],
     });

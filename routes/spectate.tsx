@@ -16,7 +16,10 @@ import {
   GameWSConnectionDetailsError,
 } from "~/game/client/ws";
 import { mergeSeatNames } from "~/game/client/spectatorNames";
-import { ViewerList } from "~/game/components/ViewerList";
+import {
+  ViewerList,
+  ViewerListToggle,
+} from "~/game/components/ViewerList";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   replayArrivalSoundTarget,
@@ -280,6 +283,7 @@ export default function GameSpectateRoute({
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [conn, setConn] = useState<string>("idle");
   const [viewers, setViewers] = useState<ViewerPresence[]>([]);
+  const [showViewerList, setShowViewerList] = useState(true);
   const lastRelaySeqRef = useRef(-1);
 
   // Refs for stale-closure-safe access inside the WS callback.
@@ -915,6 +919,12 @@ export default function GameSpectateRoute({
         </span>
         <span className="opacity-60">·</span>
         <span className="opacity-75 truncate max-w-[200px]">{matchId}</span>
+        <ViewerListToggle
+          visible={showViewerList}
+          onToggle={() => {
+            setShowViewerList((visible) => !visible);
+          }}
+        />
         <button
           type="button"
           onClick={() => {
@@ -926,7 +936,9 @@ export default function GameSpectateRoute({
         </button>
         <span className="ml-2 opacity-50 text-xs">{conn}</span>
       </div>
-  <ViewerList viewers={viewers} className="absolute left-2 top-12" />
+      {showViewerList && (
+        <ViewerList viewers={viewers} className="absolute left-2 top-12" />
+      )}
 
       {/* Right-side: seat / round selectors + nav buttons. */}
       <div className="absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base">
