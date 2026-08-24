@@ -158,11 +158,11 @@ const HandStartEvent = z.object({
    * standard dora indicator, index 4 the standard ura-dora.
    * Physical mapping in the renderer is
    * `deadWall[idxFromBreak * 2 + row]` (row 1 = upper / public,
-   * row 0 = lower / hidden). Optional on the wire — opponents
-   * stay blind during live play — and only populated by replay
-   * adapters that can regenerate it deterministically (currently
-   * Tenhou XML logs via the SHUFFLE seed). Drives the
-   * `showWalls` overlay's dead-wall reveal.
+  * row 0 = lower / hidden). Optional on the player wire so
+  * opponents stay blind during live play. Native archives snapshot
+  * it directly; platform adapters populate it when their source can
+  * reconstruct the wall deterministically. Older logs may omit it.
+  * Drives the `showWalls` overlay's dead-wall reveal.
    */
   deadWall: z.array(TileSchema).length(14).optional(),
   /**

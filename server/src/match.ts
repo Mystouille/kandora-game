@@ -6530,10 +6530,10 @@ export class MatchProcess {
 
   /**
    * Attach server-side state needed by replay archival to a
-   * wire-clean event. Today this means snapshotting per-seat
-   * starting hands at `hand_start`; the wire event itself never
-   * carries this field, eliminating the risk of leaking opponent
-   * hands through a future send path. The result is what gets
+  * wire-clean event. At `hand_start` this snapshots per-seat
+  * starting hands plus the complete live and dead walls; the wire
+  * event itself never carries these fields, eliminating the risk
+  * of leaking private state through a future player send path. The result is what gets
    * pushed to `eventLog`; consumers that forward it to live
    * recipients (`sendToSeat`, future spectator / resync paths)
    * MUST project it through the redaction layer at their boundary.
@@ -6541,6 +6541,7 @@ export class MatchProcess {
   private enrichForArchive(event: GameEvent): GameEvent {
     if (event.type === "hand_start") {
       const liveWall = [...this.state.liveWall];
+      const deadWall = [...this.state.deadWall];
       // Cache for mid-hand spectator snapshots. `state.liveWall`
       // at hand_start time is the full 70-tile starting wall (no
       // draws have happened yet for this hand).
@@ -6559,6 +6560,10 @@ export class MatchProcess {
         // this field (the projection layer / `emitEvent` pair
         // only attaches it to the archived event).
         liveWall,
+        // Fixed 14-tile snapshot in protocol yama-index order.
+        // Replay Show walls uses it for rinshan, dora, ura-dora,
+        // and kan-indicator positions.
+        deadWall,
       };
     }
     if (event.type === "hand_end") {

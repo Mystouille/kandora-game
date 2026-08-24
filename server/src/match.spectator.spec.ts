@@ -213,8 +213,8 @@ describe("MatchProcess spectator API", () => {
     }
     // `hand_start` is present and carries omniscient
     // `startingHands` so the client can render every seat. The
-    // archived `liveWall` is also forwarded (spectators are
-    // omniscient and the wall-reveal overlay uses it). The
+    // archived live/dead walls are also forwarded (spectators are
+    // omniscient and the wall-reveal overlay uses them). The
     // server-side engine doesn't track a `liveDrawSchedule`, so
     // that one stays undefined.
     const handStart = sink.events.find((e) => e.type === "hand_start");
@@ -225,6 +225,8 @@ describe("MatchProcess spectator API", () => {
       expect((hs.startingHands as unknown[]).length).toBe(4);
       expect(Array.isArray(hs.liveWall)).toBe(true);
       expect((hs.liveWall as unknown[]).length).toBe(70);
+      expect(Array.isArray(hs.deadWall)).toBe(true);
+      expect((hs.deadWall as unknown[]).length).toBe(14);
       expect(hs.liveDrawSchedule).toBeUndefined();
     }
   });

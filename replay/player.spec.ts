@@ -188,6 +188,22 @@ describe("replayReducer", () => {
         scores: [25000, 25000, 25000, 25000],
         startingHands: STARTING,
         doraIndicators: ["3m"],
+        deadWall: [
+          "1m",
+          "2m",
+          "3m",
+          "4m",
+          "5m",
+          "6m",
+          "7m",
+          "8m",
+          "9m",
+          "1p",
+          "2p",
+          "3p",
+          "4p",
+          "5p",
+        ],
       },
     ]);
     const view = replayReducer(log, 1);
@@ -195,6 +211,22 @@ describe("replayReducer", () => {
     expect(view.hands[0]).toEqual(STARTING[0]);
     expect(view.hands[2]).toEqual(STARTING[2]);
     expect(view.doraIndicators).toEqual(["3m"]);
+    expect(view.deadWall).toEqual([
+      "1m",
+      "2m",
+      "3m",
+      "4m",
+      "5m",
+      "6m",
+      "7m",
+      "8m",
+      "9m",
+      "1p",
+      "2p",
+      "3p",
+      "4p",
+      "5p",
+    ]);
     expect(view.dealer).toBe(0);
     expect(view.roundWind).toBe("E");
   });
