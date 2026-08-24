@@ -667,6 +667,7 @@ export default function GameSpectateRoute({
     r.setShowLayoutDebug(overlays.showLayoutDebug);
     r.setShowWaits(overlays.showWaits);
     r.setShowHands(overlays.showHands);
+    r.setShowTsumogiri(overlays.showTsumogiri);
     r.setShowWalls(overlays.showWalls);
     r.setShowNames(overlays.showNames);
     r.setHandResultOverride(eyeHeld ? renderedPostHandPeekResult : null);

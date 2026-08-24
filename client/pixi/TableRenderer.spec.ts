@@ -28,6 +28,7 @@ import {
   shouldRevealWinScoreDelta,
   shouldRevealWinScoreSummary,
   shouldStageWinReveal,
+  shouldTintTsumogiri,
   sortTilesForDisplay,
   topmostHandHoverTargetIndex,
   winResultRevealKey,
@@ -117,6 +118,20 @@ describe("mobile action buttons", () => {
 
   it("labels the pass transport action as Skip", () => {
     expect(actionButtonLabel({ id: "pass", type: "pass" })).toBe("Skip");
+  });
+});
+
+describe("tsumogiri tint modes", () => {
+  it("keeps the short fresh cue used by game views", () => {
+    expect(shouldTintTsumogiri(true, "fresh", 0)).toBe(true);
+    expect(shouldTintTsumogiri(true, "fresh", 2)).toBe(true);
+    expect(shouldTintTsumogiri(true, "fresh", 3)).toBe(false);
+  });
+
+  it("shows or hides every recorded tsumogiri in replay modes", () => {
+    expect(shouldTintTsumogiri(true, "all", 99)).toBe(true);
+    expect(shouldTintTsumogiri(true, "none", 0)).toBe(false);
+    expect(shouldTintTsumogiri(false, "all", 0)).toBe(false);
   });
 });
 

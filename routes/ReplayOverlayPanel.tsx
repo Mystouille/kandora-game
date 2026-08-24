@@ -12,6 +12,8 @@ import { useState } from "react";
  *  - `showHands` — reveal opponent hands ("omniscient" mode).
  *    Defaults OFF so the viewer opens "as it was played"; flipping
  *    it on is the Phase 4.5 step 4 toggle (see plan).
+ *  - `showTsumogiri` — darken every recorded tsumogiri in every
+ *    discard pond. Defaults OFF so replay ponds use natural tile art.
  *  - `showWalls` — reveal the live wall + dead wall order.
  *  - `showNames` — render seat names / final scores. Defaults ON;
  *    the only toggle that's on by default.
@@ -19,6 +21,7 @@ import { useState } from "react";
 export interface ReplayOverlayState {
   showWaits: boolean;
   showHands: boolean;
+  showTsumogiri: boolean;
   showWalls: boolean;
   showNames: boolean;
   /** Temporary debug toggle while the Tenhou-style layout is being
@@ -31,6 +34,7 @@ export interface ReplayOverlayState {
 export const defaultReplayOverlayState: ReplayOverlayState = {
   showWaits: false,
   showHands: false,
+  showTsumogiri: false,
   showWalls: false,
   showNames: true,
   showLayoutDebug: false,
@@ -44,6 +48,7 @@ interface ToggleSpec {
 const TOGGLES: ToggleSpec[] = [
   { key: "showWaits", label: "Show player waits" },
   { key: "showHands", label: "Show hands" },
+  { key: "showTsumogiri", label: "Show tsumogiri" },
   { key: "showWalls", label: "Show walls" },
   { key: "showNames", label: "Show names" },
 ];

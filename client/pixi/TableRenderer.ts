@@ -445,6 +445,19 @@ const TSUMOGIRI_FRESH_TINT = 0xc8c8c8;
  * landed, the tint is removed. */
 const TSUMOGIRI_FRESH_WINDOW = 3;
 
+export type TsumogiriTintMode = "fresh" | "all" | "none";
+
+export function shouldTintTsumogiri(
+  wasTsumogiri: boolean,
+  mode: TsumogiriTintMode,
+  discardAge: number
+): boolean {
+  if (!wasTsumogiri || mode === "none") {
+    return false;
+  }
+  return mode === "all" || discardAge < TSUMOGIRI_FRESH_WINDOW;
+}
+
 /** Clockwise rotation applied to each seat's tile-area container
  * (discards / hands / melds). A tile's own sprite counter-rotates by
  * the negative of this, so every tile nets to zero rotation on
@@ -949,6 +962,9 @@ export class TableRenderer {
    * in `ReplayOverlayPanel`. */
   private showWaits = false;
   private showHands = false;
+  /** Game views retain a short fresh-discard cue. Replay hosts override this
+   * to `all` or `none` through {@link setShowTsumogiri}. */
+  private tsumogiriTintMode: TsumogiriTintMode = "fresh";
   /** Development fixture mode: include the 52 tiles normally removed
    * by the initial deal so all 136 physical wall tiles are visible. */
   private showUndealtWall = false;
@@ -1761,6 +1777,13 @@ export class TableRenderer {
    * concealed hands, discards, melds) — is tinted red. */
   setShowWaits(flag: boolean): void {
     this.showWaits = flag;
+  }
+
+  /** Replay-only analytical overlay: show every recorded tsumogiri when on,
+   * or suppress all tsumogiri darkening when off. Game hosts do not call this
+   * setter and retain the default short-lived fresh-discard cue. */
+  setShowTsumogiri(flag: boolean): void {
+    this.tsumogiriTintMode = flag ? "all" : "none";
   }
 
   /** Tint the given tile sprite red iff its tile is in this frame's
@@ -6137,10 +6160,12 @@ export class TableRenderer {
       const tinted = this.tintIfWait(sprite, placement.tile);
       const wasTsumogiri = view.discardTsumogiri[seat]?.[i] ?? false;
       const discardOrdinal = view.discardOrdinals[seat]?.[i] ?? 0;
-      const isFreshTsumogiri =
-        wasTsumogiri &&
-        view.totalDiscards - discardOrdinal < TSUMOGIRI_FRESH_WINDOW;
-      if (!tinted && isFreshTsumogiri) {
+      const tintTsumogiri = shouldTintTsumogiri(
+        wasTsumogiri,
+        this.tsumogiriTintMode,
+        view.totalDiscards - discardOrdinal
+      );
+      if (!tinted && tintTsumogiri) {
         sprite.tint = TSUMOGIRI_FRESH_TINT;
       }
       const wrap = new Container();
@@ -6305,7 +6330,13 @@ export class TableRenderer {
       );
       // Tsumogiri fresh-tint: keep the animated tile consistent with
       // how the static last-discard would have looked.
-      if (seatDiscardAnim.isTsumogiri) {
+      if (
+        shouldTintTsumogiri(
+          seatDiscardAnim.isTsumogiri,
+          this.tsumogiriTintMode,
+          0
+        )
+      ) {
         sprite.tint = TSUMOGIRI_FRESH_TINT;
       }
       const wrap = new Container();
