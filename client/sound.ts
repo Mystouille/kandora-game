@@ -90,6 +90,7 @@ const SOUND_FILES: Record<SoundKey, string | readonly string[]> = {
 
 const LS_ENABLED_KEY = "kandora.game.sound.enabled";
 const LS_VOLUME_KEY = "kandora.game.sound.volume";
+const DEFAULT_GAME_SOUND_VOLUME = 0.5;
 
 function readBool(key: string, fallback: boolean): boolean {
   if (typeof window === "undefined") {
@@ -126,7 +127,7 @@ function readNumber(key: string, fallback: number): number {
 }
 
 let enabled = readBool(LS_ENABLED_KEY, true);
-let volume = readNumber(LS_VOLUME_KEY, 0.6);
+let volume = readNumber(LS_VOLUME_KEY, DEFAULT_GAME_SOUND_VOLUME);
 
 const howls = new Map<string, Howl>();
 
