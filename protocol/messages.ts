@@ -695,9 +695,10 @@ const ReadyCheckEndMsg = z.object({
  * Room membership snapshot for a multi-human match.
  *
  * Phase 5 unifies "room" and "match": a match lives in `waiting`
- * status until any seated human sends `start_match`, at which
- * point the server fills empty seats with bots and flips to
- * `playing`. The client uses `room_state` to render the waiting
+ * status until the first seated human sends `start_match` after
+ * every connected human has readied, at which point the server
+ * fills empty seats with bots and flips to `playing`. The client
+ * uses `room_state` to render the waiting
  * room (seat list, "Start" button) and to receive the post-start
  * confirmation (status → `playing`) just before the first
  * `snapshot` arrives.
@@ -728,6 +729,8 @@ export type RoomSeatOccupant = z.infer<typeof RoomSeatOccupantSchema>;
 const RoomSeatSchema = z.object({
   seat: SeatSchema,
   occupant: RoomSeatOccupantSchema,
+  /** Bots are always ready. Human readiness is false while disconnected. */
+  ready: z.boolean(),
 });
 
 /**
@@ -754,10 +757,20 @@ const RoomStateMsg = z.object({
   /** Recipient's own seat assignment, or `null` for a spectator
    * (no available seat at attach time). */
   mySeat: SeatSchema.nullable(),
+  /** First seated human. Only this seat may manage or start the room. */
+  hostSeat: SeatSchema.nullable(),
+  /** True when every seated human is connected and ready. */
+  canStart: z.boolean(),
   /** All four seat slots, always present, ordered 0..3. */
   seats: z.array(RoomSeatSchema).length(4),
 });
 export type RoomState = z.infer<typeof RoomStateMsg>;
+
+/** Tells a removed human client to leave the match route immediately. */
+const RoomKickedMsg = z.object({
+  type: z.literal("room_kicked"),
+  matchId: z.string(),
+});
 
 export const ViewerPresenceSchema = z.object({
   userId: z.string(),
@@ -783,6 +796,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   ReadyCheckMsg,
   ReadyCheckEndMsg,
   RoomStateMsg,
+  RoomKickedMsg,
   ViewerStateMsg,
   KeepaliveMsg,
 ]);
@@ -853,11 +867,10 @@ const ReadyMsg = z.object({
 });
 
 /**
- * Request to start the match: any seated human may send this
- * while the room is in `waiting` status. The server fills any
+ * Request to start the match. Only the first seated human may send
+ * this while every connected human is ready. The server fills any
  * empty seat with a bot, broadcasts a final `room_state` with
- * `status: "playing"`, and then begins the normal match flow
- * (ready check → first hand).
+ * `status: "playing"`, and then begins the normal match flow.
  *
  * Rejected with an `error` frame if the sender is not a seated
  * human or if the room is no longer in `waiting`.
@@ -865,6 +878,26 @@ const ReadyMsg = z.object({
 const StartMatchMsg = z.object({
   type: z.literal("start_match"),
   matchId: z.string(),
+});
+
+/** Toggle the sender's pre-match waiting-room readiness. */
+const SetRoomReadyMsg = z.object({
+  type: z.literal("set_room_ready"),
+  matchId: z.string(),
+  ready: z.boolean(),
+});
+
+/** Host-only request to fill one empty waiting-room slot with a bot. */
+const AddBotMsg = z.object({
+  type: z.literal("add_bot"),
+  matchId: z.string(),
+});
+
+/** Host-only request to remove a human or bot from a waiting-room slot. */
+const KickSeatMsg = z.object({
+  type: z.literal("kick_seat"),
+  matchId: z.string(),
+  seat: SeatSchema,
 });
 
 /**
@@ -912,7 +945,10 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   ActMsg,
   ResyncMsg,
   ReadyMsg,
+  SetRoomReadyMsg,
   StartMatchMsg,
+  AddBotMsg,
+  KickSeatMsg,
   LeaveSeatMsg,
   AfkMsg,
   VoteContinueMsg,

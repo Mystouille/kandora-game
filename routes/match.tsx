@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { EyeOutlined } from "@ant-design/icons";
+import {
+  CheckOutlined,
+  DeleteOutlined,
+  EyeOutlined,
+  RobotOutlined,
+} from "@ant-design/icons";
 import type {
   SeatEnrichment,
   TableRenderer,
@@ -940,8 +945,20 @@ export default function GameMatchRoute({
       view.roomState?.status === "waiting" &&
       wsRef.current
     ) {
-      autoStartArmedRef.current = false;
-      wsRef.current.startMatch();
+      const room = view.roomState;
+      const mySeat = room.mySeat;
+      const ownSlot = mySeat === null ? null : room.seats[mySeat];
+      if (mySeat === null || ownSlot?.occupant.kind !== "human") {
+        return;
+      }
+      if (!ownSlot.ready) {
+        wsRef.current.setWaitingRoomReady(true);
+        return;
+      }
+      if (room.hostSeat === mySeat && room.canStart) {
+        autoStartArmedRef.current = false;
+        wsRef.current.startMatch();
+      }
     }
   }, [matchId, view.roomState]);
 
@@ -1143,6 +1160,11 @@ export default function GameMatchRoute({
       // once in the `hello` frame and consumed by the game-server
       // on first attach.
       debug: takeMatchDebug(matchId),
+      onMessage: (message) => {
+        if (message.type === "room_kicked") {
+          void navigate("/lobby", { replace: true });
+        }
+      },
     });
     wsRef.current = ws;
     ws.connect();
@@ -1458,6 +1480,15 @@ export default function GameMatchRoute({
           onStart={() => {
             wsRef.current?.startMatch();
           }}
+          onReadyChange={(ready) => {
+            wsRef.current?.setWaitingRoomReady(ready);
+          }}
+          onAddBot={() => {
+            wsRef.current?.addWaitingRoomBot();
+          }}
+          onKick={(seat) => {
+            wsRef.current?.kickWaitingRoomSeat(seat);
+          }}
           onLeave={() => {
             // Tell the server to release the seat, then bounce back
             // to the lobby. `releaseSeat` nulls our socket before
@@ -1487,11 +1518,17 @@ function WaitingRoomOverlay({
   matchId,
   roomState,
   onStart,
+  onReadyChange,
+  onAddBot,
+  onKick,
   onLeave,
 }: {
   matchId: string;
   roomState: RoomState | null;
   onStart: () => void;
+  onReadyChange: (ready: boolean) => void;
+  onAddBot: () => void;
+  onKick: (seat: 0 | 1 | 2 | 3) => void;
   onLeave: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1502,6 +1539,13 @@ function WaitingRoomOverlay({
 
   const shareUrl =
     typeof window !== "undefined" ? window.location.href : matchId;
+  const isHost = roomState.mySeat === roomState.hostSeat;
+  const ownSlot =
+    roomState.mySeat === null ? null : roomState.seats[roomState.mySeat];
+  const ownReady = ownSlot?.ready ?? false;
+  const hasEmptySeat = roomState.seats.some(
+    ({ occupant }) => occupant.kind === "empty"
+  );
 
   const handleCopy = (): void => {
     if (typeof navigator === "undefined" || !navigator.clipboard) {
@@ -1527,8 +1571,7 @@ function WaitingRoomOverlay({
         <header>
           <h2 className="text-xl font-bold text-emerald-100">Waiting room</h2>
           <p className="text-sm text-emerald-300/80">
-            Share this URL with friends to fill seats — or hit Start to play
-            against bots.
+            Share this URL with friends, then ready up when the table is set.
           </p>
         </header>
 
@@ -1554,6 +1597,7 @@ function WaitingRoomOverlay({
         <ul className="flex flex-col gap-2">
           {roomState.seats.map((slot) => {
             const isMine = slot.seat === roomState.mySeat;
+            const isRoomHost = slot.seat === roomState.hostSeat;
             let label: string;
             let tone: string;
             if (slot.occupant.kind === "empty") {
@@ -1581,23 +1625,79 @@ function WaitingRoomOverlay({
                 <span className="font-mono text-xs text-emerald-300/80">
                   seat {slot.seat}
                 </span>
-                <span className={`text-sm ${tone}`}>
-                  {isMine ? "You · " : ""}
-                  {label}
-                </span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className={`truncate text-sm ${tone}`}>
+                    {isMine ? "You · " : ""}
+                    {isRoomHost ? "Host · " : ""}
+                    {label}
+                  </span>
+                  {slot.occupant.kind !== "empty" && (
+                    <span
+                      className={`shrink-0 text-xs font-semibold ${
+                        slot.ready ? "text-emerald-300" : "text-slate-400"
+                      }`}
+                    >
+                      {slot.ready ? "Ready" : "Not ready"}
+                    </span>
+                  )}
+                  {isHost &&
+                    !isMine &&
+                    slot.occupant.kind !== "empty" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onKick(slot.seat);
+                        }}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-red-500/50 text-red-200 hover:bg-red-950/60"
+                        aria-label={`Kick ${label}`}
+                        title={`Kick ${label}`}
+                      >
+                        <DeleteOutlined />
+                      </button>
+                    )}
+                </div>
               </li>
             );
           })}
         </ul>
 
-        <div className="flex gap-2 pt-2">
+        <div className="flex flex-wrap gap-2 pt-2">
           <button
             type="button"
-            onClick={onStart}
-            className="flex-1 rounded bg-emerald-500 px-4 py-2 font-semibold text-black hover:bg-emerald-400"
+            onClick={() => {
+              onReadyChange(!ownReady);
+            }}
+            aria-pressed={ownReady}
+            className={`flex min-w-28 flex-1 items-center justify-center gap-2 rounded px-4 py-2 font-semibold ${
+              ownReady
+                ? "bg-emerald-500 text-black hover:bg-emerald-400"
+                : "border border-emerald-600 text-emerald-100 hover:bg-emerald-900"
+            }`}
           >
-            Start match
+            <CheckOutlined />
+            {ownReady ? "Ready" : "Ready up"}
           </button>
+          {isHost && (
+            <button
+              type="button"
+              onClick={onAddBot}
+              disabled={!hasEmptySeat}
+              className="flex items-center justify-center gap-2 rounded border border-amber-500/60 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-950/50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RobotOutlined />
+              Add bot
+            </button>
+          )}
+          {isHost && (
+            <button
+              type="button"
+              onClick={onStart}
+              disabled={!roomState.canStart}
+              className="min-w-28 flex-1 rounded bg-emerald-500 px-4 py-2 font-semibold text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-900 disabled:text-emerald-300/50"
+            >
+              Start match
+            </button>
+          )}
           <button
             type="button"
             onClick={onLeave}

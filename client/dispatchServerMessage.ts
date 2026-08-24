@@ -48,6 +48,9 @@ export function dispatchServerMessage(
       store.setRoomState(message);
       return;
     }
+    case "room_kicked": {
+      return;
+    }
     case "viewer_state": {
       store.setViewers(message.viewers);
       return;

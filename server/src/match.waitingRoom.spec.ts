@@ -142,6 +142,108 @@ describe("MatchProcess waiting-room state machine", () => {
       expect(mine.occupant.displayName).toBe("Alice");
       expect(mine.occupant.connected).toBe(false);
     }
+    expect(mine?.ready).toBe(false);
+    expect(rs.hostSeat).toBe(seatA);
+  });
+
+  it("toggles readiness and only lets the first human start", async () => {
+    const m = MatchProcess.createWaitingRoom("ready-room", 7, dependencies);
+    const hostSeat = m.claimSeat("host", "Host") as Seat;
+    const guestSeat = m.claimSeat("guest", "Guest") as Seat;
+    m.attachHuman(hostSeat, makeSink().send);
+    m.attachHuman(guestSeat, makeSink().send);
+
+    expect(m.canStartWaitingRoom(hostSeat)).toBe(false);
+    m.setWaitingRoomReady(hostSeat, true);
+    expect(m.canStartWaitingRoom(hostSeat)).toBe(false);
+    m.setWaitingRoomReady(guestSeat, true);
+    expect(m.canStartWaitingRoom(hostSeat)).toBe(true);
+    expect(m.canStartWaitingRoom(guestSeat)).toBe(false);
+    await expect(m.startWaitingRoom(guestSeat)).rejects.toThrow(/host/i);
+
+    m.setWaitingRoomReady(guestSeat, false);
+    expect(m.canStartWaitingRoom(hostSeat)).toBe(false);
+  });
+
+  it("lets only the host add bots and kick occupants", () => {
+    const m = MatchProcess.createWaitingRoom("managed-room", 8, dependencies);
+    const hostSeat = m.claimSeat("host", "Host") as Seat;
+    const guestSeat = m.claimSeat("guest", "Guest") as Seat;
+
+    expect(() => m.addWaitingRoomBot(guestSeat)).toThrow(/host/i);
+    const botSeat = m.addWaitingRoomBot(hostSeat);
+    expect(m.buildRoomState(hostSeat).seats[botSeat].occupant.kind).toBe("bot");
+    expect(m.buildRoomState(hostSeat).seats[botSeat].ready).toBe(true);
+
+    expect(() => m.kickWaitingRoomSeat(guestSeat, botSeat)).toThrow(/host/i);
+    m.kickWaitingRoomSeat(hostSeat, botSeat);
+    expect(
+      m.buildRoomState(hostSeat).seats.some(
+        ({ occupant }) => occupant.kind === "bot"
+      )
+    ).toBe(false);
+  });
+
+  it("notifies a kicked human before removing their seat", () => {
+    const m = MatchProcess.createWaitingRoom("kicked-human", 10, dependencies);
+    const hostSeat = m.claimSeat("host", "Host") as Seat;
+    const guestSeat = m.claimSeat("guest", "Guest") as Seat;
+    const hostSink = makeSink();
+    const guestSink = makeSink();
+    m.attachHuman(hostSeat, hostSink.send);
+    m.attachHuman(guestSeat, guestSink.send);
+    guestSink.frames.length = 0;
+
+    m.kickWaitingRoomSeat(hostSeat, guestSeat);
+
+    expect(guestSink.frames).toContainEqual({
+      type: "room_kicked",
+      matchId: "kicked-human",
+    });
+    expect(m.humanSeatFor(guestSink.send)).toBeNull();
+    expect(
+      m.buildRoomState(hostSeat).seats.some(
+        ({ occupant }) =>
+          occupant.kind === "human" && occupant.userId === "guest"
+      )
+    ).toBe(false);
+  });
+
+  it("promotes the next human when the first human leaves", () => {
+    const m = MatchProcess.createWaitingRoom("host-transfer", 9, dependencies);
+    const firstSeat = m.claimSeat("first", "First") as Seat;
+    const secondSeat = m.claimSeat("second", "Second") as Seat;
+    const firstSink = makeSink();
+    const secondSink = makeSink();
+    m.attachHuman(firstSeat, firstSink.send);
+    m.attachHuman(secondSeat, secondSink.send);
+    m.addWaitingRoomBot(firstSeat);
+    secondSink.frames.length = 0;
+
+    m.releaseSeat(firstSeat);
+
+    const room = m.buildRoomState(null);
+    const promoted = room.seats.find(
+      ({ occupant }) =>
+        occupant.kind === "human" && occupant.userId === "second"
+    );
+    expect(promoted?.seat).toBe(0);
+    expect(room.hostSeat).toBe(promoted?.seat);
+    expect(room.seats[1].occupant.kind).toBe("bot");
+    expect(m.humanSeatFor(secondSink.send)).toBe(0);
+    expect(
+      [...secondSink.frames]
+        .reverse()
+        .find((frame) => frame.type === "room_state")
+    ).toMatchObject({
+      type: "room_state",
+      mySeat: 0,
+      hostSeat: 0,
+    });
+    expect(m.canStartWaitingRoom(secondSeat)).toBe(false);
+    expect(m.canStartWaitingRoom(promoted?.seat as Seat)).toBe(false);
+    m.setWaitingRoomReady(0, true);
+    expect(m.canStartWaitingRoom(0)).toBe(true);
   });
 
   it("releaseSeat clears the slot back to empty", () => {

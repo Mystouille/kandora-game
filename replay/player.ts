@@ -1084,6 +1084,8 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
       ? {
           ...mv.roomState,
           mySeat: mv.roomState.mySeat != null ? rot(mv.roomState.mySeat) : null,
+          hostSeat:
+            mv.roomState.hostSeat != null ? rot(mv.roomState.hostSeat) : null,
           seats: perm4(mv.roomState.seats).map((rs, i) => ({
             ...rs,
             seat: i as Seat,

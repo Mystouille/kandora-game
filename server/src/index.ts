@@ -955,6 +955,14 @@ async function handleClientFrame(
       await match.handleReady(seat);
       return;
     }
+    case "set_room_ready": {
+      try {
+        match.setWaitingRoomReady(seat, parsed.data.ready);
+      } catch (err) {
+        sendError("ready_rejected", (err as Error).message);
+      }
+      return;
+    }
     case "resync": {
       // Resync: always respond with a fresh per-seat snapshot of
       // the current engine state. The snapshot is authoritative
@@ -984,18 +992,26 @@ async function handleClientFrame(
         );
         return;
       }
+      // Fire-and-forget: the guarded start runs the full pre-match
+      // ready check + first hand asynchronously.
+      void match.startWaitingRoom(seat).catch((err) => {
+        sendError("start_rejected", (err as Error).message);
+      });
+      return;
+    }
+    case "add_bot": {
       try {
-        // Fire-and-forget: `fillBotsAndStart` runs the full
-        // pre-match ready check + first hand asynchronously.
-        // Errors are logged but do not propagate back to the
-        // caller — every attached human will see the failure
-        // via the engine's own error/finalization frames.
-        void match.fillBotsAndStart().catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error("[game-server] fillBotsAndStart failed", err);
-        });
+        match.addWaitingRoomBot(seat);
       } catch (err) {
-        sendError("start_failed", (err as Error).message);
+        sendError("add_bot_rejected", (err as Error).message);
+      }
+      return;
+    }
+    case "kick_seat": {
+      try {
+        match.kickWaitingRoomSeat(seat, parsed.data.seat);
+      } catch (err) {
+        sendError("kick_rejected", (err as Error).message);
       }
       return;
     }
@@ -1106,7 +1122,10 @@ function handleSpectatorConnection(
       }
       case "act":
       case "ready":
+      case "set_room_ready":
       case "start_match":
+      case "add_bot":
+      case "kick_seat":
       case "leave_seat":
       case "afk":
       case "vote_continue": {
@@ -1194,7 +1213,10 @@ function handleDelayedSpectatorConnection(
       }
       case "act":
       case "ready":
+      case "set_room_ready":
       case "start_match":
+      case "add_bot":
+      case "kick_seat":
       case "leave_seat":
       case "afk":
       case "vote_continue": {

@@ -15,6 +15,7 @@ import {
   ServerMessageSchema,
   type ClientMessage,
   type MatchDebug,
+  type Seat,
   type ServerMessage,
 } from "~/game/protocol/messages";
 import { dispatchServerMessage } from "./dispatchServerMessage";
@@ -188,6 +189,33 @@ export class GameWS {
       return;
     }
     this.send({ type: "start_match", matchId });
+  }
+
+  /** Toggle the caller's readiness in the pre-match waiting room. */
+  setWaitingRoomReady(ready: boolean): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "set_room_ready", matchId, ready });
+  }
+
+  /** Ask the waiting-room host to fill one open seat with a bot. */
+  addWaitingRoomBot(): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "add_bot", matchId });
+  }
+
+  /** Ask the waiting-room host to remove an occupied seat. */
+  kickWaitingRoomSeat(seat: Seat): void {
+    const { matchId } = useMatchStore.getState();
+    if (!matchId) {
+      return;
+    }
+    this.send({ type: "kick_seat", matchId, seat });
   }
 
   /** Release the caller's seat in a `waiting` room. */

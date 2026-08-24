@@ -59,6 +59,7 @@ export const WaitingRoomCheckpointSchema = z
       CheckpointPlayerSchema.nullable(),
       CheckpointPlayerSchema.nullable(),
     ]),
+    ready: BooleanTuple4Schema.default([false, false, false, false]),
   })
   .strict()
   .superRefine((checkpoint, context) => {

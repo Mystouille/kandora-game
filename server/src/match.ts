@@ -444,6 +444,12 @@ export class MatchProcess {
    * and stays non-null for the rest of the match's lifetime.
    */
   private readonly players: Map<Seat, MatchPlayerInit | null>;
+  private waitingRoomReady: [boolean, boolean, boolean, boolean] = [
+    false,
+    false,
+    false,
+    false,
+  ];
 
   /**
    * Match lifecycle:
@@ -1416,6 +1422,7 @@ export class MatchProcess {
           }
         : undefined,
       seats: this.checkpointPlayers(false),
+      ready: [...this.waitingRoomReady],
     });
   }
 
@@ -1762,6 +1769,7 @@ export class MatchProcess {
         const player = checkpoint.seats[seat];
         match.players.set(seat as Seat, player === null ? null : { ...player });
       }
+      match.waitingRoomReady = [...checkpoint.ready];
       return match;
     }
 
@@ -2869,8 +2877,16 @@ export class MatchProcess {
     }
     const pick = empties[0];
     this.players.set(pick, { userId, displayName, isBot: false });
+    this.waitingRoomReady[pick] = false;
+    this.compactWaitingRoomSeats();
+    const assigned = [...this.players.entries()].find(
+      ([, player]) => player?.userId === userId
+    )?.[0];
+    if (assigned === undefined) {
+      throw new Error("claimSeat: assigned player disappeared during compaction");
+    }
     this.broadcastRoomState();
-    return pick;
+    return assigned;
   }
 
   /**
@@ -2889,9 +2905,171 @@ export class MatchProcess {
     if (p === null || p === undefined || p.isBot) {
       return;
     }
-    this.humanSockets[seat] = null;
-    this.players.set(seat, null);
+    this.clearWaitingRoomSeat(seat);
+    this.compactWaitingRoomSeats();
     this.broadcastRoomState();
+    this.broadcastViewerState();
+  }
+
+  private waitingRoomHostSeat(): Seat | null {
+    for (let seat = 0; seat < 4; seat++) {
+      const player = this.players.get(seat as Seat);
+      if (player !== null && player !== undefined && !player.isBot) {
+        return seat as Seat;
+      }
+    }
+    return null;
+  }
+
+  private assertWaitingRoomHost(requestedBy: Seat, action: string): void {
+    if (this.statusValue !== "waiting") {
+      throw new Error(
+        `${action}: cannot manage room in status "${this.statusValue}"`
+      );
+    }
+    if (this.waitingRoomHostSeat() !== requestedBy) {
+      throw new Error(`${action}: only the waiting-room host may do that`);
+    }
+  }
+
+  setWaitingRoomReady(seat: Seat, ready: boolean): void {
+    this.assertNotPaused("setWaitingRoomReady");
+    if (this.statusValue !== "waiting") {
+      throw new Error(
+        `setWaitingRoomReady: cannot update readiness in status "${this.statusValue}"`
+      );
+    }
+    const player = this.players.get(seat);
+    if (player === null || player === undefined || player.isBot) {
+      throw new Error("setWaitingRoomReady: only a seated human can be ready");
+    }
+    this.waitingRoomReady[seat] = ready;
+    this.broadcastRoomState();
+  }
+
+  canStartWaitingRoom(requestedBy: Seat): boolean {
+    if (
+      this.statusValue !== "waiting" ||
+      this.waitingRoomHostSeat() !== requestedBy
+    ) {
+      return false;
+    }
+    let humanCount = 0;
+    for (let seat = 0; seat < 4; seat++) {
+      const player = this.players.get(seat as Seat);
+      if (player === null || player === undefined || player.isBot) {
+        continue;
+      }
+      humanCount++;
+      if (
+        !this.waitingRoomReady[seat] ||
+        this.humanSockets[seat] === null
+      ) {
+        return false;
+      }
+    }
+    return humanCount > 0;
+  }
+
+  async startWaitingRoom(requestedBy: Seat): Promise<void> {
+    this.assertWaitingRoomHost(requestedBy, "startWaitingRoom");
+    if (!this.canStartWaitingRoom(requestedBy)) {
+      throw new Error(
+        "startWaitingRoom: every seated human must be connected and ready"
+      );
+    }
+    await this.fillBotsAndStart();
+  }
+
+  private nextWaitingRoomBot(displayName: string): MatchPlayerInit {
+    let botNumber = 1;
+    while (
+      [...this.players.values()].some(
+        (player) => player?.userId === `bot:room:${botNumber}`
+      )
+    ) {
+      botNumber++;
+    }
+    return {
+      userId: `bot:room:${botNumber}`,
+      displayName,
+      isBot: true,
+    };
+  }
+
+  addWaitingRoomBot(requestedBy: Seat): Seat {
+    this.assertNotPaused("addWaitingRoomBot");
+    this.assertWaitingRoomHost(requestedBy, "addWaitingRoomBot");
+    for (let seat = 0; seat < 4; seat++) {
+      const target = seat as Seat;
+      if (this.players.get(target) === null) {
+        const botCount = [...this.players.values()].filter(
+          (player) => player?.isBot
+        ).length;
+        this.players.set(
+          target,
+          this.nextWaitingRoomBot(`Bot ${botCount + 1}`)
+        );
+        this.waitingRoomReady[target] = true;
+        this.broadcastRoomState();
+        return target;
+      }
+    }
+    throw new Error("addWaitingRoomBot: the waiting room is full");
+  }
+
+  kickWaitingRoomSeat(requestedBy: Seat, target: Seat): void {
+    this.assertNotPaused("kickWaitingRoomSeat");
+    this.assertWaitingRoomHost(requestedBy, "kickWaitingRoomSeat");
+    if (target === requestedBy) {
+      throw new Error("kickWaitingRoomSeat: the host must leave normally");
+    }
+    const player = this.players.get(target);
+    if (player === null || player === undefined) {
+      throw new Error("kickWaitingRoomSeat: that seat is empty");
+    }
+    if (!player.isBot) {
+      this.humanSockets[target]?.({
+        type: "room_kicked",
+        matchId: this.matchId,
+      });
+    }
+    this.clearWaitingRoomSeat(target);
+    this.compactWaitingRoomSeats();
+    this.broadcastRoomState();
+    this.broadcastViewerState();
+  }
+
+  private clearWaitingRoomSeat(seat: Seat): void {
+    this.humanConnectionGeneration[seat] += 1;
+    this.humanSockets[seat] = null;
+    this.livenessProbes[seat] = null;
+    this.livenessProbeMisses[seat] = 0;
+    this.livenessProbeInflight[seat] = false;
+    this.disconnected[seat] = false;
+    this.afkSelfReported[seat] = false;
+    this.waitingRoomReady[seat] = false;
+    this.players.set(seat, null);
+  }
+
+  private compactWaitingRoomSeats(): void {
+    const humans: Seat[] = [];
+    const bots: Seat[] = [];
+    const empty: Seat[] = [];
+    for (let seat = 0; seat < 4; seat++) {
+      const current = seat as Seat;
+      const player = this.players.get(current);
+      if (player === null) {
+        empty.push(current);
+      } else if (player?.isBot) {
+        bots.push(current);
+      } else {
+        humans.push(current);
+      }
+    }
+    this.permuteSeatOccupants(
+      [...humans, ...bots, ...empty] as [Seat, Seat, Seat, Seat]
+    );
   }
 
   /**
@@ -2910,11 +3088,8 @@ export class MatchProcess {
     const names = ["Bot East", "Bot South", "Bot West", "Bot North"];
     for (const [seat, p] of this.players) {
       if (p === null) {
-        this.players.set(seat, {
-          userId: `bot:room:${seat}`,
-          displayName: names[seat],
-          isBot: true,
-        });
+        this.players.set(seat, this.nextWaitingRoomBot(names[seat]));
+        this.waitingRoomReady[seat] = true;
       }
     }
   }
@@ -2930,6 +3105,7 @@ export class MatchProcess {
     const oldProbes = [...this.livenessProbes];
     const oldProbeMisses = [...this.livenessProbeMisses];
     const oldConnectionGenerations = [...this.humanConnectionGeneration];
+    const oldWaitingRoomReady = [...this.waitingRoomReady];
 
     for (let newSeat = 0; newSeat < 4; newSeat++) {
       const fromSeat = permutation[newSeat];
@@ -2942,6 +3118,7 @@ export class MatchProcess {
       this.livenessProbeInflight[newSeat] = false;
       this.humanConnectionGeneration[newSeat] =
         oldConnectionGenerations[fromSeat] + 1;
+      this.waitingRoomReady[newSeat] = oldWaitingRoomReady[fromSeat];
     }
   }
 
@@ -2977,7 +3154,11 @@ export class MatchProcess {
   buildRoomState(
     forSeat: Seat | null
   ): Extract<ServerMessage, { type: "room_state" }> {
-    const seats: Array<{ seat: Seat; occupant: RoomSeatOccupant }> = [];
+    const seats: Array<{
+      seat: Seat;
+      occupant: RoomSeatOccupant;
+      ready: boolean;
+    }> = [];
     for (let s = 0; s < 4; s++) {
       const seat = s as Seat;
       const p = this.players.get(seat) ?? null;
@@ -3006,13 +3187,24 @@ export class MatchProcess {
             (this.humanSockets[seat] !== null && !this.disconnected[seat]),
         };
       }
-      seats.push({ seat, occupant });
+      const ready =
+        p?.isBot === true ||
+        (p !== null &&
+          p !== undefined &&
+          !p.isBot &&
+          this.waitingRoomReady[seat] &&
+          this.humanSockets[seat] !== null);
+      seats.push({ seat, occupant, ready });
     }
+    const hostSeat = this.waitingRoomHostSeat();
     return {
       type: "room_state",
       matchId: this.matchId,
       status: this.statusValue,
       mySeat: forSeat,
+      hostSeat,
+      canStart:
+        hostSeat !== null && this.canStartWaitingRoom(hostSeat),
       seats,
     };
   }
