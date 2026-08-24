@@ -59,11 +59,13 @@ import {
   MATCH_CHECKPOINT_SCHEMA_VERSION,
   PlayingActionCheckpointSchema,
   PlayingCallCheckpointSchema,
+  PlayingReadyCheckpointSchema,
   WaitingRoomCheckpointSchema,
   parseMatchCheckpoint,
   type MatchCheckpoint,
   type PlayingActionCheckpoint,
   type PlayingCallCheckpoint,
+  type PlayingReadyCheckpoint,
   type WaitingRoomCheckpoint,
 } from "./checkpoint";
 import { projectEvent, projectPublicEvent } from "./projection";
@@ -610,6 +612,9 @@ export class MatchProcess {
   private readyDeadline: number | null = null;
   private readyTimer: MatchTimer | null = null;
   private readyResolve: (() => void) | null = null;
+  private readyContinuationKind:
+    | PlayingReadyCheckpoint["readyContinuation"]
+    | null = null;
 
   /**
    * Type of the most recently emitted engine event. Used to
@@ -1075,6 +1080,9 @@ export class MatchProcess {
       return this.createWaitingRoomCheckpoint();
     }
     if (this.statusValue === "playing") {
+      if (this.readyResolve !== null) {
+        return this.createPlayingReadyCheckpoint();
+      }
       if (this.callWindow.some((window) => window !== null)) {
         return this.createPlayingCallCheckpoint();
       }
@@ -1102,16 +1110,21 @@ export class MatchProcess {
     const checkpoint = this.createCheckpoint();
     this.pausedCheckpoint = checkpoint;
     if (checkpoint.status === "playing") {
-      const seats =
-        checkpoint.checkpointKind === "action_window"
-          ? [checkpoint.actionWindow.seat]
-          : checkpoint.callWindows.flatMap((window, seat) =>
-              window === null ? [] : [seat as Seat]
-            );
-      for (const seat of seats) {
-        this.currentDeadlineTimer[seat]?.cancel();
-        this.currentDeadlineTimer[seat] = null;
-        this.deadlineEpoch[seat] += 1;
+      if (checkpoint.checkpointKind === "ready_check") {
+        this.readyTimer?.cancel();
+        this.readyTimer = null;
+      } else {
+        const seats =
+          checkpoint.checkpointKind === "action_window"
+            ? [checkpoint.actionWindow.seat]
+            : checkpoint.callWindows.flatMap((window, seat) =>
+                window === null ? [] : [seat as Seat]
+              );
+        for (const seat of seats) {
+          this.currentDeadlineTimer[seat]?.cancel();
+          this.currentDeadlineTimer[seat] = null;
+          this.deadlineEpoch[seat] += 1;
+        }
       }
     }
     const saving = this.persistPausedCheckpoint(checkpoint);
@@ -1133,8 +1146,10 @@ export class MatchProcess {
       if (checkpoint.status === "playing") {
         if (checkpoint.checkpointKind === "action_window") {
           this.installCheckpointActionWindow(checkpoint);
-        } else {
+        } else if (checkpoint.checkpointKind === "call_window") {
           this.installCheckpointCallWindows(checkpoint);
+        } else {
+          this.installCheckpointReadyCheck(checkpoint, false);
         }
       }
       throw error;
@@ -1220,17 +1235,18 @@ export class MatchProcess {
     );
   }
 
-  private assertCommonPlayingCheckpointState(): void {
+  private assertCommonPlayingCheckpointState(allowReady = false): void {
     if (this.relayMode) {
       this.checkpointUnsupported("relay match");
     }
+    if (this.continueVoteResolve !== null || this.continueVoteTimer !== null) {
+      this.checkpointUnsupported("vote continuation");
+    }
     if (
-      this.readyResolve !== null ||
-      this.readyTimer !== null ||
-      this.continueVoteResolve !== null ||
-      this.continueVoteTimer !== null
+      !allowReady &&
+      (this.readyResolve !== null || this.readyTimer !== null)
     ) {
-      this.checkpointUnsupported("ready or vote continuation");
+      this.checkpointUnsupported("ready continuation");
     }
     if (
       this.delayedSpectators.size > 0 ||
@@ -1415,6 +1431,39 @@ export class MatchProcess {
     });
   }
 
+  private createPlayingReadyCheckpoint(): PlayingReadyCheckpoint {
+    this.assertCommonPlayingCheckpointState(true);
+    if (
+      this.readyResolve === null ||
+      this.readyTimer === null ||
+      this.readyDeadline === null
+    ) {
+      this.checkpointUnsupported("ready timer is incomplete");
+    }
+    if (this.readyContinuationKind === null) {
+      this.checkpointUnsupported("unsupported ready continuation");
+    }
+    if (
+      this.callWindow.some((window) => window !== null) ||
+      this.pendingHumanCallActions.some((action) => action !== null) ||
+      this.pendingBotRons.length > 0 ||
+      this.pendingBotCalls.length > 0 ||
+      this.pendingChankanBotRons.length > 0 ||
+      this.legalActions.some((actions) => actions.length > 0) ||
+      this.currentDeadlineTimer.some((timer) => timer !== null)
+    ) {
+      this.checkpointUnsupported("ready check retains action state");
+    }
+    const savedAt = this.runtime.now();
+    return PlayingReadyCheckpointSchema.parse({
+      ...this.playingCheckpointBase(savedAt),
+      checkpointKind: "ready_check",
+      readyContinuation: this.readyContinuationKind,
+      readyAcked: [...this.readyAcked],
+      readyRemainingMs: Math.max(0, this.readyDeadline - savedAt),
+    });
+  }
+
   /** Restore validated state with every network attachment detached. */
   static restoreCheckpoint(
     input: unknown,
@@ -1478,8 +1527,10 @@ export class MatchProcess {
 
     if (checkpoint.checkpointKind === "action_window") {
       match.installCheckpointActionWindow(checkpoint);
-    } else {
+    } else if (checkpoint.checkpointKind === "call_window") {
       match.installCheckpointCallWindows(checkpoint);
+    } else {
+      match.installCheckpointReadyCheck(checkpoint, true);
     }
     return match;
   }
@@ -1579,6 +1630,45 @@ export class MatchProcess {
         timer.expiryRemainingMs,
         { unref: true }
       );
+    }
+  }
+
+  private installCheckpointReadyCheck(
+    checkpoint: PlayingReadyCheckpoint,
+    restored: boolean
+  ): void {
+    const continuation = checkpoint.readyContinuation;
+    this.readyAcked = [...checkpoint.readyAcked];
+    this.readyDeadline = this.runtime.now() + checkpoint.readyRemainingMs;
+    this.readyContinuationKind = continuation;
+    if (restored) {
+      this.readyResolve = () => {
+        void this.resumeReadyContinuation(continuation);
+      };
+    } else if (this.readyResolve === null) {
+      throw new Error(
+        "MatchProcess.installCheckpointReadyCheck: missing live continuation"
+      );
+    }
+    this.readyTimer?.cancel();
+    this.readyTimer = this.runtime.schedule(
+      () => {
+        if (!this.isPaused) {
+          this.finishReadyCheck();
+        }
+      },
+      checkpoint.readyRemainingMs,
+      { unref: true }
+    );
+  }
+
+  private async resumeReadyContinuation(
+    continuation: PlayingReadyCheckpoint["readyContinuation"]
+  ): Promise<void> {
+    if (continuation === "initial_hand") {
+      await this.beginInitialHandAfterReady();
+    } else {
+      await this.beginNextHandAfterReady();
     }
   }
 
@@ -1687,8 +1777,12 @@ export class MatchProcess {
     // Pre-match ready check. Bots are pre-acked; if the human
     // is the only seat that hasn't acked we wait up to
     // `READY_CHECK_MS` for their ack before dealing.
-    await this.runReadyCheck();
+    await this.runReadyCheck(READY_CHECK_MS, "initial_hand");
 
+    await this.beginInitialHandAfterReady();
+  }
+
+  private async beginInitialHandAfterReady(): Promise<void> {
     // Per-seat hand redaction is handled in `sendToSeat`; the
     // recipient's hand is attached there. The omniscient
     // `startingHands` snapshot needed for replay archival is added
@@ -1718,7 +1812,11 @@ export class MatchProcess {
    * or `ms` milliseconds elapsed. Bots are pre-acked.
    * No-ops when `ms <= 0` (test path).
    */
-  private async runReadyCheck(ms: number = READY_CHECK_MS): Promise<void> {
+  private async runReadyCheck(
+    ms: number = READY_CHECK_MS,
+    continuation: PlayingReadyCheckpoint["readyContinuation"] | null = null
+  ): Promise<void> {
+    this.readyContinuationKind = null;
     for (const [seat, p] of this.players) {
       // `start()` guarantees no null slots reach here.
       this.readyAcked[seat] = p?.isBot ?? true;
@@ -1727,6 +1825,7 @@ export class MatchProcess {
       this.readyDeadline = null;
       return;
     }
+    this.readyContinuationKind = continuation;
     this.readyDeadline = this.runtime.now() + ms;
     this.broadcastReadyCheck();
     await new Promise<void>((resolve) => {
@@ -1765,6 +1864,9 @@ export class MatchProcess {
   }
 
   private finishReadyCheck(): void {
+    if (this.isPaused) {
+      return;
+    }
     if (this.readyTimer) {
       this.readyTimer.cancel();
       this.readyTimer = null;
@@ -1772,6 +1874,7 @@ export class MatchProcess {
     const resolve = this.readyResolve;
     this.readyResolve = null;
     this.readyDeadline = null;
+    this.readyContinuationKind = null;
     // Notify every attached human (any seat) that the ready check
     // is over so they all clear their overlays in lockstep.
     for (const seat of this.humanSeats()) {
@@ -4206,11 +4309,15 @@ export class MatchProcess {
       if (revealMs > 0) {
         await this.runtime.sleep(revealMs);
       }
-      await this.runReadyCheck(NEXT_HAND_DELAY_MS);
+      await this.runReadyCheck(NEXT_HAND_DELAY_MS, "next_hand");
     } else {
       this.pendingWinRevealMs = 0;
     }
 
+    await this.beginNextHandAfterReady();
+  }
+
+  private async beginNextHandAfterReady(): Promise<void> {
     const result = step(this.state, { type: "start_next_hand" });
     this.state = result.state;
     for (const ev of result.events) {
@@ -4679,24 +4786,9 @@ export class MatchProcess {
         : {}),
     });
 
-    await this.runReadyCheck();
+    await this.runReadyCheck(READY_CHECK_MS, "initial_hand");
 
-    await this.emitEvent({
-      type: "hand_start",
-      round: 0,
-      dealer: this.state.dealer,
-      roundWind: this.state.roundWind,
-      roundNumber: this.state.roundNumber,
-      honba: this.state.honba,
-      riichiSticks: this.state.riichiSticks,
-      scores: [...this.state.scores] as [number, number, number, number],
-      sinking: this.computeSinking(),
-      hand: undefined,
-      doraIndicators: this.state.doraIndicators,
-      dice: this.rollDice(),
-    });
-
-    await this.advanceTurn();
+    await this.beginInitialHandAfterReady();
   }
 
   /**

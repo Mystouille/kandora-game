@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPRNG } from "~/game/rules";
+import { createPRNG, type MatchState } from "~/game/rules";
 import { getPreset, presetToRuleSet } from "~/game/rules/presets";
 import {
   MATCH_CHECKPOINT_SCHEMA_VERSION,
@@ -9,6 +9,7 @@ import {
 import {
   MatchProcess,
   setDelayAfterDiscardMs,
+  setNextHandDelayMs,
   setReadyCheckMs,
 } from "./match";
 import {
@@ -136,6 +137,7 @@ function deferred() {
 describe("MatchProcess checkpoints", () => {
   afterEach(() => {
     setReadyCheckMs(5_000);
+    setNextHandDelayMs(5_000);
     setDelayAfterDiscardMs(350);
   });
 
@@ -251,6 +253,197 @@ describe("MatchProcess checkpoints", () => {
     }
     expect(restored.summary()).toEqual(room.summary());
     expect(restored.claimSeat("bob", "Bob")).not.toBeNull();
+  });
+
+  it("restores a partially-acknowledged initial ready check", async () => {
+    const originalRuntime = controlledRuntime(70_000, 1001);
+    const match = new MatchProcess(
+      "checkpoint-initial-ready",
+      61,
+      humanPlayers(),
+      {
+        repository: ephemeralMatchRepository,
+        runtime: originalRuntime,
+      }
+    );
+    setReadyCheckMs(5_000);
+    setDelayAfterDiscardMs(0);
+    const starting = match.start();
+    await vi.waitFor(() => {
+      const candidate = match.createCheckpoint();
+      expect(candidate).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+        readyContinuation: "initial_hand",
+      });
+    });
+    match.handleReady(0);
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "ready_check"
+    ) {
+      throw new Error("expected an initial ready checkpoint");
+    }
+    expect(checkpoint.readyAcked).toEqual([true, false, false, false]);
+
+    const restoredRuntime = controlledRuntime(1_000_000, 1002);
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: restoredRuntime,
+    });
+    for (const seat of [1, 2, 3] as const) {
+      match.handleReady(seat);
+      restored.handleReady(seat);
+    }
+    await starting;
+    await vi.waitFor(() => {
+      const candidate = restored.createCheckpoint();
+      expect(candidate).toMatchObject({
+        status: "playing",
+        checkpointKind: "action_window",
+      });
+    });
+
+    expect(restored.replayFromBuffer(0, 0)).toEqual(
+      match.replayFromBuffer(0, 0)
+    );
+    expect(comparableSnapshot(restored, 0, restoredRuntime)).toEqual(
+      comparableSnapshot(match, 0, originalRuntime)
+    );
+    expect(restoredRuntime.captureRandomState()).toBe(
+      originalRuntime.captureRandomState()
+    );
+  });
+
+  it("restores a partially-acknowledged post-hand ready check", async () => {
+    const originalRuntime = controlledRuntime(80_000, 1101);
+    const match = new MatchProcess(
+      "checkpoint-next-ready",
+      62,
+      humanPlayers(),
+      {
+        repository: ephemeralMatchRepository,
+        runtime: originalRuntime,
+      }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+    setNextHandDelayMs(5_000);
+    const internals = match as unknown as {
+      state: MatchState;
+      afterHandEnd: () => Promise<void>;
+    };
+    internals.state.phase = "hand_ended";
+    internals.state.lastHandResult = {
+      reason: "exhaustive_draw",
+      winner: null,
+      loser: null,
+      delta: [0, 0, 0, 0],
+      tenpai: [false, false, false, false],
+      abortKind: null,
+      winHan: null,
+      winYakuman: null,
+    };
+    const advancing = internals.afterHandEnd();
+    await vi.waitFor(() => {
+      const candidate = match.createCheckpoint();
+      expect(candidate).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+        readyContinuation: "next_hand",
+      });
+    });
+    match.handleReady(0);
+    const checkpoint = match.createCheckpoint();
+    if (
+      checkpoint.status !== "playing" ||
+      checkpoint.checkpointKind !== "ready_check"
+    ) {
+      throw new Error("expected a next-hand ready checkpoint");
+    }
+
+    const restoredRuntime = controlledRuntime(1_100_000, 1102);
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+      runtime: restoredRuntime,
+    });
+    for (const seat of [1, 2, 3] as const) {
+      match.handleReady(seat);
+      restored.handleReady(seat);
+    }
+    await advancing;
+    await vi.waitFor(() => {
+      const candidate = restored.createCheckpoint();
+      expect(candidate).toMatchObject({
+        status: "playing",
+        checkpointKind: "action_window",
+      });
+    });
+
+    expect(restored.replayFromBuffer(0, 0)).toEqual(
+      match.replayFromBuffer(0, 0)
+    );
+    expect(comparableSnapshot(restored, 0, restoredRuntime)).toEqual(
+      comparableSnapshot(match, 0, originalRuntime)
+    );
+  });
+
+  it("rearms a ready continuation after checkpoint save failure", async () => {
+    const gate = deferred();
+    const capturedCheckpoints: MatchCheckpoint[] = [];
+    const repository: MatchRepository = {
+      ...createMemoryMatchRepository(),
+      saveCheckpoint: async ({ checkpoint }) => {
+        capturedCheckpoints.push(checkpoint);
+        await gate.promise;
+      },
+    };
+    const runtime = controlledRuntime(90_000, 1201);
+    const match = new MatchProcess(
+      "checkpoint-ready-save-failure",
+      63,
+      humanPlayers(),
+      { repository, runtime }
+    );
+    setReadyCheckMs(5_000);
+    setDelayAfterDiscardMs(0);
+    const starting = match.start();
+    await vi.waitFor(() => {
+      const candidate = match.createCheckpoint();
+      expect(candidate).toMatchObject({
+        status: "playing",
+        checkpointKind: "ready_check",
+      });
+    });
+
+    const saving = match.pauseAndSaveCheckpoint();
+    const captured = capturedCheckpoints[0];
+    if (
+      captured?.status !== "playing" ||
+      captured.checkpointKind !== "ready_check"
+    ) {
+      throw new Error("expected a captured ready checkpoint");
+    }
+    expect(match.isPaused).toBe(true);
+    match.handleReady(0);
+    expect(match.createCheckpoint()).toEqual(captured);
+    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
+    runtime.advance(30_000);
+    gate.reject(new Error("ready checkpoint write failed"));
+    await expect(saving).rejects.toThrow("ready checkpoint write failed");
+
+    expect(match.isPaused).toBe(false);
+    expect(runtime.scheduledDelays().at(-1)).toBe(captured.readyRemainingMs);
+    for (const seat of [0, 1, 2, 3] as const) {
+      match.handleReady(seat);
+    }
+    await starting;
+    expect(match.createCheckpoint()).toMatchObject({
+      status: "playing",
+      checkpointKind: "action_window",
+    });
   });
 
   it("rejects unsupported versions and duplicate human identities", () => {

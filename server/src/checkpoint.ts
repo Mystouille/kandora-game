@@ -410,10 +410,77 @@ export const PlayingCallCheckpointSchema = z
 export type PlayingCallCheckpoint = z.infer<
   typeof PlayingCallCheckpointSchema
 >;
+
+export const PlayingReadyCheckpointSchema = z
+  .object({
+    ...PlayingCheckpointBaseShape,
+    checkpointKind: z.literal("ready_check"),
+    readyContinuation: z.enum(["initial_hand", "next_hand"]),
+    readyAcked: BooleanTuple4Schema,
+    readyRemainingMs: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((checkpoint, context) => {
+    const expectedPhase =
+      checkpoint.readyContinuation === "initial_hand"
+        ? "awaiting_draw"
+        : "hand_ended";
+    if (checkpoint.state.phase !== expectedPhase) {
+      context.addIssue({
+        code: "custom",
+        path: ["state", "phase"],
+        message: `${checkpoint.readyContinuation} ready check requires ${expectedPhase}`,
+      });
+    }
+    if (checkpoint.readyAcked.every(Boolean)) {
+      context.addIssue({
+        code: "custom",
+        path: ["readyAcked"],
+        message: "Ready checkpoint requires at least one pending human",
+      });
+    }
+    checkpoint.seats.forEach((player, seat) => {
+      if (player.isBot && !checkpoint.readyAcked[seat]) {
+        context.addIssue({
+          code: "custom",
+          path: ["readyAcked", seat],
+          message: "Bot seats must already be ready",
+        });
+      }
+    });
+    if (checkpoint.gameStartLogIdx > checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["gameStartLogIdx"],
+        message: "Game log start cannot exceed the event log length",
+      });
+    }
+    if (checkpoint.nextSeq !== checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextSeq"],
+        message: "Next sequence must equal the contiguous event log length",
+      });
+    }
+    checkpoint.eventLog.forEach((entry, index) => {
+      if (entry.seq !== index) {
+        context.addIssue({
+          code: "custom",
+          path: ["eventLog", index, "seq"],
+          message: "Event log sequence must be contiguous from zero",
+        });
+      }
+    });
+  });
+
+export type PlayingReadyCheckpoint = z.infer<
+  typeof PlayingReadyCheckpointSchema
+>;
 export const MatchCheckpointSchema = z.union([
   WaitingRoomCheckpointSchema,
   PlayingActionCheckpointSchema,
   PlayingCallCheckpointSchema,
+  PlayingReadyCheckpointSchema,
 ]);
 export type MatchCheckpoint = z.infer<typeof MatchCheckpointSchema>;
 
