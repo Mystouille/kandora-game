@@ -5367,7 +5367,7 @@ export class TableRenderer {
       // what we actually paint, not the pre-swap one). We use
       // the *current* display order's slot centers since those
       // are what the cursor is being compared against.
-      if (this.handSorter.isDragging() && !this.handSorter.isSortFlagOn()) {
+      if (this.handSorter.isDragging()) {
         const beforeDisplay = this.handSorter.getDisplayOrder(
           rawHand,
           isFreshlyDrawnNatural,
@@ -5398,7 +5398,7 @@ export class TableRenderer {
       seat === 0 &&
       !forceReveal &&
       seat0Display &&
-      !this.handSorter.isSortFlagOn()
+      (!this.handSorter.isSortFlagOn() || this.handSorter.isDragging())
     ) {
       baseHand = seat0Display.rawIndices.map((idx) => rawHand[idx] ?? null);
       baseFreshlyDrawn = seat0Display.freshGap;

@@ -7,25 +7,23 @@
  *      A per-hand `sortFlag` (resets to `true` at every
  *      `hand_start`) controls whether the focused player's hand
  *      auto-sorts via the natural sort key on every draw / discard
- *      / call. The first time the player drags a tile, the flag
- *      flips to `false` and a `customOrder` permutation takes
- *      over; from then until the next hand boundary, the renderer
- *      respects the player's manual order. Discards and calls
+ *      / call. A changed non-discard drop flips the flag to `false`
+ *      and commits a `customOrder` permutation; from then until the
+ *      next hand boundary, the renderer respects the player's manual
+ *      order. Discards and calls
  *      transparently splice tiles out of `customOrder`; draws
  *      append the new raw index at the right end.
  *
  *   2. Drag interaction state machine.
  *      Pointerdown on a focused-hand tile starts a "maybe drag";
  *      pointermove that exceeds a small px threshold promotes it
- *      to a real drag (and flips `sortFlag` to false on first
- *      promotion). While dragging, the dragged tile's screen
+ *      to a real drag. While dragging, the dragged tile's screen
  *      position follows the cursor on both axes. Only horizontal
- *      movement participates in reordering: as its center crosses a
- *      neighbour's center, the two tiles swap in `customOrder` (the
- *      gap "stays under" the dragged tile). Pointerup with no
- *      promotion is a click; a promoted drag either drops back into
- *      the hand or requests a discard when released more than two
- *      tile heights above its starting point.
+ *      movement previews reordering as its center crosses neighbours,
+ *      but `customOrder` and `sortFlag` do not change until pointerup.
+ *      A non-discard drop commits only when the tile changed slots.
+ *      In the upward discard zone, the preview resets and the tile's X
+ *      remains at its pointerdown position while Y follows the pointer.
  *
  *   3. Slide animation.
  *      Whenever a tile's *target* slot x changes (swap during
@@ -116,6 +114,10 @@ interface DragState {
   tileHeight: number;
   /** True once the drag has been promoted past the threshold. */
   promoted: boolean;
+  /** Display order when this gesture promoted. Never mutated. */
+  initialOrder: number[] | null;
+  /** Temporary display order. Committed only by a changed hand drop. */
+  previewOrder: number[] | null;
 }
 
 export class HandSorter {
@@ -125,9 +127,9 @@ export class HandSorter {
    * every {@link reset} (hand_start). */
   private sortFlag = true;
 
-  /** Player-chosen display order, as raw-hand indices.
+  /** Player-chosen committed display order, as raw-hand indices.
    * `customOrder[displaySlot] = rawIdx`. Length matches the
-   * raw hand. `null` until the player first drags. */
+   * raw hand. `null` until a changed hand drop is committed. */
   private customOrder: number[] | null = null;
 
   /** Cached previous-frame raw hand (tile strings, `null`
@@ -419,6 +421,23 @@ export class HandSorter {
     isFreshlyDrawn: boolean,
     naturalRawIndices: number[]
   ): { rawIndices: number[]; freshGap: boolean } {
+    if (
+      this.drag?.promoted &&
+      this.drag.initialOrder !== null &&
+      this.drag.previewOrder !== null
+    ) {
+      const dragOrder = isPastUpwardDiscardThreshold(this.drag)
+        ? this.drag.initialOrder
+        : this.drag.previewOrder;
+      const lastRaw = rawHand.length - 1;
+      return {
+        rawIndices: dragOrder.slice(),
+        freshGap:
+          isFreshlyDrawn &&
+          dragOrder.length > 0 &&
+          dragOrder[dragOrder.length - 1] === lastRaw,
+      };
+    }
     if (this.sortFlag) {
       return { rawIndices: naturalRawIndices, freshGap: isFreshlyDrawn };
     }
@@ -471,9 +490,10 @@ export class HandSorter {
       this.drag.promoted &&
       this.drag.rawIdx === rawIdx
     ) {
-      const x =
-        this.drag.downTileLeftX +
-        (this.drag.currentLocalX - this.drag.downLocalX);
+      const x = isPastUpwardDiscardThreshold(this.drag)
+        ? this.drag.downTileLeftX
+        : this.drag.downTileLeftX +
+          (this.drag.currentLocalX - this.drag.downLocalX);
       let track = this.tracks.get(rawIdx);
       if (track === undefined) {
         track = {
@@ -570,8 +590,8 @@ export class HandSorter {
    * Begin tracking a pointerdown on the focused-hand tile at
    * raw-hand index `rawIdx`. Records the geometry needed for
   * later swap and discard-threshold checks. Promotion happens
-  * on the first two-dimensional move past the threshold;
-  * auto-sort changes only after enough horizontal movement.
+  * on the first two-dimensional move past the threshold; the
+  * current display order is then captured for a temporary preview.
    */
   pointerDown(args: {
     rawIdx: number;
@@ -593,14 +613,15 @@ export class HandSorter {
       tileLongAxisLen: args.tileLongAxisLen,
       tileHeight: args.tileHeight,
       promoted: false,
+      initialOrder: null,
+      previewOrder: null,
     };
   }
 
   /**
   * Update the two-dimensional pointer position. Crossing the
-  * radial promote threshold starts visual dragging; crossing
-  * the horizontal threshold additionally disables auto-sort
-  * and seeds the custom order used by {@link maybeSwap}.
+  * radial promote threshold starts visual dragging and captures
+  * the initial/preview orders consumed by {@link maybeSwap}.
    */
   pointerMove(
     pointerLocalX: number,
@@ -620,47 +641,42 @@ export class HandSorter {
       ) >= DRAG_PROMOTE_THRESHOLD_PX
     ) {
       this.drag.promoted = true;
-    }
-    // Preserve the old rearranging contract: only horizontal
-    // movement disables auto-sort and seeds custom order. A
-    // vertical discard gesture can therefore float the tile
-    // without changing the player's sorting preference.
-    if (
-      this.drag.promoted &&
-      this.sortFlag &&
-      Math.abs(pointerLocalX - this.drag.downLocalX) >=
-        DRAG_PROMOTE_THRESHOLD_PX
-    ) {
-      const wasOn = this.sortFlag;
-      this.sortFlag = false;
-      if (this.customOrder === null) {
-        this.customOrder = naturalRawIndicesIfPromoting.slice();
-      }
-      if (wasOn && this.onSortFlagChange) {
-        this.onSortFlagChange(false);
-      }
+      const initialOrder = this.sortFlag
+        ? naturalRawIndicesIfPromoting
+        : (this.customOrder ?? naturalRawIndicesIfPromoting);
+      this.drag.initialOrder = initialOrder.slice();
+      this.drag.previewOrder = initialOrder.slice();
     }
   }
 
   /**
-   * After the renderer has computed each display slot's target
-   * x for this frame's display order, ask the sorter whether a
-   * swap should fire. Returns the new `customOrder` (or `null`
-   * if no swap). The caller should re-render once a swap is
-   * applied.
+  * After the renderer has computed each display slot's target
+  * x for this frame's display order, update the temporary swap
+  * preview. Entering the discard zone resets that preview so
+  * neighbouring tiles return to their pointerdown positions.
    *
    * `slotCenters[displaySlot]` is the center-x of slot
-   * `displaySlot` in handContainer-local coords, assuming the
-   * current `customOrder` is the layout.
+  * `displaySlot` in handContainer-local coords, assuming the
+  * current preview order is the layout.
    */
   maybeSwap(slotCenters: number[]): boolean {
     if (
       this.drag === null ||
       !this.drag.promoted ||
-      this.customOrder === null
+      this.drag.initialOrder === null ||
+      this.drag.previewOrder === null
     ) {
       return false;
     }
+    if (isPastUpwardDiscardThreshold(this.drag)) {
+      const changed = !ordersEqual(
+        this.drag.previewOrder,
+        this.drag.initialOrder
+      );
+      this.drag.previewOrder = this.drag.initialOrder.slice();
+      return changed;
+    }
+    const previewOrder = this.drag.previewOrder;
     // The dragged tile's center follows the cursor.
     const draggedCenterX =
       this.drag.downTileLeftX +
@@ -674,7 +690,7 @@ export class HandSorter {
     // single render frame can only progress by one slot, which
     // produces an apparent "blocked after N tiles" cap whenever
     // the render rate can't keep up with the cursor velocity.
-    let draggedDisplaySlot = this.customOrder.indexOf(this.drag.rawIdx);
+    let draggedDisplaySlot = previewOrder.indexOf(this.drag.rawIdx);
     if (draggedDisplaySlot < 0) {
       return false;
     }
@@ -684,21 +700,21 @@ export class HandSorter {
       if (draggedCenterX >= leftCenter) {
         break;
       }
-      const tmp = this.customOrder[leftSlot];
-      this.customOrder[leftSlot] = this.customOrder[draggedDisplaySlot];
-      this.customOrder[draggedDisplaySlot] = tmp;
+      const tmp = previewOrder[leftSlot];
+      previewOrder[leftSlot] = previewOrder[draggedDisplaySlot];
+      previewOrder[draggedDisplaySlot] = tmp;
       swapped = true;
       draggedDisplaySlot = leftSlot;
     }
-    while (draggedDisplaySlot < this.customOrder.length - 1) {
+    while (draggedDisplaySlot < previewOrder.length - 1) {
       const rightSlot = draggedDisplaySlot + 1;
       const rightCenter = slotCenters[rightSlot];
       if (draggedCenterX <= rightCenter) {
         break;
       }
-      const tmp = this.customOrder[rightSlot];
-      this.customOrder[rightSlot] = this.customOrder[draggedDisplaySlot];
-      this.customOrder[draggedDisplaySlot] = tmp;
+      const tmp = previewOrder[rightSlot];
+      previewOrder[rightSlot] = previewOrder[draggedDisplaySlot];
+      previewOrder[draggedDisplaySlot] = tmp;
       swapped = true;
       draggedDisplaySlot = rightSlot;
     }
@@ -706,9 +722,9 @@ export class HandSorter {
   }
 
   /**
-  * End the gesture. Returns a click, an ordinary drop, or an
-  * upward discard when the pointer finishes beyond the strict
-  * two-tile-height threshold.
+  * End the gesture. A changed non-discard drop commits the preview
+  * and disables sort; same-slot drops and upward discards leave both
+  * the current order and sort preference untouched.
    */
   pointerUp(): PointerUpResult {
     const drag = this.drag;
@@ -721,6 +737,17 @@ export class HandSorter {
     }
     if (isPastUpwardDiscardThreshold(drag)) {
       return { kind: "discard", rawIdx: drag.rawIdx };
+    }
+    if (drag.initialOrder !== null && drag.previewOrder !== null) {
+      const initialSlot = drag.initialOrder.indexOf(drag.rawIdx);
+      const droppedSlot = drag.previewOrder.indexOf(drag.rawIdx);
+      if (initialSlot >= 0 && droppedSlot >= 0 && initialSlot !== droppedSlot) {
+        this.customOrder = drag.previewOrder.slice();
+        if (this.sortFlag) {
+          this.sortFlag = false;
+          this.onSortFlagChange?.(false);
+        }
+      }
     }
     // Force the dragged tile to slide from its current
     // cursor-tracked x to its target slot x: we mark the track
@@ -806,6 +833,10 @@ function rawHandsEqual(
     }
   }
   return true;
+}
+
+function ordersEqual(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 /**

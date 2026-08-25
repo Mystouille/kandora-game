@@ -53,14 +53,73 @@ describe("HandSorter two-dimensional drag", () => {
 
   it("retains horizontal neighbour swapping", () => {
     const sorter = new HandSorter();
+    const sortChanges: boolean[] = [];
+    sorter.setOnSortFlagChange((on) => sortChanges.push(on));
     beginDrag(sorter);
 
     sorter.pointerMove(260, 300, [0, 1, 2]);
 
-    expect(sorter.isSortFlagOn()).toBe(false);
+    expect(sorter.isSortFlagOn()).toBe(true);
+    expect(sortChanges).toEqual([]);
     expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
     expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
       { rawIndices: [0, 2, 1], freshGap: false }
+    );
+    expect(sorter.pointerUp()).toEqual({ kind: "drop", rawIdx: 1 });
+    expect(sorter.isSortFlagOn()).toBe(false);
+    expect(sortChanges).toEqual([false]);
+    expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
+      { rawIndices: [0, 2, 1], freshGap: false }
+    );
+  });
+
+  it("keeps sort on when the tile returns to its original hand slot", () => {
+    const sorter = new HandSorter();
+    beginDrag(sorter);
+
+    sorter.pointerMove(260, 300, [0, 1, 2]);
+    expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
+    sorter.pointerMove(140, 300, [0, 1, 2]);
+    expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
+    expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
+      { rawIndices: [0, 1, 2], freshGap: false }
+    );
+
+    expect(sorter.pointerUp()).toEqual({ kind: "drop", rawIdx: 1 });
+    expect(sorter.isSortFlagOn()).toBe(true);
+  });
+
+  it("restores original X and order in the discard zone without changing sort", () => {
+    const sorter = new HandSorter();
+    const sortChanges: boolean[] = [];
+    sorter.setOnSortFlagChange((on) => sortChanges.push(on));
+    beginDrag(sorter);
+
+    sorter.pointerMove(260, 300, [0, 1, 2]);
+    expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
+    sorter.pointerMove(260, 99, [0, 1, 2]);
+    expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
+    expect(sorter.getRenderX(1, 100)).toBe(125);
+    expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
+      { rawIndices: [0, 1, 2], freshGap: false }
+    );
+
+    expect(sorter.pointerUp()).toEqual({ kind: "discard", rawIdx: 1 });
+    expect(sorter.isSortFlagOn()).toBe(true);
+    expect(sortChanges).toEqual([]);
+  });
+
+  it("preserves an existing custom order when discarding by drag", () => {
+    const sorter = new HandSorter();
+    sorter.setSortFlag(false, [2, 0, 1]);
+    beginDrag(sorter);
+
+    sorter.pointerMove(260, 99, [2, 0, 1]);
+    expect(sorter.maybeSwap([50, 150, 250])).toBe(false);
+    expect(sorter.pointerUp()).toEqual({ kind: "discard", rawIdx: 1 });
+    expect(sorter.isSortFlagOn()).toBe(false);
+    expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
+      { rawIndices: [2, 0, 1], freshGap: false }
     );
   });
 
