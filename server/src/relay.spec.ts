@@ -118,7 +118,11 @@ describe("MatchProcess relay", () => {
       "tenhou"
     );
     const spec = makeSpectator();
-    match.attachSpectator(spec.send);
+    match.attachSpectator(spec.send, {
+      userId: "viewer",
+      displayName: "Viewer",
+      role: "spectator",
+    });
     const events = relayEvents();
     for (const event of events) {
       match.injectRelayEvent(event);
@@ -131,6 +135,14 @@ describe("MatchProcess relay", () => {
     expect(
       handStart?.type === "hand_start" ? handStart.startingHands?.length : 0
     ).toBe(4);
+    expect(match.buildViewerState().viewers).toEqual([
+      {
+        userId: "viewer",
+        displayName: "Viewer",
+        role: "spectator",
+        delayMs: 5 * 60_000,
+      },
+    ]);
   });
 
   it("does not mark external players disconnected in room state", () => {

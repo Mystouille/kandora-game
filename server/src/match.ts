@@ -345,6 +345,7 @@ let INITIAL_BUFFER_MS = 20_000;
  * player. Any successful action or pong resets the counter.
  */
 const LIVENESS_PROBE_STRIKE_COUNT = 2;
+const TENHOU_RELAY_VIEWER_DELAY_MS = 5 * 60_000;
 
 /**
  * Pre-match ready-check duration. After `match_start` the server
@@ -2650,7 +2651,7 @@ export class MatchProcess {
       this.spectatorViewers.set(send, {
         ...viewer,
         role: "spectator",
-        delayMs: 0,
+        delayMs: this.relayMode ? TENHOU_RELAY_VIEWER_DELAY_MS : 0,
       });
     }
     // Hydrate the spectator with the latest room composition so

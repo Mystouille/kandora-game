@@ -16,10 +16,7 @@ import {
   GameWSConnectionDetailsError,
 } from "~/game/client/ws";
 import { mergeSeatNames } from "~/game/client/spectatorNames";
-import {
-  ViewerList,
-  ViewerListToggle,
-} from "~/game/components/ViewerList";
+import { ViewerList } from "~/game/components/ViewerList";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   replayArrivalSoundTarget,
@@ -914,12 +911,6 @@ export default function GameSpectateRoute({
         </span>
         <span className="opacity-60">·</span>
         <span className="opacity-75 truncate max-w-[200px]">{matchId}</span>
-        <ViewerListToggle
-          visible={showViewerList}
-          onToggle={() => {
-            setShowViewerList((visible) => !visible);
-          }}
-        />
         <button
           type="button"
           onClick={() => {
@@ -931,9 +922,18 @@ export default function GameSpectateRoute({
         </button>
         <span className="ml-2 opacity-50 text-xs">{conn}</span>
       </div>
-      {showViewerList && (
-        <ViewerList viewers={viewers} className="absolute left-2 top-12" />
-      )}
+      <div
+        className="pointer-events-none absolute left-2 top-12 z-30 flex items-start"
+        style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+      >
+        <ViewerList
+          viewers={viewers}
+          expanded={showViewerList}
+          onToggle={() => {
+            setShowViewerList((visible) => !visible);
+          }}
+        />
+      </div>
 
       {/* Right-side: seat / round selectors + nav buttons. */}
       <div className="absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base">

@@ -22,10 +22,7 @@ import {
 import { findTileAction } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
-import {
-  ViewerList,
-  ViewerListToggle,
-} from "~/game/components/ViewerList";
+import { ViewerList } from "~/game/components/ViewerList";
 import {
   advancePostHandPeekDiscardCount,
   shouldHidePostHandPeek,
@@ -1296,19 +1293,16 @@ export default function GameMatchRoute({
           <span className="pointer-events-none select-text">
             match {matchId}
           </span>
-          <ViewerListToggle
-            visible={showViewerList}
+        </div>
+        <div className="pointer-events-none absolute bottom-2 left-4 top-5 z-30 flex items-start">
+          <ViewerList
+            viewers={view.viewers}
+            expanded={showViewerList}
             onToggle={() => {
               setShowViewerList((visible) => !visible);
             }}
           />
         </div>
-        {showViewerList && (
-          <ViewerList
-            viewers={view.viewers}
-            className="absolute left-4 top-5"
-          />
-        )}
         {/* Reconnect overlay: shown whenever the server has
             flagged this seat as disconnected (network loss or a
             previous AFK self-report). The button sends
