@@ -8,10 +8,13 @@
  * for `idleGraceMs`, or when the decoded stream reaches `match_end`.
  */
 import { nanoid } from "nanoid";
-import { MatchProcess } from "../match";
+import { MatchProcess, winResultRevealDurationMs } from "../match";
 import type { MatchRepository } from "../repository";
 import { TenhouSpectateDecoder } from "~/game/adapters/tenhou/spectateDecoder";
+import type { GameEvent } from "~/game/protocol/messages";
 import type { TenhouClientFactory, TenhouSpectateClient } from "./tenhouClient";
+
+const FINAL_WIN_RESULT_HOLD_MS = 3_000;
 
 /** Thrown by {@link RelayController.start} when the concurrent-relay cap is hit. */
 export class RelayCapacityError extends Error {
@@ -29,7 +32,33 @@ interface RelaySession {
   client: TenhouSpectateClient | null;
   viewers: number;
   idleTimer: NodeJS.Timeout | null;
+  finalResultTimer: NodeJS.Timeout | null;
+  pendingWinRevealMs: number;
   closing: boolean;
+}
+
+function relayWinRevealDurationMs(
+  event: Extract<GameEvent, { type: "win" }>
+): number {
+  let visibleYakuCount = 0;
+  let hasUraYaku = false;
+  for (const [name, value] of Object.entries(event.yaku ?? {})) {
+    const count = parseInt(value, 10);
+    if (Number.isFinite(count) && count === 0) {
+      continue;
+    }
+    visibleYakuCount += 1;
+    if (name === "Ura Dora") {
+      hasUraYaku = true;
+    }
+  }
+  return (
+    winResultRevealDurationMs({
+      visibleYakuCount,
+      hasUraIndicators: (event.uraDoraIndicators?.length ?? 0) > 0,
+      hasUraYaku,
+    }) + FINAL_WIN_RESULT_HOLD_MS
+  );
 }
 
 export interface RelayControllerOptions {
@@ -86,6 +115,8 @@ export class RelayController {
       client: null,
       viewers: 0,
       idleTimer: null,
+      finalResultTimer: null,
+      pendingWinRevealMs: 0,
       closing: false,
     };
     session.client = this.opts.createClient(watchId, {
@@ -158,11 +189,36 @@ export class RelayController {
   }
 
   private onFrame(session: RelaySession, frame: Record<string, unknown>): void {
-    if (session.closing) {
+    if (session.closing || session.finalResultTimer) {
       return;
     }
     let ended = false;
     for (const event of session.decoder.ingest(frame)) {
+      if (event.type === "hand_start") {
+        session.pendingWinRevealMs = 0;
+      } else if (event.type === "win") {
+        session.pendingWinRevealMs = Math.max(
+          session.pendingWinRevealMs,
+          relayWinRevealDurationMs(event)
+        );
+      } else if (
+        event.type === "match_end" &&
+        session.pendingWinRevealMs > 0
+      ) {
+        const delayMs = session.pendingWinRevealMs;
+        session.pendingWinRevealMs = 0;
+        this.cancelIdle(session);
+        session.finalResultTimer = setTimeout(() => {
+          session.finalResultTimer = null;
+          if (session.closing) {
+            return;
+          }
+          session.match.injectRelayEvent(event);
+          this.teardown(session);
+        }, delayMs);
+        session.finalResultTimer.unref?.();
+        continue;
+      }
       session.match.injectRelayEvent(event);
       if (event.type === "match_end") {
         ended = true;
@@ -199,6 +255,10 @@ export class RelayController {
       matchId: session.matchId,
     });
     this.cancelIdle(session);
+    if (session.finalResultTimer) {
+      clearTimeout(session.finalResultTimer);
+      session.finalResultTimer = null;
+    }
     try {
       session.client?.stop();
     } catch {

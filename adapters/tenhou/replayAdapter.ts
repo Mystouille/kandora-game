@@ -47,6 +47,7 @@ import {
   type ReplayLog,
   type ReplaySeat,
 } from "~/game/replay/types";
+import { annotateWallSchedule } from "~/game/replay/annotateWallSchedule";
 import { generateTenhouWalls, type TenhouWall } from "./wallGenerator";
 import {
   tenhouYakuIdToLegacyHan,
@@ -723,7 +724,7 @@ export function parseTenhouReplayElements(
     startedAt,
     endedAt: startedAt, // Tenhou XML doesn't carry an end timestamp.
     seats,
-    events,
+    events: annotateWallSchedule(events),
     schemaVersion: REPLAY_LOG_SCHEMA_VERSION,
   };
 }

@@ -20,6 +20,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function withoutLiveDrawSchedules(events: GameEvent[]): GameEvent[] {
+  return events.map((event) => {
+    if (event.type !== "hand_start") {
+      return event;
+    }
+    const handStart = { ...event };
+    delete handStart.liveDrawSchedule;
+    return handStart;
+  });
+}
+
 export class TenhouSpectateDecoder {
   private unElement: TenhouReplayElement | null = null;
   private readonly handOrder: string[] = [];
@@ -92,7 +103,9 @@ export class TenhouSpectateDecoder {
     }
     let events: GameEvent[];
     try {
-      events = parseTenhouReplayElements(elements, this.sourceId).events;
+      events = withoutLiveDrawSchedules(
+        parseTenhouReplayElements(elements, this.sourceId).events
+      );
     } catch {
       return [];
     }

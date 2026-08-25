@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MatchProcess } from "../match";
 import { ephemeralMatchRepository } from "../repository";
+import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
 import { RelayController, RelayCapacityError } from "./relayController";
 import type {
   TenhouClientFactory,
@@ -92,6 +93,34 @@ const ryuukyokuFrame = (): Record<string, unknown> => ({
     },
   ],
 });
+const finalAgariFrame = (): Record<string, unknown> => ({
+  tag: "WGC",
+  childNodes: [
+    {
+      tag: "AGARI",
+      ba: "0,0",
+      hai: ids(0),
+      machi: "12",
+      ten: "30,1000,0",
+      yaku: "1,1",
+      doraHai: "4",
+      who: "0",
+      fromWho: "1",
+      sc: "250,10,250,-10,250,0,250,0",
+      owari: "260,0,240,0,250,0,250,0",
+    },
+  ],
+});
+
+function recordSpectatorEvents(match: MatchProcess): GameEvent[] {
+  const events: GameEvent[] = [];
+  match.attachSpectator((message: ServerMessage) => {
+    if (message.type === "event") {
+      events.push(...message.events);
+    }
+  });
+  return events;
+}
 
 describe("RelayController", () => {
   afterEach(() => {
@@ -144,6 +173,36 @@ describe("RelayController", () => {
     lastClient().handlers.onFrame(unFrame());
     lastClient().handlers.onFrame(initFrame());
     lastClient().handlers.onFrame(ryuukyokuFrame());
+    expect(matches.has(matchId)).toBe(false);
+    expect(lastClient().stopped).toBe(true);
+  });
+
+  it("shows the final win result before emitting match_end", () => {
+    vi.useFakeTimers();
+    const { controller, matches, lastClient } = harness();
+    const { matchId } = controller.start("WATCH-FINAL-WIN");
+    const match = matches.get(matchId);
+    expect(match).toBeDefined();
+    if (!match) {
+      return;
+    }
+    const events = recordSpectatorEvents(match);
+
+    lastClient().handlers.onFrame(unFrame());
+    lastClient().handlers.onFrame(initFrame());
+    lastClient().handlers.onFrame(finalAgariFrame());
+
+    expect(events.map((event) => event.type)).toContain("win");
+    expect(events.map((event) => event.type)).toContain("hand_end");
+    expect(events.map((event) => event.type)).not.toContain("match_end");
+    expect(matches.has(matchId)).toBe(true);
+    expect(lastClient().stopped).toBe(false);
+
+    vi.advanceTimersByTime(4_499);
+    expect(events.map((event) => event.type)).not.toContain("match_end");
+
+    vi.advanceTimersByTime(1);
+    expect(events.at(-1)?.type).toBe("match_end");
     expect(matches.has(matchId)).toBe(false);
     expect(lastClient().stopped).toBe(true);
   });
