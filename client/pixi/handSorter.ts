@@ -22,8 +22,8 @@
  *      movement previews reordering as its center crosses neighbours,
  *      but `customOrder` and `sortFlag` do not change until pointerup.
  *      A non-discard drop commits only when the tile changed slots.
- *      In the upward discard zone, the preview resets and the tile's X
- *      remains at its pointerdown position while Y follows the pointer.
+ *      In the upward discard zone, the preview resets so neighbouring
+ *      tiles return, while the dragged tile keeps following both axes.
  *
  *   3. Slide animation.
  *      Whenever a tile's *target* slot x changes (swap during
@@ -490,10 +490,9 @@ export class HandSorter {
       this.drag.promoted &&
       this.drag.rawIdx === rawIdx
     ) {
-      const x = isPastUpwardDiscardThreshold(this.drag)
-        ? this.drag.downTileLeftX
-        : this.drag.downTileLeftX +
-          (this.drag.currentLocalX - this.drag.downLocalX);
+      const x =
+        this.drag.downTileLeftX +
+        (this.drag.currentLocalX - this.drag.downLocalX);
       let track = this.tracks.get(rawIdx);
       if (track === undefined) {
         track = {

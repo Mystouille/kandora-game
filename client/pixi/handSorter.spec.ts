@@ -89,7 +89,7 @@ describe("HandSorter two-dimensional drag", () => {
     expect(sorter.isSortFlagOn()).toBe(true);
   });
 
-  it("restores original X and order in the discard zone without changing sort", () => {
+  it("restores original order but keeps pointer X in the discard zone", () => {
     const sorter = new HandSorter();
     const sortChanges: boolean[] = [];
     sorter.setOnSortFlagChange((on) => sortChanges.push(on));
@@ -99,7 +99,7 @@ describe("HandSorter two-dimensional drag", () => {
     expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
     sorter.pointerMove(260, 99, [0, 1, 2]);
     expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
-    expect(sorter.getRenderX(1, 100)).toBe(125);
+    expect(sorter.getRenderX(1, 100)).toBe(235);
     expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
       { rawIndices: [0, 1, 2], freshGap: false }
     );
