@@ -143,6 +143,9 @@ export class HandSorter {
   /** Drag state, or `null` when no pointer is down. */
   private drag: DragState | null = null;
 
+  /** Raw tile released as a drag-discard but not yet removed by authority. */
+  private releasedDiscardRawIdx: number | null = null;
+
   /** Listener fired whenever {@link sortFlag} flips (drag
    * promotion, explicit toggle, or boundary reset). Used by the
    * match route to keep the live-play menu's “Auto sort”
@@ -176,6 +179,7 @@ export class HandSorter {
     this.prevRawHand = null;
     this.tracks.clear();
     this.drag = null;
+    this.releasedDiscardRawIdx = null;
     if (prev !== initialSortFlag && this.onSortFlagChange) {
       this.onSortFlagChange(initialSortFlag);
     }
@@ -241,6 +245,11 @@ export class HandSorter {
     };
   }
 
+  /** Hide the released large hand tile until the discard event mutates hand. */
+  isReleasedDragDiscard(rawIdx: number): boolean {
+    return this.releasedDiscardRawIdx === rawIdx;
+  }
+
   /** True while `rawIdx` is the active tile and its pointer has crossed
    * the same strict upward threshold that {@link pointerUp} discards at. */
   isDraggedPastDiscardThreshold(rawIdx: number): boolean {
@@ -283,6 +292,22 @@ export class HandSorter {
       this.prevRawHand !== null &&
       !rawHandsEqual(this.prevRawHand, rawHand)
     ) {
+      const previousRawHand = this.prevRawHand;
+      // A draw can land while the pointer is still held. Keep both
+      // drag snapshots live by appending its raw slot immediately;
+      // otherwise the renderer has no slot in which to run draw-in.
+      if (
+        this.drag?.promoted &&
+        this.drag.initialOrder !== null &&
+        this.drag.previewOrder !== null &&
+        isPrefixAppend(previousRawHand, rawHand)
+      ) {
+        for (let rawIdx = previousRawHand.length; rawIdx < rawHand.length; rawIdx++) {
+          this.drag.initialOrder.push(rawIdx);
+          this.drag.previewOrder.push(rawIdx);
+        }
+      }
+      this.releasedDiscardRawIdx = null;
       // Skip the multiset remap when `rawHand` hasn't actually
       // mutated since the previous frame: `remapCustomOrder`'s
       // duplicate-disambiguation policy claims occurrences in
@@ -618,6 +643,7 @@ export class HandSorter {
     tileLongAxisLen: number;
     tileHeight: number;
   }): void {
+    this.releasedDiscardRawIdx = null;
     this.drag = {
       rawIdx: args.rawIdx,
       downLocalX: args.pointerLocalX,
@@ -752,6 +778,7 @@ export class HandSorter {
       return { kind: "click", rawIdx: drag.rawIdx };
     }
     if (isPastUpwardDiscardThreshold(drag)) {
+      this.releasedDiscardRawIdx = drag.rawIdx;
       return { kind: "discard", rawIdx: drag.rawIdx };
     }
     if (drag.initialOrder !== null && drag.previewOrder !== null) {
@@ -853,6 +880,16 @@ function rawHandsEqual(
 
 function ordersEqual(a: number[], b: number[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function isPrefixAppend(
+  previous: Array<string | null>,
+  current: Array<string | null>
+): boolean {
+  return (
+    current.length > previous.length &&
+    previous.every((tile, index) => current[index] === tile)
+  );
 }
 
 /**

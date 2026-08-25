@@ -5753,6 +5753,13 @@ export class TableRenderer {
         if (i === hiddenHandSlot) {
           return;
         }
+        if (
+          seat === 0 &&
+          rawIndices !== null &&
+          this.handSorter.isReleasedDragDiscard(rawIndices[i])
+        ) {
+          return;
+        }
         // Anchor top-left so hover tint reads directly off the sprite.
         const tileSprite = factory.create({
           atlasId: "ownHand",

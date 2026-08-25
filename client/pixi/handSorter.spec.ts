@@ -125,6 +125,43 @@ describe("HandSorter two-dimensional drag", () => {
     );
   });
 
+  it("keeps a released drag-discard hidden until the hand mutates", () => {
+    const sorter = new HandSorter();
+    sorter.reconcile(["1m", "2m", "3m"]);
+    beginDrag(sorter);
+    sorter.pointerMove(230, 99, [0, 1, 2]);
+
+    expect(sorter.pointerUp()).toEqual({ kind: "discard", rawIdx: 1 });
+    expect(sorter.isReleasedDragDiscard(1)).toBe(true);
+    sorter.reconcile(["1m", "2m", "3m"]);
+    expect(sorter.isReleasedDragDiscard(1)).toBe(true);
+
+    sorter.reconcile(["1m", "3m"]);
+    expect(sorter.isReleasedDragDiscard(1)).toBe(false);
+  });
+
+  it("appends a newly drawn tile to an active drag preview", () => {
+    const sorter = new HandSorter();
+    sorter.reconcile(["1m", "2m", "3m"]);
+    beginDrag(sorter);
+    sorter.pointerMove(260, 300, [0, 1, 2]);
+    expect(sorter.maybeSwap([50, 150, 250])).toBe(true);
+    expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
+      { rawIndices: [0, 2, 1], freshGap: false }
+    );
+
+    sorter.reconcile(["1m", "2m", "3m", "9m"]);
+    expect(
+      sorter.getDisplayOrder(
+        ["1m", "2m", "3m", "9m"],
+        true,
+        [0, 1, 2, 3]
+      )
+    ).toEqual({ rawIndices: [0, 2, 1, 3], freshGap: true });
+    expect(sorter.getRenderX(3, 350)).toBe(350);
+    expect(sorter.isDragging()).toBe(true);
+  });
+
   it("discards only beyond two tile heights toward the top", () => {
     const exactThreshold = new HandSorter();
     beginDrag(exactThreshold);
