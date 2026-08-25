@@ -22,6 +22,7 @@ describe("HandSorter two-dimensional drag", () => {
 
     expect(sorter.getRenderX(1, 100)).toBe(165);
     expect(sorter.getRenderY(1, 0)).toBe(-70);
+    expect(sorter.getDraggedTileCenter()).toEqual({ x: 190, y: -20 });
   });
 
   it("keeps a vertical-only drag out of the reorder path", () => {
@@ -105,6 +106,7 @@ describe("HandSorter two-dimensional drag", () => {
     );
 
     expect(sorter.pointerUp()).toEqual({ kind: "discard", rawIdx: 1 });
+    expect(sorter.getDraggedTileCenter()).toBeNull();
     expect(sorter.isSortFlagOn()).toBe(true);
     expect(sortChanges).toEqual([]);
   });

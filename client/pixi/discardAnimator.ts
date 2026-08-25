@@ -144,6 +144,9 @@ export interface DiscardAnimation {
   /** Phase-A only: source slot in the pre-discard hand layout.
    * `null` during phase B (we don't need it anymore). */
   sourceSlot: { handIndex: number; handLength: number } | null;
+  /** Optional phase-A source center captured from a drag release,
+   * expressed in focused hand-container coordinates. */
+  draggedSourceCenter: { x: number; y: number } | null;
   /** Phase-A only: snapshot of the pre-discard hand to display
    * while the slot animates. Cleared on phase-B transition so
    * the renderer falls back to the live `view.hands[seat]`. */
@@ -233,7 +236,11 @@ export class DiscardAnimator {
    * sources from the correct slot. */
   private readonly nextDiscardSourceHints = new Map<
     number,
-    { tile: string; ord: number }
+    {
+      tile: string;
+      ord: number;
+      draggedSourceCenter: { x: number; y: number } | null;
+    }
   >();
 
   constructor(options: AnimatorOptions = {}) {
@@ -296,16 +303,26 @@ export class DiscardAnimator {
   }
 
   /**
-   * Stash a hint that the player's *next* discard from `seat`
+  * Stash a hint that the player's *next* discard from `seat`
    * originated at the `ord`-th visible occurrence of `tile` in
    * their current display order (0-based). The hint is
    * consumed by the next phase-A schedule for that seat and
    * lets {@link pickHiddenSlot} pick the actually-clicked copy
    * of a duplicate tile instead of falling back to "first
-   * occurrence in display order".
+  * occurrence in display order". Drag releases additionally carry
+  * the floating hand tile's center so phase A can start there.
    */
-  setNextDiscardSourceHint(seat: number, tile: string, ord: number): void {
-    this.nextDiscardSourceHints.set(seat, { tile, ord });
+  setNextDiscardSourceHint(
+    seat: number,
+    tile: string,
+    ord: number,
+    draggedSourceCenter: { x: number; y: number } | null = null
+  ): void {
+    this.nextDiscardSourceHints.set(seat, {
+      tile,
+      ord,
+      draggedSourceCenter,
+    });
   }
 
   /** One-shot: skip animation diffing for the next
@@ -316,6 +333,7 @@ export class DiscardAnimator {
     this.snapNextFlag = true;
     this.anims.clear();
     this.drawAnims.clear();
+    this.nextDiscardSourceHints.clear();
     this.sequenceFreeMs = 0;
   }
 
@@ -328,6 +346,7 @@ export class DiscardAnimator {
     this.prevView = null;
     this.prevHandLayouts = makeEmptyHandCache();
     this.currentHandLayouts = makeEmptyHandCache();
+    this.nextDiscardSourceHints.clear();
     this.snapNextFlag = false;
   }
 
@@ -469,6 +488,7 @@ export class DiscardAnimator {
               handIndex: sourceSlot,
               handLength: prevLayout.sorted.length,
             },
+            draggedSourceCenter: hint?.draggedSourceCenter ?? null,
             phaseASnapshot: makePhaseASnapshot(prevLayout, sourceSlot),
             landSoundPlayed: false,
           });

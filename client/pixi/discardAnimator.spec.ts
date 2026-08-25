@@ -487,5 +487,66 @@ describe("DiscardAnimator", () => {
     );
 
     expect(animator.getAnim(0)?.sourceSlot?.handIndex).toBe(0);
+    expect(animator.getAnim(0)?.draggedSourceCenter).toBeNull();
+  });
+
+  it("carries a dragged tile center into the next phase-A discard", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    const before = makeView({
+      hands: [["1m", "2m", "3m"], [], [], []],
+    });
+    animator.beginFrame(before);
+    recordLayouts(animator, [
+      { sorted: ["1m", "2m", "3m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+    animator.setNextDiscardSourceHint(0, "2m", 0, {
+      x: 240,
+      y: -135,
+    });
+
+    animator.beginFrame(
+      makeView({
+        hands: [["1m", "3m"], [], [], []],
+        discards: [["2m"], [], [], []],
+        discardSources: [["hand"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+
+    expect(animator.getAnim(0)?.sourceSlot?.handIndex).toBe(1);
+    expect(animator.getAnim(0)?.draggedSourceCenter).toEqual({
+      x: 240,
+      y: -135,
+    });
+  });
+
+  it("clears a pending dragged source center on reset", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    animator.setNextDiscardSourceHint(0, "2m", 0, { x: 240, y: -135 });
+    animator.reset();
+    const before = makeView({ hands: [["1m", "2m"], [], [], []] });
+    animator.beginFrame(before);
+    recordLayouts(animator, [
+      { sorted: ["1m", "2m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    animator.beginFrame(
+      makeView({
+        hands: [["1m"], [], [], []],
+        discards: [["2m"], [], [], []],
+        discardSources: [["hand"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+
+    expect(animator.getAnim(0)?.draggedSourceCenter).toBeNull();
   });
 });

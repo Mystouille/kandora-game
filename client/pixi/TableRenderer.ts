@@ -1110,7 +1110,12 @@ export class TableRenderer {
   /** Action thunk recorded by the seat-0 pointerdown handler. Invoked
    * for a quick click or an upward-discard release, preserving the
    * original discard/riichi closure context for the physical tile. */
-  private pendingHandClickCallback: ((rawIdx: number) => void) | null = null;
+  private pendingHandClickCallback:
+    | ((
+        rawIdx: number,
+        draggedSourceCenter: { x: number; y: number } | null
+      ) => void)
+    | null = null;
   /** Cached previous-frame view, used only by the focused-hand
    * sorter to detect hand boundaries (a `totalDiscards` reset).
    * Kept separate from `lastView` because the discard animator's
@@ -1474,6 +1479,7 @@ export class TableRenderer {
         return;
       }
       updateHandDragPointer(e.clientX, e.clientY);
+      const draggedSourceCenter = this.handSorter.getDraggedTileCenter();
       const result = this.handSorter.pointerUp();
       if (result.kind === "click" || result.kind === "discard") {
         // Reproduce the legacy click-to-discard semantics. We
@@ -1483,7 +1489,10 @@ export class TableRenderer {
         // surrounding closure context).
         const cb = this.pendingHandClickCallback;
         if (cb) {
-          cb(result.rawIdx);
+          cb(
+            result.rawIdx,
+            result.kind === "discard" ? draggedSourceCenter : null
+          );
         }
       }
       this.pendingHandClickCallback = null;
@@ -5855,7 +5864,10 @@ export class TableRenderer {
             // if the gesture stays under the drag-promotion
             // threshold. If it promotes to a drag, the thunk
             // is discarded and the sorter handles the drop.
-            const fireClick = (discardRawIdx: number): void => {
+            const fireClick = (
+              discardRawIdx: number,
+              draggedSourceCenter: { x: number; y: number } | null
+            ): void => {
               if (inRiichiMode) {
                 if (riichiLegal && this.onActionClick) {
                   this.riichiMode = false;
@@ -5890,7 +5902,8 @@ export class TableRenderer {
                 this.animator.setNextDiscardSourceHint(
                   seat,
                   localTile,
-                  currentOrd
+                  currentOrd,
+                  draggedSourceCenter
                 );
                 this.onTileClick({
                   seat,
@@ -6299,18 +6312,21 @@ export class TableRenderer {
         posX = nudgedX + (finalX - nudgedX) * progress;
         posY = nudgedY + (finalY - nudgedY) * progress;
       } else {
-        const slotIdx = seatDiscardAnim.sourceSlot?.handIndex ?? 0;
-        const source = this.computeHandSlotInDiscardLocal(
-          handContainer,
-          discardContainer,
-          seat,
-          slotIdx,
-          layout,
-          isFreshlyDrawn,
-          hand.length,
-          isSideHand,
-          sideHandRevealed
-        );
+        const source = seatDiscardAnim.draggedSourceCenter
+          ? discardContainer.toLocal(
+              handContainer.toGlobal(seatDiscardAnim.draggedSourceCenter)
+            )
+          : this.computeHandSlotInDiscardLocal(
+              handContainer,
+              discardContainer,
+              seat,
+              seatDiscardAnim.sourceSlot?.handIndex ?? 0,
+              layout,
+              isFreshlyDrawn,
+              hand.length,
+              isSideHand,
+              sideHandRevealed
+            );
         posX = source.x + (nudgedX - source.x) * progress;
         posY = source.y + (nudgedY - source.y) * progress;
       }

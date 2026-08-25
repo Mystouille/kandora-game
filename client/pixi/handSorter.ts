@@ -224,6 +224,23 @@ export class HandSorter {
     return this.drag !== null && this.drag.promoted ? this.drag.rawIdx : null;
   }
 
+  /** Center of the floating hand tile in hand-container coordinates. */
+  getDraggedTileCenter(): { x: number; y: number } | null {
+    if (this.drag === null || !this.drag.promoted) {
+      return null;
+    }
+    return {
+      x:
+        this.drag.downTileLeftX +
+        (this.drag.currentLocalX - this.drag.downLocalX) +
+        this.drag.tileLongAxisLen / 2,
+      y:
+        this.drag.downTileTopY +
+        (this.drag.currentLocalY - this.drag.downLocalY) +
+        this.drag.tileHeight / 2,
+    };
+  }
+
   /** True while `rawIdx` is the active tile and its pointer has crossed
    * the same strict upward threshold that {@link pointerUp} discards at. */
   isDraggedPastDiscardThreshold(rawIdx: number): boolean {
