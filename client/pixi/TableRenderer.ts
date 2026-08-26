@@ -5988,11 +5988,10 @@ export class TableRenderer {
             if (event.button === 2) {
               return;
             }
-            // Stop pointer-based hover transfer without clearing the
-            // current sprite's red tint. A click keeps that visual cue
-            // until pendingDiscard takes over; a promoted drag causes
-            // a normal rerender and clears it.
-            this.focusedHandPointerClient = null;
+            // Keep the cached mouse position through the click. The
+            // renderer rebuilds the hand after pointerup and re-hit-tests
+            // this point, so a stationary cursor retains its hover tint.
+            // Canvas leave and touch input still clear the pointer.
             // The click semantics (riichi-tile-select vs
             // discard) are captured into a thunk and stashed
             // for the window-level pointerup handler to fire
