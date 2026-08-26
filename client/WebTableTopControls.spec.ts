@@ -18,6 +18,8 @@ describe("WebTableTopControls", () => {
     expect(html).toContain('role="switch"');
     expect(html).toContain('aria-checked="false"');
     expect(html).toContain("Compact table");
+    expect(html).toContain("left-0.5");
+    expect(html).toContain("translate-x-0");
     expect(html).toContain('aria-label="Quit replay"');
   });
 
@@ -32,5 +34,7 @@ describe("WebTableTopControls", () => {
     );
 
     expect(html).toContain('aria-checked="true"');
+    expect(html).toContain("left-0.5");
+    expect(html).toContain("translate-x-4");
   });
 });
