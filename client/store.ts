@@ -89,6 +89,13 @@ export type ConnStatus =
    * uses this to suppress the live-connection HUD line. */
   | "replay";
 
+export interface PendingDiscard {
+  seat: Seat;
+  tile: Tile;
+  /** Focused-hand display slot, used to distinguish duplicate tiles. */
+  displayIndex?: number;
+}
+
 export interface MatchView {
   matchId: string | null;
   mySeat: Seat | null;
@@ -160,8 +167,8 @@ export interface MatchView {
   legalActions: LegalAction[];
   lastSeq: number;
   conn: ConnStatus;
-  /** Optimistic discard markers; tile shown gray until server confirms. */
-  pendingDiscard: { seat: Seat; tile: Tile } | null;
+  /** Optimistic marker highlighted until the server confirms the discard. */
+  pendingDiscard: PendingDiscard | null;
   /**
    * Unix-ms deadline for the current legal-action window, as sent
    * by the server in the most recent `snapshot` / `event` frame.
@@ -423,7 +430,7 @@ interface MatchStore extends MatchView {
   applyEvent: (event: GameEvent, seq: number) => void;
   hydrateSnapshot: (state: SnapshotState, seq: number) => void;
   setLegalActions: (actions: LegalAction[]) => void;
-  setPendingDiscard: (p: { seat: Seat; tile: Tile } | null) => void;
+  setPendingDiscard: (p: PendingDiscard | null) => void;
   setActionDeadline: (deadline: number | null) => void;
   setActionBufferMs: (ms: number | null) => void;
   setReadyCheck: (

@@ -17,6 +17,7 @@ import {
   focusedHandTileMetrics,
   formatTableScore,
   handResultDealerSeat,
+  isPendingDiscardDisplaySlot,
   layoutMeldStripGroups,
   layoutTouchingMeldColumn,
   MOBILE_RIICHI_STICK,
@@ -614,6 +615,22 @@ describe("canInteractWithFocusedHand", () => {
 
   it("allows hand interaction during an actual game", () => {
     expect(canInteractWithFocusedHand({ conn: "open" })).toBe(true);
+  });
+});
+
+describe("isPendingDiscardDisplaySlot", () => {
+  it("highlights only the clicked display slot among duplicate tiles", () => {
+    const pending = { seat: 0 as const, tile: "5m", displayIndex: 3 };
+
+    expect(isPendingDiscardDisplaySlot(pending, 0, "5m", 2)).toBe(false);
+    expect(isPendingDiscardDisplaySlot(pending, 0, "5m", 3)).toBe(true);
+  });
+
+  it("falls back to seat and tile when no display slot was recorded", () => {
+    const pending = { seat: 0 as const, tile: "9m" };
+
+    expect(isPendingDiscardDisplaySlot(pending, 0, "9m", 13)).toBe(true);
+    expect(isPendingDiscardDisplaySlot(pending, 1, "9m", 13)).toBe(false);
   });
 });
 

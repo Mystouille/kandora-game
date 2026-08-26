@@ -208,6 +208,8 @@ export class DiscardAnimator {
     { length: SEAT_COUNT },
     () => null
   );
+  /** Whether this host requires the live draw-to-discard viewing beat. */
+  private minimumDrawToDiscardDelayEnabled = false;
   /** Live-spectator serial timeline (see {@link setSequenced}). */
   private sequenced = false;
   /** Earliest wall-clock ms the next sequenced animation may start.
@@ -267,6 +269,15 @@ export class DiscardAnimator {
     }
   }
 
+  /** Enable the live-only minimum between a draw and its discard. */
+  setMinimumDrawToDiscardDelayEnabled(enabled: boolean): void {
+    if (this.minimumDrawToDiscardDelayEnabled === enabled) {
+      return;
+    }
+    this.minimumDrawToDiscardDelayEnabled = enabled;
+    this.lastDrawStartMs.fill(null);
+  }
+
   /**
    * Enable / disable the live-spectator "sequenced" timeline. When
    * on, discards hold at a hover and the following draw is delayed
@@ -280,6 +291,8 @@ export class DiscardAnimator {
       return;
     }
     this.sequenced = flag;
+    this.anims.clear();
+    this.drawAnims.clear();
     this.sequenceFreeMs = 0;
     this.lastDrawStartMs.fill(null);
   }
@@ -487,7 +500,9 @@ export class DiscardAnimator {
             sourceKnown: discardSource !== null,
             hint,
           });
-          const drawStartMs = this.lastDrawStartMs[seat];
+          const drawStartMs = this.minimumDrawToDiscardDelayEnabled
+            ? this.lastDrawStartMs[seat]
+            : null;
           const earliestDiscardStartMs =
             drawStartMs === null
               ? now
@@ -535,7 +550,9 @@ export class DiscardAnimator {
           const startMs = this.sequenced
             ? this.schedule(now, DRAW_SLIDE_MS)
             : now;
-          this.lastDrawStartMs[seat] = startMs;
+          this.lastDrawStartMs[seat] = this.minimumDrawToDiscardDelayEnabled
+            ? startMs
+            : null;
           this.drawAnims.set(seat, {
             hideFrom: now,
             startMs,
@@ -665,6 +682,12 @@ export class DiscardAnimator {
   /** Lookup the active animation for `seat`, if any. */
   getAnim(seat: number): DiscardAnimation | null {
     return this.anims.get(seat) ?? null;
+  }
+
+  /** True while a confirmed discard is held at its hand source. */
+  isDiscardWaitingToStart(seat: number): boolean {
+    const anim = this.anims.get(seat);
+    return anim !== undefined && this.now() < anim.startMs;
   }
 
   /** Normalized progress 0..1 of the seat's animation, post-easing. */

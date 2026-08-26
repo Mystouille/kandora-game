@@ -859,7 +859,11 @@ export default function GameMatchRoute({
           if (!stillLegal) {
             return;
           }
-          live.setPendingDiscard({ seat: mySeat, tile: drawn });
+          live.setPendingDiscard({
+            seat: mySeat,
+            tile: drawn,
+            displayIndex: hand.length - 1,
+          });
           fire(discard.id);
         }, DRAW_TO_DISCARD_DELAY_MS);
       }
@@ -1035,6 +1039,7 @@ export default function GameMatchRoute({
             ? "compact"
             : "standard",
         });
+        renderer.setMinimumDrawToDiscardDelayEnabled(true);
         void renderer.mount(container).then(() => {
           if (cancelled) {
             renderer.destroy();
@@ -1047,14 +1052,13 @@ export default function GameMatchRoute({
           renderer.setResultPanelBoundsListener((rect) => {
             setResultPanelBounds(rect);
           });
-          renderer.setOnTileClick(({ tile, discardSource }) => {
+          renderer.setOnTileClick(({ index, tile, discardSource }) => {
             // Optimistic discard for own seat; the server confirmation
             // (a `discard` event) will clear `pendingDiscard`.
             const state = useMatchStore.getState();
             if (state.mySeat === null) {
               return;
             }
-            state.setPendingDiscard({ seat: state.mySeat, tile });
             // Find the matching legal action and forward it.
             const legal = findTileAction(
               state.legalActions,
@@ -1063,6 +1067,11 @@ export default function GameMatchRoute({
               discardSource
             );
             if (legal && wsRef.current) {
+              state.setPendingDiscard({
+                seat: state.mySeat,
+                tile,
+                displayIndex: index,
+              });
               wsRef.current.act(legal.id);
             }
           });
@@ -1222,7 +1231,11 @@ export default function GameMatchRoute({
       }
       const discard = findTileAction(legals, "discard", drawn, "draw");
       if (discard) {
-        state.setPendingDiscard({ seat: mySeat, tile: drawn });
+        state.setPendingDiscard({
+          seat: mySeat,
+          tile: drawn,
+          displayIndex: hand.length - 1,
+        });
         ws.act(discard.id);
       }
     };

@@ -1006,6 +1006,21 @@ export function canInteractWithFocusedHand(
   return view.conn !== "replay";
 }
 
+export function isPendingDiscardDisplaySlot(
+  pendingDiscard: MatchView["pendingDiscard"],
+  seat: number,
+  tile: string | null,
+  displayIndex: number
+): boolean {
+  return Boolean(
+    pendingDiscard &&
+      pendingDiscard.seat === seat &&
+      pendingDiscard.tile === tile &&
+      (pendingDiscard.displayIndex === undefined ||
+        pendingDiscard.displayIndex === displayIndex)
+  );
+}
+
 export class TableRenderer {
   private app: Application | null = null;
   private root: Container | null = null;
@@ -1852,6 +1867,10 @@ export class TableRenderer {
   setAnimationsEnabled(flag: boolean): void {
     this.animator.setEnabled(flag);
     this.meldAnimator.setEnabled(flag);
+  }
+
+  setMinimumDrawToDiscardDelayEnabled(enabled: boolean): void {
+    this.animator.setMinimumDrawToDiscardDelayEnabled(enabled);
   }
 
   /**
@@ -5920,15 +5939,24 @@ export class TableRenderer {
               DRAG_DISCARD_READY_DARKEN_FACTOR
             );
           }
+          if (
+            isPendingDiscardDisplaySlot(
+              view.pendingDiscard,
+              seat,
+              tile,
+              i
+            )
+          ) {
+            tileSprite.tint = HAND_HOVER_TINT;
+          }
           tileSprite.eventMode = "static";
           tileSprite.cursor = "pointer";
           // Light-red hover highlight on the focused hand. Tint
           // applies only to Sprite children (seat 0's tileSprite
           // is a Sprite directly), and we capture the pre-hover
           // tint so wait-tinted tiles restore correctly on out.
-          // No persistent style change on click — the optimistic
-          // pending-discard tint that used to live here was
-          // removed at the user's request.
+          // Pending discards retain this highlight through the
+          // server round trip, until phase A hides the source slot.
           if ("tint" in tileSprite) {
             const tintable = tileSprite as unknown as { tint: number };
             const originalTint = tintable.tint;
@@ -5960,11 +5988,11 @@ export class TableRenderer {
             if (event.button === 2) {
               return;
             }
-            // The hand is about to mutate. Clear both the tint and
-            // cached pointer so a replacement tile under a
-            // stationary cursor is not highlighted until the mouse
-            // genuinely moves again.
-            this.clearFocusedHandHover(true);
+            // Stop pointer-based hover transfer without clearing the
+            // current sprite's red tint. A click keeps that visual cue
+            // until pendingDiscard takes over; a promoted drag causes
+            // a normal rerender and clears it.
+            this.focusedHandPointerClient = null;
             // The click semantics (riichi-tile-select vs
             // discard) are captured into a thunk and stashed
             // for the window-level pointerup handler to fire
@@ -6462,6 +6490,12 @@ export class TableRenderer {
         )
       ) {
         sprite.tint = TSUMOGIRI_FRESH_TINT;
+      }
+      if (
+        seat === view.mySeat &&
+        this.animator.isDiscardWaitingToStart(seat)
+      ) {
+        sprite.tint = HAND_HOVER_TINT;
       }
       const wrap = new Container();
       wrap.addChild(sprite);

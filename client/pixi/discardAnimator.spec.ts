@@ -54,6 +54,7 @@ describe("DiscardAnimator", () => {
     (sequenced) => {
       let now = 0;
       const animator = new DiscardAnimator({ now: () => now });
+      animator.setMinimumDrawToDiscardDelayEnabled(true);
       animator.setSequenced(sequenced);
       animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
       recordLayouts(animator, [
@@ -88,12 +89,154 @@ describe("DiscardAnimator", () => {
       );
 
       expect(animator.getAnim(0)?.startMs).toBe(MIN_DRAW_TO_DISCARD_MS);
+      expect(animator.isDiscardWaitingToStart(0)).toBe(true);
       now = MIN_DRAW_TO_DISCARD_MS - 1;
       expect(animator.getProgress(0)).toBe(0);
       now = MIN_DRAW_TO_DISCARD_MS + 1;
+      expect(animator.isDiscardWaitingToStart(0)).toBe(false);
       expect(animator.getProgress(0)).toBeGreaterThan(0);
     }
   );
+
+  it("starts immediately when replay/manual-history delay is disabled", () => {
+    let now = 0;
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+    animator.beginFrame(
+      makeView({
+        hands: [["1m", "9m"], [], [], []],
+        freshlyDrawnSeat: 0,
+      })
+    );
+    recordLayouts(animator, [
+      { sorted: ["1m", "9m"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    now = 100;
+    animator.beginFrame(
+      makeView({
+        hands: [["1m"], [], [], []],
+        discards: [["9m"], [], [], []],
+        discardSources: [["draw"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+
+    expect(animator.getAnim(0)?.startMs).toBe(now);
+  });
+
+  it("starts immediately after live pacing is disabled for manual history", () => {
+    let now = 0;
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setMinimumDrawToDiscardDelayEnabled(true);
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+    animator.beginFrame(
+      makeView({
+        hands: [["1m", "9m"], [], [], []],
+        freshlyDrawnSeat: 0,
+      })
+    );
+    recordLayouts(animator, [
+      { sorted: ["1m", "9m"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    animator.setMinimumDrawToDiscardDelayEnabled(false);
+    now = 100;
+    animator.beginFrame(
+      makeView({
+        hands: [["1m"], [], [], []],
+        discards: [["9m"], [], [], []],
+        discardSources: [["draw"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+
+    expect(animator.getAnim(0)?.startMs).toBe(now);
+  });
+
+  it("clears queued live animations when sequencing is disabled", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    animator.setSequenced(true);
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+    animator.beginFrame(
+      makeView({
+        hands: [[], [], [], []],
+        discards: [["1m"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+    expect(animator.getAnim(0)).not.toBeNull();
+
+    animator.setSequenced(false);
+
+    expect(animator.getAnim(0)).toBeNull();
+    expect(animator.hasActive()).toBe(false);
+  });
+
+  it("does not add another wait after the live minimum has elapsed", () => {
+    let now = 0;
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setMinimumDrawToDiscardDelayEnabled(true);
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+    animator.beginFrame(
+      makeView({
+        hands: [["1m", "9m"], [], [], []],
+        freshlyDrawnSeat: 0,
+      })
+    );
+    recordLayouts(animator, [
+      { sorted: ["1m", "9m"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    now = MIN_DRAW_TO_DISCARD_MS + 100;
+    animator.beginFrame(
+      makeView({
+        hands: [["1m"], [], [], []],
+        discards: [["9m"], [], [], []],
+        discardSources: [["draw"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+
+    expect(animator.getAnim(0)?.startMs).toBe(now);
+  });
 
   it("snaps a discontinuous sequenced jump without retaining hand state or backlog", () => {
     const animator = new DiscardAnimator({ now: () => 0 });

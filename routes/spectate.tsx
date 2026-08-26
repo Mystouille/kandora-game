@@ -334,11 +334,20 @@ export default function GameSpectateRoute({
         // (discard slides + hovers, then the draw slides in as it
         // settles). The discard/draw SFX are retimed to the slide
         // landings here, so the per-event sound loop below skips them.
-        renderer.setDrawSequencing(true, {
-          onDiscardLand: (_seat, isRiichiDeclaration) =>
-            playGameSound(isRiichiDeclaration ? "riichi" : "discard"),
-          onDrawLand: () => playGameSound("draw"),
-        });
+        const followLive = liveRef.current;
+        renderer.setMinimumDrawToDiscardDelayEnabled(followLive);
+        renderer.setDrawSequencing(
+          followLive,
+          followLive
+            ? {
+                onDiscardLand: (_seat, isRiichiDeclaration) =>
+                  playGameSound(
+                    isRiichiDeclaration ? "riichi" : "discard"
+                  ),
+                onDrawLand: () => playGameSound("draw"),
+              }
+            : undefined
+        );
         renderer.setOnRenderRequest(() => {
           const r = rendererRef.current;
           const args = latestRenderRef.current;
@@ -664,7 +673,10 @@ export default function GameSpectateRoute({
       return;
     }
     const event = events[playIndex];
-    if (!event || event.type === "draw" || event.type === "discard") {
+    if (
+      !event ||
+      (live && (event.type === "draw" || event.type === "discard"))
+    ) {
       return;
     }
     try {
@@ -673,7 +685,25 @@ export default function GameSpectateRoute({
       // eslint-disable-next-line no-console
       console.error("[game] spectator sound dispatch threw", err);
     }
-  }, [playIndex, events]);
+  }, [playIndex, events, live]);
+
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) {
+      return;
+    }
+    renderer.setMinimumDrawToDiscardDelayEnabled(live);
+    renderer.setDrawSequencing(
+      live,
+      live
+        ? {
+            onDiscardLand: (_seat, isRiichiDeclaration) =>
+              playGameSound(isRiichiDeclaration ? "riichi" : "discard"),
+            onDrawLand: () => playGameSound("draw"),
+          }
+        : undefined
+    );
+  }, [live]);
 
   useEffect(() => {
     const r = rendererRef.current;
