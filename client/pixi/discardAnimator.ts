@@ -474,6 +474,11 @@ export class DiscardAnimator {
 
         // --- (a) New discard? Schedule phase A. ----------------
         if (currLen > prevLen && currLen > 0) {
+          // A rapid replay step can advance from draw to discard before
+          // the 300ms draw-in slide finishes. The discard supersedes that
+          // overlay; retaining it makes the revealed tile appear to wait
+          // for the old draw clock before phase A reads as moving.
+          this.drawAnims.delete(seat);
           const lastIdx = currLen - 1;
           const tile = currDiscards[lastIdx];
           const discardSource = view.discardSources?.[seat]?.[lastIdx] ?? null;

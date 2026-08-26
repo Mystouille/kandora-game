@@ -6,6 +6,7 @@ import {
   actionButtonStyle,
   ankanTilesForDisplay,
   buildResultYakuEntries,
+  canApplyFocusedHandHover,
   canInteractWithFocusedHand,
   centerCounterCells,
   centerCounterSpecs,
@@ -14,6 +15,7 @@ import {
   centerInfoInnerRect,
   CENTER_DORA_INDICATOR_GAP,
   darkenTileTint,
+  discardContainerZIndex,
   focusedHandTileMetrics,
   formatTableScore,
   handResultDealerSeat,
@@ -300,11 +302,11 @@ describe("mobile table presentation", () => {
 describe("riichi stick presentation", () => {
   it("scales every web stick dimension and visual proportion by 80 percent", () => {
     expect(WEB_RIICHI_STICK).toEqual({
-      width: 90 * 1.8,
-      height: 8 * 1.8,
-      gap: 10 * 1.8,
-      dotRadius: 2.5 * 1.8,
-      cornerRadius: 3 * 1.8,
+      width: 90 * 1.35,
+      height: 8 * 1.35,
+      gap: 10 * 1.35,
+      dotRadius: 2.5 * 1.35,
+      cornerRadius: 3 * 1.35,
     });
     expect(riichiStickMetrics("standard")).toBe(WEB_RIICHI_STICK);
   });
@@ -343,6 +345,17 @@ describe("web table layouts", () => {
     );
 
     expect(TEAM_LOGO_Z_INDEX).toBeLessThan(Math.min(...wallLayers));
+  });
+
+  it("layers discard ponds from top to sides to focused player", () => {
+    const top = discardContainerZIndex(2);
+    const right = discardContainerZIndex(1);
+    const left = discardContainerZIndex(3);
+    const bottom = discardContainerZIndex(0);
+
+    expect(right).toBe(top + 1);
+    expect(left).toBe(top + 2);
+    expect(bottom).toBe(top + 3);
   });
 
   it("halves the player-local top gap to the discard on the right", () => {
@@ -615,6 +628,16 @@ describe("canInteractWithFocusedHand", () => {
 
   it("allows hand interaction during an actual game", () => {
     expect(canInteractWithFocusedHand({ conn: "open" })).toBe(true);
+  });
+});
+
+describe("canApplyFocusedHandHover", () => {
+  it("retains hover while a click is held below the drag threshold", () => {
+    expect(canApplyFocusedHandHover(false)).toBe(true);
+  });
+
+  it("suppresses hover after the gesture promotes to a drag", () => {
+    expect(canApplyFocusedHandHover(true)).toBe(false);
   });
 });
 

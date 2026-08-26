@@ -300,7 +300,7 @@ interface RiichiStickMetrics {
   cornerRadius: number;
 }
 
-const WEB_RIICHI_STICK_SCALE = 1.8;
+const WEB_RIICHI_STICK_SCALE = 1.35;
 
 export const WEB_RIICHI_STICK: RiichiStickMetrics = {
   width: 90 * WEB_RIICHI_STICK_SCALE,
@@ -543,7 +543,7 @@ const SHADOW_LAYER_Z = -1_000_000;
 /** Root z for a flying discard's drop shadow: below every board tile
  * (all >= 0) but above the felt mats (-10), so a pond lifted above the
  * walls while a tile flies can't drag its shadow over a neighbour. */
-const DISCARD_FLY_SHADOW_Z = -5;
+const DISCARD_SHADOW_Z = -5;
 
 const BG_COLOR: ColorSource = 0x2a2a2a;
 const FELT_COLOR: ColorSource = 0x007f0e;
@@ -571,6 +571,21 @@ const RESULT_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS = 750;
 
 export function wallZIndex(seat: number): number {
   return seat === 0 ? 2 : seat === 2 ? 0 : 1;
+}
+
+const DISCARD_LAYER_BASE_Z = 3;
+
+export function discardContainerZIndex(seat: Seat): number {
+  if (seat === 2) {
+    return DISCARD_LAYER_BASE_Z;
+  }
+  if (seat === 1) {
+    return DISCARD_LAYER_BASE_Z + 1;
+  }
+  if (seat === 3) {
+    return DISCARD_LAYER_BASE_Z + 2;
+  }
+  return DISCARD_LAYER_BASE_Z + 3;
 }
 
 type SeatRects = readonly [Rect, Rect, Rect, Rect];
@@ -1004,6 +1019,10 @@ export function canInteractWithFocusedHand(
   view: Pick<MatchView, "conn">
 ): boolean {
   return view.conn !== "replay";
+}
+
+export function canApplyFocusedHandHover(isDragging: boolean): boolean {
+  return !isDragging;
 }
 
 export function isPendingDiscardDisplaySlot(
@@ -1794,7 +1813,11 @@ export class TableRenderer {
     const app = this.app;
     const pointer = this.focusedHandPointerClient;
     let next: FocusedHandHoverTarget | null = null;
-    if (app && pointer && !this.handSorter.hasPointerDown()) {
+    if (
+      app &&
+      pointer &&
+      canApplyFocusedHandHover(this.handSorter.isDragging())
+    ) {
       const canvasRect = app.canvas.getBoundingClientRect();
       if (canvasRect.width > 0 && canvasRect.height > 0) {
         const point = {
@@ -6252,6 +6275,11 @@ export class TableRenderer {
     // by the extra width so they don't overlap.
     const discardContainer = new Container();
     discardContainer.sortableChildren = true;
+    discardContainer.zIndex = discardContainerZIndex(seat as Seat);
+    const discardShadowHost = new Container();
+    discardShadowHost.zIndex = DISCARD_SHADOW_Z;
+    discardShadowHost.sortableChildren = true;
+    this.root.addChild(discardShadowHost);
     const riichiIdx = view.riichiTileIdx[seat];
     // -----------------------------------------------------------------
     // Discard slide animation hookup. When this seat has an active
@@ -6265,18 +6293,9 @@ export class TableRenderer {
       seatDiscardAnim != null &&
       lastIdx >= 0 &&
       seatDiscardAnim.discardIndex === lastIdx;
-    // Lift the pond above the walls (zIndex 0..2) while a tile flies.
-    // Its shadows must NOT ride along (they would cover neighbouring
-    // ponds), so host them in a low-z sibling — its transform is
-    // matched to the pond after the position switch below.
-    let flyShadowHost: Container | null = null;
-    if (lastIsAnimating) {
-      discardContainer.zIndex = 5;
-      flyShadowHost = new Container();
-      flyShadowHost.zIndex = DISCARD_FLY_SHADOW_Z;
-      flyShadowHost.sortableChildren = true;
-      this.root.addChild(flyShadowHost);
-    }
+    // Every pond has an explicit perspective layer above the walls.
+    // Shadows stay in a low-z sibling so a nearer pond's shadow never
+    // paints over a farther seat's tiles.
     // Pure container-local geometry per tile. Tint and the last-tile
     // fresh-nudge / animation remain renderer-owned below.
     const discardPlacements = layoutDiscards(
@@ -6331,10 +6350,7 @@ export class TableRenderer {
       const rot = SEAT_CONTAINER_ROT[seat];
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
-      const layer = this.screenShadowLayer(
-        flyShadowHost ?? discardContainer,
-        rot
-      );
+      const layer = this.screenShadowLayer(discardShadowHost, rot);
       this.placeColumnShadows(
         layer,
         discardPlacements
@@ -6412,13 +6428,11 @@ export class TableRenderer {
       }
     }
     this.root.addChild(discardContainer);
-    if (flyShadowHost) {
-      flyShadowHost.position.set(
-        discardContainer.position.x,
-        discardContainer.position.y
-      );
-      flyShadowHost.rotation = discardContainer.rotation;
-    }
+    discardShadowHost.position.set(
+      discardContainer.position.x,
+      discardContainer.position.y
+    );
+    discardShadowHost.rotation = discardContainer.rotation;
 
     // -----------------------------------------------------------------
     // Animated last-discard overlay.
@@ -6519,7 +6533,7 @@ export class TableRenderer {
         // Same low-z host as the static shadows (created with the pond
         // lift): keeps the flying shadow below every seat's tiles.
         this.placeTileShadow(
-          flyShadowHost ?? discardContainer,
+          discardShadowHost,
           shadow,
           posX,
           posY,

@@ -133,6 +133,7 @@ describe("DiscardAnimator", () => {
     );
 
     expect(animator.getAnim(0)?.startMs).toBe(now);
+    expect(animator.isDrawing(0)).toBe(false);
   });
 
   it("starts immediately after live pacing is disabled for manual history", () => {
