@@ -20,10 +20,12 @@ import {
   layoutMeldStripGroups,
   layoutTouchingMeldColumn,
   MOBILE_RIICHI_STICK,
+  WEB_RIICHI_STICK,
   fitCounterContentInCell,
   mobileRiichiStickPlacement,
   pointInsideRect,
   resolveSeatHandPresentation,
+  riichiStickMetrics,
   riichiSelectionTileTint,
   resultScoreBoxLayout,
   shouldRevealWinScoreDelta,
@@ -288,6 +290,30 @@ describe("mobile table presentation", () => {
         { x: 128, y: 0 },
       ],
     });
+  });
+});
+
+describe("riichi stick presentation", () => {
+  it("scales every web stick dimension and visual proportion by 80 percent", () => {
+    expect(WEB_RIICHI_STICK).toEqual({
+      width: 90 * 1.8,
+      height: 8 * 1.8,
+      gap: 10 * 1.8,
+      dotRadius: 2.5 * 1.8,
+      cornerRadius: 3 * 1.8,
+    });
+    expect(riichiStickMetrics("standard")).toBe(WEB_RIICHI_STICK);
+  });
+
+  it("keeps the standalone mobile stick metrics unchanged", () => {
+    expect(MOBILE_RIICHI_STICK).toEqual({
+      width: 120,
+      height: 12,
+      gap: 1,
+      dotRadius: 3.5,
+      cornerRadius: 3,
+    });
+    expect(riichiStickMetrics("mobile")).toBe(MOBILE_RIICHI_STICK);
   });
 });
 

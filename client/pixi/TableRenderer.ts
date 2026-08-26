@@ -292,12 +292,39 @@ export function fitCounterContentInCell(
   };
 }
 
-export const MOBILE_RIICHI_STICK = {
+interface RiichiStickMetrics {
+  width: number;
+  height: number;
+  gap: number;
+  dotRadius: number;
+  cornerRadius: number;
+}
+
+const WEB_RIICHI_STICK_SCALE = 1.8;
+
+export const WEB_RIICHI_STICK: RiichiStickMetrics = {
+  width: 90 * WEB_RIICHI_STICK_SCALE,
+  height: 8 * WEB_RIICHI_STICK_SCALE,
+  gap: 10 * WEB_RIICHI_STICK_SCALE,
+  dotRadius: 2.5 * WEB_RIICHI_STICK_SCALE,
+  cornerRadius: 3 * WEB_RIICHI_STICK_SCALE,
+};
+
+export const MOBILE_RIICHI_STICK: RiichiStickMetrics = {
   width: 120,
   height: 12,
   gap: 1,
   dotRadius: 3.5,
-} as const;
+  cornerRadius: 3,
+};
+
+export function riichiStickMetrics(
+  presentation: TableRendererPresentation
+): RiichiStickMetrics {
+  return presentation === "mobile"
+    ? MOBILE_RIICHI_STICK
+    : WEB_RIICHI_STICK;
+}
 
 export interface RiichiStickPlacement {
   x: number;
@@ -6407,19 +6434,16 @@ export class TableRenderer {
     // just inboard (table-center side) of the discard pile.
     if (view.riichiDeclared[seat]) {
       const mobileStick = this.presentation === "mobile";
-      const stickW = mobileStick ? MOBILE_RIICHI_STICK.width : 90;
-      const stickH = mobileStick ? MOBILE_RIICHI_STICK.height : 8;
-      const stickGap = mobileStick ? MOBILE_RIICHI_STICK.gap : 10;
+      const metrics = riichiStickMetrics(this.presentation);
+      const stickW = metrics.width;
+      const stickH = metrics.height;
+      const stickGap = metrics.gap;
       const stick = new Container();
       const bar = new Graphics()
-        .roundRect(0, 0, stickW, stickH, 3)
+        .roundRect(0, 0, stickW, stickH, metrics.cornerRadius)
         .fill({ color: 0xf5f5f5 });
       const dot = new Graphics()
-        .circle(
-          stickW / 2,
-          stickH / 2,
-          mobileStick ? MOBILE_RIICHI_STICK.dotRadius : 2.5
-        )
+        .circle(stickW / 2, stickH / 2, metrics.dotRadius)
         .fill({ color: 0xc04040 });
       stick.addChild(bar, dot);
       if (mobileStick) {
