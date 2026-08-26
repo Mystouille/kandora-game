@@ -844,17 +844,6 @@ export function shouldRevealWinScoreSummary(
   );
 }
 
-export function shouldRevealWinScoreDelta(
-  stageReveal: boolean,
-  revealElapsedMs: number,
-  visibleYakuCount: number
-): boolean {
-  return (
-    !stageReveal ||
-    revealElapsedMs >= visibleYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS
-  );
-}
-
 export function winResultRevealKey(
   view: Pick<MatchView, "roundWind" | "roundNumber" | "honba" | "dealer">,
   result: NonNullable<MatchView["lastHandResult"]>
@@ -4298,11 +4287,7 @@ export class TableRenderer {
           hasUraYaku,
           sharedUra.length > 0
         );
-        scoreDeltaRevealed = shouldRevealWinScoreDelta(
-          stageReveal,
-          revealElapsedMs,
-          revealableYakuCount
-        );
+        scoreDeltaRevealed = pageScoreSummaryRevealed;
         // 1-column layout for short lists; 2-column for 5+
         // entries so very-yaku-rich hands (e.g. yakuman piles)
         // don't push the panel absurdly tall. We base the
