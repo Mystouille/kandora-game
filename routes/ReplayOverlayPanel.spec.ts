@@ -27,6 +27,15 @@ describe("replayOverlayToggles", () => {
     ]);
   });
 
+  it("hides wall reveal while compact layout is active", () => {
+    expect(replayOverlayToggles(true, true).map((toggle) => toggle.key)).toEqual([
+      "showWaits",
+      "showHands",
+      "showTsumogiri",
+      "showNames",
+    ]);
+  });
+
   it("renders the tsumogiri button in both replay sliders", () => {
     const render = (includeWallToggle: boolean): string =>
       renderToStaticMarkup(
@@ -39,10 +48,12 @@ describe("replayOverlayToggles", () => {
 
     const liveReplay = render(false);
     expect(liveReplay).toContain("Show tsumogiri");
+    expect(liveReplay).not.toContain("Compact table");
     expect(liveReplay).not.toContain("Show walls");
 
     const logReplay = render(true);
     expect(logReplay).toContain("Show tsumogiri");
     expect(logReplay).toContain("Show walls");
+    expect(logReplay).not.toContain("Compact table");
   });
 });

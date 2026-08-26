@@ -24,6 +24,7 @@ export interface ReplayOverlayState {
   showTsumogiri: boolean;
   showWalls: boolean;
   showNames: boolean;
+  compactLayout: boolean;
   /** Temporary debug toggle while the Tenhou-style layout is being
    * migrated in. Paints the colored layout regions on top of the
    * canvas so the geometry can be visually verified against the
@@ -37,6 +38,7 @@ export const defaultReplayOverlayState: ReplayOverlayState = {
   showTsumogiri: false,
   showWalls: false,
   showNames: true,
+  compactLayout: false,
   showLayoutDebug: false,
 };
 
@@ -54,11 +56,14 @@ const TOGGLES: ToggleSpec[] = [
 ];
 
 export function replayOverlayToggles(
-  includeWallToggle: boolean
+  includeWallToggle: boolean,
+  compactLayout = false
 ): ToggleSpec[] {
-  return includeWallToggle
-    ? TOGGLES
-    : TOGGLES.filter((toggle) => toggle.key !== "showWalls");
+  return TOGGLES.filter(
+    (toggle) =>
+      toggle.key !== "showWalls" ||
+      (includeWallToggle && !compactLayout)
+  );
 }
 
 interface ReplayOverlayPanelProps {
@@ -114,7 +119,10 @@ export function ReplayOverlayPanel({
           aria-label="Replay overlay options"
         >
           <ul className="flex flex-col py-2">
-            {replayOverlayToggles(includeWallToggle).map((t) => {
+            {replayOverlayToggles(
+              includeWallToggle,
+              overlays.compactLayout
+            ).map((t) => {
               const active = overlays[t.key];
               return (
                 <li key={t.key}>

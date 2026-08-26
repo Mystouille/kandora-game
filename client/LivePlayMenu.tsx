@@ -12,16 +12,15 @@
  * signals — e.g. a manual hand drag flipping `autoSort` off
  * — can update the menu).
  *
- * Persistence: only the `autoSort` preference survives across
- * page loads and hand boundaries (via `localStorage`). The
- * other three "auto play" flags (autoWin / noCall / autoDiscard)
- * are deliberately ephemeral — they reset to `false` on every
- * `hand_start` so a player can't leave a hand on full auto by
- * accident. See {@link readPersistedAutoSort} and
- * {@link writePersistedAutoSort} for the persistence helpers
- * and {@link resetEphemeralFlags} for the per-hand reset.
+ * Persistence: `autoSort` and the shared web table layout survive
+ * page loads and hand boundaries. The other three "auto play"
+ * flags (autoWin / noCall / autoDiscard) are deliberately ephemeral —
+ * they reset to `false` on every `hand_start` so a player can't leave
+ * a hand on full auto by accident. See {@link readPersistedAutoSort},
+ * the top-right table parameters, and {@link resetEphemeralFlags}.
  */
 import { useState } from "react";
+import { readWebTableLayoutMode } from "./webTableLayoutPreference";
 
 /** Stable id → display label (expanded) → single-letter glyph (collapsed). */
 const OPTIONS = [
@@ -32,13 +31,16 @@ const OPTIONS = [
 ] as const;
 
 export type LivePlayMenuOptionKey = (typeof OPTIONS)[number]["key"];
-export type LivePlayMenuFlags = Record<LivePlayMenuOptionKey, boolean>;
+export type LivePlayMenuFlags = Record<LivePlayMenuOptionKey, boolean> & {
+  compactLayout: boolean;
+};
 
 export const LIVE_PLAY_MENU_DEFAULTS: LivePlayMenuFlags = {
   autoSort: true,
   autoWin: false,
   noCall: false,
   autoDiscard: false,
+  compactLayout: false,
 };
 
 /** `localStorage` key for the persisted `autoSort` preference. */
@@ -89,9 +91,8 @@ export function writePersistedAutoSort(on: boolean): void {
 }
 
 /**
- * Build the initial flag set for a fresh mount: persisted
- * `autoSort` (with the default fallback) and every ephemeral
- * "auto play" flag reset to `false`.
+ * Build the initial flag set for a fresh mount: persisted sorting and
+ * web-layout preferences plus every ephemeral auto-play flag reset.
  */
 export function buildInitialLivePlayMenuFlags(): LivePlayMenuFlags {
   return {
@@ -100,6 +101,7 @@ export function buildInitialLivePlayMenuFlags(): LivePlayMenuFlags {
     autoWin: false,
     noCall: false,
     autoDiscard: false,
+    compactLayout: readWebTableLayoutMode() === "compact",
   };
 }
 

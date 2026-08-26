@@ -7,19 +7,20 @@ import {
   ankanTilesForDisplay,
   buildResultYakuEntries,
   canInteractWithFocusedHand,
+  centerCounterCells,
+  centerCounterSpecs,
+  centerDoraIndicatorSlots,
+  centerDoraRowGeometry,
+  centerInfoInnerRect,
+  CENTER_DORA_INDICATOR_GAP,
   darkenTileTint,
   focusedHandTileMetrics,
   formatTableScore,
   handResultDealerSeat,
   layoutMeldStripGroups,
   layoutTouchingMeldColumn,
-  MOBILE_DORA_INDICATOR_GAP,
   MOBILE_RIICHI_STICK,
   fitCounterContentInCell,
-  mobileCenterInnerRect,
-  mobileCounterCells,
-  mobileDoraRowGeometry,
-  mobileDoraIndicatorSlots,
   mobileRiichiStickPlacement,
   pointInsideRect,
   resolveSeatHandPresentation,
@@ -30,10 +31,13 @@ import {
   shouldStageWinReveal,
   shouldTintTsumogiri,
   sortTilesForDisplay,
+  tableRenderPolicy,
   topmostHandHoverTargetIndex,
   winResultRevealKey,
 } from "./TableRenderer";
 import { mobileTableLayout } from "./layouts/mobileTableLayout";
+import { compactWebTableLayout } from "./layouts/compactWebTableLayout";
+import { currentTableLayout } from "./layouts/currentTableLayout";
 import { tableLayoutFromConfig } from "./tableLayout";
 
 describe("handResultDealerSeat", () => {
@@ -162,8 +166,8 @@ describe("mobile table presentation", () => {
   });
 
   it("shows five dead-wall indicator tops with unrevealed backs", () => {
-    expect(MOBILE_DORA_INDICATOR_GAP).toBe(0);
-    expect(mobileDoraIndicatorSlots(["4m"])).toEqual([
+    expect(CENTER_DORA_INDICATOR_GAP).toBe(0);
+    expect(centerDoraIndicatorSlots(["4m"])).toEqual([
       "4m",
       null,
       null,
@@ -171,13 +175,13 @@ describe("mobile table presentation", () => {
       null,
     ]);
     expect(
-      mobileDoraIndicatorSlots(["4m", "7p", "2s", "1z", "6m"])
+      centerDoraIndicatorSlots(["4m", "7p", "2s", "1z", "6m"])
     ).toEqual(["4m", "7p", "2s", "1z", "6m"]);
   });
 
   it("fits the dora row directly between both side score cartridges", () => {
     const center = layout.center;
-    const dora = mobileDoraRowGeometry(center, 5);
+    const dora = centerDoraRowGeometry(center, 5);
 
     expect(dora.x).toBe(561);
     expect(dora.width).toBe(158);
@@ -187,8 +191,8 @@ describe("mobile table presentation", () => {
 
   it("bounds all three counters inside the score-cartridge borders", () => {
     const center = layout.center;
-    const inner = mobileCenterInnerRect(center);
-    const cells = mobileCounterCells(center, 3);
+    const inner = centerInfoInnerRect(center);
+    const cells = centerCounterCells(center, 3);
 
     expect(inner).toEqual({ x: 561, y: 278, w: 158, h: 114 });
     expect(cells).toHaveLength(3);
@@ -284,6 +288,83 @@ describe("mobile table presentation", () => {
         { x: 128, y: 0 },
       ],
     });
+  });
+});
+
+describe("web table layouts", () => {
+  it("renders perimeter walls only in the standard web layout", () => {
+    expect(tableRenderPolicy("standard", "standard")).toEqual({
+      indicatorCenter: false,
+      perimeterWalls: true,
+    });
+    expect(tableRenderPolicy("standard", "compact")).toEqual({
+      indicatorCenter: true,
+      perimeterWalls: false,
+    });
+    expect(tableRenderPolicy("mobile", "standard")).toEqual({
+      indicatorCenter: true,
+      perimeterWalls: false,
+    });
+  });
+
+  it("builds three icon counters, or two in Buu mode", () => {
+    const counters = centerCounterSpecs({
+      buuMode: false,
+      honba: 3,
+      riichiSticks: 4,
+      drawsTaken: 12,
+    });
+    expect(counters.map(({ kind, value }) => ({ kind, value }))).toEqual([
+      { kind: "honba", value: 3 },
+      { kind: "riichi", value: 4 },
+      { kind: "tiles", value: 58 },
+    ]);
+    expect(
+      centerCounterSpecs({
+        buuMode: true,
+        honba: 3,
+        riichiSticks: 4,
+        drawsTaken: 80,
+      }).map(({ kind, value }) => ({ kind, value }))
+    ).toEqual([
+      { kind: "riichi", value: 4 },
+      { kind: "tiles", value: 0 },
+    ]);
+  });
+
+  it("fits inline counters in both standard and compact centers", () => {
+    for (const config of [currentTableLayout, compactWebTableLayout]) {
+      const center = tableLayoutFromConfig(config).center;
+      const inner = centerInfoInnerRect(center);
+      const cells = centerCounterCells(center, 3);
+      expect(cells).toHaveLength(3);
+      expect(cells[0].x).toBe(inner.x);
+      expect(cells[2].x + cells[2].w).toBeCloseTo(inner.x + inner.w);
+      expect(inner.h).toBeGreaterThan(100);
+    }
+  });
+
+  it("gives compact mode five usable center indicator slots", () => {
+    const center = tableLayoutFromConfig(compactWebTableLayout).center;
+    const inner = centerInfoInnerRect(center);
+    const dora = centerDoraRowGeometry(center, 5);
+    expect(inner).toEqual({ x: 413, y: 369, w: 174, h: 134 });
+    expect(dora.x).toBe(inner.x);
+    expect(dora.width).toBe(inner.w);
+    expect(dora.tileW).toBeCloseTo(34.8);
+    expect(dora.tileH).toBeLessThan(inner.h / 2);
+  });
+
+  it("keeps desktop focused-hand metrics in compact mode", () => {
+    const standardMetrics = focusedHandTileMetrics(
+      tableLayoutFromConfig(currentTableLayout),
+      "standard"
+    );
+    const compactMetrics = focusedHandTileMetrics(
+      tableLayoutFromConfig(compactWebTableLayout),
+      "standard"
+    );
+    expect(compactMetrics).toEqual(standardMetrics);
   });
 });
 

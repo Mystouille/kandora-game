@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import {
   CheckOutlined,
   DeleteOutlined,
@@ -22,6 +22,7 @@ import {
 import { findTileAction } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
+import { WebTableTopControls } from "~/game/client/WebTableTopControls";
 import { ViewerList } from "~/game/components/ViewerList";
 import {
   advancePostHandPeekDiscardCount,
@@ -36,6 +37,7 @@ import {
 } from "~/game/client/LivePlayMenu";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
 import { findNoCallAutoPass } from "~/game/client/callPrompt";
+import { writeWebTableLayoutMode } from "~/game/client/webTableLayoutPreference";
 import { rotateHandResult, rotateMatchView } from "~/game/replay/player";
 import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
@@ -713,6 +715,11 @@ export default function GameMatchRoute({
       if (next.noCall !== prev.noCall && rendererRef.current !== null) {
         rendererRef.current.setNoCallEnabled(next.noCall);
       }
+      if (next.compactLayout !== prev.compactLayout) {
+        const mode = next.compactLayout ? "compact" : "standard";
+        writeWebTableLayoutMode(mode);
+        rendererRef.current?.setWebTableLayoutMode(mode);
+      }
       return next;
     });
   }, []);
@@ -1023,7 +1030,11 @@ export default function GameMatchRoute({
         if (cancelled) {
           return;
         }
-        const renderer = new TableRenderer();
+        const renderer = new TableRenderer({
+          webTableLayoutMode: liveMenuFlags.compactLayout
+            ? "compact"
+            : "standard",
+        });
         void renderer.mount(container).then(() => {
           if (cancelled) {
             renderer.destroy();
@@ -1368,20 +1379,25 @@ export default function GameMatchRoute({
               </div>
             </div>
           )}
-        {/* Top-right controls: sound toggle + close. Absolutely
-            positioned so the canvas occupies the full container;
-            `pointer-events: auto` on the wrapper so clicks land
-            (the outer overlay disables touch gestures on the
-            canvas itself). */}
-        <div className="absolute top-2 right-2 flex items-center gap-2 pointer-events-auto">
+        <WebTableTopControls
+          compactLayout={liveMenuFlags.compactLayout}
+          onCompactLayoutChange={(compactLayout) => {
+            handleLiveMenuChange({ ...liveMenuFlags, compactLayout });
+          }}
+          onQuit={() => {
+            if (view.roomState?.status === "waiting") {
+              wsRef.current?.leaveSeat();
+            }
+            void navigate("/lobby");
+          }}
+          quitLabel={
+            view.roomState?.status === "waiting"
+              ? "Leave waiting room"
+              : "Quit game"
+          }
+        >
           <MatchSoundToggle />
-          <Link
-            to="/lobby"
-            className="px-3 py-1.5 rounded bg-emerald-800/90 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow"
-          >
-            Close
-          </Link>
-        </div>
+        </WebTableTopControls>
         {/* Left-side live-play options menu (semi-collapsible).
             UI only for now; behaviour wiring lands in a
             follow-up. */}
@@ -1506,15 +1522,6 @@ export default function GameMatchRoute({
           onKick={(seat) => {
             wsRef.current?.kickWaitingRoomSeat(seat);
           }}
-          onLeave={() => {
-            // Tell the server to release the seat, then bounce back
-            // to the lobby. `releaseSeat` nulls our socket before
-            // broadcasting the new room_state, so we'd never see
-            // the update anyway — navigating away closes the
-            // socket and unmounts the route cleanly.
-            wsRef.current?.leaveSeat();
-            void navigate("/lobby");
-          }}
         />
       </div>
     </div>
@@ -1526,7 +1533,8 @@ export default function GameMatchRoute({
  * `status === "waiting"`. Lists the four seats with their current
  * occupants (you / friend / bot / empty), a "Start match" button
  * that fills empties with bots and begins the ready check, and a
- * "Leave seat" button. The match URL is exposed for sharing.
+ * The match URL is exposed for sharing; leaving is handled by the
+ * persistent top-right quit control.
  *
  * Hidden in `playing` / `finished` status so the canvas takes
  * over without interference.
@@ -1538,7 +1546,6 @@ function WaitingRoomOverlay({
   onReadyChange,
   onAddBot,
   onKick,
-  onLeave,
 }: {
   matchId: string;
   roomState: RoomState | null;
@@ -1546,7 +1553,6 @@ function WaitingRoomOverlay({
   onReadyChange: (ready: boolean) => void;
   onAddBot: () => void;
   onKick: (seat: 0 | 1 | 2 | 3) => void;
-  onLeave: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -1715,13 +1721,6 @@ function WaitingRoomOverlay({
               Start match
             </button>
           )}
-          <button
-            type="button"
-            onClick={onLeave}
-            className="rounded border border-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-900"
-          >
-            Leave
-          </button>
         </div>
       </div>
     </div>

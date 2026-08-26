@@ -16,6 +16,11 @@ import {
   GameWSConnectionDetailsError,
 } from "~/game/client/ws";
 import { mergeSeatNames } from "~/game/client/spectatorNames";
+import {
+  readWebTableLayoutMode,
+  writeWebTableLayoutMode,
+} from "~/game/client/webTableLayoutPreference";
+import { WebTableTopControls } from "~/game/client/WebTableTopControls";
 import { ViewerList } from "~/game/components/ViewerList";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
@@ -254,9 +259,16 @@ export default function GameSpectateRoute({
     x: number;
     y: number;
   } | null>(null);
-  const [overlays, setOverlays] = useState<ReplayOverlayState>(
-    defaultReplayOverlayState
-  );
+  const [overlays, setOverlays] = useState<ReplayOverlayState>(() => ({
+    ...defaultReplayOverlayState,
+    compactLayout: readWebTableLayoutMode() === "compact",
+  }));
+  const handleOverlayChange = (next: ReplayOverlayState): void => {
+    if (next.compactLayout !== overlays.compactLayout) {
+      writeWebTableLayoutMode(next.compactLayout ? "compact" : "standard");
+    }
+    setOverlays(next);
+  };
   const [seatNames, setSeatNames] = useState<[string, string, string, string]>([
     "",
     "",
@@ -310,7 +322,9 @@ export default function GameSpectateRoute({
         if (cancelled) {
           return;
         }
-        const renderer = new TableRenderer();
+        const renderer = new TableRenderer({
+          webTableLayoutMode: overlays.compactLayout ? "compact" : "standard",
+        });
         // Show the full wall (face-down): the relay carries no tile
         // faces, but the draw count is tracked so the wall shrinks
         // correctly. `showWalls` (off here) is what reveals faces.
@@ -662,6 +676,9 @@ export default function GameSpectateRoute({
       return;
     }
     r.setShowLayoutDebug(overlays.showLayoutDebug);
+    r.setWebTableLayoutMode(
+      overlays.compactLayout ? "compact" : "standard"
+    );
     r.setShowWaits(overlays.showWaits);
     r.setShowHands(overlays.showHands);
     r.setShowTsumogiri(overlays.showTsumogiri);
@@ -892,7 +909,7 @@ export default function GameSpectateRoute({
   return (
     <main className="fixed inset-0 bg-black">
       {/* Top-left status banner */}
-      <div className="absolute top-2 left-2 z-30 flex items-center gap-2 px-3 py-1 rounded-md bg-black/60 text-white text-sm font-mono">
+      <div className="absolute top-2 left-2 z-30 flex w-fit max-w-[calc(100%-11rem)] items-center gap-2 rounded-md bg-black/60 px-3 py-1 font-mono text-sm text-white">
         <span
           className={`inline-block w-2 h-2 rounded-full ${
             isLive
@@ -910,18 +927,21 @@ export default function GameSpectateRoute({
             : "Paused"}
         </span>
         <span className="opacity-60">·</span>
-        <span className="opacity-75 truncate max-w-[200px]">{matchId}</span>
-        <button
-          type="button"
-          onClick={() => {
-            void navigate("/lobby");
-          }}
-          className="ml-2 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-xs"
-        >
-          Leave
-        </button>
-        <span className="ml-2 opacity-50 text-xs">{conn}</span>
+        <span className="min-w-0 max-w-[200px] truncate opacity-75">
+          {matchId}
+        </span>
+        <span className="min-w-0 truncate text-xs opacity-50">{conn}</span>
       </div>
+      <WebTableTopControls
+        compactLayout={overlays.compactLayout}
+        onCompactLayoutChange={(compactLayout) => {
+          handleOverlayChange({ ...overlays, compactLayout });
+        }}
+        onQuit={() => {
+          void navigate("/lobby");
+        }}
+        quitLabel="Quit spectating"
+      />
       <div
         className="pointer-events-none absolute left-2 top-12 z-30 flex items-start"
         style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
@@ -1099,7 +1119,10 @@ export default function GameSpectateRoute({
         </button>
       )}
 
-      <ReplayOverlayPanel overlays={overlays} onChange={setOverlays} />
+      <ReplayOverlayPanel
+        overlays={overlays}
+        onChange={handleOverlayChange}
+      />
 
       <div ref={containerRef} className="w-full h-full" />
     </main>

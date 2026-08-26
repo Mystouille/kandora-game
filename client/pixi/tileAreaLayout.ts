@@ -50,15 +50,38 @@ export interface TilePlacement {
 const CONTAINER_ROTATIONS = [0, -Math.PI / 2, Math.PI, Math.PI / 2] as const;
 const DISCARD_COLS = 6;
 
+export interface DiscardLayoutOptions {
+  scale?: number;
+  offsetX?: number;
+  offsetY?: number;
+}
+
+function resolvedDiscardScale(options?: DiscardLayoutOptions): number {
+  const scale = options?.scale ?? 1;
+  if (!Number.isFinite(scale) || scale <= 0) {
+    throw new Error("discard scale must be a positive finite number");
+  }
+  return scale;
+}
+
+function scaledSize(size: Size, scale: number): Size {
+  return { w: size.w * scale, h: size.h * scale };
+}
+
 /** Normalise `-0` to `0` so placements compare cleanly. */
 const nz = (n: number): number => (n === 0 ? 0 : n);
 
 /** Container-local footprint of one non-riichi discard tile. Row
  * stride uses its height; row-direction stride uses its width. */
-export function discardCellSize(design: TileDesign, seat: Seat): Size {
-  const small = smallScreen(design);
-  const side = sideScreen(design);
-  const bump = design.metrics.discardUprightBump;
+export function discardCellSize(
+  design: TileDesign,
+  seat: Seat,
+  options?: DiscardLayoutOptions
+): Size {
+  const scale = resolvedDiscardScale(options);
+  const small = scaledSize(smallScreen(design), scale);
+  const side = scaledSize(sideScreen(design), scale);
+  const bump = design.metrics.discardUprightBump * scale;
   if (isSideSeat(seat)) {
     return { w: side.h, h: side.w };
   }
@@ -74,18 +97,20 @@ export function layoutDiscards(
   design: TileDesign,
   seat: Seat,
   discards: ReadonlyArray<string | null>,
-  riichiIdx: number | null
+  riichiIdx: number | null,
+  options?: DiscardLayoutOptions
 ): TilePlacement[] {
-  const small = smallScreen(design);
-  const side = sideScreen(design);
-  const overlapHoriz = design.spacing.discardRowHoriz;
-  const overlapVert = design.spacing.discardRowVert;
+  const scale = resolvedDiscardScale(options);
+  const small = scaledSize(smallScreen(design), scale);
+  const side = scaledSize(sideScreen(design), scale);
+  const overlapHoriz = design.spacing.discardRowHoriz * scale;
+  const overlapVert = design.spacing.discardRowVert * scale;
   const discardSheet = design.sheets.discard[seat];
   const riichiSheet = design.sheets.riichiDiscard[seat];
   const spriteCounterRot = nz(-CONTAINER_ROTATIONS[seat]);
   const isHoriz = isSideSeat(seat);
 
-  const cell = discardCellSize(design, seat);
+  const cell = discardCellSize(design, seat, { scale });
   const tileLocalW = cell.w;
   const tileLocalH = cell.h;
   const rowStride = tileLocalH - (isHoriz ? 0 : overlapVert);
@@ -161,6 +186,9 @@ export function layoutDiscards(
       cursorX += tileStride;
     }
 
+    wrap.x += options?.offsetX ?? 0;
+    wrap.y += options?.offsetY ?? 0;
+
     out.push({ index: i, tile, atlasId, isRiichi, zIndex, wrap, sprite });
   });
   return out;
@@ -200,7 +228,8 @@ export function tilePlacementBounds(placement: TilePlacement): Rect {
 export function potentialDiscardBounds(
   design: TileDesign,
   seat: Seat,
-  tileCount = 18
+  tileCount = 18,
+  options?: DiscardLayoutOptions
 ): Rect {
   if (!Number.isInteger(tileCount) || tileCount <= 0) {
     throw new Error("tileCount must be a positive integer");
@@ -212,9 +241,24 @@ export function potentialDiscardBounds(
   ];
   return boundingBox(
     riichiIndices.flatMap((riichiIndex) =>
-      layoutDiscards(design, seat, tiles, riichiIndex).map(tilePlacementBounds)
+      layoutDiscards(design, seat, tiles, riichiIndex, options).map(
+        tilePlacementBounds
+      )
     )
   );
+}
+
+export function discardScaleForTargetSpan(
+  design: TileDesign,
+  seat: Seat,
+  targetSpan: number,
+  tileCount = 18
+): number {
+  if (!Number.isFinite(targetSpan) || targetSpan <= 0) {
+    throw new Error("target discard span must be a positive finite number");
+  }
+  const base = potentialDiscardBounds(design, seat, tileCount);
+  return targetSpan / base.w;
 }
 
 /** Inputs for concealable-hand layout that depend on renderer state. */

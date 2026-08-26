@@ -51,6 +51,11 @@ import {
 import { HandSorter, naturalOrderRawIndices } from "./handSorter";
 import { ACTIVE_TILE_DESIGN } from "./tiles/activeTileDesign";
 import { ACTIVE_TABLE_LAYOUT } from "./layouts/activeTableLayout";
+import {
+  webDiscardLayoutOptions,
+  webTableLayoutConfig,
+  type WebTableLayoutMode,
+} from "./layouts/webTableLayout";
 import type { TileDesign } from "./tiles/tileDesign";
 import { TileTextureStore } from "./tiles/tileTextureStore";
 import { TileSpriteFactory } from "./tiles/tileSpriteFactory";
@@ -80,6 +85,24 @@ export interface SeatEnrichment {
 }
 
 export type TableRendererPresentation = "standard" | "mobile";
+
+export interface TableRenderPolicy {
+  indicatorCenter: boolean;
+  perimeterWalls: boolean;
+}
+
+export function tableRenderPolicy(
+  presentation: TableRendererPresentation,
+  webLayoutMode: WebTableLayoutMode
+): TableRenderPolicy {
+  if (presentation === "mobile") {
+    return { indicatorCenter: true, perimeterWalls: false };
+  }
+  if (webLayoutMode === "compact") {
+    return { indicatorCenter: true, perimeterWalls: false };
+  }
+  return { indicatorCenter: false, perimeterWalls: true };
+}
 
 interface FocusedHandHoverTarget {
   sprite: Sprite;
@@ -138,7 +161,7 @@ const DISCARD_ROW_OVERLAP_HORIZ = 14.5;
  * width. */
 const TSUMO_GAP = 8;
 const MOBILE_FOCUSED_TILE_MAX_H = 115;
-export const MOBILE_DORA_INDICATOR_GAP = 0;
+export const CENTER_DORA_INDICATOR_GAP = 0;
 
 interface FocusedHandTileMetrics {
   tile: TileDims;
@@ -170,20 +193,20 @@ export function focusedHandTileMetrics(
   };
 }
 
-export function mobileDoraIndicatorSlots(
+export function centerDoraIndicatorSlots(
   indicators: readonly string[]
 ): Array<string | null> {
   return Array.from({ length: 5 }, (_, index) => indicators[index] ?? null);
 }
 
-export interface MobileDoraRowGeometry {
+export interface CenterDoraRowGeometry {
   x: number;
   width: number;
   tileW: number;
   tileH: number;
 }
 
-export function mobileCenterInnerRect(center: Rect): Rect {
+export function centerInfoInnerRect(center: Rect): Rect {
   const { height: sideCartridgeW, inset } = scoreCartridgeMetrics(center);
   return {
     x: center.x + inset + sideCartridgeW,
@@ -193,11 +216,11 @@ export function mobileCenterInnerRect(center: Rect): Rect {
   };
 }
 
-export function mobileDoraRowGeometry(
+export function centerDoraRowGeometry(
   center: Rect,
   slotCount: number
-): MobileDoraRowGeometry {
-  const inner = mobileCenterInnerRect(center);
+): CenterDoraRowGeometry {
+  const inner = centerInfoInnerRect(center);
   const x = inner.x;
   const width = inner.w;
   const tileW = slotCount > 0 ? width / slotCount : 0;
@@ -209,11 +232,11 @@ export function mobileDoraRowGeometry(
   };
 }
 
-export function mobileCounterCells(center: Rect, count: number): Rect[] {
+export function centerCounterCells(center: Rect, count: number): Rect[] {
   if (count <= 0) {
     return [];
   }
-  const inner = mobileCenterInnerRect(center);
+  const inner = centerInfoInnerRect(center);
   const cellWidth = inner.w / count;
   return Array.from({ length: count }, (_, index) => ({
     x: inner.x + index * cellWidth,
@@ -221,6 +244,28 @@ export function mobileCounterCells(center: Rect, count: number): Rect[] {
     w: cellWidth,
     h: inner.h,
   }));
+}
+
+export interface CenterCounterSpec {
+  kind: "honba" | "riichi" | "tiles";
+  value: number;
+  color: number;
+}
+
+export function centerCounterSpecs(
+  view: Pick<MatchView, "buuMode" | "honba" | "riichiSticks" | "drawsTaken">
+): CenterCounterSpec[] {
+  return [
+    ...(view.buuMode === true
+      ? []
+      : [{ kind: "honba" as const, value: view.honba, color: 0xfde68a }]),
+    { kind: "riichi", value: view.riichiSticks, color: 0xfca5a5 },
+    {
+      kind: "tiles",
+      value: Math.max(0, 70 - view.drawsTaken),
+      color: 0xd1d5db,
+    },
+  ];
 }
 
 export function fitCounterContentInCell(
@@ -767,7 +812,6 @@ function scoreCartridgeMetrics(center: Rect): {
   width: number;
   height: number;
   inset: number;
-  bottomTop: number;
 } {
   const width = Math.round(center.w * 0.5);
   const height = Math.round(center.h * 0.16);
@@ -776,7 +820,6 @@ function scoreCartridgeMetrics(center: Rect): {
     width,
     height,
     inset,
-    bottomTop: center.y + center.h - inset - height,
   };
 }
 
@@ -1235,9 +1278,11 @@ export class TableRenderer {
   /** Active board layout (zone geometry + layers). Injectable and
    * swappable at runtime via {@link setLayoutConfig}. */
   private layoutConfig: TableLayoutConfig;
-  private readonly discardFootprintBySeat = new Map<Seat, Rect>();
+  private readonly discardFootprintBySeat = new Map<string, Rect>();
   /** Rendering treatment layered over the semantic geometry. */
   private presentation: TableRendererPresentation;
+  /** Standard or wall-hidden geometry for browser-hosted tables. */
+  private webTableLayoutMode: WebTableLayoutMode;
   /** Loads atlases and hands out framed textures for {@link tileDesign}. */
   private textureStore: TileTextureStore | null = null;
   /** Materializes tile sprites from the active design. */
@@ -1253,10 +1298,16 @@ export class TableRenderer {
     tileDesign?: TileDesign;
     layoutConfig?: TableLayoutConfig;
     presentation?: TableRendererPresentation;
+    webTableLayoutMode?: WebTableLayoutMode;
   }) {
     this.tileDesign = opts?.tileDesign ?? ACTIVE_TILE_DESIGN;
-    this.layoutConfig = opts?.layoutConfig ?? ACTIVE_TABLE_LAYOUT;
     this.presentation = opts?.presentation ?? "standard";
+    this.webTableLayoutMode = opts?.webTableLayoutMode ?? "standard";
+    this.layoutConfig =
+      opts?.layoutConfig ??
+      (this.presentation === "standard"
+        ? webTableLayoutConfig(this.webTableLayoutMode)
+        : ACTIVE_TABLE_LAYOUT);
   }
 
   async mount(container: HTMLElement): Promise<void> {
@@ -1573,6 +1624,18 @@ export class TableRenderer {
       );
     }
     this.layoutConfig = config;
+    this.discardFootprintBySeat.clear();
+    this.requestRender();
+  }
+
+  setWebTableLayoutMode(mode: WebTableLayoutMode): void {
+    const config = webTableLayoutConfig(mode);
+    if (this.webTableLayoutMode === mode && this.layoutConfig === config) {
+      return;
+    }
+    this.webTableLayoutMode = mode;
+    this.layoutConfig = config;
+    this.discardFootprintBySeat.clear();
     this.requestRender();
   }
 
@@ -2542,8 +2605,12 @@ export class TableRenderer {
     // the maximum 6×3 footprint of each discard pond.
     this.renderHandPanels(layout);
     this.renderDiscardPanels(layout);
-    if (this.presentation === "mobile") {
-      this.renderMobileCenterPanel(layout.center);
+    const renderPolicy = tableRenderPolicy(
+      this.presentation,
+      this.webTableLayoutMode
+    );
+    if (renderPolicy.indicatorCenter) {
+      this.renderIndicatorCenterPanel(layout.center);
     }
     // Stash the felt's bottom-right in screen coords so the timer
     // HUD (which lives on `app.stage`, not `root`) can hug it.
@@ -2582,12 +2649,14 @@ export class TableRenderer {
     // Per-seat identity content next to each discard pond. It sits above
     // the identity panel background but below every board tile layer.
     this.renderPlayerNames(view, layout);
-    if (this.presentation === "mobile") {
-      this.renderMobileCenterInfo(view, layout.center);
+    if (renderPolicy.indicatorCenter) {
+      this.renderIndicatorCenterInfo(view, layout.center);
     } else {
-      // Round / honba / sticks / wall-remaining centre block.
+      // Round heading plus inline honba / riichi / tiles-remaining counters.
       this.renderRoundInfo(view, layout.center);
-      // Wall stacks + dora indicators around the centre.
+    }
+    if (renderPolicy.perimeterWalls) {
+      // Standard web layout: wall stacks + dora indicators around the centre.
       this.renderWalls(view, layout);
     }
 
@@ -2732,7 +2801,7 @@ export class TableRenderer {
   // Score / round / result overlays
   // -------------------------------------------------------------------------
 
-  private renderMobileCenterPanel(center: Rect): void {
+  private renderIndicatorCenterPanel(center: Rect): void {
     if (!this.root) {
       return;
     }
@@ -2740,6 +2809,7 @@ export class TableRenderer {
       .roundRect(center.x, center.y, center.w, center.h, 7)
       .fill({ color: 0x161b19, alpha: 0.96 })
       .stroke({ color: 0x778078, width: 2, alpha: 0.55 });
+    panel.label = "center-panel";
     panel.zIndex = -8;
     this.root.addChild(panel);
   }
@@ -2889,7 +2959,6 @@ export class TableRenderer {
       return;
     }
     const cx = center.x + center.w / 2;
-    const cy = center.y + center.h / 2;
     const label = `${ROUND_WIND_KANJI[view.roundWind]} - ${view.roundNumber}`;
     const fontSize = Math.max(22, Math.round(center.h * 0.13 * 1.6));
     const heading = new Text({
@@ -2902,132 +2971,27 @@ export class TableRenderer {
       }),
     });
     heading.anchor.set(0.5, 0.5);
-    // Three small status lines below the heading: honba counters,
-    // riichi sticks, and wall remaining. Stacked vertically.
-    const lineSize = Math.max(10, Math.round(center.h * 0.085));
-    const lineGap = Math.round(lineSize * 0.25);
-    // The drawable wall starts at 70 after the deal. Rinshan draws
-    // count too: each replacement moves one live-wall tail tile into
-    // the dead wall, reducing the number of future draws by one.
-    const wallRemaining = Math.max(0, 70 - view.drawsTaken);
-    // Buu Mahjong has no repeat counter, so omit the honba line
-    // entirely in that mode rather than rendering a stale "Repeat: 0".
-    const lineSpecs: Array<{ label: string; value: string; color: number }> = [
-      ...(view.buuMode === true
-        ? []
-        : [
-            {
-              label: this.centerLabels.repeat,
-              value: String(view.honba),
-              color: 0xfde68a,
-            },
-          ]),
-      {
-        label: this.centerLabels.riichi,
-        value: String(view.riichiSticks),
-        color: 0xfca5a5,
-      },
-      {
-        label: this.centerLabels.tiles,
-        value: String(wallRemaining),
-        color: 0xd1d5db,
-      },
-    ];
-    // Preserve the established heading placement independently from the
-    // status rows, with a further 2 px drop to clear the top cartridge.
-    const linesBlockH =
-      lineSpecs.length * lineSize + (lineSpecs.length - 1) * lineGap;
-    const headingGap = Math.round(lineSize * 0.6);
-    const totalH = fontSize + headingGap + linesBlockH;
-    const topY = cy - totalH / 2 + 3;
-    heading.position.set(cx, topY + fontSize / 2 + 2);
+    heading.position.set(cx, center.y + center.h * 0.43);
     this.root.addChild(heading);
-
-    // Keep the status rows as a separate visual block immediately above
-    // the bottom score cartridge. The block's bottom edge is the anchor;
-    // its colon axis is offset slightly right for visual balance.
-    const statusBlock = new Container();
-    const { bottomTop } = scoreCartridgeMetrics(center);
-    statusBlock.position.set(cx + 10, bottomTop - linesBlockH);
-    let lineY = lineSize / 2;
-    for (const spec of lineSpecs) {
-      const style = new TextStyle({
-        fontFamily: "Inter, system-ui, sans-serif",
-        fontSize: lineSize,
-        fontWeight: "600",
-        fill: spec.color,
-      });
-      const labelText = new Text({ text: spec.label, style });
-      const colonText = new Text({ text: ":", style });
-      const valueText = new Text({ text: spec.value, style });
-      const valueGap = Math.round(lineSize * 0.3);
-      labelText.anchor.set(1, 0.5);
-      colonText.anchor.set(0.5, 0.5);
-      valueText.anchor.set(0, 0.5);
-      labelText.position.set(-colonText.width / 2, lineY);
-      colonText.position.set(0, lineY);
-      valueText.position.set(colonText.width / 2 + valueGap, lineY);
-      statusBlock.addChild(labelText, colonText, valueText);
-      lineY += lineSize + lineGap;
-    }
-    this.root.addChild(statusBlock);
+    this.renderInlineCenterCounters(view, center);
   }
 
-  private renderMobileCenterInfo(view: MatchView, center: Rect): void {
-    if (!this.root || !this.spriteFactory) {
+  private renderInlineCenterCounters(view: MatchView, center: Rect): void {
+    if (!this.root) {
       return;
     }
-    const cx = center.x + center.w / 2;
-    const inner = mobileCenterInnerRect(center);
-    const doraGap = MOBILE_DORA_INDICATOR_GAP;
-    const slots = mobileDoraIndicatorSlots(view.doraIndicators);
-    const dora = mobileDoraRowGeometry(center, slots.length);
-    const doraY = inner.y + 5;
-
-    slots.forEach((tile, index) => {
-      const sprite = this.spriteFactory!.create({
-        atlasId:
-          tile === null
-            ? this.tileDesign.sheets.wallBack[0]
-            : this.tileDesign.sheets.wallFace[0],
-        tile,
-        width: dora.tileW,
-        height: dora.tileH,
-        anchor: 0,
-      });
-      sprite.position.set(dora.x + index * (dora.tileW + doraGap), doraY);
-      this.root!.addChild(sprite);
-    });
-
-    const heading = new Text({
-      text: `${ROUND_WIND_KANJI[view.roundWind]}${view.roundNumber}局`,
-      style: new TextStyle({
-        fontFamily: KANJI_FONT_FAMILY,
-        fontSize: Math.max(28, Math.round(center.h * 0.15)),
-        fontWeight: "400",
-        fill: 0xffffff,
-      }),
-    });
-    heading.anchor.set(0.5, 0.5);
-    heading.position.set(cx, doraY + dora.tileH + heading.height * 0.55);
-    this.root.addChild(heading);
-
-    const wallRemaining = Math.max(0, 70 - view.drawsTaken);
-    const counters: Array<{
-      kind: "honba" | "riichi" | "tiles";
-      value: number;
-      color: number;
-    }> = [
-      ...(view.buuMode === true
-        ? []
-        : [{ kind: "honba" as const, value: view.honba, color: 0xfde68a }]),
-      { kind: "riichi", value: view.riichiSticks, color: 0xfca5a5 },
-      { kind: "tiles", value: wallRemaining, color: 0xd1d5db },
-    ];
-    const counterCells = mobileCounterCells(center, counters.length);
+    const counters = centerCounterSpecs(view);
+    const counterCells = centerCounterCells(center, counters.length);
     const counterRow = new Container();
     counters.forEach((counter, index) => {
       const item = new Container();
+      const counterLabel =
+        counter.kind === "honba"
+          ? this.centerLabels.repeat
+          : counter.kind === "riichi"
+            ? this.centerLabels.riichi
+            : this.centerLabels.tiles;
+      item.label = `center-counter-${counter.kind}:${counterLabel}`;
       const icon = new Graphics();
       if (counter.kind === "tiles") {
         icon.roundRect(-6, -9, 12, 18, 2).stroke({
@@ -3072,6 +3036,48 @@ export class TableRenderer {
       counterRow.addChild(item);
     });
     this.root.addChild(counterRow);
+  }
+
+  private renderIndicatorCenterInfo(view: MatchView, center: Rect): void {
+    if (!this.root || !this.spriteFactory) {
+      return;
+    }
+    const cx = center.x + center.w / 2;
+    const inner = centerInfoInnerRect(center);
+    const doraGap = CENTER_DORA_INDICATOR_GAP;
+    const slots = centerDoraIndicatorSlots(view.doraIndicators);
+    const dora = centerDoraRowGeometry(center, slots.length);
+    const doraY = inner.y + 5;
+
+    slots.forEach((tile, index) => {
+      const sprite = this.spriteFactory!.create({
+        atlasId:
+          tile === null
+            ? this.tileDesign.sheets.wallBack[0]
+            : this.tileDesign.sheets.wallFace[0],
+        tile,
+        width: dora.tileW,
+        height: dora.tileH,
+        anchor: 0,
+      });
+      sprite.label = `center-indicator-${index}`;
+      sprite.position.set(dora.x + index * (dora.tileW + doraGap), doraY);
+      this.root!.addChild(sprite);
+    });
+
+    const heading = new Text({
+      text: `${ROUND_WIND_KANJI[view.roundWind]}${view.roundNumber}局`,
+      style: new TextStyle({
+        fontFamily: KANJI_FONT_FAMILY,
+        fontSize: Math.max(28, Math.round(center.h * 0.15)),
+        fontWeight: "400",
+        fill: 0xffffff,
+      }),
+    });
+    heading.anchor.set(0.5, 0.5);
+    heading.position.set(cx, doraY + dora.tileH + heading.height * 0.55);
+    this.root.addChild(heading);
+    this.renderInlineCenterCounters(view, center);
   }
 
   /**
@@ -3175,9 +3181,8 @@ export class TableRenderer {
     const dabukenCY = -h / 2 + nameRowH + chipRowH + dabukenRowH / 2;
     for (const b of built) {
       const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
-      const rect = layout.discards[seat];
       const identityCenter = this.playerPanelCenter(
-        this.discardPanelRect(rect, seat),
+        this.discardPanelRect(layout, seat),
         seat
       );
       const container = new Container();
@@ -3497,6 +3502,7 @@ export class TableRenderer {
       const crossInset = crossAtEnd ? bandCross - tileCrossDim : 0;
 
       const wallContainer = new Container();
+      wallContainer.label = `perimeter-wall-${seat}`;
       wallContainer.sortableChildren = true;
       const backSheet = this.tileDesign.sheets.wallBack[
         seat as Seat
@@ -3829,6 +3835,7 @@ export class TableRenderer {
     const faceSheet = this.tileDesign.sheets.wallFace[0] as SheetKey;
 
     const container = new Container();
+    container.label = "relay-dead-wall";
     container.sortableChildren = true;
     const wallShadowBoxes: Array<{
       ax: number;
@@ -6156,7 +6163,8 @@ export class TableRenderer {
       this.tileDesign,
       seat as Seat,
       discards,
-      riichiIdx
+      riichiIdx,
+      this.discardLayoutOptions(layout, seat as Seat)
     );
     let animLastPlacement: TilePlacement | null = null;
     for (const placement of discardPlacements) {
@@ -6416,7 +6424,7 @@ export class TableRenderer {
       stick.addChild(bar, dot);
       if (mobileStick) {
         const placement = mobileRiichiStickPlacement(
-          this.discardPanelRect(discardRect, seat),
+          this.discardPanelRect(layout, seat),
           layout.center,
           seat as Seat
         );
@@ -6549,6 +6557,7 @@ export class TableRenderer {
           HAND_PANEL_RADIUS
         )
         .fill({ color: 0x000000, alpha: HAND_PANEL_ALPHA });
+      panel.label = `hand-panel-${seat}`;
       panel.zIndex = -10;
       this.root.addChild(panel);
     }
@@ -6566,8 +6575,7 @@ export class TableRenderer {
       return;
     }
     for (let seat = 0; seat < 4; seat++) {
-      const pond = layout.discards[seat];
-      const panelRect = this.discardPanelRect(pond, seat);
+      const panelRect = this.discardPanelRect(layout, seat);
       const panel = new Graphics()
         .roundRect(
           panelRect.x,
@@ -6577,6 +6585,7 @@ export class TableRenderer {
           HAND_PANEL_RADIUS
         )
         .fill({ color: 0x000000, alpha: HAND_PANEL_ALPHA });
+      panel.label = `discard-panel-${seat}`;
       panel.zIndex = -10;
       this.root.addChild(panel);
 
@@ -6624,12 +6633,30 @@ export class TableRenderer {
     }
   }
 
-  private discardPanelRect(pond: Rect, seat: number): Rect {
+  private discardLayoutOptions(layout: TableLayout, seat: Seat) {
+    return this.presentation === "standard"
+      ? webDiscardLayoutOptions(
+          this.webTableLayoutMode,
+          this.tileDesign,
+          layout,
+          seat
+        )
+      : undefined;
+  }
+
+  private discardPanelRect(layout: TableLayout, seat: number): Rect {
     const typedSeat = seat as Seat;
-    let localFootprint = this.discardFootprintBySeat.get(typedSeat);
+    const pond = layout.discards[typedSeat];
+    const cacheKey = `${this.presentation}:${this.webTableLayoutMode}:${this.layoutConfig.id}:${typedSeat}`;
+    let localFootprint = this.discardFootprintBySeat.get(cacheKey);
     if (!localFootprint) {
-      localFootprint = potentialDiscardBounds(this.tileDesign, typedSeat, 18);
-      this.discardFootprintBySeat.set(typedSeat, localFootprint);
+      localFootprint = potentialDiscardBounds(
+        this.tileDesign,
+        typedSeat,
+        18,
+        this.discardLayoutOptions(layout, typedSeat)
+      );
+      this.discardFootprintBySeat.set(cacheKey, localFootprint);
     }
     const footprint = localRectToTable(
       seatTransform(typedSeat),
