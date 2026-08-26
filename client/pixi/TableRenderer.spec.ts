@@ -23,6 +23,7 @@ import {
   WEB_RIICHI_STICK,
   fitCounterContentInCell,
   mobileRiichiStickPlacement,
+  playerIdentityCenter,
   pointInsideRect,
   resolveSeatHandPresentation,
   riichiStickMetrics,
@@ -34,7 +35,9 @@ import {
   shouldTintTsumogiri,
   sortTilesForDisplay,
   tableRenderPolicy,
+  TEAM_LOGO_Z_INDEX,
   topmostHandHoverTargetIndex,
+  wallZIndex,
   winResultRevealKey,
 } from "./TableRenderer";
 import { mobileTableLayout } from "./layouts/mobileTableLayout";
@@ -331,6 +334,41 @@ describe("web table layouts", () => {
       indicatorCenter: true,
       perimeterWalls: false,
     });
+  });
+
+  it("keeps team logos below every perimeter wall", () => {
+    const wallLayers = ([0, 1, 2, 3] as const).map((seat) =>
+      wallZIndex(seat)
+    );
+
+    expect(TEAM_LOGO_Z_INDEX).toBeLessThan(Math.min(...wallLayers));
+  });
+
+  it("halves the player-local top gap to the discard on the right", () => {
+    const discardPanels = [
+      { x: 400, y: 500, w: 200, h: 150 },
+      { x: 600, y: 300, w: 150, h: 200 },
+      { x: 400, y: 150, w: 200, h: 150 },
+      { x: 250, y: 300, w: 150, h: 200 },
+    ] as const;
+    const centers = ([0, 1, 2, 3] as const).map((seat) =>
+      playerIdentityCenter(discardPanels, seat)
+    );
+
+    expect(centers).toEqual([
+      { x: 686, y: 575 },
+      { x: 675, y: 214 },
+      { x: 314, y: 225 },
+      { x: 325, y: 586 },
+    ]);
+    expect(centers[0].y - 60 - (discardPanels[1].y + discardPanels[1].h)).toBe(
+      15
+    );
+    expect(centers[1].x - 60 - (discardPanels[2].x + discardPanels[2].w)).toBe(
+      15
+    );
+    expect(discardPanels[3].y - (centers[2].y + 60)).toBe(15);
+    expect(discardPanels[0].x - (centers[3].x + 60)).toBe(15);
   });
 
   it("builds three icon counters, or two in Buu mode", () => {

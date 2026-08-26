@@ -448,6 +448,7 @@ export default function GameSpectateRoute({
               return;
             }
             if (msg.type === "snapshot") {
+              rendererRef.current?.snapNextAnimation();
               pendingSoundIndexRef.current = null;
               lastRelaySeqRef.current = msg.seq;
               if (msg.state.seatNames) {
@@ -483,6 +484,7 @@ export default function GameSpectateRoute({
               // The following resync response overlaps this batch, so the seq
               // guard above also prevents duplicate catch-up events.
               if (startSeq === 0 && msg.events.length > 1) {
+                rendererRef.current?.snapNextAnimation();
                 pendingSoundIndexRef.current = null;
                 let hydrated = initialView();
                 for (const event of msg.events) {
@@ -503,6 +505,9 @@ export default function GameSpectateRoute({
               const incoming = msg.events.slice(unseenOffset);
               if (incoming.length === 0) {
                 return;
+              }
+              if (liveRef.current && incoming.length > 1) {
+                rendererRef.current?.snapNextAnimation();
               }
               lastRelaySeqRef.current = msg.seq;
               // Relay matches have no engine snapshot. If no history batch
@@ -730,11 +735,13 @@ export default function GameSpectateRoute({
     Math.max(minIndex, Math.min(n, maxIndex));
   /** Step to absolute event index `n`. Always pauses live mode. */
   const goto = (n: number): void => {
+    rendererRef.current?.snapNextAnimation();
     pendingSoundIndexRef.current = null;
     setLive(false);
     setPlayIndex(clamp(n));
   };
   const goLive = (): void => {
+    rendererRef.current?.snapNextAnimation();
     pendingSoundIndexRef.current = null;
     setLive(true);
     setPlayIndex(maxIndex);
@@ -843,6 +850,9 @@ export default function GameSpectateRoute({
         }
       }
       setLive(false);
+    }
+    if (target !== playIndexRef.current) {
+      rendererRef.current?.snapNextAnimation();
     }
     setPlayIndex(target);
   };

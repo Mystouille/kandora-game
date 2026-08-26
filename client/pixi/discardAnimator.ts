@@ -43,6 +43,8 @@ export const PHASE_B_DURATION_MS = 150;
 /** Draw-in slide: the freshly drawn tile enters sliding from the wall
  * into the tsumo slot. Fixed 0.3s. */
 export const DRAW_SLIDE_MS = 300;
+/** Minimum visual time from a draw starting to that seat's discard starting. */
+export const MIN_DRAW_TO_DISCARD_MS = 500;
 
 /**
  * Live-spectator "sequenced" timeline (relay feeds only, enabled via
@@ -56,6 +58,7 @@ export const DRAW_SLIDE_MS = 300;
  *   0.3s  discard reaches the hover (nudge) position   → discard SFX
  *   0.8s  next action begins; the discard settles flush
  *   1.1s  draw slide finishes                          → draw SFX
+ *   1.3s  earliest following discard
  *
  * (Plus any real server delay K from call windows, absorbed by the
  * `max(now, …)` in {@link DiscardAnimator.schedule}.)
@@ -199,6 +202,12 @@ export class DiscardAnimator {
    * back into the tsumo slot; independent of the discard `anims`
    * map (a seat never draws and discards in the same frame). */
   private readonly drawAnims = new Map<number, DrawAnim>();
+  /** Per-seat draw start retained after the slide ends so a fast
+   * following discard still observes the common minimum delay. */
+  private readonly lastDrawStartMs: Array<number | null> = Array.from(
+    { length: SEAT_COUNT },
+    () => null
+  );
   /** Live-spectator serial timeline (see {@link setSequenced}). */
   private sequenced = false;
   /** Earliest wall-clock ms the next sequenced animation may start.
@@ -254,6 +263,7 @@ export class DiscardAnimator {
     if (!flag) {
       this.anims.clear();
       this.drawAnims.clear();
+      this.lastDrawStartMs.fill(null);
     }
   }
 
@@ -271,6 +281,7 @@ export class DiscardAnimator {
     }
     this.sequenced = flag;
     this.sequenceFreeMs = 0;
+    this.lastDrawStartMs.fill(null);
   }
 
   /**
@@ -293,11 +304,16 @@ export class DiscardAnimator {
    * when the clock has drifted more than {@link SEQ_CATCHUP_CAP_MS}
    * ahead of real time, so fast exchanges can't lag without bound.
    */
-  private schedule(now: number, handoffMs: number): number {
+  private schedule(
+    now: number,
+    handoffMs: number,
+    earliestStartMs: number = now
+  ): number {
     let start = Math.max(now, this.sequenceFreeMs);
     if (start - now > SEQ_CATCHUP_CAP_MS) {
       start = now;
     }
+    start = Math.max(start, earliestStartMs);
     this.sequenceFreeMs = start + handoffMs;
     return start;
   }
@@ -333,6 +349,7 @@ export class DiscardAnimator {
     this.snapNextFlag = true;
     this.anims.clear();
     this.drawAnims.clear();
+    this.lastDrawStartMs.fill(null);
     this.nextDiscardSourceHints.clear();
     this.sequenceFreeMs = 0;
   }
@@ -342,6 +359,7 @@ export class DiscardAnimator {
   reset(): void {
     this.anims.clear();
     this.drawAnims.clear();
+    this.lastDrawStartMs.fill(null);
     this.sequenceFreeMs = 0;
     this.prevView = null;
     this.prevHandLayouts = makeEmptyHandCache();
@@ -418,6 +436,7 @@ export class DiscardAnimator {
     if (hardReset) {
       this.anims.clear();
       this.drawAnims.clear();
+      this.lastDrawStartMs.fill(null);
       this.sequenceFreeMs = 0;
       // A hard reset means the semantic hand/discard relation
       // jumped discontinuously (call claimed a discard, hand_end,
@@ -468,6 +487,19 @@ export class DiscardAnimator {
             sourceKnown: discardSource !== null,
             hint,
           });
+          const drawStartMs = this.lastDrawStartMs[seat];
+          const earliestDiscardStartMs =
+            drawStartMs === null
+              ? now
+              : drawStartMs + MIN_DRAW_TO_DISCARD_MS;
+          const discardStartMs = this.sequenced
+            ? this.schedule(
+                now,
+                SEQ_SLIDE_MS + SEQ_HOVER_MS,
+                earliestDiscardStartMs
+              )
+            : Math.max(now, earliestDiscardStartMs);
+          this.lastDrawStartMs[seat] = null;
 
           this.anims.set(seat, {
             seat,
@@ -480,9 +512,7 @@ export class DiscardAnimator {
             // Sequenced mode queues the slide on the serial clock so it
             // can be held pending behind an in-flight draw; otherwise it
             // starts immediately.
-            startMs: this.sequenced
-              ? this.schedule(now, SEQ_SLIDE_MS + SEQ_HOVER_MS)
-              : now,
+            startMs: discardStartMs,
             durationMs: this.sequenced ? SEQ_SLIDE_MS : PHASE_A_DURATION_MS,
             sourceSlot: {
               handIndex: sourceSlot,
@@ -505,6 +535,7 @@ export class DiscardAnimator {
           const startMs = this.sequenced
             ? this.schedule(now, DRAW_SLIDE_MS)
             : now;
+          this.lastDrawStartMs[seat] = startMs;
           this.drawAnims.set(seat, {
             hideFrom: now,
             startMs,

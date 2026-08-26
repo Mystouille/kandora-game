@@ -7,6 +7,7 @@ import {
   PHASE_A_DURATION_MS,
   PHASE_B_DURATION_MS,
   DRAW_SLIDE_MS,
+  MIN_DRAW_TO_DISCARD_MS,
 } from "./discardAnimator";
 
 function makeView(args: {
@@ -48,6 +49,115 @@ function recordLayouts(
 }
 
 describe("DiscardAnimator", () => {
+  it.each([false, true])(
+    "enforces the draw-to-discard minimum when sequenced is %s",
+    (sequenced) => {
+      let now = 0;
+      const animator = new DiscardAnimator({ now: () => now });
+      animator.setSequenced(sequenced);
+      animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+      recordLayouts(animator, [
+        { sorted: ["1m"] },
+        { sorted: [] },
+        { sorted: [] },
+        { sorted: [] },
+      ]);
+
+      animator.beginFrame(
+        makeView({
+          hands: [["1m", "9m"], [], [], []],
+          freshlyDrawnSeat: 0,
+        })
+      );
+      recordLayouts(animator, [
+        { sorted: ["1m", "9m"], isFreshlyDrawn: true },
+        { sorted: [] },
+        { sorted: [] },
+        { sorted: [] },
+      ]);
+
+      animator.beginFrame(
+        makeView({
+          hands: [["1m"], [], [], []],
+          discards: [["9m"], [], [], []],
+          discardTsumogiri: [[true], [], [], []],
+          discardSources: [["draw"], [], [], []],
+          totalDiscards: 1,
+          freshlyDiscardedSeat: 0,
+        })
+      );
+
+      expect(animator.getAnim(0)?.startMs).toBe(MIN_DRAW_TO_DISCARD_MS);
+      now = MIN_DRAW_TO_DISCARD_MS - 1;
+      expect(animator.getProgress(0)).toBe(0);
+      now = MIN_DRAW_TO_DISCARD_MS + 1;
+      expect(animator.getProgress(0)).toBeGreaterThan(0);
+    }
+  );
+
+  it("snaps a discontinuous sequenced jump without retaining hand state or backlog", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    animator.setSequenced(true);
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    animator.beginFrame(
+      makeView({
+        hands: [["1m", "9m"], [], [], []],
+        freshlyDrawnSeat: 0,
+      })
+    );
+    recordLayouts(animator, [
+      { sorted: ["1m", "9m"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+    animator.beginFrame(
+      makeView({
+        hands: [["1m"], [], [], []],
+        discards: [["9m"], [], [], []],
+        discardSources: [["draw"], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+    expect(animator.getAnim(0)?.phaseASnapshot).not.toBeNull();
+
+    animator.snapNext();
+    expect(animator.getAnim(0)).toBeNull();
+
+    const jumped = makeView({
+      hands: [["1m"], ["2p"], ["3s"], []],
+      discards: [["9m"], ["1p"], [], []],
+      totalDiscards: 2,
+      freshlyDiscardedSeat: 1,
+    });
+    animator.beginFrame(jumped);
+    expect(animator.hasActive()).toBe(false);
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: ["2p"] },
+      { sorted: ["3s"] },
+      { sorted: [] },
+    ]);
+
+    animator.beginFrame(
+      makeView({
+        hands: [["1m"], ["2p"], [], []],
+        discards: [["9m"], ["1p"], ["3s"], []],
+        totalDiscards: 3,
+        freshlyDiscardedSeat: 2,
+      })
+    );
+    expect(animator.getAnim(2)?.startMs).toBe(0);
+  });
+
   it("uses the normal discard timing for a riichi declaration", () => {
     const animator = new DiscardAnimator({ now: () => 0 });
     animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));

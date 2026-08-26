@@ -556,6 +556,7 @@ const PLAYER_PANEL_LINK_WIDTH = 28;
 const PLAYER_PANEL_ALPHA = 0.28;
 /** Above the identity panel (-10), below every root board tile layer (0+). */
 const PLAYER_PANEL_CONTENT_Z = -9;
+export const TEAM_LOGO_Z_INDEX = -9;
 const RELATIVE_SCORE_DISPLAY_MS = 4_000;
 const HAND_HOVER_TINT = 0xffaaaa;
 const RIICHI_UNAVAILABLE_TINT = 0xb0b0b0;
@@ -567,6 +568,72 @@ const RESULT_SCORE_BOX_NAME_GAP = 8;
 const RESULT_YAKU_REVEAL_INTERVAL_MS = 750;
 const RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
 const RESULT_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS = 750;
+
+export function wallZIndex(seat: number): number {
+  return seat === 0 ? 2 : seat === 2 ? 0 : 1;
+}
+
+type SeatRects = readonly [Rect, Rect, Rect, Rect];
+
+export function playerIdentityCenter(
+  discardPanels: SeatRects,
+  seat: Seat
+): { x: number; y: number } {
+  const discardPanel = discardPanels[seat];
+  let center: { x: number; y: number };
+  if (seat === 0) {
+    center = {
+      x:
+        discardPanel.x +
+        discardPanel.w +
+        PLAYER_PANEL_GAP +
+        PLAYER_PANEL_SIZE / 2,
+      y: discardPanel.y + discardPanel.h - PLAYER_PANEL_SIZE / 2,
+    };
+  } else if (seat === 1) {
+    center = {
+      x: discardPanel.x + discardPanel.w - PLAYER_PANEL_SIZE / 2,
+      y: discardPanel.y - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
+    };
+  } else if (seat === 2) {
+    center = {
+      x: discardPanel.x - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
+      y: discardPanel.y + PLAYER_PANEL_SIZE / 2,
+    };
+  } else {
+    center = {
+      x: discardPanel.x + PLAYER_PANEL_SIZE / 2,
+      y:
+        discardPanel.y +
+        discardPanel.h +
+        PLAYER_PANEL_GAP +
+        PLAYER_PANEL_SIZE / 2,
+    };
+  }
+
+  const rightDiscard = discardPanels[((seat + 1) % 4) as Seat];
+  if (seat === 0) {
+    const gap =
+      center.y -
+      PLAYER_PANEL_SIZE / 2 -
+      (rightDiscard.y + rightDiscard.h);
+    center.y -= Math.max(0, gap) / 2;
+  } else if (seat === 1) {
+    const gap =
+      center.x -
+      PLAYER_PANEL_SIZE / 2 -
+      (rightDiscard.x + rightDiscard.w);
+    center.x -= Math.max(0, gap) / 2;
+  } else if (seat === 2) {
+    const gap =
+      rightDiscard.y - (center.y + PLAYER_PANEL_SIZE / 2);
+    center.y += Math.max(0, gap) / 2;
+  } else {
+    const gap = rightDiscard.x - (center.x + PLAYER_PANEL_SIZE / 2);
+    center.x += Math.max(0, gap) / 2;
+  }
+  return center;
+}
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
  *  East, South, West, North. */
@@ -1451,6 +1518,7 @@ export class TableRenderer {
     }
 
     const root = new Container();
+    root.sortableChildren = true;
     app.stage.addChild(root);
     this.root = root;
 
@@ -3191,6 +3259,7 @@ export class TableRenderer {
     if (built.length === 0) {
       return;
     }
+    const discardPanels = this.discardPanelRects(layout);
     // Row metrics.
     const nameRowH = maxNameH + padY * 2;
     const chipIconR = 14; // chip icon radius (px)
@@ -3208,10 +3277,7 @@ export class TableRenderer {
     const dabukenCY = -h / 2 + nameRowH + chipRowH + dabukenRowH / 2;
     for (const b of built) {
       const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
-      const identityCenter = this.playerPanelCenter(
-        this.discardPanelRect(layout, seat),
-        seat
-      );
+      const identityCenter = playerIdentityCenter(discardPanels, seat);
       const container = new Container();
       // Enriched (team) nameplate: team logo as the box background with the
       // player name on top, anchored to the player's hand (player-right end,
@@ -3264,7 +3330,7 @@ export class TableRenderer {
 
         container.rotation = SEAT_CONTAINER_ROT[seat];
         container.position.set(identityCenter.x, identityCenter.y);
-        container.zIndex = PLAYER_PANEL_CONTENT_Z;
+        container.zIndex = TEAM_LOGO_Z_INDEX;
         this.root.addChild(container);
         continue;
       }
@@ -3833,7 +3899,7 @@ export class TableRenderer {
         wallShadowBoxes
       );
 
-      wallContainer.zIndex = seat === 0 ? 2 : seat === 2 ? 0 : 1;
+      wallContainer.zIndex = wallZIndex(seat);
       this.root.sortableChildren = true;
       this.root.addChild(wallContainer);
     }
@@ -3918,7 +3984,7 @@ export class TableRenderer {
       wallShadowBoxes
     );
     // Wall layer on the sortable root (below discards=5 / hands=10).
-    container.zIndex = 2;
+    container.zIndex = wallZIndex(0);
     this.root.addChild(container);
   }
 
@@ -6598,8 +6664,10 @@ export class TableRenderer {
     if (!this.root) {
       return;
     }
+    const discardPanels = this.discardPanelRects(layout);
     for (let seat = 0; seat < 4; seat++) {
-      const panelRect = this.discardPanelRect(layout, seat);
+      const typedSeat = seat as Seat;
+      const panelRect = discardPanels[typedSeat];
       const panel = new Graphics()
         .roundRect(
           panelRect.x,
@@ -6613,7 +6681,7 @@ export class TableRenderer {
       panel.zIndex = -10;
       this.root.addChild(panel);
 
-      const identityCenter = this.playerPanelCenter(panelRect, seat);
+      const identityCenter = playerIdentityCenter(discardPanels, typedSeat);
       const playerPanelX = identityCenter.x - PLAYER_PANEL_SIZE / 2;
       const playerPanelY = identityCenter.y - PLAYER_PANEL_SIZE / 2;
       let linkX = 0;
@@ -6668,6 +6736,15 @@ export class TableRenderer {
       : undefined;
   }
 
+  private discardPanelRects(layout: TableLayout): [Rect, Rect, Rect, Rect] {
+    return [
+      this.discardPanelRect(layout, 0),
+      this.discardPanelRect(layout, 1),
+      this.discardPanelRect(layout, 2),
+      this.discardPanelRect(layout, 3),
+    ];
+  }
+
   private discardPanelRect(layout: TableLayout, seat: number): Rect {
     const typedSeat = seat as Seat;
     const pond = layout.discards[typedSeat];
@@ -6693,45 +6770,6 @@ export class TableRenderer {
       y: footprint.y - padding,
       w: footprint.w + padding * 2,
       h: footprint.h + padding * 2,
-    };
-  }
-
-  private playerPanelCenter(
-    discardPanel: Rect,
-    seat: number
-  ): { x: number; y: number } {
-    // Align the identity square's player-relative bottom edge with
-    // the discard mat's: screen bottom/right/top/left for seats
-    // 0/1/2/3 respectively.
-    if (seat === 0) {
-      return {
-        x:
-          discardPanel.x +
-          discardPanel.w +
-          PLAYER_PANEL_GAP +
-          PLAYER_PANEL_SIZE / 2,
-        y: discardPanel.y + discardPanel.h - PLAYER_PANEL_SIZE / 2,
-      };
-    }
-    if (seat === 1) {
-      return {
-        x: discardPanel.x + discardPanel.w - PLAYER_PANEL_SIZE / 2,
-        y: discardPanel.y - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
-      };
-    }
-    if (seat === 2) {
-      return {
-        x: discardPanel.x - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
-        y: discardPanel.y + PLAYER_PANEL_SIZE / 2,
-      };
-    }
-    return {
-      x: discardPanel.x + PLAYER_PANEL_SIZE / 2,
-      y:
-        discardPanel.y +
-        discardPanel.h +
-        PLAYER_PANEL_GAP +
-        PLAYER_PANEL_SIZE / 2,
     };
   }
 
