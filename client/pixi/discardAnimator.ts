@@ -332,14 +332,14 @@ export class DiscardAnimator {
   }
 
   /**
-  * Stash a hint that the player's *next* discard from `seat`
+   * Stash a hint that the player's *next* discard from `seat`
    * originated at the `ord`-th visible occurrence of `tile` in
    * their current display order (0-based). The hint is
    * consumed by the next phase-A schedule for that seat and
    * lets {@link pickHiddenSlot} pick the actually-clicked copy
    * of a duplicate tile instead of falling back to "first
-  * occurrence in display order". Drag releases additionally carry
-  * the floating hand tile's center so phase A can start there.
+   * occurrence in display order". Drag releases additionally carry
+   * the floating hand tile's center so phase A can start there.
    */
   setNextDiscardSourceHint(
     seat: number,
@@ -509,9 +509,7 @@ export class DiscardAnimator {
             ? this.lastDrawStartMs[seat]
             : null;
           const earliestDiscardStartMs =
-            drawStartMs === null
-              ? now
-              : drawStartMs + MIN_DRAW_TO_DISCARD_MS;
+            drawStartMs === null ? now : drawStartMs + MIN_DRAW_TO_DISCARD_MS;
           const discardStartMs = this.sequenced
             ? this.schedule(
                 now,
@@ -826,17 +824,13 @@ function pickHiddenSlot(args: {
   // an identical copy remains in the draw slot.
   if (!sourceKnown && isFreshlyDrawn && len > 0) {
     const drawn = sortedHand[len - 1];
-    if (
-      drawn !== null &&
-      normalizeFive(drawn) === normalizeFive(discardedTile)
-    ) {
+    if (drawn === discardedTile) {
       return len - 1;
     }
   }
   // Revealed / focused hand → find the discarded tile.
-  // Red-five (`0X`) ↔ plain five (`5X`) collide visually but
-  // never simultaneously appear in a hand, so an equality check
-  // is safe.
+  // Prefer exact physical identity because red and normal fives can
+  // coexist in the same hand.
   for (let i = 0; i < closedEnd; i++) {
     if (sortedHand[i] === discardedTile) {
       return i;

@@ -715,6 +715,33 @@ describe("DiscardAnimator", () => {
     expect(animator.getAnim(0)?.sourceSlot?.handIndex).toBe(3);
   });
 
+  it("distinguishes a normal five discard from a drawn red five", () => {
+    const animator = new DiscardAnimator({ now: () => 0 });
+    const before = makeView({
+      hands: [["2p", "5p", "8p", "0p"], [], [], []],
+      freshlyDrawnSeat: 0,
+    });
+    animator.beginFrame(before);
+    recordLayouts(animator, [
+      { sorted: ["2p", "5p", "8p", "0p"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    animator.beginFrame(
+      makeView({
+        hands: [["2p", "8p", "0p"], [], [], []],
+        discards: [["5p"], [], [], []],
+        discardTsumogiri: [[false], [], [], []],
+        totalDiscards: 1,
+        freshlyDiscardedSeat: 0,
+      })
+    );
+
+    expect(animator.getAnim(0)?.sourceSlot?.handIndex).toBe(1);
+  });
+
   it("does not reinterpret authoritative tedashi when the drawn value matches", () => {
     const animator = new DiscardAnimator({ now: () => 0 });
     const before = makeView({
