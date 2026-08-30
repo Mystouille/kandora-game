@@ -23,7 +23,7 @@
     "suuchaRiichi": true,
     "sanchahou": true
   },
-  "atamahane": false,
+  "atamahane": true,
   "bustedScore": 0,
   "bustedStrict": true,
   "agariYame": false,
