@@ -111,9 +111,10 @@ npm run mobile:sync
 ```
 
 The current shell renders the real table, validates/imports shared `ReplayLog`
-JSON, and initializes a native SQLite `MatchRepository`. SQLite atomically
-stores checkpoints, pending commands, terminal tombstones, completed matches,
-and replay archives; browser development injects the in-memory implementation.
+JSON, and initializes native SQLite persistence. SQLite stores best-effort live
+event journals, explicit-pause checkpoints, terminal tombstones, completed
+matches, and replay archives; browser development injects the in-memory
+implementation.
 The mobile loopback controller hosts one human plus three bots in-process and
 dispatches `ServerMessage` objects through the same client-store function as
 `GameWS`. Native background/foreground and manual Pause/Resume replace the
@@ -148,46 +149,32 @@ Remaining pacing sleeps (win reaction, turn/draw-to-discard pacing, match-end
 display, win-to-panel), the internal win→chombo display pause, relays, and
 delayed spectators remain explicitly uncheckpointable.
 
-`pauseAndSaveCheckpoint()` freezes mutation and cancels every active phase timer
-before awaiting `MatchRepository.saveCheckpoint()`. Concurrent pause calls share
-one write. Success leaves the old process frozen for disposal; a failed atomic
-write rebases the saved durations onto the current runtime and resumes the same
-process without charging the I/O interval. `restoreSavedCheckpoint()` loads and
-validates through the repository.
+During normal play, accepted commands mutate the in-memory authority without
+awaiting Mongo or SQLite. Archive-enriched `GameEvent` records enter an ordered
+per-game journal queue after they enter the authoritative event log. The queue
+batches contiguous sequences, retries transient failures, and never applies
+storage backpressure to a turn. A cloud process crash still loses its active
+match; partial journal prefixes are diagnostic data, not resumable authority.
 
-Accepted `act`, `ready`, `vote_continue`, and self-reported `afk` frames use a
-write-ahead recovery record. Before authority mutates, `MatchProcess` freezes
-the current input window and atomically stores its checkpoint together with the
-seat and command payload. An `afk:true` record also carries the exact safe
-default selected from that window (`pass` or tsumogiri/fallback discard), so the
-sticky flag and default are one crash-safe command. Recovery validates every
-command against its exact action/ready/vote window, restores the pre-state,
-replays once, and replaces the pending record with the resulting checkpoint.
+`pauseAndSaveCheckpoint()` is the deliberate durability boundary. It freezes
+mutation, cancels active phase timers, flushes the event journal, and then saves
+one full checkpoint. Concurrent pause calls share the operation. Success leaves
+the old process frozen for disposal; a failed flush or checkpoint write rebases
+saved durations onto the current runtime and resumes the same process without
+charging the I/O interval. Mobile exact resume is promised only after this
+barrier completes. Native OS background callbacks invoke it best-effort, but an
+OS may suspend JavaScript before the write finishes.
 
-The final ready acknowledgment and a resolving Buu vote commit a completed
-window checkpoint before starting their asynchronous continuation. Installing
-that checkpoint, either after the commit or during recovery, consumes the
-continuation: deal/start the hand, begin the next Buu game, or finalize the
-session. This makes a crash on either side of the continuation deterministic.
-Likewise, a gameplay command that reaches a staged result reveal, ready check,
-or Buu vote commits that open boundary and releases command ownership before
-waiting. Recovery therefore returns a usable match at the boundary instead of
-blocking on input that can only arrive after reconnection. Frames arriving
-while the boundary write is in flight wait for that write, not for the parent
-command whose continuation depends on those frames.
+At game end, final archival seals the journal, waits only for an already-started
+batch, and replaces the partial prefix with the complete in-memory log. This
+archive remains awaited before Buu continuation or session completion. Restored
+checkpoints are consumed when their host becomes active so a later abrupt kill
+cannot silently roll visible play back to an old checkpoint.
 
-A failed write-ahead save mutates nothing and resumes the original timers. A
-failed post-command commit leaves the advanced process paused and the durable
-pre-state/command intact; `retryPendingCommandCommit()` commits that captured
-post-state before input resumes. Terminalization replaces either form with the
-same tombstone. A detached replay continuation that fails after recovery has
-returned also pauses the process and exposes its cause through
-`pendingCommandRecoveryError`. Transactional gameplay covers discard,
-call/pass, kan, win, riichi, and explicit AFK opt-out/opt-in. `start_match`,
-`leave_seat`, raw network detach, and ordinary server deadline/liveness defaults
-do not write their own command record yet. Automatic defaults serialize against
-client input and are replayable from the latest disconnected-window checkpoint,
-but only a later command or explicit lifecycle save advances durable storage.
+Recovery rows containing `pendingCommand` from older builds remain supported.
+The command is validated against its saved input window, replayed once, and the
+row is replaced with one clean checkpoint. New gameplay never creates pending
+command rows.
 
 Before emitting terminal `session_end`, `MatchProcess` atomically replaces any
 existing checkpoint with a retained terminal tombstone. Loads then return no

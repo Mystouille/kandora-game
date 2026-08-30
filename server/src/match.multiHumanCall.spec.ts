@@ -56,6 +56,7 @@ import {
 import type {
   GameEvent,
   LegalAction,
+  Seat,
   ServerMessage,
   Tile,
 } from "~/game/protocol/messages";
@@ -414,23 +415,13 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     }
   });
 
-  it("queues a concurrent call response behind the active command write", async () => {
-    const storage = createMemoryMatchRepository();
+  it("queues a concurrent call response behind active command execution", async () => {
+    const repository = createMemoryMatchRepository();
     let releaseSeatOne = (): void => undefined;
     const seatOneGate = new Promise<void>((resolve) => {
       releaseSeatOne = resolve;
     });
-    let seatOneWriteStarted = false;
-    const repository: MatchRepository = {
-      ...storage,
-      saveCommandTransaction: async (args) => {
-        if (args.command.seat === 1 && !seatOneWriteStarted) {
-          seatOneWriteStarted = true;
-          await seatOneGate;
-        }
-        await storage.saveCommandTransaction(args);
-      },
-    };
+    let seatOneExecutionStarted = false;
     const m = makeFourHumanMatch(242, repository);
     await m.start();
     const internals = plantThreeRonScenario(m);
@@ -441,10 +432,21 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     if (!seat2Ron) {
       throw new Error("expected seat 2 ron");
     }
+    const commandInternals = m as unknown as {
+      handleActDirect(seat: Seat, actionId: string): Promise<void>;
+    };
+    const handleActDirect = commandInternals.handleActDirect.bind(m);
+    commandInternals.handleActDirect = async (seat, actionId) => {
+      if (seat === 1 && !seatOneExecutionStarted) {
+        seatOneExecutionStarted = true;
+        await seatOneGate;
+      }
+      await handleActDirect(seat, actionId);
+    };
 
     const seatOnePass = m.handleAct(1, "pass");
     await vi.waitFor(() => {
-      expect(seatOneWriteStarted).toBe(true);
+      expect(seatOneExecutionStarted).toBe(true);
     });
     const seatTwoRon = m.handleAct(2, seat2Ron.id);
 

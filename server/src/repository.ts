@@ -192,17 +192,39 @@ export interface PersistedMatchPlayer {
   isBot: boolean;
 }
 
+export interface PersistedMatchEvent {
+  seq: number;
+  event: GameEvent;
+  emittedAt: number;
+}
+
+/**
+ * Best-effort live event persistence. Implementations must make appending the
+ * same contiguous batch idempotent so an ambiguous I/O failure can be retried.
+ */
+export interface MatchEventJournalStore {
+  appendMatchEvents(args: {
+    matchId: string;
+    events: PersistedMatchEvent[];
+  }): Promise<void>;
+  loadMatchEventJournalState(matchId: string): Promise<{
+    status: "playing" | "finished" | "aborted";
+    nextSeq: number;
+  } | null>;
+}
+
 export interface CreateMatchArgs {
   matchId: string;
   seed: number;
   players: PersistedMatchPlayer[];
+  initialEventSeq: number;
   sessionId?: string;
   gameIndex?: number;
 }
 
 export interface ArchiveMatchArgs {
   matchId: string;
-  events: Array<{ seq: number; event: GameEvent }>;
+  events: PersistedMatchEvent[];
   finalScores: Array<{
     seat: Seat;
     score: number;
@@ -236,7 +258,7 @@ export interface MatchRepository {
     matchId: string;
     checkpoint: MatchCheckpoint;
   }): Promise<void>;
-  /** Atomically save pre-command authority and the command to replay. */
+  /** Legacy compatibility for recovery rows written by older builds. */
   saveCommandTransaction(args: {
     matchId: string;
     checkpoint: MatchCheckpoint;
@@ -268,16 +290,103 @@ export const ephemeralMatchRepository: MatchRepository = {
   deleteCheckpoint: async () => undefined,
 };
 
-export function createMemoryMatchRepository(): MatchRepository {
+interface MemoryMatchJournal {
+  status: "playing" | "finished" | "aborted";
+  nextSeq: number;
+  events: PersistedMatchEvent[];
+}
+
+export interface MemoryMatchRepository
+  extends MatchRepository,
+    MatchEventJournalStore {
+  inspectMatchEventJournal(matchId: string): MemoryMatchJournal | null;
+}
+
+function cloneMatchEvents(events: PersistedMatchEvent[]): PersistedMatchEvent[] {
+  return JSON.parse(JSON.stringify(events)) as PersistedMatchEvent[];
+}
+
+export function assertContiguousMatchEvents(events: PersistedMatchEvent[]): {
+  firstSeq: number;
+  nextSeq: number;
+} {
+  if (events.length === 0) {
+    throw new Error("Match event batch must not be empty");
+  }
+  const firstSeq = events[0].seq;
+  if (!Number.isInteger(firstSeq) || firstSeq < 0) {
+    throw new Error("Match event sequence must be nonnegative");
+  }
+  for (let index = 0; index < events.length; index += 1) {
+    const entry = events[index];
+    if (entry.seq !== firstSeq + index) {
+      throw new Error(`Match event batch is not contiguous at seq ${entry.seq}`);
+    }
+    if (!Number.isFinite(entry.emittedAt)) {
+      throw new Error(`Match event ${entry.seq} has an invalid timestamp`);
+    }
+  }
+  return { firstSeq, nextSeq: firstSeq + events.length };
+}
+
+export function createMemoryMatchRepository(): MemoryMatchRepository {
   const records = new Map<
     string,
     | { kind: "checkpoint"; recovery: MatchRecoveryRecord }
     | { kind: "terminal"; finishedAt: number }
   >();
+  const journals = new Map<string, MemoryMatchJournal>();
   return {
-    createMatch: async () => undefined,
-    archiveMatch: async () => undefined,
+    createMatch: async ({ matchId, initialEventSeq }) => {
+      if (!journals.has(matchId)) {
+        journals.set(matchId, {
+          status: "playing",
+          nextSeq: initialEventSeq,
+          events: [],
+        });
+      }
+    },
+    archiveMatch: async ({ matchId, events }) => {
+      const nextSeq =
+        events.length === 0
+          ? journals.get(matchId)?.nextSeq ?? 0
+          : assertContiguousMatchEvents(events).nextSeq;
+      journals.set(matchId, {
+        status: "finished",
+        nextSeq,
+        events: cloneMatchEvents(events),
+      });
+    },
     archiveReplayLog: async () => undefined,
+    appendMatchEvents: async ({ matchId, events }) => {
+      const { firstSeq, nextSeq } = assertContiguousMatchEvents(events);
+      const journal = journals.get(matchId);
+      if (journal === undefined) {
+        throw new Error(`Cannot append events for unknown match ${matchId}`);
+      }
+      if (journal.status !== "playing" || journal.nextSeq >= nextSeq) {
+        return;
+      }
+      if (journal.nextSeq !== firstSeq) {
+        throw new Error(
+          `Match ${matchId} expected event seq ${journal.nextSeq}, got ${firstSeq}`
+        );
+      }
+      journal.events.push(...cloneMatchEvents(events));
+      journal.nextSeq = nextSeq;
+    },
+    loadMatchEventJournalState: async (matchId) => {
+      const journal = journals.get(matchId);
+      return journal === undefined
+        ? null
+        : { status: journal.status, nextSeq: journal.nextSeq };
+    },
+    inspectMatchEventJournal: (matchId) => {
+      const journal = journals.get(matchId);
+      return journal === undefined
+        ? null
+        : { ...journal, events: cloneMatchEvents(journal.events) };
+    },
     saveCheckpoint: async ({ matchId, checkpoint }) => {
       if (records.get(matchId)?.kind === "terminal") {
         throw new Error(`Cannot save checkpoint for terminal match ${matchId}`);

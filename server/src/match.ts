@@ -75,9 +75,14 @@ import {
 import { projectEvent, projectPublicEvent } from "./projection";
 import {
   type MatchRepository,
+  type MatchEventJournalStore,
   type PendingMatchCommand,
   type PersistedMatchPlayer,
 } from "./repository";
+import {
+  MatchEventJournal,
+  type EventJournalErrorContext,
+} from "./eventJournal";
 import {
   type MatchRuntime,
   type MatchTimer,
@@ -98,17 +103,12 @@ type FinalScore = {
 
 export interface MatchProcessDependencies {
   repository: MatchRepository;
+  eventJournalStore?: MatchEventJournalStore;
+  onEventJournalError?: (context: EventJournalErrorContext) => void;
   runtime?: MatchRuntime;
 }
 
 type Send = (msg: ServerMessage) => void;
-
-class CommandBoundaryCommitError extends Error {
-  constructor(cause: unknown) {
-    super("failed to commit command input boundary", { cause });
-    this.name = "CommandBoundaryCommitError";
-  }
-}
 
 /**
  * Per-connection state for a delayed-spectator session. Tracks
@@ -758,13 +758,10 @@ export class MatchProcess {
 
   /**
    * In-memory event log retained for the lifetime of the match.
-   * Doubles as (a) the source for in-process resync replay (no
-   * separate ring buffer needed — a full match is ~400 KB worst
-   * case, scanning is microseconds) and (b) the payload archived
-   * to Mongo in one shot from `finalizeMatch` via `archiveMatch`.
-    * Durable recovery stores this log inside quiescent checkpoints
-    * and write-ahead command records; the standalone Match archive
-    * still receives the complete log only at game completion.
+  * Doubles as (a) the source for in-process resync replay, (b) the payload
+  * source for best-effort journal batches, and (c) the complete final archive.
+  * The journal queue stores only cursors, so this array remains the sole
+  * in-memory owner of events that have not reached storage yet.
    */
   private readonly eventLog: Array<{
     seq: number;
@@ -1012,15 +1009,17 @@ export class MatchProcess {
   private lastVoteReason: "vote_no" | "vote_timeout" | null = null;
   private readonly runtime: MatchRuntime;
   private readonly repository: MatchRepository;
+  private readonly eventJournalStore: MatchEventJournalStore | null;
+  private readonly onEventJournalError:
+    | ((context: EventJournalErrorContext) => void)
+    | undefined;
+  private eventJournal: MatchEventJournal | null = null;
   private pausedCheckpoint: MatchCheckpoint | null = null;
   private checkpointSavePromise: Promise<MatchCheckpoint> | null = null;
   private commandTransactionPromise: Promise<void> | null = null;
   private nextCommandTransactionId = 1;
   private activeCommandTransactionId: number | null = null;
-  private readonly yieldedCommandTransactionIds = new Set<number>();
-  private pendingCommandCommitCheckpoint: MatchCheckpoint | null = null;
-  private commandCommitRetryPromise: Promise<boolean> | null = null;
-  private pendingCommandCommitRestoresContinuation = false;
+  private legacyCommandRecoveryInProgress = false;
   private commandRecoveryRequired = false;
   private commandRecoveryError: Error | null = null;
   private commandBoundaryResolve: (() => void) | null = null;
@@ -1030,17 +1029,9 @@ export class MatchProcess {
   private automaticDefaultPromise: Promise<void> | null = null;
   private automaticDefaultHandoffPromise: Promise<void> | null = null;
   private automaticDefaultHandoffResolve: (() => void) | null = null;
-  private suspendedCommandTimer:
-    | { kind: "ready" }
-    | { kind: "continue_vote"; timeoutArmed: boolean }
-    | null = null;
 
   get isPaused(): boolean {
     return this.pausedCheckpoint !== null || this.commandRecoveryRequired;
-  }
-
-  get hasPendingCommandCommit(): boolean {
-    return this.pendingCommandCommitCheckpoint !== null;
   }
 
   get pendingCommandRecoveryError(): Error | null {
@@ -1049,7 +1040,9 @@ export class MatchProcess {
 
   async waitUntilConnectionReady(): Promise<boolean> {
     const activeTransaction =
-      this.commandBoundaryHandoffPromise ?? this.commandTransactionPromise;
+      this.checkpointSavePromise ??
+      this.commandBoundaryHandoffPromise ??
+      this.commandTransactionPromise;
     if (activeTransaction !== null) {
       try {
         await activeTransaction;
@@ -1061,7 +1054,7 @@ export class MatchProcess {
   }
 
   private assertNotPaused(operation: string): void {
-    if (this.isPaused) {
+    if (this.isPaused || this.checkpointSavePromise !== null) {
       throw new Error(`MatchProcess.${operation}: match is paused`);
     }
   }
@@ -1088,6 +1081,8 @@ export class MatchProcess {
     this.presetId = presetId;
     this.runtime = dependencies.runtime ?? createSystemMatchRuntime(seed);
     this.repository = dependencies.repository;
+    this.eventJournalStore = dependencies.eventJournalStore ?? null;
+    this.onEventJournalError = dependencies.onEventJournalError;
   }
 
   /**
@@ -1222,11 +1217,45 @@ export class MatchProcess {
     if (this.pausedCheckpoint !== null) {
       return Promise.resolve(this.createCheckpoint());
     }
-    const checkpoint = this.createCheckpoint();
-    this.freezeCheckpoint(checkpoint);
-    const saving = this.persistPausedCheckpoint(checkpoint);
+    const activeCommand = this.commandTransactionPromise;
+    if (activeCommand === null) {
+      const checkpoint = this.createCheckpoint();
+      this.freezeCheckpoint(checkpoint);
+      const saving = this.persistPausedCheckpointAndClear(checkpoint);
+      this.checkpointSavePromise = saving;
+      return saving;
+    }
+    const saving = this.pauseAfterActiveCommand(activeCommand);
     this.checkpointSavePromise = saving;
     return saving;
+  }
+
+  private async pauseAfterActiveCommand(
+    activeCommand: Promise<void>
+  ): Promise<MatchCheckpoint> {
+    try {
+      const boundary = this.beginCommandBoundaryWatch();
+      try {
+        await Promise.race([activeCommand, boundary]);
+      } finally {
+        this.clearCommandBoundaryWatch(boundary);
+      }
+      const checkpoint = this.createCheckpoint();
+      this.freezeCheckpoint(checkpoint);
+      return await this.persistPausedCheckpoint(checkpoint);
+    } finally {
+      this.checkpointSavePromise = null;
+    }
+  }
+
+  private async persistPausedCheckpointAndClear(
+    checkpoint: MatchCheckpoint
+  ): Promise<MatchCheckpoint> {
+    try {
+      return await this.persistPausedCheckpoint(checkpoint);
+    } finally {
+      this.checkpointSavePromise = null;
+    }
   }
 
   private freezeCheckpoint(checkpoint: MatchCheckpoint): void {
@@ -1288,6 +1317,9 @@ export class MatchProcess {
     checkpoint: MatchCheckpoint
   ): Promise<MatchCheckpoint> {
     try {
+      if (this.eventJournal !== null) {
+        await this.eventJournal.flush();
+      }
       await this.repository.saveCheckpoint({
         matchId: this.matchId,
         checkpoint,
@@ -1296,8 +1328,6 @@ export class MatchProcess {
     } catch (error) {
       this.resumeCheckpoint(checkpoint);
       throw error;
-    } finally {
-      this.checkpointSavePromise = null;
     }
   }
 
@@ -1316,7 +1346,9 @@ export class MatchProcess {
       );
     }
     const match = MatchProcess.restoreCheckpoint(checkpoint, dependencies);
+    await match.restoreEventJournal();
     if (recovery.pendingCommand !== null) {
+      match.legacyCommandRecoveryInProgress = true;
       const boundary = match.beginCommandBoundaryWatch();
       const replaying = match.replayPendingCommand(recovery.pendingCommand);
       match.commandTransactionPromise = replaying;
@@ -1330,6 +1362,60 @@ export class MatchProcess {
       await Promise.race([replaying, boundary]);
     }
     return match;
+  }
+
+  private openEventJournal(matchId: string, initialNextSeq: number): void {
+    if (this.eventJournalStore === null) {
+      return;
+    }
+    if (this.eventJournal !== null) {
+      throw new Error("MatchProcess.openEventJournal: journal already open");
+    }
+    this.eventJournal = new MatchEventJournal({
+      matchId,
+      initialNextSeq,
+      store: this.eventJournalStore,
+      readEvents: (fromSeq, toSeq) =>
+        this.eventLog.slice(fromSeq, toSeq).map((entry) => ({ ...entry })),
+      onError: this.onEventJournalError,
+    });
+  }
+
+  private async restoreEventJournal(): Promise<void> {
+    if (this.eventJournalStore === null || this.statusValue !== "playing") {
+      return;
+    }
+    const matchId = this.currentGameMongoId();
+    const stored = await this.eventJournalStore.loadMatchEventJournalState(
+      matchId
+    );
+    if (stored === null || stored.status !== "playing") {
+      return;
+    }
+    if (
+      stored.nextSeq < this.gameStartLogIdx ||
+      stored.nextSeq > this.nextSeq
+    ) {
+      throw new Error(
+        `MatchProcess.restoreEventJournal: invalid durable seq ${stored.nextSeq}`
+      );
+    }
+    this.openEventJournal(matchId, stored.nextSeq);
+    for (let seq = stored.nextSeq; seq < this.nextSeq; seq += 1) {
+      this.eventJournal?.record(seq);
+    }
+  }
+
+  private async supersedeEventJournal(): Promise<void> {
+    const journal = this.eventJournal;
+    this.eventJournal = null;
+    await journal?.supersede();
+  }
+
+  async flushEventJournal(): Promise<void> {
+    if (this.eventJournal !== null) {
+      await this.eventJournal.flush();
+    }
   }
 
   private beginCommandBoundaryWatch(): Promise<void> {
@@ -1352,39 +1438,6 @@ export class MatchProcess {
     this.commandBoundaryPromise = null;
     this.commandBoundaryResolve = null;
     resolve?.();
-  }
-
-  retryPendingCommandCommit(): Promise<boolean> {
-    if (this.commandCommitRetryPromise !== null) {
-      return this.commandCommitRetryPromise;
-    }
-    const checkpoint = this.pendingCommandCommitCheckpoint;
-    if (checkpoint === null) {
-      return Promise.resolve(false);
-    }
-    const retrying = this.persistPendingCommandCommit(checkpoint);
-    this.commandCommitRetryPromise = retrying;
-    return retrying;
-  }
-
-  private async persistPendingCommandCommit(
-    checkpoint: MatchCheckpoint
-  ): Promise<boolean> {
-    try {
-      await this.repository.saveCheckpoint({
-        matchId: this.matchId,
-        checkpoint,
-      });
-      const restoredContinuation =
-        this.pendingCommandCommitRestoresContinuation;
-      this.pendingCommandCommitCheckpoint = null;
-      this.pendingCommandCommitRestoresContinuation = false;
-      this.suspendedCommandTimer = null;
-      this.resumeCheckpoint(checkpoint, restoredContinuation);
-      return true;
-    } finally {
-      this.commandCommitRetryPromise = null;
-    }
   }
 
   async deleteSavedCheckpoint(): Promise<void> {
@@ -1670,7 +1723,7 @@ export class MatchProcess {
     if (
       this.readyResolve === null ||
       this.readyDeadline === null ||
-      (this.readyTimer === null && this.suspendedCommandTimer?.kind !== "ready")
+      this.readyTimer === null
     ) {
       this.checkpointUnsupported("ready timer is incomplete");
     }
@@ -1720,9 +1773,6 @@ export class MatchProcess {
     const resolutionPending =
       this.continueVote.some((vote) => vote === "no") ||
       this.continueVote.every((vote) => vote === "yes");
-    const suspendedTimeoutArmed =
-      this.suspendedCommandTimer?.kind === "continue_vote" &&
-      this.suspendedCommandTimer.timeoutArmed;
     return PlayingContinueVoteCheckpointSchema.parse({
       ...this.playingCheckpointBase(savedAt),
       checkpointKind: "continue_vote",
@@ -1730,7 +1780,7 @@ export class MatchProcess {
       voteRemainingMs: Math.max(0, this.continueVoteDeadline - savedAt),
       timeoutArmed:
         !resolutionPending &&
-        (this.continueVoteTimer !== null || suspendedTimeoutArmed),
+        this.continueVoteTimer !== null,
       finalScores: this.continueVoteFinalScores,
     });
   }
@@ -2175,16 +2225,19 @@ export class MatchProcess {
       });
     }
     const isBuu = this.state.ruleSet.buuMode;
+    const initialEventSeq = this.eventLog.length;
     await this.repository.createMatch({
       matchId: this.currentGameMongoId(),
       seed: this.seed,
       players: matchPlayers,
+      initialEventSeq,
       ...(isBuu ? { sessionId: this.matchId, gameIndex: this.gameIndex } : {}),
     });
 
     // Track where this game starts in the omniscient log so
     // `archiveCurrentGame` can slice precisely on match_end.
-    this.gameStartLogIdx = this.eventLog.length;
+    this.gameStartLogIdx = initialEventSeq;
+    this.openEventJournal(this.currentGameMongoId(), initialEventSeq);
 
     await this.emitEvent({
       type: "match_start",
@@ -2287,6 +2340,9 @@ export class MatchProcess {
    */
   async handleReady(seat: Seat): Promise<void> {
     const receivedAtSeq = this.nextSeq;
+    if (this.checkpointSavePromise !== null) {
+      return;
+    }
     const activeAutomaticDefault = this.automaticDefaultPromise;
     if (activeAutomaticDefault !== null) {
       if (!this.isAcceptedReady(seat)) {
@@ -2318,11 +2374,15 @@ export class MatchProcess {
       }
       return;
     }
-    if (this.isPaused || !this.isAcceptedReady(seat)) {
+    if (
+      this.isPaused ||
+      this.checkpointSavePromise !== null ||
+      !this.isAcceptedReady(seat)
+    ) {
       return;
     }
     const command: PendingMatchCommand = { type: "ready", seat };
-    const transaction = this.runCommandTransaction(command);
+    const transaction = this.runCommand(command);
     this.commandTransactionPromise = transaction;
     try {
       await transaction;
@@ -2591,7 +2651,10 @@ export class MatchProcess {
    * was already scheduled against).
    */
   async handleAfk(seat: Seat, afk: boolean): Promise<void> {
-    if (this.statusValue !== "playing") {
+    if (
+      this.statusValue !== "playing" ||
+      this.checkpointSavePromise !== null
+    ) {
       return;
     }
     const activeAutomaticDefault = this.automaticDefaultPromise;
@@ -2627,7 +2690,7 @@ export class MatchProcess {
       }
       return;
     }
-    if (this.isPaused) {
+    if (this.isPaused || this.checkpointSavePromise !== null) {
       return;
     }
     const defaultActionId = afk ? this.pickDefaultActionId(seat) : null;
@@ -2640,7 +2703,7 @@ export class MatchProcess {
       afk,
       defaultActionId,
     };
-    const transaction = this.runCommandTransaction(command);
+    const transaction = this.runCommand(command);
     this.commandTransactionPromise = transaction;
     try {
       await transaction;
@@ -3640,6 +3703,9 @@ export class MatchProcess {
 
   async handleAct(seat: Seat, actionId: string): Promise<void> {
     const receivedAtSeq = this.nextSeq;
+    if (this.checkpointSavePromise !== null) {
+      return;
+    }
     const activeAutomaticDefault = this.automaticDefaultPromise;
     if (activeAutomaticDefault !== null) {
       if (!this.isAcceptedAction(seat, actionId)) {
@@ -3668,11 +3734,15 @@ export class MatchProcess {
       }
       return;
     }
-    if (this.isPaused || !this.isAcceptedAction(seat, actionId)) {
+    if (
+      this.isPaused ||
+      this.checkpointSavePromise !== null ||
+      !this.isAcceptedAction(seat, actionId)
+    ) {
       return;
     }
     const command: PendingMatchCommand = { type: "act", seat, actionId };
-    const transaction = this.runCommandTransaction(command);
+    const transaction = this.runCommand(command);
     this.commandTransactionPromise = transaction;
     try {
       await transaction;
@@ -3699,31 +3769,16 @@ export class MatchProcess {
     );
   }
 
-  private async runCommandTransaction(
+  private async runCommand(
     command: PendingMatchCommand
   ): Promise<void> {
     const transactionId = this.nextCommandTransactionId++;
     this.activeCommandTransactionId = transactionId;
     try {
-      const checkpoint = this.createCheckpoint();
-      this.freezeCheckpoint(checkpoint);
-      try {
-        await this.repository.saveCommandTransaction({
-          matchId: this.matchId,
-          checkpoint,
-          command,
-        });
-      } catch (error) {
-        this.resumeCheckpoint(checkpoint);
-        throw error;
-      }
-      this.resumeCheckpointForCommand(checkpoint, command);
-      await this.executePersistedCommand(command);
-      if (!this.yieldedCommandTransactionIds.delete(transactionId)) {
-        await this.commitCommandState();
-      }
+      await Promise.resolve();
+      this.prepareCommand(command);
+      await this.executeCommand(command);
     } finally {
-      this.yieldedCommandTransactionIds.delete(transactionId);
       if (this.activeCommandTransactionId === transactionId) {
         this.activeCommandTransactionId = null;
       }
@@ -3736,36 +3791,22 @@ export class MatchProcess {
     const transactionId = this.nextCommandTransactionId++;
     this.activeCommandTransactionId = transactionId;
     try {
-      const checkpoint = this.createCheckpoint();
-      this.freezeCheckpoint(checkpoint);
-      this.resumeCheckpointForCommand(checkpoint, command);
-      await this.executePersistedCommand(command);
-      if (!this.yieldedCommandTransactionIds.delete(transactionId)) {
-        await this.commitCommandState();
-      }
+      await Promise.resolve();
+      this.prepareCommand(command);
+      await this.executeCommand(command);
+      await this.persistLegacyCommandRecovery();
     } finally {
-      this.yieldedCommandTransactionIds.delete(transactionId);
       if (this.activeCommandTransactionId === transactionId) {
         this.activeCommandTransactionId = null;
       }
     }
   }
 
-  private resumeCheckpointForCommand(
-    checkpoint: MatchCheckpoint,
-    command: PendingMatchCommand
-  ): void {
-    this.resumeCheckpoint(checkpoint);
+  private prepareCommand(command: PendingMatchCommand): void {
     if (command.type === "act") {
       this.currentDeadlineTimer[command.seat]?.cancel();
       this.currentDeadlineTimer[command.seat] = null;
       this.deadlineEpoch[command.seat] += 1;
-      return;
-    }
-    if (command.type === "ready") {
-      this.readyTimer?.cancel();
-      this.readyTimer = null;
-      this.suspendedCommandTimer = { kind: "ready" };
       return;
     }
     if (command.type === "afk") {
@@ -3774,15 +3815,10 @@ export class MatchProcess {
         this.currentDeadlineTimer[command.seat] = null;
         this.deadlineEpoch[command.seat] += 1;
       }
-      return;
     }
-    const timeoutArmed = this.continueVoteTimer !== null;
-    this.continueVoteTimer?.cancel();
-    this.continueVoteTimer = null;
-    this.suspendedCommandTimer = { kind: "continue_vote", timeoutArmed };
   }
 
-  private async executePersistedCommand(
+  private async executeCommand(
     command: PendingMatchCommand
   ): Promise<void> {
     try {
@@ -3830,9 +3866,6 @@ export class MatchProcess {
       }
       await this.handleVoteContinueDirect(command.seat, command.vote);
     } catch (error) {
-      if (error instanceof CommandBoundaryCommitError) {
-        throw error;
-      }
       this.commandRecoveryRequired = true;
       const recoveryError = new Error(
         `MatchProcess: ${(error as Error).message}`,
@@ -3845,16 +3878,24 @@ export class MatchProcess {
     }
   }
 
-  private async commitCommandState(): Promise<void> {
-    if (this.statusValue === "finished") {
+  private async persistLegacyCommandRecovery(): Promise<void> {
+    if (!this.legacyCommandRecoveryInProgress || this.statusValue === "finished") {
       return;
     }
     const checkpoint = this.createCheckpoint();
     this.freezeCheckpoint(checkpoint);
-    this.pendingCommandCommitCheckpoint = checkpoint;
-    const committing = this.persistPendingCommandCommit(checkpoint);
-    this.commandCommitRetryPromise = committing;
-    await committing;
+    try {
+      await this.eventJournal?.flush();
+      await this.repository.saveCheckpoint({
+        matchId: this.matchId,
+        checkpoint,
+      });
+      this.legacyCommandRecoveryInProgress = false;
+      this.resumeCheckpoint(checkpoint);
+    } catch (error) {
+      this.resumeCheckpoint(checkpoint);
+      throw error;
+    }
   }
 
   private commitOpenInputBoundary(): Promise<void> {
@@ -3882,19 +3923,10 @@ export class MatchProcess {
     transactionId: number
   ): Promise<void> {
     try {
-      await this.commitCommandState();
-    } catch (error) {
-      this.pendingCommandCommitRestoresContinuation = true;
-      this.commandTransactionPromise = null;
-      if (this.activeCommandTransactionId === transactionId) {
-        this.activeCommandTransactionId = null;
-      }
-      this.signalCommandBoundary();
-      throw new CommandBoundaryCommitError(error);
+      await this.persistLegacyCommandRecovery();
     } finally {
       this.commandBoundaryHandoffPromise = null;
     }
-    this.yieldedCommandTransactionIds.add(transactionId);
     this.commandTransactionPromise = null;
     if (this.activeCommandTransactionId === transactionId) {
       this.activeCommandTransactionId = null;
@@ -3915,9 +3947,13 @@ export class MatchProcess {
 
   private handleReadyDirect(seat: Seat): void {
     this.readyAcked[seat] = true;
-    if (!this.readyAcked.every(Boolean)) {
-      this.broadcastReadyCheck();
+    if (this.readyAcked.every(Boolean)) {
+      if (!this.legacyCommandRecoveryInProgress) {
+        this.finishReadyCheck();
+      }
+      return;
     }
+    this.broadcastReadyCheck();
   }
 
   private isAcceptedAfk(
@@ -3990,6 +4026,9 @@ export class MatchProcess {
         "yes" | "no" | null,
       ],
     });
+    if (!this.legacyCommandRecoveryInProgress) {
+      this.tallyContinueVote();
+    }
   }
 
   private async handleActDirect(seat: Seat, actionId: string): Promise<void> {
@@ -5099,8 +5138,8 @@ export class MatchProcess {
    * shouminkan (matching pon already declared + 4th tile in hand).
    * Ankan during riichi is restricted to kans that don't change the
    * winning interpretation of the tenpai hand — enforced by the
-   * engine; here we surface them and let `step.ts` reject illegal
-   * declarations.
+  * engine; this builder probes `step.ts` and only surfaces accepted
+  * declarations.
    *
    * Riichi-rules gate: a self-kan may only be declared immediately
    * after a draw (live wall or rinshan from a previous kan), never
@@ -5131,6 +5170,15 @@ export class MatchProcess {
     for (const [, group] of counts) {
       if (group.length >= 4) {
         const t = group[0];
+        const probe = step(this.state, {
+          type: "kan",
+          seat,
+          kind: "ankan",
+          tile: t,
+        });
+        if (probe.events.length === 0) {
+          continue;
+        }
         out.push({
           id: `kan:ankan:${t}`,
           type: "kan",
@@ -5649,6 +5697,7 @@ export class MatchProcess {
   ): Promise<void> {
     const gameEvents = this.eventLog.slice(this.gameStartLogIdx);
     const docId = this.currentGameMongoId();
+    await this.supersedeEventJournal();
     await this.repository.archiveMatch({
       matchId: docId,
       events: gameEvents,
@@ -5767,6 +5816,9 @@ export class MatchProcess {
     seat: Seat,
     vote: "yes" | "no"
   ): Promise<void> {
+    if (this.checkpointSavePromise !== null) {
+      return;
+    }
     const activeAutomaticDefault = this.automaticDefaultPromise;
     if (activeAutomaticDefault !== null) {
       if (!this.isAcceptedContinueVote(seat, vote)) {
@@ -5798,7 +5850,11 @@ export class MatchProcess {
       }
       return;
     }
-    if (this.isPaused || !this.isAcceptedContinueVote(seat, vote)) {
+    if (
+      this.isPaused ||
+      this.checkpointSavePromise !== null ||
+      !this.isAcceptedContinueVote(seat, vote)
+    ) {
       return;
     }
     const command: PendingMatchCommand = {
@@ -5806,7 +5862,7 @@ export class MatchProcess {
       seat,
       vote,
     };
-    const transaction = this.runCommandTransaction(command);
+    const transaction = this.runCommand(command);
     this.commandTransactionPromise = transaction;
     try {
       await transaction;
@@ -5961,10 +6017,12 @@ export class MatchProcess {
       });
     }
 
+    const initialEventSeq = this.eventLog.length;
     await this.repository.createMatch({
       matchId: this.currentGameMongoId(),
       seed: nextSeed,
       players: matchPlayers,
+      initialEventSeq,
       sessionId: this.matchId,
       gameIndex: this.gameIndex,
     });
@@ -5973,7 +6031,8 @@ export class MatchProcess {
     // the new seating before they see `match_start`.
     this.broadcastRoomState();
 
-    this.gameStartLogIdx = this.eventLog.length;
+    this.gameStartLogIdx = initialEventSeq;
+    this.openEventJournal(this.currentGameMongoId(), initialEventSeq);
 
     await this.emitEvent({
       type: "match_start",
@@ -6376,11 +6435,13 @@ export class MatchProcess {
   private async emitEvent(event: GameEvent): Promise<void> {
     const omniSeq = this.nextSeq++;
     const archived = this.enrichForArchive(event);
+    const emittedAt = this.runtime.now();
     this.eventLog.push({
       seq: omniSeq,
       event: archived,
-      emittedAt: this.runtime.now(),
+      emittedAt,
     });
+    this.eventJournal?.record(omniSeq);
     // Live broadcast — per recipient. Each seat's per-seat seq is
     // assigned inside `sendToSeat`, only when the projection emits
     // a non-null frame. We iterate every human seat so multi-

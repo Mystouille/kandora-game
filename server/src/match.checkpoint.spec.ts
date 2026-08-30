@@ -318,19 +318,17 @@ describe("MatchProcess checkpoints", () => {
     );
   });
 
-  it("does not acknowledge ready until the command is durable", async () => {
-    const storage = createMemoryMatchRepository();
-    const gate = deferred();
-    let captured:
-      | Parameters<MatchRepository["saveCommandTransaction"]>[0]
-      | null = null;
+  it("acknowledges ready without command persistence", async () => {
+    const saveCheckpoint = vi.fn(async () => {
+      throw new Error("checkpoint persistence must not run");
+    });
+    const saveCommandTransaction = vi.fn(async () => {
+      throw new Error("command persistence must not run");
+    });
     const repository: MatchRepository = {
-      ...storage,
-      saveCommandTransaction: async (args) => {
-        captured = args;
-        await gate.promise;
-        await storage.saveCommandTransaction(args);
-      },
+      ...ephemeralMatchRepository,
+      saveCheckpoint,
+      saveCommandTransaction,
     };
     const runtime = controlledRuntime(75_000, 1051);
     const match = new MatchProcess(
@@ -349,117 +347,23 @@ describe("MatchProcess checkpoints", () => {
       });
     });
 
-    const acknowledging = match.handleReady(0);
-    await Promise.resolve();
-
-    expect(captured).toMatchObject({
-      matchId: match.matchId,
-      command: { type: "ready", seat: 0 },
-    });
-    expect(match.createCheckpoint()).toMatchObject({
-      checkpointKind: "ready_check",
-      readyAcked: [false, false, false, false],
-    });
-    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
-
-    gate.resolve();
-    await acknowledging;
+    await match.handleReady(0);
 
     expect(match.createCheckpoint()).toMatchObject({
       checkpointKind: "ready_check",
       readyAcked: [true, false, false, false],
     });
-    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
-      pendingCommand: null,
-    });
+    expect(saveCommandTransaction).not.toHaveBeenCalled();
+    expect(saveCheckpoint).not.toHaveBeenCalled();
+    expect(runtime.scheduledDelays().length).toBeGreaterThan(0);
     for (const seat of [1, 2, 3] as const) {
       await match.handleReady(seat);
     }
     await starting;
   });
 
-  it("retries a failed ready-command commit before resuming its timer", async () => {
-    const storage = createMemoryMatchRepository();
-    const retryGate = deferred();
-    let commitAttempts = 0;
-    const repository: MatchRepository = {
-      ...storage,
-      saveCheckpoint: async (args) => {
-        commitAttempts += 1;
-        if (commitAttempts === 1) {
-          throw new Error("ready command commit failed");
-        }
-        if (commitAttempts === 2) {
-          await retryGate.promise;
-        }
-        await storage.saveCheckpoint(args);
-      },
-    };
-    const runtime = controlledRuntime(75_500, 1056);
-    const match = new MatchProcess(
-      "checkpoint-ready-commit-retry",
-      613,
-      humanPlayers(),
-      { repository, runtime }
-    );
-    setReadyCheckMs(5_000);
-    setDelayAfterDiscardMs(0);
-    const starting = match.start();
-    await vi.waitFor(() => {
-      expect(match.createCheckpoint()).toMatchObject({
-        checkpointKind: "ready_check",
-      });
-    });
-
-    await expect(match.handleReady(0)).rejects.toThrow(
-      "ready command commit failed"
-    );
-
-    expect(match.isPaused).toBe(true);
-    expect(match.hasPendingCommandCommit).toBe(true);
-    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
-    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
-      checkpoint: { readyAcked: [false, false, false, false] },
-      pendingCommand: { type: "ready", seat: 0 },
-    });
-
-    const retrying = match.retryPendingCommandCommit();
-    expect(match.retryPendingCommandCommit()).toBe(retrying);
-    expect(commitAttempts).toBe(2);
-    retryGate.resolve();
-    await expect(retrying).resolves.toBe(true);
-    expect(commitAttempts).toBe(2);
-    const committed = match.createCheckpoint();
-    if (
-      committed.status !== "playing" ||
-      committed.checkpointKind !== "ready_check"
-    ) {
-      throw new Error("expected a committed ready checkpoint");
-    }
-    expect(committed.readyAcked).toEqual([true, false, false, false]);
-    expect(runtime.scheduledDelays().at(-1)).toBe(
-      committed.readyRemainingMs
-    );
-    for (const seat of [1, 2, 3] as const) {
-      await match.handleReady(seat);
-    }
-    await starting;
-  });
-
-  it("accepts ready while a parent command boundary is still saving", async () => {
-    const storage = createMemoryMatchRepository();
-    const gate = deferred();
-    let boundarySaveStarted = false;
-    const repository: MatchRepository = {
-      ...storage,
-      saveCheckpoint: async (args) => {
-        if (!boundarySaveStarted) {
-          boundarySaveStarted = true;
-          await gate.promise;
-        }
-        await storage.saveCheckpoint(args);
-      },
-    };
+  it("accepts ready after a parent command hands off in memory", async () => {
+    const repository = createMemoryMatchRepository();
     const runtime = controlledRuntime(75_750, 1058);
     const match = new MatchProcess(
       "checkpoint-ready-boundary-race",
@@ -492,18 +396,13 @@ describe("MatchProcess checkpoints", () => {
     internals.activeCommandTransactionId = 999;
     const advancing = internals.afterHandEnd();
     await vi.waitFor(() => {
-      expect(boundarySaveStarted).toBe(true);
+      expect(match.createCheckpoint()).toMatchObject({
+        checkpointKind: "ready_check",
+        readyAcked: [false, false, false, false],
+      });
     });
 
-    const acknowledging = match.handleReady(0);
-    await Promise.resolve();
-    expect(match.createCheckpoint()).toMatchObject({
-      checkpointKind: "ready_check",
-      readyAcked: [false, false, false, false],
-    });
-
-    gate.resolve();
-    await acknowledging;
+    await match.handleReady(0);
     expect(match.createCheckpoint()).toMatchObject({
       checkpointKind: "ready_check",
       readyAcked: [true, false, false, false],
@@ -517,7 +416,7 @@ describe("MatchProcess checkpoints", () => {
     });
   });
 
-  it("replays ready and resumes a completed ready checkpoint once", async () => {
+  it("replays ready and clears a legacy pending command once", async () => {
     const repository = createMemoryMatchRepository();
     const originalRuntime = controlledRuntime(76_000, 1061);
     const match = new MatchProcess(
@@ -567,30 +466,15 @@ describe("MatchProcess checkpoints", () => {
     expect(completed).toMatchObject({
       checkpoint: {
         checkpointKind: "ready_check",
-        readyAcked: [true, true, true, true],
+        readyAcked: [true, false, false, false],
       },
       pendingCommand: null,
     });
-
-    const recoveredRuntime = controlledRuntime(1_060_000, 1063);
-    const recovered = await MatchProcess.restoreSavedCheckpoint(match.matchId, {
-      repository,
-      runtime: recoveredRuntime,
-    });
-    if (!recovered) {
-      throw new Error("expected a completed ready recovery");
-    }
     await vi.waitFor(() => {
       expect(restored.createCheckpoint()).toMatchObject({
         checkpointKind: "action_window",
       });
-      expect(recovered.createCheckpoint()).toMatchObject({
-        checkpointKind: "action_window",
-      });
     });
-    expect(recovered.replayFromBuffer(0, 0)).toEqual(
-      restored.replayFromBuffer(0, 0)
-    );
   });
 
   it("returns recovery when a pending win reaches result transition", async () => {
@@ -688,8 +572,7 @@ describe("MatchProcess checkpoints", () => {
     });
     expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
       checkpoint: {
-        checkpointKind: "ready_check",
-        readyAcked: [true, true, true, true],
+        checkpointKind: "result_transition",
       },
       pendingCommand: null,
     });
@@ -1282,19 +1165,17 @@ describe("MatchProcess checkpoints", () => {
     expect(resumed.connectionPolicy.afkSelfReported[1]).toBe(false);
   });
 
-  it("does not mark AFK or apply its default before the command is durable", async () => {
-    const storage = createMemoryMatchRepository();
-    const gate = deferred();
-    let captured:
-      | Parameters<MatchRepository["saveCommandTransaction"]>[0]
-      | null = null;
+  it("marks AFK and applies its default without command persistence", async () => {
+    const saveCheckpoint = vi.fn(async () => {
+      throw new Error("checkpoint persistence must not run");
+    });
+    const saveCommandTransaction = vi.fn(async () => {
+      throw new Error("command persistence must not run");
+    });
     const repository: MatchRepository = {
-      ...storage,
-      saveCommandTransaction: async (args) => {
-        captured = args;
-        await gate.promise;
-        await storage.saveCommandTransaction(args);
-      },
+      ...ephemeralMatchRepository,
+      saveCheckpoint,
+      saveCommandTransaction,
     };
     const runtime = controlledRuntime(45_500, 805);
     const match = new MatchProcess(
@@ -1331,30 +1212,7 @@ describe("MatchProcess checkpoints", () => {
     }
     const beforeEvents = match.replayFromBuffer(0, 0);
 
-    const markingAfk = match.handleAfk(seat, true);
-    await Promise.resolve();
-
-    expect(captured).toMatchObject({
-      matchId: match.matchId,
-      checkpoint,
-      command: {
-        type: "afk",
-        seat,
-        afk: true,
-        defaultActionId: safeDefault.id,
-      },
-    });
-    const frozen = match.createCheckpoint();
-    if (frozen.status !== "playing") {
-      throw new Error("expected frozen playing authority");
-    }
-    expect(frozen.connectionPolicy.disconnected[seat]).toBe(false);
-    expect(frozen.connectionPolicy.afkSelfReported[seat]).toBe(false);
-    expect(match.replayFromBuffer(0, 0)).toEqual(beforeEvents);
-    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
-
-    gate.resolve();
-    await markingAfk;
+    await match.handleAfk(seat, true);
 
     const committed = match.createCheckpoint();
     if (committed.status !== "playing") {
@@ -1365,9 +1223,8 @@ describe("MatchProcess checkpoints", () => {
     expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(
       beforeEvents.length
     );
-    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
-      pendingCommand: null,
-    });
+    expect(saveCommandTransaction).not.toHaveBeenCalled();
+    expect(saveCheckpoint).not.toHaveBeenCalled();
   });
 
   it("replays a durable AFK default after process loss", async () => {
@@ -1448,59 +1305,6 @@ describe("MatchProcess checkpoints", () => {
     expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
       pendingCommand: null,
     });
-  });
-
-  it("retries a failed AFK command commit", async () => {
-    const storage = createMemoryMatchRepository();
-    let commitAttempts = 0;
-    const repository: MatchRepository = {
-      ...storage,
-      saveCheckpoint: async (args) => {
-        commitAttempts += 1;
-        if (commitAttempts === 1) {
-          throw new Error("AFK command commit failed");
-        }
-        await storage.saveCheckpoint(args);
-      },
-    };
-    const runtime = controlledRuntime(45_900, 811);
-    const match = new MatchProcess(
-      "checkpoint-afk-commit-retry",
-      324,
-      humanPlayers(),
-      { repository, runtime }
-    );
-    setReadyCheckMs(0);
-    setDelayAfterDiscardMs(0);
-    await match.start();
-    const checkpoint = match.createCheckpoint();
-    if (
-      checkpoint.status !== "playing" ||
-      checkpoint.checkpointKind !== "action_window"
-    ) {
-      throw new Error("expected an action checkpoint");
-    }
-    const seat = checkpoint.actionWindow.seat;
-
-    await expect(match.handleAfk(seat, true)).rejects.toThrow(
-      "AFK command commit failed"
-    );
-
-    expect(match.isPaused).toBe(true);
-    expect(match.hasPendingCommandCommit).toBe(true);
-    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
-      checkpoint: { checkpointKind: "action_window" },
-      pendingCommand: { type: "afk", seat, afk: true },
-    });
-
-    await expect(match.retryPendingCommandCommit()).resolves.toBe(true);
-    expect(commitAttempts).toBe(2);
-    const committed = match.createCheckpoint();
-    if (committed.status !== "playing") {
-      throw new Error("expected a committed AFK checkpoint");
-    }
-    expect(committed.connectionPolicy.disconnected[seat]).toBe(true);
-    expect(committed.connectionPolicy.afkSelfReported[seat]).toBe(true);
   });
 
   it("does not apply a liveness default after the match is paused", async () => {
@@ -1845,18 +1649,17 @@ describe("MatchProcess checkpoints", () => {
     expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(beforeCount);
   });
 
-  it("does not mutate until the pending action is durable", async () => {
-    const storage = createMemoryMatchRepository();
-    const gate = deferred();
-    let captured: Parameters<MatchRepository["saveCommandTransaction"]>[0] | null =
-      null;
+  it("applies an accepted action without command persistence", async () => {
+    const saveCheckpoint = vi.fn(async () => {
+      throw new Error("checkpoint persistence must not run");
+    });
+    const saveCommandTransaction = vi.fn(async () => {
+      throw new Error("command persistence must not run");
+    });
     const repository: MatchRepository = {
-      ...storage,
-      saveCommandTransaction: async (args) => {
-        captured = args;
-        await gate.promise;
-        await storage.saveCommandTransaction(args);
-      },
+      ...ephemeralMatchRepository,
+      saveCheckpoint,
+      saveCommandTransaction,
     };
     const runtime = controlledRuntime(70_000, 223);
     const match = new MatchProcess(
@@ -1883,33 +1686,8 @@ describe("MatchProcess checkpoints", () => {
     }
     const beforeEvents = match.replayFromBuffer(0, 0);
 
-    const acting = match.handleAct(checkpoint.actionWindow.seat, discard.id);
-    await Promise.resolve();
+    await match.handleAct(checkpoint.actionWindow.seat, discard.id);
 
-    expect(captured).toMatchObject({
-      matchId: match.matchId,
-      checkpoint,
-      command: {
-        type: "act",
-        seat: checkpoint.actionWindow.seat,
-        actionId: discard.id,
-      },
-    });
-    expect(match.isPaused).toBe(true);
-    expect(match.replayFromBuffer(0, 0)).toEqual(beforeEvents);
-    expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
-    let connectionWaitSettled = false;
-    const connectionReady = match.waitUntilConnectionReady().then((ready) => {
-      connectionWaitSettled = true;
-      return ready;
-    });
-    await Promise.resolve();
-    expect(connectionWaitSettled).toBe(false);
-
-    gate.resolve();
-    await acting;
-
-    await expect(connectionReady).resolves.toBe(true);
     expect(
       match.claimSeat(
         `human-${checkpoint.actionWindow.seat}`,
@@ -1920,9 +1698,8 @@ describe("MatchProcess checkpoints", () => {
     expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(
       beforeEvents.length
     );
-    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
-      pendingCommand: null,
-    });
+    expect(saveCommandTransaction).not.toHaveBeenCalled();
+    expect(saveCheckpoint).not.toHaveBeenCalled();
   });
 
   it("replays a durable pending action after process loss", async () => {
@@ -1985,76 +1762,6 @@ describe("MatchProcess checkpoints", () => {
     expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
       pendingCommand: null,
     });
-  });
-
-  it("stays paused until a failed command commit is retried", async () => {
-    const storage = createMemoryMatchRepository();
-    let commitAttempts = 0;
-    const repository: MatchRepository = {
-      ...storage,
-      saveCheckpoint: async (args) => {
-        commitAttempts += 1;
-        if (commitAttempts === 1) {
-          throw new Error("command commit failed");
-        }
-        await storage.saveCheckpoint(args);
-      },
-    };
-    const runtime = controlledRuntime(90_000, 227);
-    const match = new MatchProcess(
-      "checkpoint-command-commit-retry",
-      54,
-      humanPlayers(),
-      { repository, runtime }
-    );
-    setReadyCheckMs(0);
-    setDelayAfterDiscardMs(0);
-    await match.start();
-    const checkpoint = match.createCheckpoint();
-    if (
-      checkpoint.status !== "playing" ||
-      checkpoint.checkpointKind !== "action_window"
-    ) {
-      throw new Error("expected an action checkpoint");
-    }
-    const discard = checkpoint.actionWindow.legalActions.find(
-      (action) => action.type === "discard"
-    );
-    if (!discard) {
-      throw new Error("expected a legal discard");
-    }
-    const beforeCount = match.replayFromBuffer(0, 0).length;
-
-    await expect(
-      match.handleAct(checkpoint.actionWindow.seat, discard.id)
-    ).rejects.toThrow("command commit failed");
-
-    expect(match.isPaused).toBe(true);
-    expect(match.hasPendingCommandCommit).toBe(true);
-    expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(beforeCount);
-    const pendingRecovery = await repository.loadRecoveryRecord(match.matchId);
-    expect(pendingRecovery).toMatchObject({
-      checkpoint: {
-        matchId: checkpoint.matchId,
-        status: "playing",
-        checkpointKind: "action_window",
-        nextSeq: checkpoint.nextSeq,
-      },
-      pendingCommand: {
-        type: "act",
-        seat: checkpoint.actionWindow.seat,
-        actionId: discard.id,
-      },
-    });
-
-    await expect(match.retryPendingCommandCommit()).resolves.toBe(true);
-    expect(commitAttempts).toBe(2);
-    expect(match.isPaused).toBe(false);
-    expect(match.hasPendingCommandCommit).toBe(false);
-    expect(await repository.loadRecoveryRecord(match.matchId)).toMatchObject({
-      pendingCommand: null,
-    });
-    await expect(match.retryPendingCommandCommit()).resolves.toBe(false);
   });
 
   it("replaces a saved checkpoint with a terminal tombstone", async () => {

@@ -3,6 +3,7 @@ import type { MatchView } from "../store";
 import {
   TableRenderer,
   activePlayerIndicatorSeat,
+  advanceMatchEndRevealSound,
   actionButtonLabel,
   actionButtonStyle,
   ankanTilesForDisplay,
@@ -86,6 +87,26 @@ describe("action timer ownership", () => {
         actionBufferMs: 30_000,
       })
     ).toEqual({ deadline: 15_000, bufferMs: 30_000 });
+  });
+});
+
+describe("game-end reveal sound", () => {
+  it("plays once when the game-end screen first renders", () => {
+    const first = advanceMatchEndRevealSound(false, true, true);
+    const rerender = advanceMatchEndRevealSound(first.nextPlayed, true, true);
+
+    expect(first).toEqual({ play: true, nextPlayed: true });
+    expect(rerender).toEqual({ play: false, nextPlayed: true });
+  });
+
+  it("waits until the screen is visible and resets after game end clears", () => {
+    const hidden = advanceMatchEndRevealSound(false, true, false);
+    const shown = advanceMatchEndRevealSound(hidden.nextPlayed, true, true);
+    const reset = advanceMatchEndRevealSound(shown.nextPlayed, false, false);
+
+    expect(hidden).toEqual({ play: false, nextPlayed: false });
+    expect(shown).toEqual({ play: true, nextPlayed: true });
+    expect(reset).toEqual({ play: false, nextPlayed: false });
   });
 });
 

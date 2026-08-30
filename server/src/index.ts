@@ -46,7 +46,11 @@ import {
 } from "~/game/protocol/messages";
 import { MatchProcess, setReadyCheckMs } from "./match";
 import { connectGameDb } from "./db";
-import { getMatchStatus, mongoMatchRepository } from "./persist";
+import {
+  getMatchStatus,
+  mongoMatchEventJournalStore,
+  mongoMatchRepository,
+} from "./persist";
 import { RelayController, RelayCapacityError } from "./relay/relayController";
 import { createWsTenhouClient } from "./relay/tenhouClient";
 import { listLobbyRoomSummaries } from "./lobbyRooms";
@@ -93,6 +97,7 @@ const ABORT_ABANDONED_GRACE_MS = 30_000;
  * eventLog as if it were a permanent broadcast tape).
  */
 const MAX_SPECTATOR_DELAY_MS = 30 * 60_000;
+const SHUTDOWN_JOURNAL_FLUSH_MS = 3_000;
 
 // Production default for the pre-match ready check. The match
 // module ships with 0 (test-safe) so each spec doesn't have to
@@ -109,6 +114,32 @@ if (!GAME_ENABLED) {
 
 // Match registry — keyed by matchId. Slice has no eviction.
 const matches = new Map<string, MatchProcess>();
+
+const nativeMatchDependencies = {
+  repository: mongoMatchRepository,
+  eventJournalStore: mongoMatchEventJournalStore,
+  onEventJournalError: (context: {
+    matchId: string;
+    durableNextSeq: number;
+    targetNextSeq: number;
+    retryAttempt: number;
+    error: unknown;
+  }): void => {
+    const message =
+      context.error instanceof Error
+        ? context.error.message
+        : String(context.error);
+    console.error(
+      `[game-server] event journal append failed ${JSON.stringify({
+        matchId: context.matchId,
+        durableNextSeq: context.durableNextSeq,
+        targetNextSeq: context.targetNextSeq,
+        retryAttempt: context.retryAttempt,
+        error: message,
+      })}`
+    );
+  },
+};
 
 // Spectator sockets currently attached to a given match. Held
 // here (rather than in `MatchProcess`) because we need the raw
@@ -378,7 +409,7 @@ async function handleCreateRoom(
   const match = MatchProcess.createWaitingRoom(
     matchId,
     hashStringToSeed(matchId),
-    { repository: mongoMatchRepository },
+    nativeMatchDependencies,
     parsedDebug,
     presetToRuleSet(getPreset(presetId)),
     presetId
@@ -1457,5 +1488,37 @@ async function main(): Promise<void> {
     );
   });
 }
+
+let shuttingDown = false;
+async function shutdown(signal: "SIGINT" | "SIGTERM"): Promise<void> {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  // eslint-disable-next-line no-console
+  console.log(`[game-server] ${signal}; flushing live event journals`);
+  server.close();
+  wss.close();
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  await Promise.race([
+    Promise.allSettled(
+      [...matches.values()].map((match) => match.flushEventJournal())
+    ),
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, SHUTDOWN_JOURNAL_FLUSH_MS);
+    }),
+  ]);
+  if (timeout !== null) {
+    clearTimeout(timeout);
+  }
+  process.exit(0);
+}
+
+process.once("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
 
 void main();

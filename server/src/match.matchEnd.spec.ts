@@ -31,6 +31,7 @@ import { REPLAY_LOG_SCHEMA_VERSION } from "~/game/replay/types";
 import type { ReplayLog } from "~/game/replay/types";
 import { replayReducer } from "~/game/replay/player";
 import type { MatchRepository } from "./repository";
+import type { MatchEventJournalStore } from "./repository";
 
 const recordingRepository: MatchRepository = {
   createMatch: async () => undefined,
@@ -64,7 +65,10 @@ function captureSink(): {
   return { sink, events };
 }
 
-function makeMatch(seed: number): MatchProcess {
+function makeMatch(
+  seed: number,
+  eventJournalStore?: MatchEventJournalStore
+): MatchProcess {
   return new MatchProcess(
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
     seed,
@@ -74,7 +78,7 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
     ],
-    { repository: recordingRepository },
+    { repository: recordingRepository, eventJournalStore },
     undefined,
     undefined,
     "tenhou-hanchan"
@@ -114,6 +118,54 @@ describe("MatchProcess — match-end transition", () => {
     vi.clearAllMocks();
     setNextHandDelayMs(3000);
     setDelayAfterDiscardMs(350);
+  });
+
+  it("supersedes queued journal events before writing the complete archive", async () => {
+    let releaseAppend!: () => void;
+    const heldAppend = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const appendMatchEvents = vi.fn(async () => {
+      await heldAppend;
+    });
+    const eventJournalStore: MatchEventJournalStore = {
+      appendMatchEvents,
+      loadMatchEventJournalState: async () => null,
+    };
+    const m = makeMatch(91, eventJournalStore);
+    await m.start();
+    const internals = m as unknown as MatchInternals;
+    internals.state.phase = "hand_ended";
+    internals.state.scores = [38000, 30000, 20000, 10000];
+    internals.state.riichiSticks = 0;
+    internals.state.dealer = 3;
+    internals.state.roundWind = "E";
+    internals.state.roundNumber = 4;
+    internals.state.ruleSet.roundWindCount = 1;
+    internals.state.lastHandResult = {
+      reason: "exhaustive_draw",
+      winner: null,
+      loser: null,
+      delta: [0, 0, 0, 0],
+      tenpai: [false, false, false, false],
+      abortKind: null,
+    };
+    archiveMatchMock.mockClear();
+
+    const ending = internals.afterHandEnd();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(archiveMatchMock).not.toHaveBeenCalled();
+    expect(appendMatchEvents).toHaveBeenCalledTimes(1);
+
+    releaseAppend();
+    await ending;
+    expect(appendMatchEvents).toHaveBeenCalledTimes(1);
+    expect(archiveMatchMock).toHaveBeenCalledTimes(1);
+    const archiveCalls = archiveMatchMock.mock.calls as unknown as Array<
+      [Parameters<MatchRepository["archiveMatch"]>[0]]
+    >;
+    const archived = archiveCalls[0][0];
+    expect(archived.events.at(-1)?.event.type).toBe("match_end");
   });
 
   it("emits match_end with real engine scores when the round limit is exceeded", async () => {

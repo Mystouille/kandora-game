@@ -3,6 +3,58 @@ import { MatchProcess } from "./match";
 import { createMemoryMatchRepository } from "./repository";
 
 describe("memory match checkpoint repository", () => {
+    it("appends contiguous event batches idempotently and fences a final archive", async () => {
+      const repository = createMemoryMatchRepository();
+      await repository.createMatch({
+        matchId: "journal-repository",
+        seed: 1,
+        players: [],
+        initialEventSeq: 5,
+      });
+      const events = [5, 6, 7, 8, 9].map((seq) => ({
+        seq,
+        emittedAt: 1_000 + seq,
+        event: {
+          type: "furiten" as const,
+          seat: 0 as const,
+          active: seq % 2 === 0,
+        },
+      }));
+
+      await repository.appendMatchEvents({
+        matchId: "journal-repository",
+        events: events.slice(0, 2),
+      });
+      await repository.appendMatchEvents({
+        matchId: "journal-repository",
+        events: events.slice(0, 2),
+      });
+      expect(
+        await repository.loadMatchEventJournalState("journal-repository")
+      ).toEqual({ status: "playing", nextSeq: 7 });
+      await expect(
+        repository.appendMatchEvents({
+          matchId: "journal-repository",
+          events: events.slice(3, 4),
+        })
+      ).rejects.toThrow(/expected event seq 7, got 8/);
+
+      await repository.archiveMatch({
+        matchId: "journal-repository",
+        events: events.slice(0, 4),
+        finalScores: [],
+      });
+      await repository.appendMatchEvents({
+        matchId: "journal-repository",
+        events: events.slice(4),
+      });
+      expect(repository.inspectMatchEventJournal("journal-repository")).toEqual({
+        status: "finished",
+        nextSeq: 9,
+        events: events.slice(0, 4),
+      });
+    });
+
   it("atomically records and commits a pending action", async () => {
     const repository = createMemoryMatchRepository();
     const match = new MatchProcess(

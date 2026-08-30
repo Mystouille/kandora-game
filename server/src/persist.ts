@@ -3,14 +3,15 @@
  *
  * Design:
  *
- *   - **Events remain in RAM; accepted input is transactional.** Mongo is
- *     not touched per event. Before a supported client command mutates authority, one
- *     record atomically stores its quiescent checkpoint plus the pending
- *     command. The resulting checkpoint atomically replaces that record when
- *     the action finishes. Explicit lifecycle pauses use the same collection.
+ *   - **Live authority remains in RAM.** Accepted commands never await Mongo.
+ *     Archive-enriched events are appended through a per-match ordered queue;
+ *     transient journal failures lag persistence without pausing gameplay.
  *   - **Mongo also owns the final archive.** `createMatchDoc` advertises the
- *     playing match; `archiveMatch` writes the complete event log and scores
- *     at game end. Recovery writes are separate from this public archive.
+ *     playing match; `archiveMatch` replaces any partial journal prefix with
+ *     the complete event log and scores at game end.
+ *   - Explicit lifecycle pauses still write a full recovery checkpoint after
+ *     flushing the event journal. `pendingCommand` remains readable only for
+ *     checkpoints created by older builds; new commands do not create it.
  *   - Session completion replaces an existing recovery record with a terminal
  *     tombstone before clients receive `session_end`; the marker prevents a
  *     delayed stale writer from resurrecting the match.
@@ -19,21 +20,25 @@
  *     pause rooms or restore them at startup. Mobile/local composition owns
  *     that lifecycle; cloud startup recovery remains a later integration.
  *
- * Reading: `loadMatchEvents` returns the finished-match event log
- * (or `[]` for an in-progress match — those events live only in
- * the resident `MatchProcess`).
+ * Reading: `loadMatchEvents` returns the finished-match event log. Partial
+ * playing journals are deliberately not exposed as completed replays.
  */
 import mongoose, { Schema } from "mongoose";
-import { MatchModel, type MatchPlayer } from "~/core/models/game/Match";
+import { MatchModel } from "~/core/models/game/Match";
 import { ReplayLogModel } from "~/core/models/game/ReplayLog";
 import type { GameEvent } from "~/game/protocol/messages";
 import { REPLAY_LOG_SCHEMA_VERSION } from "~/game/replay/types";
 import {
+  assertContiguousMatchEvents,
   parseMatchRecoveryRecord,
   PendingMatchCommandSchema,
+  type ArchiveMatchArgs,
+  type CreateMatchArgs,
+  type MatchEventJournalStore,
   type MatchRecoveryRecord,
   type MatchRepository,
   type PendingMatchCommand,
+  type PersistedMatchEvent,
 } from "./repository";
 import {
   parseMatchCheckpoint,
@@ -56,13 +61,7 @@ const MatchCheckpointModel =
     "game_match_checkpoints"
   );
 
-export async function createMatchDoc(args: {
-  matchId: string;
-  seed: number;
-  players: MatchPlayer[];
-  sessionId?: string;
-  gameIndex?: number;
-}): Promise<void> {
+export async function createMatchDoc(args: CreateMatchArgs): Promise<void> {
   await MatchModel.updateOne(
     { _id: args.matchId },
     {
@@ -73,7 +72,7 @@ export async function createMatchDoc(args: {
         status: "playing",
         startedAt: new Date(),
         events: [],
-        nextSeq: 0,
+        nextSeq: args.initialEventSeq,
         ...(args.sessionId ? { sessionId: args.sessionId } : {}),
         ...(args.gameIndex !== undefined ? { gameIndex: args.gameIndex } : {}),
       },
@@ -87,27 +86,89 @@ export async function createMatchDoc(args: {
  * `status: "finished"` in a single update. Called once per match,
  * after the `match_end` event has been emitted.
  */
-export async function archiveMatch(args: {
-  matchId: string;
-  events: Array<{ seq: number; event: GameEvent }>;
-  finalScores: Array<{ seat: number; score: number; place: number }>;
-}): Promise<void> {
+export async function archiveMatch(args: ArchiveMatchArgs): Promise<void> {
   const now = new Date();
+  const nextSeq =
+    args.events.length === 0
+      ? 0
+      : assertContiguousMatchEvents(args.events).nextSeq;
   const setOps: Record<string, unknown> = {
     status: "finished",
     endedAt: now,
     events: args.events.map((e) => ({
       seq: e.seq,
-      timestamp: now,
+      timestamp: new Date(e.emittedAt),
       event: e.event,
     })),
-    nextSeq: args.events.length,
+    nextSeq,
   };
   for (const fs of args.finalScores) {
     setOps[`players.${fs.seat}.finalScore`] = fs.score;
     setOps[`players.${fs.seat}.place`] = fs.place;
   }
   await MatchModel.updateOne({ _id: args.matchId }, { $set: setOps });
+}
+
+function journalEventDocuments(events: PersistedMatchEvent[]) {
+  return events.map((entry) => ({
+    seq: entry.seq,
+    timestamp: new Date(entry.emittedAt),
+    event: entry.event,
+  }));
+}
+
+export async function appendMatchEvents(args: {
+  matchId: string;
+  events: PersistedMatchEvent[];
+}): Promise<void> {
+  const { firstSeq, nextSeq } = assertContiguousMatchEvents(args.events);
+  const result = await MatchModel.updateOne(
+    {
+      _id: args.matchId,
+      status: "playing",
+      nextSeq: firstSeq,
+    },
+    {
+      $push: { events: { $each: journalEventDocuments(args.events) } },
+      $set: { nextSeq },
+    }
+  );
+  if (result.modifiedCount === 1) {
+    return;
+  }
+  const stored = (await MatchModel.findById(
+    args.matchId,
+    { status: 1, nextSeq: 1 }
+  ).lean()) as
+    | { status?: "playing" | "finished" | "aborted"; nextSeq?: number }
+    | null;
+  if (stored === null) {
+    throw new Error(`Cannot append events for unknown match ${args.matchId}`);
+  }
+  if (stored.status !== "playing" || (stored.nextSeq ?? 0) >= nextSeq) {
+    return;
+  }
+  throw new Error(
+    `Match ${args.matchId} expected event seq ${stored.nextSeq ?? 0}, got ${firstSeq}`
+  );
+}
+
+export async function loadMatchEventJournalState(
+  matchId: string
+): Promise<{
+  status: "playing" | "finished" | "aborted";
+  nextSeq: number;
+} | null> {
+  const stored = (await MatchModel.findById(
+    matchId,
+    { status: 1, nextSeq: 1 }
+  ).lean()) as
+    | { status?: "playing" | "finished" | "aborted"; nextSeq?: number }
+    | null;
+  if (stored === null || stored.status === undefined) {
+    return null;
+  }
+  return { status: stored.status, nextSeq: stored.nextSeq ?? 0 };
 }
 
 /**
@@ -239,6 +300,12 @@ export const mongoMatchRepository: MatchRepository = {
   loadRecoveryRecord: (matchId) => loadMatchRecoveryRecord(matchId),
   markCheckpointTerminal: (args) => markMatchCheckpointTerminal(args),
   deleteCheckpoint: (matchId) => deleteMatchCheckpoint(matchId),
+};
+
+export const mongoMatchEventJournalStore: MatchEventJournalStore = {
+  appendMatchEvents: (args) => appendMatchEvents(args),
+  loadMatchEventJournalState: (matchId) =>
+    loadMatchEventJournalState(matchId),
 };
 
 /**

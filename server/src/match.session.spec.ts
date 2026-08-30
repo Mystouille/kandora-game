@@ -339,15 +339,24 @@ describe("MatchProcess — Buu multi-game session", () => {
     expect(internals.gameIndex).toBe(1);
     expect(createMatchDocMock).toHaveBeenCalledTimes(2);
     const calls = createMatchDocMock.mock.calls as unknown as Array<
-      [{ matchId: string; sessionId?: string; gameIndex?: number }]
+      [
+        {
+          matchId: string;
+          sessionId?: string;
+          gameIndex?: number;
+          initialEventSeq: number;
+        },
+      ]
     >;
     const sessionId = (m as unknown as { matchId: string }).matchId;
     expect(calls[0][0].matchId).toBe(`${sessionId}-g0`);
     expect(calls[0][0].sessionId).toBe(sessionId);
     expect(calls[0][0].gameIndex).toBe(0);
+    expect(calls[0][0].initialEventSeq).toBe(0);
     expect(calls[1][0].matchId).toBe(`${sessionId}-g1`);
     expect(calls[1][0].sessionId).toBe(sessionId);
     expect(calls[1][0].gameIndex).toBe(1);
+    expect(calls[1][0].initialEventSeq).toBeGreaterThan(0);
   });
 
   it("Buu vote: human votes no → session ends with vote_no", async () => {
@@ -482,47 +491,31 @@ describe("MatchProcess — Buu multi-game session", () => {
     });
   });
 
-  it("restores the vote continuation after a failed command handoff", async () => {
+  it("opens the vote without checkpointing the command boundary", async () => {
     setContinueVoteMs(10_000);
-    const storage = createMemoryMatchRepository();
-    let saveAttempts = 0;
+    const saveCheckpoint = vi.fn(async () => {
+      throw new Error("checkpoint persistence must not run");
+    });
     const repository: MatchRepository = {
-      ...storage,
-      saveCheckpoint: async (args) => {
-        saveAttempts += 1;
-        if (saveAttempts === 1) {
-          throw new Error("vote boundary write failed");
-        }
-        await storage.saveCheckpoint(args);
-      },
+      ...ephemeralMatchRepository,
+      saveCheckpoint,
     };
     const m = makeMatch({ seed: 16, buu: true, repository });
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
     const internals = m as unknown as MatchInternals;
-    internals.commandTransactionPromise = new Promise<void>(() => undefined);
-    internals.activeCommandTransactionId = 999;
+    const done = internals.afterHandEnd();
+    await new Promise((resolve) => setImmediate(resolve));
 
-    await expect(internals.afterHandEnd()).rejects.toThrow(
-      "failed to commit command input boundary"
-    );
-
-    expect(m.isPaused).toBe(true);
-    expect(m.hasPendingCommandCommit).toBe(true);
-    expect(await repository.loadRecoveryRecord(m.matchId)).toBeNull();
-
-    await expect(m.retryPendingCommandCommit()).resolves.toBe(true);
-    expect(saveAttempts).toBe(2);
     expect(m.createCheckpoint()).toMatchObject({
       checkpointKind: "continue_vote",
       votes: [null, "yes", "yes", "yes"],
     });
+    expect(saveCheckpoint).not.toHaveBeenCalled();
 
     await m.handleVoteContinue(0, "no");
-    await vi.waitFor(() => {
-      expect(m.status).toBe("finished");
-    });
-    expect(await repository.loadRecoveryRecord(m.matchId)).toBeNull();
+    await done;
+    expect(m.status).toBe("finished");
     expect(
       m.replayFromBuffer(0, 0).filter(
         ({ event }) => event.type === "session_end"
@@ -629,19 +622,18 @@ describe("MatchProcess — Buu multi-game session", () => {
     );
   });
 
-  it("retries a failed vote-command commit with its timeout armed", async () => {
+  it("records a vote without checkpoint persistence and keeps the timeout armed", async () => {
     setContinueVoteMs(10_000);
-    const storage = createMemoryMatchRepository();
-    let commitAttempts = 0;
+    const saveCheckpoint = vi.fn(async () => {
+      throw new Error("checkpoint persistence must not run");
+    });
+    const saveCommandTransaction = vi.fn(async () => {
+      throw new Error("command persistence must not run");
+    });
     const repository: MatchRepository = {
-      ...storage,
-      saveCheckpoint: async (args) => {
-        commitAttempts += 1;
-        if (commitAttempts === 1) {
-          throw new Error("vote command commit failed");
-        }
-        await storage.saveCheckpoint(args);
-      },
+      ...ephemeralMatchRepository,
+      saveCheckpoint,
+      saveCommandTransaction,
     };
     const m = makeMatch({
       seed: 181,
@@ -654,18 +646,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     const done = (m as unknown as MatchInternals).afterHandEnd();
     await new Promise((resolve) => setImmediate(resolve));
 
-    await expect(m.handleVoteContinue(0, "yes")).rejects.toThrow(
-      "vote command commit failed"
-    );
-
-    expect(m.isPaused).toBe(true);
-    expect(m.hasPendingCommandCommit).toBe(true);
-    expect(await repository.loadRecoveryRecord(m.matchId)).toMatchObject({
-      checkpoint: { votes: [null, null, "yes", "yes"] },
-      pendingCommand: { type: "vote_continue", seat: 0, vote: "yes" },
-    });
-
-    await expect(m.retryPendingCommandCommit()).resolves.toBe(true);
+    await m.handleVoteContinue(0, "yes");
     const committed = m.createCheckpoint();
     if (
       committed.status !== "playing" ||
@@ -675,6 +656,8 @@ describe("MatchProcess — Buu multi-game session", () => {
     }
     expect(committed.votes).toEqual(["yes", null, "yes", "yes"]);
     expect(committed.timeoutArmed).toBe(true);
+    expect(saveCommandTransaction).not.toHaveBeenCalled();
+    expect(saveCheckpoint).not.toHaveBeenCalled();
     await m.handleVoteContinue(1, "yes");
     await done;
   });

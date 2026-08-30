@@ -682,6 +682,20 @@ export function activePlayerIndicatorSeat(
   return null;
 }
 
+export function advanceMatchEndRevealSound(
+  playedForCurrentMatchEnd: boolean,
+  matchEnded: boolean,
+  screenRendered: boolean
+): { play: boolean; nextPlayed: boolean } {
+  if (!matchEnded) {
+    return { play: false, nextPlayed: false };
+  }
+  if (screenRendered && !playedForCurrentMatchEnd) {
+    return { play: true, nextPlayed: true };
+  }
+  return { play: false, nextPlayed: playedForCurrentMatchEnd };
+}
+
 type HandResult = NonNullable<MatchView["lastHandResult"]>;
 
 interface ResultSeatReveal {
@@ -1277,6 +1291,7 @@ export class TableRenderer {
    * simultaneously, so we'd otherwise double up.
    */
   private winPageUraRevealSoundPlayed = false;
+  private matchEndRevealSoundPlayed = false;
   /**
    * When true, the win-info panel reveals its yaku list and
    * ura-dora indicators progressively (staged reveal). When false
@@ -2882,6 +2897,15 @@ export class TableRenderer {
       if (view.matchEnded) {
         designRect = this.renderMatchEnd(view, cx, cy);
       }
+    }
+    const matchEndRevealSound = advanceMatchEndRevealSound(
+      this.matchEndRevealSoundPlayed,
+      view.matchEnded !== null,
+      view.matchEnded !== null && designRect !== null
+    );
+    this.matchEndRevealSoundPlayed = matchEndRevealSound.nextPlayed;
+    if (matchEndRevealSound.play) {
+      playGameSound("yaku-reveal");
     }
 
     // Publish the result-panel bounds (in canvas pixels) for host
