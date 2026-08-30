@@ -110,6 +110,17 @@ describe("MatchProcess relay", () => {
     expect(match.status).toBe("playing");
   });
 
+  it("does not add a requested dispatch delay to an upstream-delayed relay", () => {
+    const match = MatchProcess.createRelayMatch(
+      "relay-delay",
+      "0E342071",
+      { repository: ephemeralMatchRepository },
+      "tenhou"
+    );
+
+    expect(match.spectatorDispatchDelayMs(5 * 60_000)).toBe(0);
+  });
+
   it("fans injected events out to a spectator, omnisciently", () => {
     const match = MatchProcess.createRelayMatch(
       "relay-2",

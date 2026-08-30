@@ -475,6 +475,9 @@ export class MatchProcess {
   get isRelay(): boolean {
     return this.relayMode;
   }
+  spectatorDispatchDelayMs(requestedDelayMs: number): number {
+    return this.relayMode ? 0 : requestedDelayMs;
+  }
   /** Relay archive metadata, set by `createRelayMatch` / `injectRelayEvent`. */
   private relaySourceGameId: string | null = null;
   private relayRuleSet = "tenhou-default";

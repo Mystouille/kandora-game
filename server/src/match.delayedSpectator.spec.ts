@@ -107,6 +107,12 @@ describe("MatchProcess delayed-spectator API", () => {
     expect(sink.events).toHaveLength(0);
   });
 
+  it("preserves the requested dispatch delay for native matches", () => {
+    const match = makeMatch(30);
+
+    expect(match.spectatorDispatchDelayMs(5 * 60_000)).toBe(5 * 60_000);
+  });
+
   it("broadcasts presence immediately without releasing delayed events", async () => {
     const match = makeMatch(32);
     await match.start();

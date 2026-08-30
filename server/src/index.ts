@@ -49,6 +49,7 @@ import { connectGameDb } from "./db";
 import { getMatchStatus, mongoMatchRepository } from "./persist";
 import { RelayController, RelayCapacityError } from "./relay/relayController";
 import { createWsTenhouClient } from "./relay/tenhouClient";
+import { listLobbyRoomSummaries } from "./lobbyRooms";
 
 // The host bootstrap (portal or standalone) injects the PortalAdapter via
 // `setAdapter(...)` before importing this module.
@@ -141,6 +142,9 @@ const relayController = new RelayController({
   createClient: createWsTenhouClient,
   repository: mongoMatchRepository,
   maxConcurrent: RELAY_MAX_CONCURRENT,
+  log: (event, data) => {
+    console.log(`[tenhou-relay] ${event} ${JSON.stringify(data)}`);
+  },
 });
 
 /**
@@ -394,11 +398,10 @@ async function handleCreateRoom(
 }
 
 /**
- * `GET /rooms` — list all in-memory rooms (waiting + playing) for
- * the portal lobby. Finished matches are filtered out: the lobby
- * cares about joinable / spectate-able rooms only. Unauthenticated
- * (the data is per-seat display names + status, no engine state),
- * but still gated on `GAME_ENABLED`.
+ * `GET /rooms` — list native in-memory rooms (waiting + playing) for
+ * the portal lobby. Finished matches and external relays are filtered out.
+ * Unauthenticated (the data is per-seat display names + status, no engine
+ * state), but still gated on `GAME_ENABLED`.
  */
 function handleListRooms(res: http.ServerResponse): void {
   res.setHeader("content-type", "application/json");
@@ -407,13 +410,7 @@ function handleListRooms(res: http.ServerResponse): void {
     res.end(JSON.stringify({ error: "game_disabled" }));
     return;
   }
-  const rooms: ReturnType<MatchProcess["summary"]>[] = [];
-  for (const m of matches.values()) {
-    if (m.status === "finished") {
-      continue;
-    }
-    rooms.push(m.summary());
-  }
+  const rooms = listLobbyRoomSummaries(matches.values());
   res.statusCode = 200;
   res.end(JSON.stringify({ rooms }));
 }
@@ -729,8 +726,8 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
       ws.close();
       return;
     }
-    const delayMs = hello.delayMs ?? 0;
-    if (delayMs > MAX_SPECTATOR_DELAY_MS) {
+    const requestedDelayMs = hello.delayMs ?? 0;
+    if (requestedDelayMs > MAX_SPECTATOR_DELAY_MS) {
       sendError(
         "spectate_delay_too_large",
         `Spectator delay must be <= ${MAX_SPECTATOR_DELAY_MS}ms.`
@@ -743,13 +740,14 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
       displayName: profile.displayName,
       role: "spectator",
     };
-    if (delayMs > 0) {
+    const dispatchDelayMs = match.spectatorDispatchDelayMs(requestedDelayMs);
+    if (dispatchDelayMs > 0) {
       handleDelayedSpectatorConnection(
         ws,
         match,
         send,
         sendError,
-        delayMs,
+        dispatchDelayMs,
         viewer
       );
     } else {

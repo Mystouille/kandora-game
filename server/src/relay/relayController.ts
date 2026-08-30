@@ -34,6 +34,7 @@ interface RelaySession {
   idleTimer: NodeJS.Timeout | null;
   finalResultTimer: NodeJS.Timeout | null;
   pendingWinRevealMs: number;
+  upstreamReady: boolean;
   closing: boolean;
 }
 
@@ -117,11 +118,29 @@ export class RelayController {
       idleTimer: null,
       finalResultTimer: null,
       pendingWinRevealMs: 0,
+      upstreamReady: false,
       closing: false,
     };
     session.client = this.opts.createClient(watchId, {
-      onFrame: (frame) => this.onFrame(session, frame),
+      onFrame: (frame) => {
+        if (!session.upstreamReady) {
+          session.upstreamReady = true;
+          this.log("upstream_ready", {
+            watchId,
+            matchId,
+            tag: frame.tag,
+          });
+        }
+        this.onFrame(session, frame);
+      },
       onClose: () => undefined,
+      onIssue: (issue) => {
+        this.log("upstream_issue", {
+          watchId,
+          matchId,
+          ...issue,
+        });
+      },
     });
     this.byWatch.set(watchId, session);
     this.byMatch.set(matchId, session);

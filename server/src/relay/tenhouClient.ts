@@ -16,6 +16,12 @@ export interface TenhouClientHandlers {
   onFrame: (frame: Record<string, unknown>) => void;
   /** Fired once the client is permanently stopped (no more reconnects). */
   onClose: (reason: string) => void;
+  onIssue?: (issue: TenhouClientIssue) => void;
+}
+
+export interface TenhouClientIssue {
+  kind: "protocol_error" | "handshake_timeout" | "socket_error";
+  detail?: string;
 }
 
 export interface TenhouSpectateClient {
@@ -39,7 +45,8 @@ const TENHOU_RELAY_ID = resolveTenhouRelayId(process.env.TENHOU_RELAY_ID);
 const TENHOU_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const KEEPALIVE_MS = 10_000;
-const RECONNECT_MS = 3_000;
+export const TENHOU_RECONNECT_MS = 3_000;
+export const TENHOU_HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export interface TimedTenhouFrame {
   delayMs: number;
@@ -79,13 +86,18 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
   private ws: WebSocket | null = null;
   private keepalive: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private handshakeTimer: NodeJS.Timeout | null = null;
   private frameTimer: NodeJS.Timeout | null = null;
   private readonly frameQueue: TimedTenhouFrame[] = [];
   private stopped = false;
 
   constructor(
     private readonly watchId: string,
-    private readonly handlers: TenhouClientHandlers
+    private readonly handlers: TenhouClientHandlers,
+    private readonly createSocket: () => WebSocket = () =>
+      new WebSocket(TENHOU_WS_URL, {
+        headers: { "User-Agent": TENHOU_USER_AGENT, Origin: TENHOU_ORIGIN },
+      })
   ) {}
 
   start(): void {
@@ -116,6 +128,10 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
+    }
     if (this.frameTimer) {
       clearTimeout(this.frameTimer);
       this.frameTimer = null;
@@ -124,22 +140,39 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
   }
 
   private open(): void {
-    const ws = new WebSocket(TENHOU_WS_URL, {
-      headers: { "User-Agent": TENHOU_USER_AGENT, Origin: TENHOU_ORIGIN },
-    });
+    const ws = this.createSocket();
     this.ws = ws;
     ws.on("open", () => {
+      if (this.ws !== ws) {
+        return;
+      }
       this.send({ tag: "HELO", name: TENHOU_RELAY_ID, sx: "M" });
       this.keepalive = setInterval(() => this.raw("<Z/>"), KEEPALIVE_MS);
       this.keepalive.unref?.();
+      this.handshakeTimer = setTimeout(() => {
+        this.handshakeTimer = null;
+        this.reconnectUpstream(ws, {
+          kind: "handshake_timeout",
+        });
+      }, TENHOU_HANDSHAKE_TIMEOUT_MS);
+      this.handshakeTimer.unref?.();
     });
     ws.on("message", (data: WebSocket.RawData) => {
-      this.onMessage(data.toString());
+      if (this.ws === ws) {
+        this.onMessage(ws, data.toString());
+      }
     });
     ws.on("close", () => {
+      if (this.ws !== ws) {
+        return;
+      }
       if (this.keepalive) {
         clearInterval(this.keepalive);
         this.keepalive = null;
+      }
+      if (this.handshakeTimer) {
+        clearTimeout(this.handshakeTimer);
+        this.handshakeTimer = null;
       }
       if (this.frameTimer) {
         clearTimeout(this.frameTimer);
@@ -151,15 +184,25 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
         return;
       }
       // Reconnect + re-handshake; the decoder dedupes the catch-up snapshot.
-      this.reconnectTimer = setTimeout(() => this.open(), RECONNECT_MS);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.open();
+      }, TENHOU_RECONNECT_MS);
       this.reconnectTimer.unref?.();
     });
-    ws.on("error", () => {
+    ws.on("error", (error) => {
+      if (this.ws !== ws) {
+        return;
+      }
+      this.handlers.onIssue?.({
+        kind: "socket_error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
       // The `close` handler follows and drives the reconnect.
     });
   }
 
-  private onMessage(text: string): void {
+  private onMessage(ws: WebSocket, text: string): void {
     let frame: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(text);
@@ -172,6 +215,13 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
       return;
     }
     const tag = frame.tag;
+    if (tag === "ERR") {
+      this.reconnectUpstream(ws, {
+        kind: "protocol_error",
+        detail: String(frame.code ?? "unknown"),
+      });
+      return;
+    }
     if (tag === "HELO") {
       this.send({ tag: "WG", id: this.watchId, tw: 0 });
       return;
@@ -180,6 +230,12 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
       this.send({ tag: "GOK" });
       return;
     }
+    if (tag === "UN" || tag === "INITBYLOG" || tag === "WGC") {
+      if (this.handshakeTimer) {
+        clearTimeout(this.handshakeTimer);
+        this.handshakeTimer = null;
+      }
+    }
     if (tag === "WGC") {
       this.enqueueTimedFrame(frame);
       return;
@@ -187,6 +243,18 @@ export class WsTenhouSpectateClient implements TenhouSpectateClient {
     if (tag === "UN" || tag === "INITBYLOG") {
       this.handlers.onFrame(frame);
     }
+  }
+
+  private reconnectUpstream(ws: WebSocket, issue: TenhouClientIssue): void {
+    if (this.stopped || this.ws !== ws) {
+      return;
+    }
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
+    }
+    this.handlers.onIssue?.(issue);
+    ws.terminate();
   }
 
   private enqueueTimedFrame(frame: Record<string, unknown>): void {

@@ -80,11 +80,17 @@ values onto the corresponding domain events for the development simulator.
 
 ## Reconnect behavior
 
-The upstream client reconnects three seconds after an unexpected close and
-repeats the handshake. Tenhou responds with an overlapping catch-up snapshot.
-The stateful decoder keys hands by the `INIT.seed` value and replaces a shorter
-copy of a hand with the reconnect snapshot. It then reparses the accumulated
-elements and emits only events beyond its monotonic cursor.
+The upstream client reconnects three seconds after an unexpected close,
+Tenhou `ERR` frame, or a handshake that produces no `UN`, `INITBYLOG`, or `WGC`
+frame within 15 seconds. This prevents a rejected WG subscription from staying
+alive on keepalives while its downstream viewers receive no game state. Relay
+logs record `start`, `upstream_issue`, `upstream_ready`, and `teardown` with the
+safe watch and match IDs for production diagnosis.
+
+After reconnecting, Tenhou responds with an overlapping catch-up snapshot. The
+stateful decoder keys hands by the `INIT.seed` value and replaces a shorter copy
+of a hand with the reconnect snapshot. It then reparses the accumulated elements
+and emits only events beyond its monotonic cursor.
 
 This prevents duplicated `hand_start`, draw, discard, and result events when a
 snapshot overlaps data already delivered. A real `match_end` is emitted only
