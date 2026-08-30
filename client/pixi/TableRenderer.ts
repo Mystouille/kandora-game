@@ -521,15 +521,15 @@ export function shouldRevealWinScoreSummary(
   revealElapsedMs: number,
   visibleYakuCount: number,
   hasUraYaku: boolean,
-  hasUraIndicators: boolean
+  hasUraIndicators: boolean,
+  uraDoraEnabled = true
 ): boolean {
   if (!stageReveal) {
     return true;
   }
-  const lastYakuRevealAtMs =
-    visibleYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS;
+  const lastYakuRevealAtMs = visibleYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS;
   const finalDetailRevealAtMs =
-    hasUraIndicators && !hasUraYaku
+    uraDoraEnabled && hasUraIndicators && !hasUraYaku
       ? lastYakuRevealAtMs + RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS
       : lastYakuRevealAtMs;
   return (
@@ -560,15 +560,16 @@ export function buildResultYakuEntries(
   yaku: Record<string, string> | undefined,
   doraCount: number | undefined,
   uraDoraCount: number | undefined,
-  reserveUraRow: boolean
+  reserveUraRow: boolean,
+  uraDoraEnabled = true
 ): Array<{ name: string; value: string; alwaysHidden: boolean }> {
-  const entries = Object.entries(sortYakuRecord(yaku ?? {})).map(
-    ([name, value]) => ({
+  const entries = Object.entries(sortYakuRecord(yaku ?? {}))
+    .filter(([name]) => uraDoraEnabled || name !== "Ura Dora")
+    .map(([name, value]) => ({
       name,
       value,
       alwaysHidden: false,
-    })
-  );
+    }));
   const setCount = (name: string, count: number, keepZero: boolean): void => {
     const index = entries.findIndex((entry) => entry.name === name);
     if (count === 0 && !keepZero) {
@@ -592,7 +593,7 @@ export function buildResultYakuEntries(
   if (doraCount !== undefined) {
     setCount("Dora", doraCount, false);
   }
-  if (uraDoraCount !== undefined || reserveUraRow) {
+  if (uraDoraEnabled && (uraDoraCount !== undefined || reserveUraRow)) {
     setCount("Ura Dora", uraDoraCount ?? 0, true);
   }
 
@@ -609,6 +610,22 @@ export function buildResultYakuEntries(
     filtered.push(ura);
   }
   return filtered;
+}
+
+export function resultUraDoraIndicators(
+  uraDoraEnabled: boolean,
+  wins: NonNullable<HandResult["wins"]>
+): string[] {
+  if (!uraDoraEnabled) {
+    return [];
+  }
+  return (
+    wins.find(
+      (win) =>
+        win.uraDoraIndicators !== undefined &&
+        win.uraDoraIndicators.length > 0
+    )?.uraDoraIndicators ?? []
+  );
 }
 
 function scoreCartridgeMetrics(center: Rect): {
@@ -3777,7 +3794,8 @@ export class TableRenderer {
       cy,
       overlay,
       view.seatNames,
-      view.scoreCap
+      view.scoreCap,
+      view.uraDoraEnabled
     );
 
     // Honba / riichi sticks pill, tucked into the top-left of the
@@ -3806,7 +3824,8 @@ export class TableRenderer {
     cy: number,
     parent: Container,
     seatNames: MatchView["seatNames"],
-    scoreCap: MatchView["scoreCap"]
+    scoreCap: MatchView["scoreCap"],
+    uraDoraEnabled: MatchView["uraDoraEnabled"]
   ): boolean {
     if (!this.root) {
       return true;
@@ -3907,10 +3926,7 @@ export class TableRenderer {
       const sharedDora =
         r.wins.find((w) => w.doraIndicators && w.doraIndicators.length > 0)
           ?.doraIndicators ?? [];
-      const sharedUra =
-        r.wins.find(
-          (w) => w.uraDoraIndicators && w.uraDoraIndicators.length > 0
-        )?.uraDoraIndicators ?? [];
+      const sharedUra = resultUraDoraIndicators(uraDoraEnabled, r.wins);
       winsToRender.forEach((win, idx) => {
         if (idx > 0) {
           rows.push({ kind: "divider" });
@@ -3934,13 +3950,15 @@ export class TableRenderer {
             name === "両立直"
         );
         const reserveUraRow =
-          (win.uraDoraIndicators?.length ?? 0) > 0 ||
-          (win.uraDoraCount !== undefined && hasRiichiYaku);
+          uraDoraEnabled &&
+          ((win.uraDoraIndicators?.length ?? 0) > 0 ||
+            (win.uraDoraCount !== undefined && hasRiichiYaku));
         const visibleYakuAll = buildResultYakuEntries(
           win.yaku,
           win.doraCount,
           win.uraDoraCount,
-          reserveUraRow
+          reserveUraRow,
+          uraDoraEnabled
         );
         const revealableYakuCount = visibleYakuAll.filter(
           (entry) => !entry.alwaysHidden
@@ -3983,7 +4001,8 @@ export class TableRenderer {
           revealElapsedMs,
           revealableYakuCount,
           hasUraYaku,
-          sharedUra.length > 0
+          sharedUra.length > 0,
+          uraDoraEnabled
         );
         scoreDeltaRevealed = shouldRevealWinScoreDelta(
           stageReveal,

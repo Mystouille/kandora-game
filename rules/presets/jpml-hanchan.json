@@ -1,7 +1,7 @@
 {
   "id": "jpml-hanchan",
-  "displayName": "JPML — Hanchan",
-  "description": "JPML hanchan rules with no ippatsu, ura dora, kan dora, or aka dora.",
+  "displayName": "JPML A — Hanchan",
+  "description": "JPML A rules - No ippatsu, ura dora, kan dora, or aka dora.",
   "roundWindCount": 2,
   "roundLimit": 4,
   "startingScore": 25000,

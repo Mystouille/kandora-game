@@ -184,6 +184,7 @@ function snapshotToReplayView(s: SnapshotState): ReplayView {
       : [false, false, false, false],
     buuMode: s.chips !== undefined,
     scoreCap: s.scoreCap ?? null,
+    uraDoraEnabled: s.uraDoraEnabled ?? true,
   };
 }
 

@@ -14,8 +14,12 @@ import { MatchProcess, setDelayAfterDiscardMs } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import { ServerMessageSchema } from "~/game/protocol/messages";
 import { useMatchStore } from "~/game/client/store";
+import type { RuleSetOverride } from "~/game/rules/ruleSet";
 
-function makeMatch(seed: number): MatchProcess {
+function makeMatch(
+  seed: number,
+  ruleSetOverride?: RuleSetOverride
+): MatchProcess {
   return new MatchProcess(
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
     seed,
@@ -25,7 +29,9 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
     ],
-    { repository: ephemeralMatchRepository }
+    { repository: ephemeralMatchRepository },
+    undefined,
+    ruleSetOverride
   );
 }
 
@@ -60,7 +66,7 @@ describe("snapshot hydration", () => {
   });
 
   it("hydrateSnapshot populates round/score/dealer fields", async () => {
-    const m = makeMatch(1);
+    const m = makeMatch(1, { uraDora: false });
     m.attachHuman(0, () => undefined);
     await m.start();
     const snapshot = m.buildSnapshotForSeat(0);
@@ -79,6 +85,7 @@ describe("snapshot hydration", () => {
     expect(view.roundNumber).toBe(1);
     expect(view.honba).toBe(0);
     expect(view.scores).toEqual([25000, 25000, 25000, 25000]);
+    expect(view.uraDoraEnabled).toBe(false);
     expect(view.hands[0].length).toBeGreaterThanOrEqual(13);
     // Opponents redacted to nulls.
     for (let s = 1; s < 4; s++) {

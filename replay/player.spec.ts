@@ -11,7 +11,9 @@ import { describe, expect, it } from "vitest";
 import type { GameEvent } from "~/game/protocol/messages";
 import {
   applyReplayEvent,
+  initialView,
   replayBounds,
+  replayViewToMatchView,
   replayReducer,
   rotateHandResult,
   rotateSeatValues,
@@ -38,6 +40,32 @@ function makeLog(events: GameEvent[]): ReplayLog {
     schemaVersion: REPLAY_LOG_SCHEMA_VERSION,
   };
 }
+
+describe("ruleset capabilities", () => {
+  it("carries disabled ura dora from match start into the renderer view", () => {
+    const replayView = applyReplayEvent(initialView(), {
+      type: "match_start",
+      seats: [],
+      ruleSet: "jpml-hanchan",
+      uraDoraEnabled: false,
+    });
+
+    expect(replayView.uraDoraEnabled).toBe(false);
+    expect(replayViewToMatchView(replayView, { index: 0 }).uraDoraEnabled).toBe(
+      false
+    );
+  });
+
+  it("defaults legacy logs without the capability to ura dora enabled", () => {
+    const replayView = applyReplayEvent(initialView(), {
+      type: "match_start",
+      seats: [],
+      ruleSet: "tenhou-default",
+    });
+
+    expect(replayView.uraDoraEnabled).toBe(true);
+  });
+});
 
 /** Reusable fixture for the omniscient `startingHands` field. */
 const STARTING: [string[], string[], string[], string[]] = [

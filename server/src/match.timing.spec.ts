@@ -52,4 +52,15 @@ describe("win result reveal timing", () => {
       })
     ).toBe(4_000);
   });
+
+  it("ignores stale ura indicators when the rule set disables ura dora", () => {
+    expect(
+      winResultRevealDurationMs({
+        visibleYakuCount: 3,
+        hasUraIndicators: true,
+        hasUraYaku: false,
+        uraDoraEnabled: false,
+      })
+    ).toBe(3_000);
+  });
 });

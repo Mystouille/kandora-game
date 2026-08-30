@@ -121,6 +121,8 @@ export interface ReplayView {
    * shows the tier name (e.g. "Mangan") instead of the raw
    * han / yakuman value. `null` for rule sets without a cap. */
   scoreCap: "mangan" | "haneman" | "baiman" | "sanbaiman" | null;
+  /** Whether the active rule set permits ura dora. */
+  uraDoraEnabled: boolean;
   /** Per-seat: is this seat currently in furiten (any flavor).
    * Mirrors the engine's `isFuritenForRon` predicate and is
    * driven by `furiten` archived events. Drives the "Furiten"
@@ -263,6 +265,7 @@ export function initialView(): ReplayView {
     buuMode: false,
     riichiBetValue: 1000,
     scoreCap: null,
+    uraDoraEnabled: true,
     riichiTileIdx: [null, null, null, null],
     lastHandResult: null,
     matchEnded: null,
@@ -289,6 +292,7 @@ export function applyReplayEvent(
         buuMode: event.ruleSet === "buu-east",
         riichiBetValue: event.riichiBetValue ?? view.riichiBetValue,
         scoreCap: event.scoreCap ?? null,
+        uraDoraEnabled: event.uraDoraEnabled ?? true,
         chips: (event.chips ? [...event.chips] : view.chips) as [
           number,
           number,
@@ -923,6 +927,7 @@ export function replayViewToMatchView(
     buuMode: view.buuMode,
     riichiBetValue: view.riichiBetValue,
     scoreCap: view.scoreCap,
+    uraDoraEnabled: view.uraDoraEnabled,
     lastHandResult: view.lastHandResult,
     matchEnded: view.matchEnded,
     currentWaits: opts.currentWaits ?? null,

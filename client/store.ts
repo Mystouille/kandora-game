@@ -246,6 +246,8 @@ export interface MatchView {
    * payout. `null` for rule sets without a cap.
    */
   scoreCap: "mangan" | "haneman" | "baiman" | "sanbaiman" | null;
+  /** Whether the active rule set permits ura dora. */
+  uraDoraEnabled: boolean;
   /** Current dealer seat. */
   dealer: Seat;
   /** Round wind (E / S / W / N). */
@@ -476,6 +478,7 @@ const initialState: MatchView = {
   buuMode: false,
   riichiBetValue: 1000,
   scoreCap: null,
+  uraDoraEnabled: true,
   dealer: 0,
   roundWind: "E",
   roundNumber: 1,
@@ -639,6 +642,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       // server omits the field (older snapshots / non-capped
       // rule sets).
       scoreCap: snap.scoreCap ?? state.scoreCap,
+      uraDoraEnabled: snap.uraDoraEnabled ?? state.uraDoraEnabled,
       lastSeq: seq,
       // A snapshot is the authoritative current view; clear any
       // optimistic / panel state that may not survive the resync.
@@ -693,6 +697,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             buuMode: event.ruleSet === "buu-east",
             riichiBetValue: event.riichiBetValue ?? state.riichiBetValue,
             scoreCap: event.scoreCap ?? null,
+            uraDoraEnabled: event.uraDoraEnabled ?? true,
             chips: (event.chips ? [...event.chips] : state.chips) as [
               number,
               number,

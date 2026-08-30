@@ -293,11 +293,12 @@ export function winResultRevealDurationMs(args: {
   visibleYakuCount: number;
   hasUraIndicators: boolean;
   hasUraYaku: boolean;
+  uraDoraEnabled?: boolean;
 }): number {
   const lastYakuRevealAtMs =
     args.visibleYakuCount * WIN_YAKU_REVEAL_INTERVAL_MS;
   const finalDetailRevealAtMs =
-    args.hasUraIndicators && !args.hasUraYaku
+    (args.uraDoraEnabled ?? true) && args.hasUraIndicators && !args.hasUraYaku
       ? lastYakuRevealAtMs + WIN_URA_REVEAL_AFTER_LAST_YAKU_MS
       : lastYakuRevealAtMs;
   return finalDetailRevealAtMs + WIN_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS;
@@ -2179,6 +2180,7 @@ export class MatchProcess {
       })),
       ruleSet: this.state.ruleSet.buuMode ? "buu-east" : "tenhou-default",
       riichiBetValue: this.state.ruleSet.riichiBetValue,
+      uraDoraEnabled: this.state.ruleSet.uraDora,
       ...(this.state.ruleSet.scoreCap
         ? { scoreCap: this.state.ruleSet.scoreCap }
         : {}),
@@ -3438,6 +3440,7 @@ export class MatchProcess {
         scores: [...this.state.scores],
         sinking: this.computeSinking(),
         riichiBetValue: this.state.ruleSet.riichiBetValue,
+        uraDoraEnabled: this.state.ruleSet.uraDora,
         ...(this.state.ruleSet.scoreCap
           ? { scoreCap: this.state.ruleSet.scoreCap }
           : {}),
@@ -3532,6 +3535,7 @@ export class MatchProcess {
         scores: [...this.state.scores],
         sinking: this.computeSinking(),
         riichiBetValue: this.state.ruleSet.riichiBetValue,
+        uraDoraEnabled: this.state.ruleSet.uraDora,
         ...(this.state.ruleSet.scoreCap
           ? { scoreCap: this.state.ruleSet.scoreCap }
           : {}),
@@ -5965,6 +5969,7 @@ export class MatchProcess {
       })),
       ruleSet: this.state.ruleSet.buuMode ? "buu-east" : "tenhou-default",
       riichiBetValue: this.state.ruleSet.riichiBetValue,
+      uraDoraEnabled: this.state.ruleSet.uraDora,
       ...(this.state.ruleSet.scoreCap
         ? { scoreCap: this.state.ruleSet.scoreCap }
         : {}),
@@ -6147,11 +6152,15 @@ export class MatchProcess {
       // beat, tack on +1000ms when ura indicators are shown
       // without an accompanying "Ura Dora" yaku, then leave one
       // final beat for the han/fu + hand-value summary.
+      const uraDoraEnabled = this.state.ruleSet.uraDora;
       const hasUraIndicators =
-        this.state.ruleSet.uraDora && this.state.riichiDeclared[e.winner];
+        uraDoraEnabled && this.state.riichiDeclared[e.winner];
       let visibleYakuCount = 0;
       let hasUraYaku = false;
       for (const [name, value] of Object.entries(yakuRomaji)) {
+        if (!uraDoraEnabled && name === "Ura Dora") {
+          continue;
+        }
         const leading = parseInt(value, 10);
         if (Number.isFinite(leading) && leading === 0) {
           continue;
@@ -6165,6 +6174,7 @@ export class MatchProcess {
         visibleYakuCount,
         hasUraIndicators,
         hasUraYaku,
+        uraDoraEnabled,
       });
       if (revealMs > this.pendingWinRevealMs) {
         this.pendingWinRevealMs = revealMs;

@@ -31,6 +31,7 @@ import {
   resolveSeatHandPresentation,
   riichiStickMetrics,
   riichiSelectionTileTint,
+  resultUraDoraIndicators,
   resultScoreBoxLayout,
   shouldRevealWinScoreSummary,
   shouldStageWinReveal,
@@ -697,6 +698,29 @@ describe("shouldRevealWinScoreSummary", () => {
   it("keeps static replay and history results fully visible", () => {
     expect(shouldRevealWinScoreSummary(false, 0, 3, false, true)).toBe(true);
   });
+
+  it("does not wait for stale ura indicators when ura dora is disabled", () => {
+    expect(
+      shouldRevealWinScoreSummary(true, 3_000, 3, false, true, false)
+    ).toBe(true);
+  });
+});
+
+describe("resultUraDoraIndicators", () => {
+  const wins: NonNullable<NonNullable<MatchView["lastHandResult"]>["wins"]> = [
+    {
+      seat: 0,
+      uraDoraIndicators: ["2m", "4p"],
+    },
+  ];
+
+  it("returns no indicators when ura dora is disabled", () => {
+    expect(resultUraDoraIndicators(false, wins)).toEqual([]);
+  });
+
+  it("retains indicators when ura dora is enabled", () => {
+    expect(resultUraDoraIndicators(true, wins)).toEqual(["2m", "4p"]);
+  });
 });
 
 describe("winResultRevealKey", () => {
@@ -785,5 +809,17 @@ describe("buildResultYakuEntries", () => {
       { name: "Tsumo", value: "1飜", alwaysHidden: false },
       { name: "Dora", value: "1飜", alwaysHidden: false },
     ]);
+  });
+
+  it("removes ura yaku and placeholder rows when ura dora is disabled", () => {
+    expect(
+      buildResultYakuEntries(
+        { Riichi: "1飜", "Ura Dora": "2飜" },
+        0,
+        2,
+        true,
+        false
+      )
+    ).toEqual([{ name: "Riichi", value: "1飜", alwaysHidden: false }]);
   });
 });

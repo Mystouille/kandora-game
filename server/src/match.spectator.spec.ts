@@ -24,8 +24,12 @@ import {
   type GameEvent,
   type ServerMessage,
 } from "~/game/protocol/messages";
+import type { RuleSetOverride } from "~/game/rules/ruleSet";
 
-function makeMatch(seed: number): MatchProcess {
+function makeMatch(
+  seed: number,
+  ruleSetOverride?: RuleSetOverride
+): MatchProcess {
   return new MatchProcess(
     `m-spec-${seed}-${Math.random().toString(36).slice(2, 8)}`,
     seed,
@@ -35,7 +39,9 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
     ],
-    { repository: ephemeralMatchRepository }
+    { repository: ephemeralMatchRepository },
+    undefined,
+    ruleSetOverride
   );
 }
 
@@ -72,7 +78,7 @@ describe("MatchProcess spectator API", () => {
   });
 
   it("buildSpectatorSnapshot has mySeat=null, all hands visible, validates against the schema", async () => {
-    const m = makeMatch(7);
+    const m = makeMatch(7, { uraDora: false });
     await m.start();
     const snap = m.buildSpectatorSnapshot();
     const parsed = ServerMessageSchema.safeParse(snap);
@@ -100,6 +106,7 @@ describe("MatchProcess spectator API", () => {
     expect(parsed.data.legalActions).toEqual([]);
     expect(parsed.data.deadline).toBeUndefined();
     expect(parsed.data.state.furiten).toEqual([false, false, false, false]);
+    expect(parsed.data.state.uraDoraEnabled).toBe(false);
   });
 
   it("broadcasts deduplicated spectator-only presence and prefers live", () => {

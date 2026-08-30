@@ -79,6 +79,8 @@ const MatchStartEvent = z.object({
    * (standard riichi).
    */
   riichiBetValue: z.number().int().positive().optional(),
+  /** Whether ura dora is enabled by the active rule set. */
+  uraDoraEnabled: z.boolean().optional(),
 });
 
 const HandStartEvent = z.object({
@@ -588,6 +590,8 @@ export const SnapshotStateSchema = z.object({
    * riichi).
    */
   riichiBetValue: z.number().int().positive().optional(),
+  /** Whether ura dora is enabled by the active rule set. */
+  uraDoraEnabled: z.boolean().optional(),
   riichiDeclared: z.array(z.boolean()).length(4),
   /** Per-seat index into `discards[seat]` of the riichi declaration
    * tile (null when that seat has not declared riichi). */
