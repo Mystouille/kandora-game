@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { advanceReadyCheckTick, type ReadyCheckTickState } from "./readyCheckCountdown";
+import {
+  advanceCountdownSoundGate,
+  advanceReadyCheckTick,
+  resetCountdownSoundGate,
+  type ReadyCheckTickState,
+} from "./readyCheckCountdown";
 
 const initial: ReadyCheckTickState = { deadline: null, seconds: -1 };
 
@@ -30,5 +35,52 @@ describe("advanceReadyCheckTick", () => {
       play: false,
       next: { deadline: null, seconds: -1 },
     });
+  });
+});
+
+describe("advanceCountdownSoundGate", () => {
+  it("allows the first displayed second and every visual decrement", () => {
+    const first = advanceCountdownSoundGate(
+      resetCountdownSoundGate(),
+      "ready:10000",
+      5
+    );
+    const next = advanceCountdownSoundGate(first.next, "ready:10000", 4);
+
+    expect(first.play).toBe(true);
+    expect(next.play).toBe(true);
+  });
+
+  it("rejects overlapping cues from separate countdown producers", () => {
+    let state = resetCountdownSoundGate();
+    const playedSeconds: number[] = [];
+    for (const seconds of [5, 5, 4, 4, 3, 3, 2, 2, 1, 1]) {
+      const result = advanceCountdownSoundGate(state, "ready:10000", seconds);
+      state = result.next;
+      if (result.play) {
+        playedSeconds.push(seconds);
+      }
+    }
+
+    expect(playedSeconds).toEqual([5, 4, 3, 2, 1]);
+  });
+
+  it("does not replay after a visual clock correction moves upward", () => {
+    const five = advanceCountdownSoundGate(
+      resetCountdownSoundGate(),
+      "action:10000",
+      5
+    );
+    const four = advanceCountdownSoundGate(five.next, "action:10000", 4);
+    const corrected = advanceCountdownSoundGate(four.next, "action:10000", 5);
+    const backToFour = advanceCountdownSoundGate(
+      corrected.next,
+      "action:10000",
+      4
+    );
+
+    expect(four.play).toBe(true);
+    expect(corrected.play).toBe(false);
+    expect(backToFour.play).toBe(false);
   });
 });

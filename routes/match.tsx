@@ -35,7 +35,10 @@ import {
   writePersistedAutoSort,
   type LivePlayMenuFlags,
 } from "~/game/client/LivePlayMenu";
-import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
+import {
+  installGameSoundBindings,
+  playGameCountdownSound,
+} from "~/game/client/sound";
 import {
   advanceReadyCheckTick,
   type ReadyCheckTickState,
@@ -506,8 +509,9 @@ function ReadyCheckOverlay({
   resultPanelBounds: { x: number; y: number; w: number; h: number } | null;
   onReady: () => void;
 }) {
+  const readyDeadline = readyCheck?.deadline ?? null;
   const [remainingMs, setRemainingMs] = useState<number>(() =>
-    readyCheck ? Math.max(0, readyCheck.deadline - Date.now()) : 0
+    readyDeadline === null ? 0 : Math.max(0, readyDeadline - Date.now())
   );
   const lastTickRef = useRef<ReadyCheckTickState>({
     deadline: null,
@@ -515,37 +519,40 @@ function ReadyCheckOverlay({
   });
 
   useEffect(() => {
-    if (!readyCheck) {
-      lastTickRef.current = advanceReadyCheckTick(
-        lastTickRef.current,
-        null,
-        0
-      ).next;
+    if (readyDeadline === null) {
+      setRemainingMs(0);
       return;
     }
     let frame: number;
     const loop = () => {
-      const ms = Math.max(0, readyCheck.deadline - Date.now());
+      const ms = Math.max(0, readyDeadline - Date.now());
       setRemainingMs(ms);
-      const secs = Math.ceil(ms / 1000);
-      const tick = advanceReadyCheckTick(
-        lastTickRef.current,
-        readyCheck.deadline,
-        secs
-      );
-      lastTickRef.current = tick.next;
-      if (tick.play) {
-        playGameSound("game-start-tick");
-      }
       if (ms > 0) {
         frame = requestAnimationFrame(loop);
       }
     };
-    frame = requestAnimationFrame(loop);
+    loop();
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [readyCheck]);
+  }, [readyDeadline]);
+
+  const seconds = Math.ceil(remainingMs / 1000);
+  useEffect(() => {
+    const tick = advanceReadyCheckTick(
+      lastTickRef.current,
+      readyDeadline,
+      seconds
+    );
+    lastTickRef.current = tick.next;
+    if (tick.play && mySeat !== null && readyDeadline !== null) {
+      playGameCountdownSound(
+        "game-start-tick",
+        `ready:${readyDeadline}`,
+        seconds
+      );
+    }
+  }, [mySeat, readyDeadline, seconds]);
 
   if (!readyCheck || mySeat === null) {
     return null;
@@ -564,7 +571,6 @@ function ReadyCheckOverlay({
   const topSeat = ((mySeat + 2) % 4) as 0 | 1 | 2 | 3;
   const leftSeat = ((mySeat + 3) % 4) as 0 | 1 | 2 | 3;
 
-  const seconds = Math.ceil(remainingMs / 1000);
   const humanAcked = readyCheck.acked[mySeat as 0 | 1 | 2 | 3];
 
   // Compact variant: when the renderer is showing a hand-result
@@ -1515,6 +1521,7 @@ export default function GameMatchRoute({
             </button>
           )}
         <ReadyCheckOverlay
+          key={view.readyCheck?.deadline ?? "inactive"}
           readyCheck={view.readyCheck}
           mySeat={view.mySeat}
           seatNames={view.seatNames}

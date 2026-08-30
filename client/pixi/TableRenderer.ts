@@ -30,7 +30,7 @@ import {
 import type { MatchView } from "../store";
 import type { LegalAction, Meld } from "~/game/protocol/messages";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
-import { playGameSound } from "../sound";
+import { playGameCountdownSound, playGameSound } from "../sound";
 import { filterNoCallActionButtons } from "../callPrompt";
 import {
   resolveFelt,
@@ -7507,7 +7507,7 @@ export class TableRenderer {
     // full 5-4-3-2-1 sequence even if the window opens already
     // inside the danger zone).
     if (totalSec > 0 && totalSec <= 5 && totalSec !== this.lastTimerSeconds) {
-      playGameSound("timer-tick");
+      playGameCountdownSound("timer-tick", `action:${deadline}`, totalSec);
     }
     this.lastTimerSeconds = totalSec;
   }

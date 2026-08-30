@@ -22,6 +22,10 @@ import { Howl } from "howler";
 import type { GameEvent, Seat } from "~/game/protocol/messages";
 import { subscribeToGameEvents, useMatchStore } from "./store";
 import { shouldTriggerCallPrompt } from "./callPrompt";
+import {
+  advanceCountdownSoundGate,
+  resetCountdownSoundGate,
+} from "./readyCheckCountdown";
 
 /**
  * Hashed-URL map of every SFX shipped in this build, keyed by
@@ -128,6 +132,7 @@ function readNumber(key: string, fallback: number): number {
 
 let enabled = readBool(LS_ENABLED_KEY, true);
 let volume = readNumber(LS_VOLUME_KEY, DEFAULT_GAME_SOUND_VOLUME);
+let countdownSoundGate = resetCountdownSoundGate();
 
 const howls = new Map<string, Howl>();
 
@@ -191,6 +196,25 @@ export function playGameSound(key: SoundKey): void {
     howl.play();
   } catch {
     // ignore — howler reports through `onplayerror` already.
+  }
+}
+
+export function playGameCountdownSound(
+  key: "timer-tick" | "game-start-tick",
+  countdownId: string,
+  displayedSeconds: number
+): void {
+  if (!enabled || typeof window === "undefined") {
+    return;
+  }
+  const gate = advanceCountdownSoundGate(
+    countdownSoundGate,
+    countdownId,
+    displayedSeconds
+  );
+  countdownSoundGate = gate.next;
+  if (gate.play) {
+    playGameSound(key);
   }
 }
 
