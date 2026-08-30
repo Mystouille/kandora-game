@@ -279,29 +279,28 @@ let WIN_TO_PANEL_DELAY_MS = 500;
 const WIN_YAKU_REVEAL_INTERVAL_MS = 750;
 
 /**
- * Extra delay after the last yaku reveal before the ura-dora
- * indicators flip face-up, used when the winner declared riichi
- * but the ura tiles didn't score any uradora yaku. Mirrors the
- * client-side animation timing.
+ * Extra delay after the last regular yaku before the Ura Dora yaku and
+ * indicators appear. Applies whether or not an ura tile scores.
  */
-const WIN_URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
+const WIN_URA_REVEAL_AFTER_LAST_YAKU_MS = 2000;
 
-/** Final beat between the last yaku/ura detail and the han/fu + value row. */
-const WIN_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS = 750;
+/** Short final beat used only by rulesets with no ura-dora phase. */
+const WIN_SCORE_REVEAL_WITHOUT_URA_MS = 750;
 
 export function winResultRevealDurationMs(args: {
   visibleYakuCount: number;
-  hasUraIndicators: boolean;
   hasUraYaku: boolean;
   uraDoraEnabled?: boolean;
 }): number {
-  const lastYakuRevealAtMs =
-    args.visibleYakuCount * WIN_YAKU_REVEAL_INTERVAL_MS;
-  const finalDetailRevealAtMs =
-    (args.uraDoraEnabled ?? true) && args.hasUraIndicators && !args.hasUraYaku
-      ? lastYakuRevealAtMs + WIN_URA_REVEAL_AFTER_LAST_YAKU_MS
-      : lastYakuRevealAtMs;
-  return finalDetailRevealAtMs + WIN_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS;
+  const regularYakuCount = Math.max(
+    0,
+    args.visibleYakuCount - (args.hasUraYaku ? 1 : 0)
+  );
+  const lastRegularYakuRevealAtMs =
+    regularYakuCount * WIN_YAKU_REVEAL_INTERVAL_MS;
+  return (args.uraDoraEnabled ?? true)
+      ? lastRegularYakuRevealAtMs + WIN_URA_REVEAL_AFTER_LAST_YAKU_MS
+      : lastRegularYakuRevealAtMs + WIN_SCORE_REVEAL_WITHOUT_URA_MS;
 }
 
 export function setDelayAfterDiscardMs(ms: number): void {
@@ -6152,9 +6151,8 @@ export class MatchProcess {
       // countdown. Mirrors the visibility logic in
       // `TableRenderer.renderResultCenterInfo`: filter out
       // 0-han yaku, schedule each remaining yaku at a 750ms
-      // beat, tack on +1000ms when ura indicators are shown
-      // without an accompanying "Ura Dora" yaku, then leave one
-      // final beat for the han/fu + hand-value summary.
+      // beat, then wait +2000ms before revealing any Ura Dora and
+      // the han/fu, hand value, and score deltas together.
       const uraDoraEnabled = this.state.ruleSet.uraDora;
       const hasUraIndicators =
         uraDoraEnabled && this.state.riichiDeclared[e.winner];
@@ -6175,7 +6173,6 @@ export class MatchProcess {
       }
       const revealMs = winResultRevealDurationMs({
         visibleYakuCount,
-        hasUraIndicators,
         hasUraYaku,
         uraDoraEnabled,
       });

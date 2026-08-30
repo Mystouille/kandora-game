@@ -29,18 +29,21 @@ import {
   mobileRiichiStickPlacement,
   playerIdentityCenter,
   pointInsideRect,
+  resolveActionTimerState,
   resolveSeatHandPresentation,
   riichiStickMetrics,
   riichiSelectionTileTint,
   resultUraDoraIndicators,
   resultScoreBoxLayout,
   shouldRevealWinScoreSummary,
+  shouldRevealWinScoreDelta,
   shouldStageWinReveal,
   shouldTintTsumogiri,
   sortTilesForDisplay,
   tableRenderPolicy,
   TEAM_LOGO_Z_INDEX,
   topmostHandHoverTargetIndex,
+  uraDoraRevealAtMs,
   wallZIndex,
   winResultRevealKey,
 } from "./TableRenderer";
@@ -58,6 +61,31 @@ describe("route-facing renderer API", () => {
       typeof TableRenderer.prototype.setMinimumDrawToDiscardDelayEnabled
     ).toBe("function");
     expect(typeof TableRenderer.prototype.setShowTsumogiri).toBe("function");
+  });
+});
+
+describe("action timer ownership", () => {
+  it("suppresses a stale action clock while the ready-check clock is active", () => {
+    expect(
+      resolveActionTimerState({
+        readyCheck: {
+          deadline: 20_000,
+          acked: [false, true, true, true],
+        },
+        actionDeadline: 15_000,
+        actionBufferMs: 30_000,
+      })
+    ).toEqual({ deadline: null, bufferMs: null });
+  });
+
+  it("keeps the action clock when no ready check is active", () => {
+    expect(
+      resolveActionTimerState({
+        readyCheck: null,
+        actionDeadline: 15_000,
+        actionBufferMs: 30_000,
+      })
+    ).toEqual({ deadline: 15_000, bufferMs: 30_000 });
   });
 });
 
@@ -686,6 +714,29 @@ describe("shouldStageWinReveal", () => {
 
 describe("shouldRevealWinScoreSummary", () => {
   it("reveals one beat after the final regular yaku", () => {
+    expect(shouldRevealWinScoreSummary(true, 4_249, 3, false)).toBe(
+      false
+    );
+    expect(shouldRevealWinScoreSummary(true, 4_250, 3, false)).toBe(true);
+  });
+
+  it("reveals score details with positive ura dora", () => {
+    expect(shouldRevealWinScoreSummary(true, 4_249, 4, true)).toBe(
+      false
+    );
+    expect(shouldRevealWinScoreSummary(true, 4_250, 4, true)).toBe(true);
+  });
+
+  it("uses the same final timing when the win is not in riichi", () => {
+    expect(shouldRevealWinScoreSummary(true, 4_249, 3, false)).toBe(false);
+    expect(shouldRevealWinScoreSummary(true, 4_250, 3, false)).toBe(true);
+  });
+
+  it("keeps static replay and history results fully visible", () => {
+    expect(shouldRevealWinScoreSummary(false, 0, 3, false)).toBe(true);
+  });
+
+  it("keeps the shorter final beat when ura dora is disabled", () => {
     expect(shouldRevealWinScoreSummary(true, 2_999, 3, false, false)).toBe(
       false
     );
@@ -693,29 +744,27 @@ describe("shouldRevealWinScoreSummary", () => {
       true
     );
   });
+});
 
-  it("reveals one beat after a positive ura-dora yaku", () => {
-    expect(shouldRevealWinScoreSummary(true, 3_749, 4, true, true)).toBe(
+describe("ura dora reveal timing", () => {
+  it("reveals ura dora and all final score details together", () => {
+    const revealAt = uraDoraRevealAtMs(4, true);
+
+    expect(revealAt).toBe(4_250);
+    expect(shouldRevealWinScoreSummary(true, revealAt - 1, 4, true)).toBe(
       false
     );
-    expect(shouldRevealWinScoreSummary(true, 3_750, 4, true, true)).toBe(true);
+    expect(shouldRevealWinScoreDelta(true, revealAt - 1, 4, true)).toBe(false);
+    expect(shouldRevealWinScoreSummary(true, revealAt, 4, true)).toBe(true);
+    expect(shouldRevealWinScoreDelta(true, revealAt, 4, true)).toBe(true);
   });
 
-  it("waits for the zero-ura indicator flip before the final beat", () => {
-    expect(shouldRevealWinScoreSummary(true, 3_999, 3, false, true)).toBe(
-      false
-    );
-    expect(shouldRevealWinScoreSummary(true, 4_000, 3, false, true)).toBe(true);
+  it("waits two seconds after regular yaku before positive ura dora", () => {
+    expect(uraDoraRevealAtMs(4, true)).toBe(4_250);
   });
 
-  it("keeps static replay and history results fully visible", () => {
-    expect(shouldRevealWinScoreSummary(false, 0, 3, false, true)).toBe(true);
-  });
-
-  it("does not wait for stale ura indicators when ura dora is disabled", () => {
-    expect(
-      shouldRevealWinScoreSummary(true, 3_000, 3, false, true, false)
-    ).toBe(true);
+  it("uses the same dedicated beat when no ura tile scores", () => {
+    expect(uraDoraRevealAtMs(3, false)).toBe(4_250);
   });
 });
 

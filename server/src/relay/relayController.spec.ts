@@ -198,7 +198,7 @@ describe("RelayController", () => {
     expect(matches.has(matchId)).toBe(true);
     expect(lastClient().stopped).toBe(false);
 
-    vi.advanceTimersByTime(4_499);
+    vi.advanceTimersByTime(5_749);
     expect(events.map((event) => event.type)).not.toContain("match_end");
 
     vi.advanceTimersByTime(1);

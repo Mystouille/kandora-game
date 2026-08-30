@@ -4,6 +4,8 @@ const store = vi.hoisted(() => ({
   lastSeq: -1,
   matchId: "match-1",
   setConn: vi.fn(),
+  setActionDeadline: vi.fn(),
+  setActionBufferMs: vi.fn(),
   setReadyCheck: vi.fn(),
   setViewers: vi.fn(),
 }));
@@ -76,6 +78,8 @@ describe("GameWS reconnect ownership", () => {
     store.lastSeq = -1;
     store.matchId = "match-1";
     store.setConn.mockReset();
+    store.setActionDeadline.mockReset();
+    store.setActionBufferMs.mockReset();
     store.setReadyCheck.mockReset();
     store.setViewers.mockReset();
   });
@@ -268,6 +272,33 @@ describe("GameWS reconnect ownership", () => {
       { userId: "u1", displayName: "Alice", role: "player" },
       { userId: "u2", displayName: "Bob", role: "spectator" },
     ]);
+    client.close();
+  });
+
+  it("clears the action timer when a ready check starts", async () => {
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+
+    socket.emitMessage(
+      JSON.stringify({
+        type: "ready_check",
+        deadline: 10_000,
+        acked: [false, true, true, true],
+      })
+    );
+
+    expect(store.setActionDeadline).toHaveBeenCalledWith(null);
+    expect(store.setActionBufferMs).toHaveBeenCalledWith(null);
+    expect(store.setReadyCheck).toHaveBeenCalledWith({
+      deadline: 10_000,
+      acked: [false, true, true, true],
+    });
     client.close();
   });
 

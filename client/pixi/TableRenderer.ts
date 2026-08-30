@@ -570,8 +570,8 @@ const RESULT_SCORE_BOX_HEIGHT = 88;
 const RESULT_SCORE_BOX_PAD_X = 18;
 const RESULT_SCORE_BOX_NAME_GAP = 8;
 const RESULT_YAKU_REVEAL_INTERVAL_MS = 750;
-const RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
-const RESULT_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS = 750;
+const RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS = 2000;
+const RESULT_SCORE_REVEAL_WITHOUT_URA_MS = 750;
 
 export function wallZIndex(seat: number): number {
   return seat === 0 ? 2 : seat === 2 ? 0 : 1;
@@ -830,31 +830,50 @@ export function shouldRevealWinScoreSummary(
   revealElapsedMs: number,
   visibleYakuCount: number,
   hasUraYaku: boolean,
-  hasUraIndicators: boolean,
   uraDoraEnabled = true
 ): boolean {
   if (!stageReveal) {
     return true;
   }
-  const lastYakuRevealAtMs = visibleYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS;
-  const finalDetailRevealAtMs =
-    uraDoraEnabled && hasUraIndicators && !hasUraYaku
-      ? lastYakuRevealAtMs + RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS
-      : lastYakuRevealAtMs;
+  const regularYakuCount = Math.max(
+    0,
+    visibleYakuCount - (hasUraYaku ? 1 : 0)
+  );
+  const lastRegularYakuRevealAtMs =
+    regularYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS;
+  const summaryRevealAtMs = uraDoraEnabled
+      ? lastRegularYakuRevealAtMs + RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS
+      : lastRegularYakuRevealAtMs + RESULT_SCORE_REVEAL_WITHOUT_URA_MS;
+  return revealElapsedMs >= summaryRevealAtMs;
+}
+
+export function uraDoraRevealAtMs(
+  visibleYakuCount: number,
+  hasUraYaku: boolean
+): number {
+  const regularYakuCount = Math.max(
+    0,
+    visibleYakuCount - (hasUraYaku ? 1 : 0)
+  );
   return (
-    revealElapsedMs >=
-    finalDetailRevealAtMs + RESULT_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS
+    regularYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS +
+    RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS
   );
 }
 
 export function shouldRevealWinScoreDelta(
   stageReveal: boolean,
   revealElapsedMs: number,
-  visibleYakuCount: number
+  visibleYakuCount: number,
+  hasUraYaku = false,
+  uraDoraEnabled = true
 ): boolean {
-  return (
-    !stageReveal ||
-    revealElapsedMs >= visibleYakuCount * RESULT_YAKU_REVEAL_INTERVAL_MS
+  return shouldRevealWinScoreSummary(
+    stageReveal,
+    revealElapsedMs,
+    visibleYakuCount,
+    hasUraYaku,
+    uraDoraEnabled
   );
 }
 
@@ -1060,6 +1079,18 @@ export function isPendingDiscardDisplaySlot(
       (pendingDiscard.displayIndex === undefined ||
         pendingDiscard.displayIndex === displayIndex)
   );
+}
+
+export function resolveActionTimerState(
+  view: Pick<MatchView, "readyCheck" | "actionDeadline" | "actionBufferMs">
+): { deadline: number | null; bufferMs: number | null } {
+  if (view.readyCheck !== null) {
+    return { deadline: null, bufferMs: null };
+  }
+  return {
+    deadline: view.actionDeadline,
+    bufferMs: view.actionBufferMs,
+  };
 }
 
 export class TableRenderer {
@@ -2812,8 +2843,9 @@ export class TableRenderer {
       this.actionBufferMs = null;
     } else {
       this.hudText.text = `conn: ${conn}   wall: ${wall}   seq: ${seq}`;
-      this.actionDeadline = view.actionDeadline;
-      this.actionBufferMs = view.actionBufferMs;
+      const actionTimer = resolveActionTimerState(view);
+      this.actionDeadline = actionTimer.deadline;
+      this.actionBufferMs = actionTimer.bufferMs;
     }
     // Render one timer frame immediately so the value reflects the
     // latest `view` even if the Pixi ticker hasn't fired since the
@@ -4325,20 +4357,30 @@ export class TableRenderer {
         const hasUraYaku = visibleYakuAll.some(
           (entry) => entry.name === "Ura Dora" && !entry.alwaysHidden
         );
-        // Slice to the staged reveal frontier. Yaku k appears at
-        // t = (k + 1) * YAKU_REVEAL_INTERVAL_MS, i.e. nothing is
-        // visible until the first interval elapses.
-        const revealedCount = stageReveal
+        const regularYakuCount = Math.max(
+          0,
+          revealableYakuCount - (hasUraYaku ? 1 : 0)
+        );
+        // Regular yaku use the standard cadence. Positive Ura Dora is
+        // deliberately excluded from that cadence and appears with the
+        // indicator flip after the dedicated ura pause.
+        const regularRevealedCount = stageReveal
           ? Math.max(
               0,
               Math.min(
-                revealableYakuCount,
+                regularYakuCount,
                 Math.floor(
                   revealElapsedMs / RESULT_YAKU_REVEAL_INTERVAL_MS
                 )
               )
             )
-          : revealableYakuCount;
+          : regularYakuCount;
+        const uraRevealed =
+          !stageReveal ||
+          revealElapsedMs >=
+            uraDoraRevealAtMs(revealableYakuCount, hasUraYaku);
+        const revealedCount =
+          regularRevealedCount + (hasUraYaku && uraRevealed ? 1 : 0);
         // Fire one `yaku-reveal` SFX per newly revealed yaku.
         // Idempotent across repeated `render()` calls within the
         // same reveal step thanks to `winPageYakuRevealSoundsPlayed`.
@@ -4360,13 +4402,14 @@ export class TableRenderer {
           revealElapsedMs,
           revealableYakuCount,
           hasUraYaku,
-          sharedUra.length > 0,
           uraDoraEnabled
         );
         scoreDeltaRevealed = shouldRevealWinScoreDelta(
           stageReveal,
           revealElapsedMs,
-          revealableYakuCount
+          revealableYakuCount,
+          hasUraYaku,
+          uraDoraEnabled
         );
         // 1-column layout for short lists; 2-column for 5+
         // entries so very-yaku-rich hands (e.g. yakuman piles)
@@ -4509,16 +4552,12 @@ export class TableRenderer {
       // populating `uraDoraIndicators` only in that case.
       if (sharedUra.length > 0) {
         // Staged reveal: keep the indicators face-down until
-        // either the "Ura Dora" yaku (which we sort to last
-        // above) is revealed, or — when the hand didn't score
-        // any ura yaku — a one-second beat after the final yaku
-        // appears. With staged reveal disabled the indicators
-        // are always face-up (full panel).
-        const lastYakuRevealAtMs =
-          pageVisibleYakuTotal * RESULT_YAKU_REVEAL_INTERVAL_MS;
-        const uraRevealAtMs = pageHasUraYaku
-          ? lastYakuRevealAtMs
-          : lastYakuRevealAtMs + RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS;
+        // both the positive Ura Dora yaku and a zero-ura indicator flip
+        // wait for the dedicated pause after all regular yaku.
+        const uraRevealAtMs = uraDoraRevealAtMs(
+          pageVisibleYakuTotal,
+          pageHasUraYaku
+        );
         const uraRevealed =
           !stageReveal ||
           (pageRevealedYakuCount >= pageVisibleYakuTotal &&
@@ -4530,9 +4569,8 @@ export class TableRenderer {
           : Array.from({ length: 5 }, () => null);
         rows.push({ kind: "tiles", tiles: uraRow });
         // Fire a single `yaku-reveal` cue when the indicators
-        // flip face-up — but only when there's no "Ura Dora"
-        // yaku, since that yaku's own reveal already played a
-        // cue and the flip is synced to it (per spec).
+        // flip face-up. A positive Ura Dora yaku already plays that cue
+        // because its text appears on the same dedicated beat.
         if (stageReveal && uraRevealed && !this.winPageUraRevealSoundPlayed) {
           if (!pageHasUraYaku) {
             playGameSound("yaku-reveal");

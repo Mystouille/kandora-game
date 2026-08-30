@@ -23,41 +23,37 @@ describe("victory reaction timing", () => {
 });
 
 describe("win result reveal timing", () => {
-  it("leaves a final beat after the last regular yaku", () => {
+  it("uses the final reveal timing when the win is not in riichi", () => {
     expect(
       winResultRevealDurationMs({
         visibleYakuCount: 3,
-        hasUraIndicators: false,
         hasUraYaku: false,
       })
-    ).toBe(3_000);
+    ).toBe(4_250);
   });
 
-  it("leaves a final beat after a positive ura-dora yaku", () => {
+  it("reveals score details with positive ura dora", () => {
     expect(
       winResultRevealDurationMs({
         visibleYakuCount: 4,
-        hasUraIndicators: true,
         hasUraYaku: true,
       })
-    ).toBe(3_750);
+    ).toBe(4_250);
   });
 
-  it("waits for zero-ura indicators before the final beat", () => {
+  it("uses the same timing when no ura tile scores", () => {
     expect(
       winResultRevealDurationMs({
         visibleYakuCount: 3,
-        hasUraIndicators: true,
         hasUraYaku: false,
       })
-    ).toBe(4_000);
+    ).toBe(4_250);
   });
 
   it("ignores stale ura indicators when the rule set disables ura dora", () => {
     expect(
       winResultRevealDurationMs({
         visibleYakuCount: 3,
-        hasUraIndicators: true,
         hasUraYaku: false,
         uraDoraEnabled: false,
       })

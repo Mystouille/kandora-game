@@ -56,7 +56,6 @@ function relayWinRevealDurationMs(
   return (
     winResultRevealDurationMs({
       visibleYakuCount,
-      hasUraIndicators: (event.uraDoraIndicators?.length ?? 0) > 0,
       hasUraYaku,
     }) + FINAL_WIN_RESULT_HOLD_MS
   );

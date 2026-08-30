@@ -36,6 +36,10 @@ import {
   type LivePlayMenuFlags,
 } from "~/game/client/LivePlayMenu";
 import { installGameSoundBindings, playGameSound } from "~/game/client/sound";
+import {
+  advanceReadyCheckTick,
+  type ReadyCheckTickState,
+} from "~/game/client/readyCheckCountdown";
 import { findNoCallAutoPass } from "~/game/client/callPrompt";
 import { writeWebTableLayoutMode } from "~/game/client/webTableLayoutPreference";
 import { rotateHandResult, rotateMatchView } from "~/game/replay/player";
@@ -505,23 +509,32 @@ function ReadyCheckOverlay({
   const [remainingMs, setRemainingMs] = useState<number>(() =>
     readyCheck ? Math.max(0, readyCheck.deadline - Date.now()) : 0
   );
-  // Last full-second already ticked; -1 forces a tick on the
-  // first render that the overlay is visible (e.g. "5s" tick).
-  const lastTickRef = useRef<number>(-1);
+  const lastTickRef = useRef<ReadyCheckTickState>({
+    deadline: null,
+    seconds: -1,
+  });
 
   useEffect(() => {
     if (!readyCheck) {
-      lastTickRef.current = -1;
+      lastTickRef.current = advanceReadyCheckTick(
+        lastTickRef.current,
+        null,
+        0
+      ).next;
       return;
     }
-    lastTickRef.current = -1;
     let frame: number;
     const loop = () => {
       const ms = Math.max(0, readyCheck.deadline - Date.now());
       setRemainingMs(ms);
       const secs = Math.ceil(ms / 1000);
-      if (secs > 0 && secs !== lastTickRef.current) {
-        lastTickRef.current = secs;
+      const tick = advanceReadyCheckTick(
+        lastTickRef.current,
+        readyCheck.deadline,
+        secs
+      );
+      lastTickRef.current = tick.next;
+      if (tick.play) {
         playGameSound("game-start-tick");
       }
       if (ms > 0) {

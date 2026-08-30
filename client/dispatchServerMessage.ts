@@ -34,6 +34,8 @@ export function dispatchServerMessage(
       return;
     }
     case "ready_check": {
+      store.setActionDeadline(null);
+      store.setActionBufferMs(null);
       store.setReadyCheck({
         deadline: message.deadline,
         acked: message.acked,
