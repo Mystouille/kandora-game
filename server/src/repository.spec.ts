@@ -8,6 +8,7 @@ describe("memory match checkpoint repository", () => {
       await repository.createMatch({
         matchId: "journal-repository",
         seed: 1,
+        ruleSet: "tenhou-hanchan",
         players: [],
         initialEventSeq: 5,
       });

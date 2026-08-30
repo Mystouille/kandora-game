@@ -35,12 +35,14 @@ import type { GameEvent } from "~/game/protocol/messages";
  * the produced documents. Hydration re-parses logs whose
  * `schemaVersion` is older.
  */
-export const REPLAY_LOG_SCHEMA_VERSION = 4;
+export const REPLAY_LOG_SCHEMA_VERSION = 5;
 
 export type ReplaySource = "ingame" | "majsoul" | "tenhou" | "riichicity";
 
 export interface ReplaySeat {
   seat: 0 | 1 | 2 | 3;
+  /** Kandora User ObjectId for authenticated in-app players. */
+  userDbId?: string;
   displayName: string;
   finalScore: number;
   place: 1 | 2 | 3 | 4;

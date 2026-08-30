@@ -68,6 +68,7 @@ export async function createMatchDoc(args: CreateMatchArgs): Promise<void> {
       $setOnInsert: {
         _id: args.matchId,
         seed: args.seed,
+        ruleSet: args.ruleSet,
         players: args.players,
         status: "playing",
         startedAt: new Date(),
@@ -195,6 +196,7 @@ export async function archiveReplayLog(args: {
   events: GameEvent[];
   seats: Array<{
     seat: 0 | 1 | 2 | 3;
+    userDbId?: string;
     displayName: string;
     finalScore: number;
     place: 1 | 2 | 3 | 4;
@@ -202,6 +204,12 @@ export async function archiveReplayLog(args: {
 }): Promise<void> {
   const source = args.source ?? "ingame";
   const sourceGameId = args.sourceGameId ?? args.matchId;
+  const seats = args.seats.map(({ userDbId, ...seat }) => ({
+    ...seat,
+    ...(userDbId && mongoose.isValidObjectId(userDbId)
+      ? { userDbId: new mongoose.Types.ObjectId(userDbId) }
+      : {}),
+  }));
   await ReplayLogModel.updateOne(
     { source, sourceGameId },
     {
@@ -212,7 +220,7 @@ export async function archiveReplayLog(args: {
         ruleSetDetails: args.ruleSetDetails,
         startedAt: args.startedAt.getTime(),
         endedAt: args.endedAt.getTime(),
-        seats: args.seats,
+        seats,
         events: args.events,
         schemaVersion: REPLAY_LOG_SCHEMA_VERSION,
         parsedAt: new Date(),

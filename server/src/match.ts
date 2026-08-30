@@ -2229,6 +2229,7 @@ export class MatchProcess {
     await this.repository.createMatch({
       matchId: this.currentGameMongoId(),
       seed: this.seed,
+      ruleSet: this.presetId,
       players: matchPlayers,
       initialEventSeq,
       ...(isBuu ? { sessionId: this.matchId, gameIndex: this.gameIndex } : {}),
@@ -2246,7 +2247,7 @@ export class MatchProcess {
         userId: p.userId,
         displayName: p.displayName,
       })),
-      ruleSet: this.state.ruleSet.buuMode ? "buu-east" : "tenhou-default",
+      ruleSet: this.presetId,
       riichiBetValue: this.state.ruleSet.riichiBetValue,
       uraDoraEnabled: this.state.ruleSet.uraDora,
       ...(this.state.ruleSet.scoreCap
@@ -5713,12 +5714,13 @@ export class MatchProcess {
         matchId: docId,
         startedAt,
         endedAt: new Date(this.runtime.now()),
-        ruleSet: this.state.ruleSet.buuMode ? "buu-east" : "tenhou-default",
+        ruleSet: this.presetId,
         events: gameEvents.map((e) => e.event),
         seats: finalScores.map((f) => {
           const player = this.players.get(f.seat);
           return {
             seat: f.seat,
+            userDbId: player && !player.isBot ? player.userId : undefined,
             displayName: player?.displayName ?? `Seat ${f.seat}`,
             finalScore: f.score,
             place: f.place,
@@ -6021,6 +6023,7 @@ export class MatchProcess {
     await this.repository.createMatch({
       matchId: this.currentGameMongoId(),
       seed: nextSeed,
+      ruleSet: this.presetId,
       players: matchPlayers,
       initialEventSeq,
       sessionId: this.matchId,
@@ -6041,7 +6044,7 @@ export class MatchProcess {
         userId: p.userId,
         displayName: p.displayName,
       })),
-      ruleSet: this.state.ruleSet.buuMode ? "buu-east" : "tenhou-default",
+      ruleSet: this.presetId,
       riichiBetValue: this.state.ruleSet.riichiBetValue,
       uraDoraEnabled: this.state.ruleSet.uraDora,
       ...(this.state.ruleSet.scoreCap

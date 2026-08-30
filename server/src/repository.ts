@@ -216,6 +216,7 @@ export interface MatchEventJournalStore {
 export interface CreateMatchArgs {
   matchId: string;
   seed: number;
+  ruleSet: string;
   players: PersistedMatchPlayer[];
   initialEventSeq: number;
   sessionId?: string;
@@ -243,6 +244,7 @@ export interface ArchiveReplayLogArgs {
   events: GameEvent[];
   seats: Array<{
     seat: Seat;
+    userDbId?: string;
     displayName: string;
     finalScore: number;
     place: 1 | 2 | 3 | 4;

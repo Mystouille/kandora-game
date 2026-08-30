@@ -246,6 +246,7 @@ describe("MatchProcess — match-end transition", () => {
           events: GameEvent[];
           seats: Array<{
             seat: number;
+            userDbId?: string;
             displayName: string;
             finalScore: number;
             place: number;
@@ -265,8 +266,10 @@ describe("MatchProcess — match-end transition", () => {
     const replayBySeat = new Map(replayArg.seats.map((s) => [s.seat, s]));
     expect(replayBySeat.get(0)?.finalScore).toBe(40000);
     expect(replayBySeat.get(0)?.place).toBe(1);
+    expect(replayBySeat.get(0)?.userDbId).toBe("u0");
     expect(replayBySeat.get(3)?.finalScore).toBe(10000);
     expect(replayBySeat.get(3)?.place).toBe(4);
+    expect(replayArg.ruleSet).toBe("tenhou-hanchan");
     // The events stream contains the `match_end` event we just
     // observed on the wire.
     expect(replayArg.events.some((e) => e.type === "match_end")).toBe(true);
