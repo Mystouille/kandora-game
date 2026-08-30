@@ -244,6 +244,7 @@ describe("MatchProcess checkpoints", () => {
     await room.pauseAndSaveCheckpoint();
 
     expect(room.isPaused).toBe(true);
+    await expect(room.waitUntilConnectionReady()).resolves.toBe(false);
     expect(() => room.claimSeat("bob", "Bob")).toThrow(/match is paused/);
     const restored = await MatchProcess.restoreSavedCheckpoint(room.matchId, {
       repository,
@@ -1897,10 +1898,24 @@ describe("MatchProcess checkpoints", () => {
     expect(match.isPaused).toBe(true);
     expect(match.replayFromBuffer(0, 0)).toEqual(beforeEvents);
     expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
+    let connectionWaitSettled = false;
+    const connectionReady = match.waitUntilConnectionReady().then((ready) => {
+      connectionWaitSettled = true;
+      return ready;
+    });
+    await Promise.resolve();
+    expect(connectionWaitSettled).toBe(false);
 
     gate.resolve();
     await acting;
 
+    await expect(connectionReady).resolves.toBe(true);
+    expect(
+      match.claimSeat(
+        `human-${checkpoint.actionWindow.seat}`,
+        "Reconnected human"
+      )
+    ).toBe(checkpoint.actionWindow.seat);
     expect(match.isPaused).toBe(false);
     expect(match.replayFromBuffer(0, 0).length).toBeGreaterThan(
       beforeEvents.length

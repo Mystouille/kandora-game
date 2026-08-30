@@ -670,7 +670,30 @@ server.on("upgrade", (req, socket, head) => {
   const matchId = decodeURIComponent(m[1]);
   wss.handleUpgrade(req, socket, head, (ws) => {
     attachHeartbeat(ws);
-    void handleConnection(ws, matchId);
+    void handleConnection(ws, matchId).catch((error: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error("[game-server] connection setup failed", error);
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              code: "connection_failed",
+              message: "The connection could not be established.",
+            } satisfies ServerMessage)
+          );
+          ws.close(1011, "Connection setup failed");
+        } else if (ws.readyState !== WebSocket.CLOSED) {
+          ws.terminate();
+        }
+      } catch {
+        try {
+          ws.terminate();
+        } catch {
+          // The socket is already gone.
+        }
+      }
+    });
   });
 });
 
@@ -797,7 +820,27 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   // result means there is neither an empty waiting slot nor a bot
   // seat available for replacement. A running all-human table sends
   // the new user to live spectating below.
-  const assignedSeat = match.claimSeat(verified.userId, profile.displayName);
+  const rejectBusyConnection = (): void => {
+    sendError(
+      "match_busy",
+      "The match is finishing a durable action. Reconnecting shortly."
+    );
+    ws.close(1013, "Match temporarily busy");
+  };
+  if (!(await match.waitUntilConnectionReady())) {
+    rejectBusyConnection();
+    return;
+  }
+  let assignedSeat: Seat | null;
+  try {
+    assignedSeat = match.claimSeat(verified.userId, profile.displayName);
+  } catch (error) {
+    if (match.isPaused) {
+      rejectBusyConnection();
+      return;
+    }
+    throw error;
+  }
   if (assignedSeat === null) {
     if (match.status === "waiting") {
       sendError("room_full", "This room is full.");

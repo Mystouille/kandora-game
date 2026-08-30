@@ -1047,6 +1047,19 @@ export class MatchProcess {
     return this.commandRecoveryError;
   }
 
+  async waitUntilConnectionReady(): Promise<boolean> {
+    const activeTransaction =
+      this.commandBoundaryHandoffPromise ?? this.commandTransactionPromise;
+    if (activeTransaction !== null) {
+      try {
+        await activeTransaction;
+      } catch {
+        // The paused state below determines whether reconnect can proceed.
+      }
+    }
+    return !this.isPaused;
+  }
+
   private assertNotPaused(operation: string): void {
     if (this.isPaused) {
       throw new Error(`MatchProcess.${operation}: match is paused`);
