@@ -17,6 +17,7 @@
 import tenhouHanchan from "./tenhou-hanchan.json";
 import tenhouTonpuusen from "./tenhou-tonpuusen.json";
 import buuEast from "./buu-east.json";
+import jpmlHanchan from "./jpml-hanchan.json";
 import mLeague from "./m-league.json";
 
 import type { RuleSet } from "../ruleSet";
@@ -32,8 +33,14 @@ const PRESET_SOURCES: ReadonlyArray<unknown> = [
   tenhouHanchan,
   tenhouTonpuusen,
   buuEast,
+  jpmlHanchan,
   mLeague,
 ];
+
+const NON_SELECTABLE_PRESET_IDS = new Set([
+  "tenhou-hanchan",
+  "tenhou-tonpuusen",
+]);
 
 /** The default preset id used when no override is supplied. */
 export const DEFAULT_PRESET_ID = "tenhou-hanchan";
@@ -48,6 +55,13 @@ export function listPresetIds(): string[] {
 /** All presets, in declaration order. */
 export function listPresets(): RuleSetPreset[] {
   return Array.from(PRESETS.values());
+}
+
+/** Presets offered when creating a new game. */
+export function listSelectablePresets(): RuleSetPreset[] {
+  return listPresets().filter(
+    (preset) => !NON_SELECTABLE_PRESET_IDS.has(preset.id)
+  );
 }
 
 /**

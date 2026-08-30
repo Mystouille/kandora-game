@@ -26,6 +26,7 @@ import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   replayArrivalSoundTarget,
   replaySoundTarget,
+  type ReplaySoundTarget,
 } from "~/game/client/replaySound";
 import {
   applyReplayEvent,
@@ -251,7 +252,7 @@ export default function GameSpectateRoute({
   // `-1` = baseline (snapshot view). `>= 0` = state after applying
   // events[0..playIndex] over the baseline.
   const [playIndex, setPlayIndex] = useState<number>(-1);
-  const pendingSoundIndexRef = useRef<number | null>(null);
+  const pendingSoundTargetRef = useRef<ReplaySoundTarget | null>(null);
   const [live, setLive] = useState<boolean>(true);
   const [focusSeat, setFocusSeat] = useState<Seat>(0);
   const [eyeHeld, setEyeHeld] = useState(false);
@@ -460,7 +461,7 @@ export default function GameSpectateRoute({
             }
             if (msg.type === "snapshot") {
               rendererRef.current?.snapNextAnimation();
-              pendingSoundIndexRef.current = null;
+              pendingSoundTargetRef.current = null;
               lastRelaySeqRef.current = msg.seq;
               if (msg.state.seatNames) {
                 setSeatNames((current) =>
@@ -496,7 +497,7 @@ export default function GameSpectateRoute({
               // guard above also prevents duplicate catch-up events.
               if (startSeq === 0 && msg.events.length > 1) {
                 rendererRef.current?.snapNextAnimation();
-                pendingSoundIndexRef.current = null;
+                pendingSoundTargetRef.current = null;
                 let hydrated = initialView();
                 for (const event of msg.events) {
                   hydrated = applyReplayEvent(hydrated, event);
@@ -527,8 +528,11 @@ export default function GameSpectateRoute({
               setEvents((prev) => {
                 const next = [...prev, ...incoming];
                 if (liveRef.current) {
-                  pendingSoundIndexRef.current =
-                    replayArrivalSoundTarget(next.length, incoming.length);
+                  pendingSoundTargetRef.current = replayArrivalSoundTarget(
+                    next.length,
+                    incoming,
+                    pendingSoundTargetRef.current
+                  );
                   // Snap playhead to the last event in the new buffer.
                   // Use a setTimeout-free direct call: `setPlayIndex`
                   // is safe inside an updater because React batches
@@ -669,12 +673,12 @@ export default function GameSpectateRoute({
   // event step. Round/wheel/go-live/catch-up jumps never iterate the
   // skipped range, so they cannot replay a burst of historical cues.
   useEffect(() => {
-    const shouldPlay = pendingSoundIndexRef.current === playIndex;
-    pendingSoundIndexRef.current = null;
-    if (!shouldPlay) {
+    const target = pendingSoundTargetRef.current;
+    pendingSoundTargetRef.current = null;
+    if (!target || target.playIndex !== playIndex) {
       return;
     }
-    const event = events[playIndex];
+    const event = events[target.eventIndex];
     if (
       !event ||
       (live && (event.type === "draw" || event.type === "discard"))
@@ -768,13 +772,13 @@ export default function GameSpectateRoute({
   /** Step to absolute event index `n`. Always pauses live mode. */
   const goto = (n: number): void => {
     rendererRef.current?.snapNextAnimation();
-    pendingSoundIndexRef.current = null;
+    pendingSoundTargetRef.current = null;
     setLive(false);
     setPlayIndex(clamp(n));
   };
   const goLive = (): void => {
     rendererRef.current?.snapNextAnimation();
-    pendingSoundIndexRef.current = null;
+    pendingSoundTargetRef.current = null;
     setLive(true);
     setPlayIndex(maxIndex);
   };
@@ -837,7 +841,7 @@ export default function GameSpectateRoute({
     }
     const max = eventsRef.current.length - 1;
     const next = Math.max(-1, Math.min(playIndexRef.current + delta, max));
-    pendingSoundIndexRef.current = replaySoundTarget(
+    pendingSoundTargetRef.current = replaySoundTarget(
       playIndexRef.current,
       next,
       "step"
@@ -854,7 +858,7 @@ export default function GameSpectateRoute({
    * turn per notch.
    */
   const stepToStop = (dir: 1 | -1): void => {
-    pendingSoundIndexRef.current = null;
+    pendingSoundTargetRef.current = null;
     const buf = eventsRef.current;
     const max = buf.length - 1;
     const isStop = (i: number): boolean => {

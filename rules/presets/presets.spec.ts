@@ -5,6 +5,7 @@ import {
   getPreset,
   listPresetIds,
   listPresets,
+  listSelectablePresets,
   presetToRuleSet,
 } from "./index";
 
@@ -35,6 +36,24 @@ describe("rule-set presets", () => {
       false,
       false,
     ]);
+  });
+
+  it("offers JPML hanchan without the legacy Tenhou options", () => {
+    const selectableIds = listSelectablePresets().map((preset) => preset.id);
+    expect(selectableIds).toContain("jpml-hanchan");
+    expect(selectableIds).not.toContain("tenhou-hanchan");
+    expect(selectableIds).not.toContain("tenhou-tonpuusen");
+
+    const preset = getPreset("jpml-hanchan");
+    expect(preset.roundWindCount).toBe(2);
+    expect(preset.ippatsu).toBe(false);
+    expect(preset.uraDora).toBe(false);
+    expect(preset.kanDora).toBe(false);
+    expect([
+      preset.nbRedFiveManzu,
+      preset.nbRedFivePinzu,
+      preset.nbRedFiveSouzu,
+    ]).toEqual([0, 0, 0]);
   });
 
   it("getPreset throws on unknown id", () => {
