@@ -1876,7 +1876,11 @@ export class TableRenderer {
     const app = this.app;
     const pointer = this.focusedHandPointerClient;
     let next: FocusedHandHoverTarget | null = null;
-    if (app && pointer && !this.handSorter.hasPointerDown()) {
+    if (
+      app &&
+      pointer &&
+      canApplyFocusedHandHover(this.handSorter.isDragging())
+    ) {
       const canvasRect = app.canvas.getBoundingClientRect();
       if (canvasRect.width > 0 && canvasRect.height > 0) {
         const point = {
@@ -6122,11 +6126,6 @@ export class TableRenderer {
             if (event.button === 2) {
               return;
             }
-            // The hand is about to mutate. Clear both the tint and
-            // cached pointer so a replacement tile under a
-            // stationary cursor is not highlighted until the mouse
-            // genuinely moves again.
-            this.clearFocusedHandHover(true);
             // The click semantics (riichi-tile-select vs
             // discard) are captured into a thunk and stashed
             // for the window-level pointerup handler to fire
