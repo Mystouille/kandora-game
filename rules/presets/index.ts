@@ -119,6 +119,14 @@ function validatePreset(raw: unknown): RuleSetPreset {
   }
   expectFiniteInt(obj, "roundLimit", ctx, { min: 1 });
   expectFiniteInt(obj, "startingScore", ctx, { min: 0 });
+  if (
+    obj.unclaimedRiichiDeposits !== "left_outside_table_score" &&
+    obj.unclaimedRiichiDeposits !== "highest_score_player"
+  ) {
+    throw new Error(
+      `${ctx}unclaimedRiichiDeposits must be "left_outside_table_score" or "highest_score_player"`
+    );
+  }
   for (const key of [
     "nbRedFiveManzu",
     "nbRedFivePinzu",

@@ -84,6 +84,7 @@ function makeMatch(seed: number): MatchProcess {
 interface InternalState {
   phase: string;
   scores: number[];
+  riichiSticks: number;
   dealer: number;
   roundNumber: number;
   roundWind: "E" | "S" | "W" | "N";
@@ -126,7 +127,8 @@ describe("MatchProcess — match-end transition", () => {
     // last round wind" with non-tenpai dealer so `start_next_hand`
     // rotates the dealer past the round limit and ends the match.
     internals.state.phase = "hand_ended";
-    internals.state.scores = [40000, 30000, 20000, 10000];
+    internals.state.scores = [38000, 30000, 20000, 10000];
+    internals.state.riichiSticks = 2;
     internals.state.dealer = 3;
     internals.state.roundWind = "E";
     internals.state.roundNumber =
@@ -146,6 +148,9 @@ describe("MatchProcess — match-end transition", () => {
     archiveMatchMock.mockClear();
 
     await internals.afterHandEnd();
+
+    expect(internals.state.scores).toEqual([40000, 30000, 20000, 10000]);
+    expect(internals.state.riichiSticks).toBe(0);
 
     const matchEnds = events.filter((e) => e.event.type === "match_end");
     expect(matchEnds).toHaveLength(1);

@@ -5,6 +5,7 @@
   "roundWindCount": 1,
   "roundLimit": 4,
   "startingScore": 6000,
+  "unclaimedRiichiDeposits": "highest_score_player",
   "nbRedFiveManzu": 0,
   "nbRedFivePinzu": 2,
   "nbRedFiveSouzu": 0,

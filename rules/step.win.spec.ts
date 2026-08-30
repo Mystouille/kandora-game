@@ -372,6 +372,113 @@ describe("step — start_next_hand", () => {
     const matchEnd = after.events.find((e) => e.type === "match_end");
     expect(matchEnd).toBeDefined();
   });
+
+  it("awards unclaimed riichi deposits to the highest-score player", () => {
+    const base = createInitialState(0, {
+      ruleSet: {
+        roundWindCount: 1,
+        unclaimedRiichiDeposits: "highest_score_player",
+      },
+    });
+    const state: MatchState = {
+      ...base,
+      phase: "hand_ended",
+      roundWind: "E",
+      roundNumber: 4,
+      dealer: 3,
+      scores: [31000, 30000, 20000, 17000],
+      riichiSticks: 2,
+      lastHandResult: {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: [false, false, false, false],
+        abortKind: null,
+        winHan: null,
+        winYakuman: null,
+      },
+    };
+
+    const after = step(state, { type: "start_next_hand" });
+    expect(after.state.phase).toBe("match_ended");
+    expect(after.state.scores).toEqual([33000, 30000, 20000, 17000]);
+    expect(after.state.riichiSticks).toBe(0);
+    expect(after.events).toContainEqual({
+      type: "match_end",
+      reason: "round_limit",
+      finalScores: [33000, 30000, 20000, 17000],
+    });
+  });
+
+  it("leaves unclaimed riichi deposits outside player scores", () => {
+    const base = createInitialState(0, {
+      ruleSet: {
+        roundWindCount: 1,
+        unclaimedRiichiDeposits: "left_outside_table_score",
+      },
+    });
+    const state: MatchState = {
+      ...base,
+      phase: "hand_ended",
+      roundWind: "E",
+      roundNumber: 4,
+      dealer: 3,
+      scores: [31000, 30000, 20000, 17000],
+      riichiSticks: 2,
+      lastHandResult: {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: [false, false, false, false],
+        abortKind: null,
+        winHan: null,
+        winYakuman: null,
+      },
+    };
+
+    const after = step(state, { type: "start_next_hand" });
+    expect(after.state.scores).toEqual([31000, 30000, 20000, 17000]);
+    expect(after.state.riichiSticks).toBe(2);
+    expect(after.events).toContainEqual({
+      type: "match_end",
+      reason: "round_limit",
+      finalScores: [31000, 30000, 20000, 17000],
+    });
+  });
+
+  it("breaks a highest-score tie by seat order", () => {
+    const base = createInitialState(0, {
+      ruleSet: {
+        roundWindCount: 1,
+        unclaimedRiichiDeposits: "highest_score_player",
+      },
+    });
+    const state: MatchState = {
+      ...base,
+      phase: "hand_ended",
+      roundWind: "E",
+      roundNumber: 4,
+      dealer: 3,
+      scores: [30000, 30000, 20000, 18000],
+      riichiSticks: 2,
+      lastHandResult: {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: [false, false, false, false],
+        abortKind: null,
+        winHan: null,
+        winYakuman: null,
+      },
+    };
+
+    const after = step(state, { type: "start_next_hand" });
+    expect(after.state.scores).toEqual([32000, 30000, 20000, 18000]);
+    expect(after.state.riichiSticks).toBe(0);
+  });
 });
 
 describe("distributePayments — direct", () => {

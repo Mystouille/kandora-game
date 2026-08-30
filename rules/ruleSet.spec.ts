@@ -82,6 +82,16 @@ describe("ruleSet — defaults", () => {
     }
   });
 
+  it("defaults legacy serialized rules to highest-score settlement", () => {
+    const current = presetToRuleSet(listPresets()[0]);
+    const legacy = { ...current } as Partial<typeof current>;
+    delete legacy.unclaimedRiichiDeposits;
+
+    expect(RuleSetSchema.parse(legacy).unclaimedRiichiDeposits).toBe(
+      "highest_score_player"
+    );
+  });
+
   it("createInitialState defaults to hanchan (roundWindCount=2)", () => {
     const s = createInitialState(0);
     expect(s.ruleSet.roundWindCount).toBe(2);

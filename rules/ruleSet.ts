@@ -30,6 +30,14 @@ export interface RuleSet {
   roundLimit: number;
   /** Starting score per seat. */
   startingScore: number;
+  /**
+   * Settlement for riichi deposits still on the table when the match ends.
+   * `highest_score_player` awards every stick to the current highest-scoring
+   * seat; score ties use seat order, matching final-placement ordering.
+   */
+  unclaimedRiichiDeposits:
+    | "left_outside_table_score"
+    | "highest_score_player";
   /** Number of red 5m tiles (0–4; replaces that many "5m" copies). */
   nbRedFiveManzu: number;
   /** Number of red 5p tiles (0–4; replaces that many "5p" copies). */
@@ -143,7 +151,7 @@ export interface RuleSet {
   /**
    * Point value of a single riichi stick. Standard riichi: 1000.
    * Buu: 100. Affects both the at-declaration deduction and the
-   * winner pickup at hand-end (`riichiSticks * riichiBetValue`).
+  * payout at hand-end or match-end (`riichiSticks * riichiBetValue`).
    */
   riichiBetValue: number;
   /**
@@ -256,6 +264,9 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
     roundWindCount: z.union([z.literal(1), z.literal(2), z.literal(4)]),
     roundLimit: z.number().int().positive(),
     startingScore: z.number().int(),
+    unclaimedRiichiDeposits: z
+      .enum(["left_outside_table_score", "highest_score_player"])
+      .default("highest_score_player"),
     nbRedFiveManzu: z.number().int().min(0).max(4),
     nbRedFivePinzu: z.number().int().min(0).max(4),
     nbRedFiveSouzu: z.number().int().min(0).max(4),

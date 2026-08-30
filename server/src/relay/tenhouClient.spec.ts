@@ -11,7 +11,7 @@ import {
 } from "./tenhouClient";
 
 class FakeSocket extends EventEmitter {
-  readyState = WebSocket.CONNECTING;
+  readyState: number = WebSocket.CONNECTING;
   readonly sent: string[] = [];
   terminated = false;
 

@@ -80,6 +80,7 @@ describe("rule-set presets", () => {
       expect([1, 2, 4]).toContain(p.roundWindCount);
       expect(Number.isInteger(p.roundLimit)).toBe(true);
       expect(Number.isInteger(p.startingScore)).toBe(true);
+      expect(p.unclaimedRiichiDeposits).toBe("highest_score_player");
       for (const key of [
         "nbRedFiveManzu",
         "nbRedFivePinzu",

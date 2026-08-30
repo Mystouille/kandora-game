@@ -147,7 +147,7 @@ export interface MatchState {
   roundLimit: number;
   /** Honba counter (repeat / draw repeats). */
   honba: number;
-  /** Stake (riichi sticks × 1000) waiting to be claimed by next winner. */
+  /** Stake waiting for the next winner or end-of-match settlement. */
   riichiSticks: number;
   /** Current per-seat scores. */
   scores: [number, number, number, number];

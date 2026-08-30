@@ -2138,6 +2138,20 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     const endDecision = shouldEndMatch(state, result, dealerKeeps);
     if (endDecision.ended) {
       const ended = clone(state);
+      if (
+        ended.ruleSet.unclaimedRiichiDeposits === "highest_score_player" &&
+        ended.riichiSticks > 0
+      ) {
+        let highestSeat: Seat = 0;
+        for (let seat = 1; seat < 4; seat++) {
+          if (ended.scores[seat] > ended.scores[highestSeat]) {
+            highestSeat = seat as Seat;
+          }
+        }
+        ended.scores[highestSeat] +=
+          ended.riichiSticks * ended.ruleSet.riichiBetValue;
+        ended.riichiSticks = 0;
+      }
       ended.phase = "match_ended";
       return {
         state: ended,
@@ -2145,7 +2159,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           {
             type: "match_end",
             reason: endDecision.reason,
-            finalScores: [...state.scores] as [number, number, number, number],
+            finalScores: [...ended.scores] as [number, number, number, number],
           },
         ],
       };
