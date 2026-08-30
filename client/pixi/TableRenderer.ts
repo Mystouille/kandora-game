@@ -51,6 +51,11 @@ import {
 import { HandSorter, naturalOrderRawIndices } from "./handSorter";
 import { ACTIVE_TILE_DESIGN } from "./tiles/activeTileDesign";
 import { ACTIVE_TABLE_LAYOUT } from "./layouts/activeTableLayout";
+import {
+  webDiscardLayoutOptions,
+  webTableLayoutConfig,
+  type WebTableLayoutMode,
+} from "./layouts/webTableLayout";
 import type { TileDesign } from "./tiles/tileDesign";
 import { TileTextureStore } from "./tiles/tileTextureStore";
 import { TileSpriteFactory } from "./tiles/tileSpriteFactory";
@@ -80,6 +85,21 @@ export interface SeatEnrichment {
 }
 
 export type TableRendererPresentation = "standard" | "mobile";
+
+export interface TableRenderPolicy {
+  indicatorCenter: boolean;
+  perimeterWalls: boolean;
+}
+
+export function tableRenderPolicy(
+  presentation: TableRendererPresentation,
+  webLayoutMode: WebTableLayoutMode
+): TableRenderPolicy {
+  if (presentation === "mobile" || webLayoutMode === "compact") {
+    return { indicatorCenter: true, perimeterWalls: false };
+  }
+  return { indicatorCenter: false, perimeterWalls: true };
+}
 
 interface FocusedHandHoverTarget {
   sprite: Sprite;
@@ -223,6 +243,35 @@ export function mobileCounterCells(center: Rect, count: number): Rect[] {
   }));
 }
 
+export const CENTER_DORA_INDICATOR_GAP = MOBILE_DORA_INDICATOR_GAP;
+export const centerDoraIndicatorSlots = mobileDoraIndicatorSlots;
+export type CenterDoraRowGeometry = MobileDoraRowGeometry;
+export const centerInfoInnerRect = mobileCenterInnerRect;
+export const centerDoraRowGeometry = mobileDoraRowGeometry;
+export const centerCounterCells = mobileCounterCells;
+
+export interface CenterCounterSpec {
+  kind: "honba" | "riichi" | "tiles";
+  value: number;
+  color: number;
+}
+
+export function centerCounterSpecs(
+  view: Pick<MatchView, "buuMode" | "honba" | "riichiSticks" | "drawsTaken">
+): CenterCounterSpec[] {
+  return [
+    ...(view.buuMode === true
+      ? []
+      : [{ kind: "honba" as const, value: view.honba, color: 0xfde68a }]),
+    { kind: "riichi", value: view.riichiSticks, color: 0xfca5a5 },
+    {
+      kind: "tiles",
+      value: Math.max(0, 70 - view.drawsTaken),
+      color: 0xd1d5db,
+    },
+  ];
+}
+
 export function fitCounterContentInCell(
   content: { minX: number; minY: number; maxX: number; maxY: number },
   cell: Rect,
@@ -245,6 +294,172 @@ export function fitCounterContentInCell(
     y: cell.y + cell.h - padding - content.maxY * scale,
     scale,
   };
+}
+
+interface RiichiStickMetrics {
+  width: number;
+  height: number;
+  gap: number;
+  dotRadius: number;
+  cornerRadius: number;
+}
+
+const WEB_RIICHI_STICK_SCALE = 1.35;
+
+export const WEB_RIICHI_STICK: RiichiStickMetrics = {
+  width: 90 * WEB_RIICHI_STICK_SCALE,
+  height: 8 * WEB_RIICHI_STICK_SCALE,
+  gap: 10 * WEB_RIICHI_STICK_SCALE,
+  dotRadius: 2.5 * WEB_RIICHI_STICK_SCALE,
+  cornerRadius: 3 * WEB_RIICHI_STICK_SCALE,
+};
+
+export const MOBILE_RIICHI_STICK: RiichiStickMetrics = {
+  width: 120,
+  height: 12,
+  gap: 1,
+  dotRadius: 3.5,
+  cornerRadius: 3,
+};
+
+export function riichiStickMetrics(
+  presentation: TableRendererPresentation
+): RiichiStickMetrics {
+  return presentation === "mobile"
+    ? MOBILE_RIICHI_STICK
+    : WEB_RIICHI_STICK;
+}
+
+export interface RiichiStickPlacement {
+  x: number;
+  y: number;
+  rotation: number;
+  bounds: Rect;
+}
+
+export function mobileRiichiStickPlacement(
+  discardPanel: Rect,
+  center: Rect,
+  seat: Seat
+): RiichiStickPlacement {
+  const { width, height, gap } = MOBILE_RIICHI_STICK;
+  const centerX = center.x + center.w / 2;
+  const centerY = center.y + center.h / 2;
+  switch (seat) {
+    case 0:
+      return {
+        x: centerX - width / 2,
+        y: discardPanel.y - gap - height,
+        rotation: 0,
+        bounds: {
+          x: centerX - width / 2,
+          y: discardPanel.y - gap - height,
+          w: width,
+          h: height,
+        },
+      };
+    case 1:
+      return {
+        x: discardPanel.x - gap - height,
+        y: centerY + width / 2,
+        rotation: -Math.PI / 2,
+        bounds: {
+          x: discardPanel.x - gap - height,
+          y: centerY - width / 2,
+          w: height,
+          h: width,
+        },
+      };
+    case 2:
+      return {
+        x: centerX + width / 2,
+        y: discardPanel.y + discardPanel.h + gap + height,
+        rotation: Math.PI,
+        bounds: {
+          x: centerX - width / 2,
+          y: discardPanel.y + discardPanel.h + gap,
+          w: width,
+          h: height,
+        },
+      };
+    case 3:
+      return {
+        x: discardPanel.x + discardPanel.w + gap + height,
+        y: centerY - width / 2,
+        rotation: Math.PI / 2,
+        bounds: {
+          x: discardPanel.x + discardPanel.w + gap,
+          y: centerY - width / 2,
+          w: height,
+          h: width,
+        },
+      };
+  }
+}
+
+export interface ActionButtonStyle {
+  height: number;
+  gap: number;
+  rightInset: number;
+  bottomOffset: number;
+  optionGap: number;
+  optionRowGap: number;
+  minActionWidth: number;
+  minGroupWidth: number;
+  minRiichiWidth: number;
+  horizontalPadding: number;
+  optionPadding: number;
+  optionTileInset: number;
+  radius: number;
+  fillAlpha: number;
+  optionFillAlpha: number;
+  borderAlpha: number;
+}
+
+const STANDARD_ACTION_BUTTON_STYLE: ActionButtonStyle = {
+  height: 64,
+  gap: 14,
+  rightInset: 16,
+  bottomOffset: 240,
+  optionGap: 12,
+  optionRowGap: 14,
+  minActionWidth: 110,
+  minGroupWidth: 120,
+  minRiichiWidth: 110,
+  horizontalPadding: 22,
+  optionPadding: 12,
+  optionTileInset: 12,
+  radius: 10,
+  fillAlpha: 1,
+  optionFillAlpha: 1,
+  borderAlpha: 0,
+};
+
+const MOBILE_ACTION_BUTTON_STYLE: ActionButtonStyle = {
+  height: 108,
+  gap: 10,
+  rightInset: 12,
+  bottomOffset: 240,
+  optionGap: 10,
+  optionRowGap: 12,
+  minActionWidth: 156,
+  minGroupWidth: 168,
+  minRiichiWidth: 168,
+  horizontalPadding: 28,
+  optionPadding: 16,
+  optionTileInset: 14,
+  radius: 8,
+  fillAlpha: 0.72,
+  optionFillAlpha: 0.82,
+  borderAlpha: 0.28,
+};
+
+export function actionButtonStyle(
+  presentation: TableRendererPresentation
+): Readonly<ActionButtonStyle> {
+  return presentation === "mobile"
+    ? MOBILE_ACTION_BUTTON_STYLE
+    : STANDARD_ACTION_BUTTON_STYLE;
 }
 
 export interface MeldStripGroupPlacement {
@@ -306,6 +521,19 @@ const TSUMOGIRI_FRESH_TINT = 0xc8c8c8;
  * landed, the tint is removed. */
 const TSUMOGIRI_FRESH_WINDOW = 3;
 
+export type TsumogiriTintMode = "fresh" | "all" | "none";
+
+export function shouldTintTsumogiri(
+  wasTsumogiri: boolean,
+  mode: TsumogiriTintMode,
+  discardAge: number
+): boolean {
+  if (!wasTsumogiri || mode === "none") {
+    return false;
+  }
+  return mode === "all" || discardAge < TSUMOGIRI_FRESH_WINDOW;
+}
+
 /** Clockwise rotation applied to each seat's tile-area container
  * (discards / hands / melds). A tile's own sprite counter-rotates by
  * the negative of this, so every tile nets to zero rotation on
@@ -332,6 +560,7 @@ const PLAYER_PANEL_LINK_WIDTH = 28;
 const PLAYER_PANEL_ALPHA = 0.28;
 /** Above the identity panel (-10), below every root board tile layer (0+). */
 const PLAYER_PANEL_CONTENT_Z = -9;
+export const TEAM_LOGO_Z_INDEX = -9;
 const RELATIVE_SCORE_DISPLAY_MS = 4_000;
 const HAND_HOVER_TINT = 0xffaaaa;
 const RIICHI_UNAVAILABLE_TINT = 0xb0b0b0;
@@ -343,6 +572,86 @@ const RESULT_SCORE_BOX_NAME_GAP = 8;
 const RESULT_YAKU_REVEAL_INTERVAL_MS = 750;
 const RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS = 1000;
 const RESULT_SCORE_REVEAL_AFTER_FINAL_DETAIL_MS = 750;
+
+export function wallZIndex(seat: number): number {
+  return seat === 0 ? 2 : seat === 2 ? 0 : 1;
+}
+
+const DISCARD_LAYER_BASE_Z = 3;
+
+export function discardContainerZIndex(seat: Seat): number {
+  if (seat === 2) {
+    return DISCARD_LAYER_BASE_Z;
+  }
+  if (seat === 1) {
+    return DISCARD_LAYER_BASE_Z + 1;
+  }
+  if (seat === 3) {
+    return DISCARD_LAYER_BASE_Z + 2;
+  }
+  return DISCARD_LAYER_BASE_Z + 3;
+}
+
+type SeatRects = readonly [Rect, Rect, Rect, Rect];
+
+export function playerIdentityCenter(
+  discardPanels: SeatRects,
+  seat: Seat
+): { x: number; y: number } {
+  const discardPanel = discardPanels[seat];
+  let center: { x: number; y: number };
+  if (seat === 0) {
+    center = {
+      x:
+        discardPanel.x +
+        discardPanel.w +
+        PLAYER_PANEL_GAP +
+        PLAYER_PANEL_SIZE / 2,
+      y: discardPanel.y + discardPanel.h - PLAYER_PANEL_SIZE / 2,
+    };
+  } else if (seat === 1) {
+    center = {
+      x: discardPanel.x + discardPanel.w - PLAYER_PANEL_SIZE / 2,
+      y: discardPanel.y - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
+    };
+  } else if (seat === 2) {
+    center = {
+      x: discardPanel.x - PLAYER_PANEL_GAP - PLAYER_PANEL_SIZE / 2,
+      y: discardPanel.y + PLAYER_PANEL_SIZE / 2,
+    };
+  } else {
+    center = {
+      x: discardPanel.x + PLAYER_PANEL_SIZE / 2,
+      y:
+        discardPanel.y +
+        discardPanel.h +
+        PLAYER_PANEL_GAP +
+        PLAYER_PANEL_SIZE / 2,
+    };
+  }
+
+  const rightDiscard = discardPanels[((seat + 1) % 4) as Seat];
+  if (seat === 0) {
+    const gap =
+      center.y -
+      PLAYER_PANEL_SIZE / 2 -
+      (rightDiscard.y + rightDiscard.h);
+    center.y -= Math.max(0, gap) / 2;
+  } else if (seat === 1) {
+    const gap =
+      center.x -
+      PLAYER_PANEL_SIZE / 2 -
+      (rightDiscard.x + rightDiscard.w);
+    center.x -= Math.max(0, gap) / 2;
+  } else if (seat === 2) {
+    const gap = rightDiscard.y - (center.y + PLAYER_PANEL_SIZE / 2);
+    center.y += Math.max(0, gap) / 2;
+  } else {
+    const gap = rightDiscard.x - (center.x + PLAYER_PANEL_SIZE / 2);
+    center.x += Math.max(0, gap) / 2;
+  }
+  return center;
+}
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
  *  East, South, West, North. */
@@ -734,6 +1043,25 @@ export function canInteractWithFocusedHand(
   return view.conn !== "replay";
 }
 
+export function canApplyFocusedHandHover(isDragging: boolean): boolean {
+  return !isDragging;
+}
+
+export function isPendingDiscardDisplaySlot(
+  pendingDiscard: MatchView["pendingDiscard"],
+  seat: number,
+  tile: string | null,
+  displayIndex: number
+): boolean {
+  return Boolean(
+    pendingDiscard &&
+      pendingDiscard.seat === seat &&
+      pendingDiscard.tile === tile &&
+      (pendingDiscard.displayIndex === undefined ||
+        pendingDiscard.displayIndex === displayIndex)
+  );
+}
+
 export class TableRenderer {
   private app: Application | null = null;
   private root: Container | null = null;
@@ -827,6 +1155,7 @@ export class TableRenderer {
    * in `ReplayOverlayPanel`. */
   private showWaits = false;
   private showHands = false;
+  private tsumogiriTintMode: TsumogiriTintMode = "fresh";
   /** Development fixture mode: include the 52 tiles normally removed
    * by the initial deal so all 136 physical wall tiles are visible. */
   private showUndealtWall = false;
@@ -1092,9 +1421,11 @@ export class TableRenderer {
   /** Active board layout (zone geometry + layers). Injectable and
    * swappable at runtime via {@link setLayoutConfig}. */
   private layoutConfig: TableLayoutConfig;
-  private readonly discardFootprintBySeat = new Map<Seat, Rect>();
+  private readonly discardFootprintBySeat = new Map<string, Rect>();
   /** Rendering treatment layered over the semantic geometry. */
   private presentation: TableRendererPresentation;
+  /** Standard or wall-hidden geometry for browser-hosted tables. */
+  private webTableLayoutMode: WebTableLayoutMode;
   /** Loads atlases and hands out framed textures for {@link tileDesign}. */
   private textureStore: TileTextureStore | null = null;
   /** Materializes tile sprites from the active design. */
@@ -1110,10 +1441,16 @@ export class TableRenderer {
     tileDesign?: TileDesign;
     layoutConfig?: TableLayoutConfig;
     presentation?: TableRendererPresentation;
+    webTableLayoutMode?: WebTableLayoutMode;
   }) {
     this.tileDesign = opts?.tileDesign ?? ACTIVE_TILE_DESIGN;
-    this.layoutConfig = opts?.layoutConfig ?? ACTIVE_TABLE_LAYOUT;
     this.presentation = opts?.presentation ?? "standard";
+    this.webTableLayoutMode = opts?.webTableLayoutMode ?? "standard";
+    this.layoutConfig =
+      opts?.layoutConfig ??
+      (this.presentation === "standard"
+        ? webTableLayoutConfig(this.webTableLayoutMode)
+        : ACTIVE_TABLE_LAYOUT);
   }
 
   async mount(container: HTMLElement): Promise<void> {
@@ -1427,6 +1764,25 @@ export class TableRenderer {
     }
     this.layoutConfig = config;
     this.requestRender();
+  }
+
+  setWebTableLayoutMode(mode: WebTableLayoutMode): void {
+    const config = webTableLayoutConfig(mode);
+    if (this.webTableLayoutMode === mode && this.layoutConfig === config) {
+      return;
+    }
+    this.webTableLayoutMode = mode;
+    this.layoutConfig = config;
+    this.discardFootprintBySeat.clear();
+    this.requestRender();
+  }
+
+  setMinimumDrawToDiscardDelayEnabled(enabled: boolean): void {
+    this.animator.setMinimumDrawToDiscardDelayEnabled(enabled);
+  }
+
+  setShowTsumogiri(flag: boolean): void {
+    this.tsumogiriTintMode = flag ? "all" : "none";
   }
 
   setOnActionClick(handler: (click: ActionClick) => void): void {
@@ -2388,7 +2744,11 @@ export class TableRenderer {
     // the maximum 6×3 footprint of each discard pond.
     this.renderHandPanels(layout);
     this.renderDiscardPanels(layout);
-    if (this.presentation === "mobile") {
+    const renderPolicy = tableRenderPolicy(
+      this.presentation,
+      this.webTableLayoutMode
+    );
+    if (renderPolicy.indicatorCenter) {
       this.renderMobileCenterPanel(layout.center);
     }
     // Stash the felt's bottom-right in screen coords so the timer
@@ -2428,11 +2788,13 @@ export class TableRenderer {
     // Per-seat identity content next to each discard pond. It sits above
     // the identity panel background but below every board tile layer.
     this.renderPlayerNames(view, layout);
-    if (this.presentation === "mobile") {
+    if (renderPolicy.indicatorCenter) {
       this.renderMobileCenterInfo(view, layout.center);
     } else {
       // Round / honba / sticks / wall-remaining centre block.
       this.renderRoundInfo(view, layout.center);
+    }
+    if (renderPolicy.perimeterWalls) {
       // Wall stacks + dora indicators around the centre.
       this.renderWalls(view, layout);
     }
@@ -3019,13 +3381,10 @@ export class TableRenderer {
     const nameCY = -h / 2 + nameRowH / 2;
     const chipCY = -h / 2 + nameRowH + chipRowH / 2;
     const dabukenCY = -h / 2 + nameRowH + chipRowH + dabukenRowH / 2;
+    const discardPanels = this.discardPanelRects(layout);
     for (const b of built) {
       const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
-      const rect = layout.discards[seat];
-      const identityCenter = this.playerPanelCenter(
-        this.discardPanelRect(rect, seat),
-        seat
-      );
+      const identityCenter = playerIdentityCenter(discardPanels, seat);
       const container = new Container();
       // Enriched (team) nameplate: team logo as the box background with the
       // player name on top, anchored to the player's hand (player-right end,
@@ -3646,7 +4005,7 @@ export class TableRenderer {
         wallShadowBoxes
       );
 
-      wallContainer.zIndex = seat === 0 ? 2 : seat === 2 ? 0 : 1;
+      wallContainer.zIndex = wallZIndex(seat);
       this.root.sortableChildren = true;
       this.root.addChild(wallContainer);
     }
@@ -5962,6 +6321,7 @@ export class TableRenderer {
     // by the extra width so they don't overlap.
     const discardContainer = new Container();
     discardContainer.sortableChildren = true;
+    discardContainer.zIndex = discardContainerZIndex(seat as Seat);
     const riichiIdx = view.riichiTileIdx[seat];
     // -----------------------------------------------------------------
     // Discard slide animation hookup. When this seat has an active
@@ -5993,7 +6353,8 @@ export class TableRenderer {
       this.tileDesign,
       seat as Seat,
       discards,
-      riichiIdx
+      riichiIdx,
+      this.discardLayoutOptions(layout, seat as Seat)
     );
     let animLastPlacement: TilePlacement | null = null;
     for (const placement of discardPlacements) {
@@ -6017,10 +6378,14 @@ export class TableRenderer {
       const tinted = this.tintIfWait(sprite, placement.tile);
       const wasTsumogiri = view.discardTsumogiri[seat]?.[i] ?? false;
       const discardOrdinal = view.discardOrdinals[seat]?.[i] ?? 0;
-      const isFreshTsumogiri =
-        wasTsumogiri &&
-        view.totalDiscards - discardOrdinal < TSUMOGIRI_FRESH_WINDOW;
-      if (!tinted && isFreshTsumogiri) {
+      if (
+        !tinted &&
+        shouldTintTsumogiri(
+          wasTsumogiri,
+          this.tsumogiriTintMode,
+          view.totalDiscards - discardOrdinal
+        )
+      ) {
         sprite.tint = TSUMOGIRI_FRESH_TINT;
       }
       const wrap = new Container();
@@ -6185,7 +6550,13 @@ export class TableRenderer {
       );
       // Tsumogiri fresh-tint: keep the animated tile consistent with
       // how the static last-discard would have looked.
-      if (seatDiscardAnim.isTsumogiri) {
+      if (
+        shouldTintTsumogiri(
+          seatDiscardAnim.isTsumogiri,
+          this.tsumogiriTintMode,
+          0
+        )
+      ) {
         sprite.tint = TSUMOGIRI_FRESH_TINT;
       }
       const wrap = new Container();
@@ -6375,9 +6746,10 @@ export class TableRenderer {
     if (!this.root) {
       return;
     }
+    const discardPanels = this.discardPanelRects(layout);
     for (let seat = 0; seat < 4; seat++) {
-      const pond = layout.discards[seat];
-      const panelRect = this.discardPanelRect(pond, seat);
+      const typedSeat = seat as Seat;
+      const panelRect = discardPanels[typedSeat];
       const panel = new Graphics()
         .roundRect(
           panelRect.x,
@@ -6390,7 +6762,7 @@ export class TableRenderer {
       panel.zIndex = -10;
       this.root.addChild(panel);
 
-      const identityCenter = this.playerPanelCenter(panelRect, seat);
+      const identityCenter = playerIdentityCenter(discardPanels, typedSeat);
       const playerPanelX = identityCenter.x - PLAYER_PANEL_SIZE / 2;
       const playerPanelY = identityCenter.y - PLAYER_PANEL_SIZE / 2;
       let linkX = 0;
@@ -6434,12 +6806,39 @@ export class TableRenderer {
     }
   }
 
-  private discardPanelRect(pond: Rect, seat: number): Rect {
+  private discardLayoutOptions(layout: TableLayout, seat: Seat) {
+    return this.presentation === "standard"
+      ? webDiscardLayoutOptions(
+          this.webTableLayoutMode,
+          this.tileDesign,
+          layout,
+          seat
+        )
+      : undefined;
+  }
+
+  private discardPanelRects(layout: TableLayout): [Rect, Rect, Rect, Rect] {
+    return [
+      this.discardPanelRect(layout, 0),
+      this.discardPanelRect(layout, 1),
+      this.discardPanelRect(layout, 2),
+      this.discardPanelRect(layout, 3),
+    ];
+  }
+
+  private discardPanelRect(layout: TableLayout, seat: number): Rect {
     const typedSeat = seat as Seat;
-    let localFootprint = this.discardFootprintBySeat.get(typedSeat);
+    const pond = layout.discards[typedSeat];
+    const cacheKey = `${this.presentation}:${this.webTableLayoutMode}:${this.layoutConfig.id}:${typedSeat}`;
+    let localFootprint = this.discardFootprintBySeat.get(cacheKey);
     if (!localFootprint) {
-      localFootprint = potentialDiscardBounds(this.tileDesign, typedSeat, 18);
-      this.discardFootprintBySeat.set(typedSeat, localFootprint);
+      localFootprint = potentialDiscardBounds(
+        this.tileDesign,
+        typedSeat,
+        18,
+        this.discardLayoutOptions(layout, typedSeat)
+      );
+      this.discardFootprintBySeat.set(cacheKey, localFootprint);
     }
     const footprint = localRectToTable(
       seatTransform(typedSeat),
@@ -7694,6 +8093,10 @@ function labelForAction(action: LegalAction): string {
     return "Win";
   }
   return action.type;
+}
+
+export function actionButtonLabel(action: LegalAction): string {
+  return action.type === "pass" ? "Skip" : labelForAction(action);
 }
 
 function tileNum(tile: string): string {

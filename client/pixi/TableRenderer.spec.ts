@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import {
+  TableRenderer,
   activePlayerIndicatorSeat,
   actionButtonLabel,
   actionButtonStyle,
@@ -47,6 +48,18 @@ import { mobileTableLayout } from "./layouts/mobileTableLayout";
 import { compactWebTableLayout } from "./layouts/compactWebTableLayout";
 import { currentTableLayout } from "./layouts/currentTableLayout";
 import { tableLayoutFromConfig } from "./tableLayout";
+
+describe("route-facing renderer API", () => {
+  it("keeps layout and replay controls available on the renderer", () => {
+    expect(typeof TableRenderer.prototype.setWebTableLayoutMode).toBe(
+      "function"
+    );
+    expect(
+      typeof TableRenderer.prototype.setMinimumDrawToDiscardDelayEnabled
+    ).toBe("function");
+    expect(typeof TableRenderer.prototype.setShowTsumogiri).toBe("function");
+  });
+});
 
 describe("handResultDealerSeat", () => {
   it("uses the completed hand dealer instead of the current dealer", () => {
