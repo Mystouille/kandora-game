@@ -189,6 +189,10 @@ export async function archiveReplayLog(args: {
   source?: string;
   /** Platform-native game id; defaults to `matchId`. */
   sourceGameId?: string;
+  /** Temporary platform ids which should redirect to `sourceGameId`. */
+  sourceGameIdAliases?: string[];
+  /** Relay archives must not replace a richer completed-log archive. */
+  insertOnly?: boolean;
   startedAt: Date;
   endedAt: Date;
   ruleSet: string;
@@ -204,30 +208,44 @@ export async function archiveReplayLog(args: {
 }): Promise<void> {
   const source = args.source ?? "ingame";
   const sourceGameId = args.sourceGameId ?? args.matchId;
+  const sourceGameIdAliases = [
+    ...new Set(
+      (args.sourceGameIdAliases ?? []).filter(
+        (alias) => alias.length > 0 && alias !== sourceGameId
+      )
+    ),
+  ];
   const seats = args.seats.map(({ userDbId, ...seat }) => ({
     ...seat,
     ...(userDbId && mongoose.isValidObjectId(userDbId)
       ? { userDbId: new mongoose.Types.ObjectId(userDbId) }
       : {}),
   }));
+  const replayDocument = {
+    source,
+    sourceGameId,
+    ruleSet: args.ruleSet,
+    ruleSetDetails: args.ruleSetDetails,
+    startedAt: args.startedAt.getTime(),
+    endedAt: args.endedAt.getTime(),
+    seats,
+    events: args.events,
+    schemaVersion: REPLAY_LOG_SCHEMA_VERSION,
+    parsedAt: new Date(),
+  };
   await ReplayLogModel.updateOne(
     { source, sourceGameId },
-    {
-      $set: {
-        source,
-        sourceGameId,
-        ruleSet: args.ruleSet,
-        ruleSetDetails: args.ruleSetDetails,
-        startedAt: args.startedAt.getTime(),
-        endedAt: args.endedAt.getTime(),
-        seats,
-        events: args.events,
-        schemaVersion: REPLAY_LOG_SCHEMA_VERSION,
-        parsedAt: new Date(),
-      },
-    },
+    args.insertOnly
+      ? { $setOnInsert: replayDocument }
+      : { $set: replayDocument },
     { upsert: true }
   );
+  if (sourceGameIdAliases.length > 0) {
+    await ReplayLogModel.updateOne(
+      { source, sourceGameId },
+      { $addToSet: { sourceGameIdAliases: { $each: sourceGameIdAliases } } }
+    );
+  }
 }
 
 export async function saveMatchCheckpoint(args: {

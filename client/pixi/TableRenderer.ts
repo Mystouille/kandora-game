@@ -987,6 +987,18 @@ function scoreCartridgeMetrics(center: Rect): {
   };
 }
 
+export function scoreCartridgeTextLayout(
+  chipWidth: number,
+  chipHeight: number
+): { scoreRightX: number; seatIndicatorLeftX: number } {
+  const scoreRightMargin = Math.round(chipHeight * 0.35);
+  const seatIndicatorLeftMargin = Math.round(chipHeight * 0.12);
+  return {
+    scoreRightX: chipWidth / 2 - scoreRightMargin,
+    seatIndicatorLeftX: -chipWidth / 2 + seatIndicatorLeftMargin,
+  };
+}
+
 export function resultScoreBoxLayout(
   nameWidth: number,
   dealerWidth: number
@@ -1078,6 +1090,16 @@ export function canInteractWithFocusedHand(
 
 export function canApplyFocusedHandHover(isDragging: boolean): boolean {
   return !isDragging;
+}
+
+export function focusedHandOrderPolicy(
+  isDragging: boolean,
+  isAutoSortOn: boolean
+): { previewReorder: boolean; useDisplayOrder: boolean } {
+  return {
+    previewReorder: isDragging,
+    useDisplayOrder: isDragging || !isAutoSortOn,
+  };
 }
 
 export function isPendingDiscardDisplaySlot(
@@ -3095,9 +3117,9 @@ export class TableRenderer {
           fill: view.sinking[seat] ? 0xff6b6b : 0xffffff,
         }),
       });
-      const horizontalPadding = Math.round(chipH * 0.35);
+      const textLayout = scoreCartridgeTextLayout(chipW, chipH);
       txt.anchor.set(1, 0.5);
-      txt.position.set(chipW / 2 - horizontalPadding, 0);
+      txt.position.set(textLayout.scoreRightX, 0);
       // Seat wind kanji, anchored to the left edge of the chip.
       // The active player's wind is red; otherwise East is white
       // and the remaining winds are muted grey.
@@ -3114,7 +3136,7 @@ export class TableRenderer {
         }),
       });
       windTxt.anchor.set(0, 0.5);
-      windTxt.position.set(-chipW / 2 + horizontalPadding, 0);
+      windTxt.position.set(textLayout.seatIndicatorLeftX, 0);
       chip.addChild(bg, windTxt, txt);
       // Seat display names are rendered separately by
       // `renderPlayerNames` next to each discard pond.
@@ -5644,12 +5666,16 @@ export class TableRenderer {
         isFreshlyDrawnNatural,
         tileSortKey
       );
+      const orderPolicy = focusedHandOrderPolicy(
+        this.handSorter.isDragging(),
+        this.handSorter.isSortFlagOn()
+      );
       // If a drag is mid-flight, decide before paint whether a
       // swap should fire this frame (so the swapped layout is
       // what we actually paint, not the pre-swap one). We use
       // the *current* display order's slot centers since those
       // are what the cursor is being compared against.
-      if (this.handSorter.isDragging() && !this.handSorter.isSortFlagOn()) {
+      if (orderPolicy.previewReorder) {
         const beforeDisplay = this.handSorter.getDisplayOrder(
           rawHand,
           isFreshlyDrawnNatural,
@@ -5680,7 +5706,10 @@ export class TableRenderer {
       seat === 0 &&
       !forceReveal &&
       seat0Display &&
-      !this.handSorter.isSortFlagOn()
+      focusedHandOrderPolicy(
+        this.handSorter.isDragging(),
+        this.handSorter.isSortFlagOn()
+      ).useDisplayOrder
     ) {
       baseHand = seat0Display.rawIndices.map((idx) => rawHand[idx] ?? null);
       baseFreshlyDrawn = seat0Display.freshGap;

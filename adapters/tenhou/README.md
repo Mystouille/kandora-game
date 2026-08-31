@@ -99,23 +99,27 @@ end is removed from open streams.
 
 ## Relay lifecycle
 
-`RelayController.start(watchId)` creates a spectator-only `MatchProcess` and
-starts one upstream Tenhou client. Calling it again with the same watch ID
-returns the existing match ID. By default:
+`RelayController.start(watchId, canonicalGameId)` creates a spectator-only
+`MatchProcess` and starts one upstream Tenhou client. Calling it again with the
+same watch ID returns the existing match ID and may attach a canonical game ID
+that was discovered after the relay started. By default:
 
 - at most 20 relays may be active;
 - a relay with no spectators is removed after 60 seconds;
 - the upstream socket and all downstream spectator sockets close at
   `match_end`;
-- closing a relay archives its buffered stream as a Tenhou replay, including a
-  partial stream after idle teardown;
+- closing a relay archives its buffered stream under the canonical Tenhou log
+  ID only; a relay without that mapping is not persisted under its temporary
+  watch ID;
+- relay archives are insert-only, so they cannot overwrite a richer completed
+  XML replay written by tournament hydration;
 - late spectators receive the existing event buffer before live updates.
 
 The game server exposes secret-authenticated control endpoints:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /relay/start` | Start or reuse a relay from `{ "watchId": "..." }` |
+| `POST /relay/start` | Start or reuse a relay from `{ "watchId": "...", "canonicalGameId": "..." }` |
 | `POST /relay/stop` | Stop a relay by watch ID |
 | `GET /relay/stats` | Return active relay, viewer, and capacity counts |
 
@@ -137,14 +141,15 @@ rejected.
 
 ## Tournament integration
 
-The tournament poller obtains Tenhou watch IDs and stores ongoing games in
-`LiveGame`. The statistics Games tab renders a live-watch action only when a
-Tenhou game has a watch ID.
+The tournament poller joins Tenhou's `wg` watch ID to the canonical `log` ID
+from the lobby's `START` row and stores both on `LiveGame`. The statistics Games
+tab renders a live-watch action only when a Tenhou game has a watch ID.
 
-The action posts the watch ID to
+The action posts both IDs to
 [`watch.ts`](../../../routes/api/game/watch.ts). That route accepts only watch
 IDs currently present in `LiveGame`, preventing arbitrary browser input from
-opening upstream connections. It calls the game server through
+opening upstream connections. The watch ID is used for the upstream handshake;
+the canonical ID is used for replay persistence. It calls the game server through
 [`gameServer.server.ts`](../../../services/gameServer.server.ts), stores the
 returned relay match ID, and sends the browser to `/spectate/:matchId`.
 

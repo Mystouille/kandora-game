@@ -19,6 +19,7 @@ import {
   darkenTileTint,
   discardContainerZIndex,
   focusedHandTileMetrics,
+  focusedHandOrderPolicy,
   formatTableScore,
   handResultDealerSeat,
   isPendingDiscardDisplaySlot,
@@ -36,6 +37,7 @@ import {
   riichiSelectionTileTint,
   resultUraDoraIndicators,
   resultScoreBoxLayout,
+  scoreCartridgeTextLayout,
   shouldRevealWinScoreSummary,
   shouldRevealWinScoreDelta,
   shouldStageWinReveal,
@@ -173,6 +175,22 @@ describe("activePlayerIndicatorSeat", () => {
 
   it("returns null after every seat has completed its turn", () => {
     expect(activePlayerIndicatorSeat(turnView([13, 13, 13, 13]))).toBe(null);
+  });
+});
+
+describe("scoreCartridgeTextLayout", () => {
+  it("keeps the seat indicator closer to the player-relative left edge", () => {
+    const chipWidth = 120;
+    const chipHeight = 40;
+    const layout = scoreCartridgeTextLayout(chipWidth, chipHeight);
+
+    expect(layout).toEqual({
+      scoreRightX: 46,
+      seatIndicatorLeftX: -55,
+    });
+    expect(layout.seatIndicatorLeftX - -chipWidth / 2).toBeLessThan(
+      chipWidth / 2 - layout.scoreRightX
+    );
   });
 });
 
@@ -700,6 +718,26 @@ describe("canApplyFocusedHandHover", () => {
 
   it("suppresses hover after the gesture promotes to a drag", () => {
     expect(canApplyFocusedHandHover(true)).toBe(false);
+  });
+});
+
+describe("focusedHandOrderPolicy", () => {
+  it("allows a drag preview before auto-sort is disabled by the drop", () => {
+    expect(focusedHandOrderPolicy(true, true)).toEqual({
+      previewReorder: true,
+      useDisplayOrder: true,
+    });
+  });
+
+  it("uses natural order when auto-sort is idle and custom order when off", () => {
+    expect(focusedHandOrderPolicy(false, true)).toEqual({
+      previewReorder: false,
+      useDisplayOrder: false,
+    });
+    expect(focusedHandOrderPolicy(false, false)).toEqual({
+      previewReorder: false,
+      useDisplayOrder: true,
+    });
   });
 });
 

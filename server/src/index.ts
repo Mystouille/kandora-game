@@ -468,7 +468,8 @@ function handleRelayStats(
 /**
  * `POST /relay/start` — start (or reuse) a live Tenhou relay for a watch-id.
  * De-duplicated: a second viewer of the same game reuses the existing relay.
- * Auth: `x-relay-secret`. Body: `{ watchId }`. Returns `{ matchId }`.
+ * Auth: `x-relay-secret`. Body: `{ watchId, canonicalGameId? }`.
+ * Returns `{ matchId }`.
  */
 async function handleRelayStart(
   req: http.IncomingMessage,
@@ -492,13 +493,23 @@ async function handleRelayStart(
     reply(400, { error: "invalid_body" });
     return;
   }
-  const { watchId } = body as { watchId?: unknown };
+  const { watchId, canonicalGameId } = body as {
+    watchId?: unknown;
+    canonicalGameId?: unknown;
+  };
   if (typeof watchId !== "string" || watchId.length === 0) {
     reply(400, { error: "missing_watchId" });
     return;
   }
+  if (
+    canonicalGameId !== undefined &&
+    (typeof canonicalGameId !== "string" || canonicalGameId.length === 0)
+  ) {
+    reply(400, { error: "invalid_canonicalGameId" });
+    return;
+  }
   try {
-    reply(200, relayController.start(watchId));
+    reply(200, relayController.start(watchId, canonicalGameId));
   } catch (err) {
     if (err instanceof RelayCapacityError) {
       reply(503, { error: "relay_capacity" });

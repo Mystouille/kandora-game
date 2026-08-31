@@ -12,10 +12,29 @@ const initial: ReadyCheckTickState = { deadline: null, seconds: -1 };
 describe("advanceReadyCheckTick", () => {
   it("does not replay the current second when acknowledgement state changes", () => {
     const first = advanceReadyCheckTick(initial, 10_000, 5);
-    const acknowledged = advanceReadyCheckTick(first.next, 10_000, 5);
+    const acknowledged = advanceReadyCheckTick(first.next, 10_000, 5, true);
+    const nextSecond = advanceReadyCheckTick(
+      acknowledged.next,
+      10_000,
+      4,
+      true
+    );
 
     expect(first.play).toBe(true);
     expect(acknowledged.play).toBe(false);
+    expect(nextSecond.play).toBe(false);
+  });
+
+  it("resumes ticks for the next unacknowledged countdown", () => {
+    const acknowledged = advanceReadyCheckTick(initial, 10_000, 5, true);
+    const nextCountdown = advanceReadyCheckTick(
+      acknowledged.next,
+      20_000,
+      5,
+      false
+    );
+
+    expect(nextCountdown.play).toBe(true);
   });
 
   it("plays each new second and each genuinely new countdown", () => {

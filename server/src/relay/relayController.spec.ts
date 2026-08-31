@@ -137,6 +137,28 @@ describe("RelayController", () => {
     expect(clients[0].started).toBe(true);
   });
 
+  it("attaches a canonical replay id to new and existing relays", () => {
+    const setReplayIdentity = vi.spyOn(
+      MatchProcess.prototype,
+      "setRelayReplayIdentity"
+    );
+    const { controller } = harness();
+
+    controller.start("WATCH-1", "2026081004gm-0009-11017-first");
+    controller.start("WATCH-1", "2026081004gm-0009-11017-canonical");
+
+    expect(setReplayIdentity).toHaveBeenNthCalledWith(
+      1,
+      "2026081004gm-0009-11017-first",
+      ["WATCH-1"]
+    );
+    expect(setReplayIdentity).toHaveBeenNthCalledWith(
+      2,
+      "2026081004gm-0009-11017-canonical",
+      ["WATCH-1"]
+    );
+  });
+
   it("decodes incoming frames into the relay match", () => {
     const { controller, matches, lastClient } = harness();
     const { matchId } = controller.start("WATCH-2");

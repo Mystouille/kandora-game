@@ -479,6 +479,7 @@ export class MatchProcess {
   }
   /** Relay archive metadata, set by `createRelayMatch` / `injectRelayEvent`. */
   private relaySourceGameId: string | null = null;
+  private relaySourceGameIdAliases: string[] = [];
   private relayRuleSet = "tenhou-default";
   private relaySeats: Array<{ seat: Seat; displayName: string }> | null = null;
   private relayFinalScores: Array<{
@@ -1133,7 +1134,7 @@ export class MatchProcess {
    */
   static createRelayMatch(
     matchId: string,
-    sourceGameId: string,
+    sourceGameId: string | null,
     dependencies: MatchProcessDependencies,
     ruleSet = "tenhou-default"
   ): MatchProcess {
@@ -1158,6 +1159,17 @@ export class MatchProcess {
     m.relaySourceGameId = sourceGameId;
     m.relayRuleSet = ruleSet;
     return m;
+  }
+
+  setRelayReplayIdentity(
+    sourceGameId: string,
+    sourceGameIdAliases: string[] = []
+  ): void {
+    if (!this.relayMode || this.statusValue !== "playing") {
+      return;
+    }
+    this.relaySourceGameId = sourceGameId;
+    this.relaySourceGameIdAliases = [...new Set(sourceGameIdAliases)];
   }
 
   /** Serialize durable state at a supported quiescent boundary. */
@@ -6519,6 +6531,9 @@ export class MatchProcess {
       return;
     }
     this.statusValue = "finished";
+    if (!this.relaySourceGameId) {
+      return;
+    }
     const seats = ([0, 1, 2, 3] as Seat[]).map((seat) => {
       const fs = this.relayFinalScores?.find((f) => f.seat === seat);
       return {
@@ -6535,7 +6550,9 @@ export class MatchProcess {
       await this.repository.archiveReplayLog({
         matchId: this.matchId,
         source: "tenhou",
-        sourceGameId: this.relaySourceGameId ?? this.matchId,
+        sourceGameId: this.relaySourceGameId,
+        sourceGameIdAliases: this.relaySourceGameIdAliases,
+        insertOnly: true,
         startedAt: this.startedAt ?? new Date(this.runtime.now()),
         endedAt: new Date(this.runtime.now()),
         ruleSet: this.relayRuleSet,

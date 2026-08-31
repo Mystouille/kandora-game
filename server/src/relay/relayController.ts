@@ -90,9 +90,12 @@ export class RelayController {
   }
 
   /** De-duplicated by watch-id: returns an existing relay's matchId or opens one. */
-  start(watchId: string): { matchId: string } {
+  start(watchId: string, canonicalGameId?: string): { matchId: string } {
     const existing = this.byWatch.get(watchId);
     if (existing && !existing.closing) {
+      if (canonicalGameId) {
+        existing.match.setRelayReplayIdentity(canonicalGameId, [watchId]);
+      }
       this.cancelIdle(existing);
       return { matchId: existing.matchId };
     }
@@ -103,9 +106,12 @@ export class RelayController {
     const matchId = nanoid(12);
     const match = MatchProcess.createRelayMatch(
       matchId,
-      watchId,
+      null,
       { repository: this.opts.repository }
     );
+    if (canonicalGameId) {
+      match.setRelayReplayIdentity(canonicalGameId, [watchId]);
+    }
     this.opts.matches.set(matchId, match);
     const session: RelaySession = {
       watchId,

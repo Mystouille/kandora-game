@@ -55,4 +55,40 @@ describe("archiveReplayLog seat identity", () => {
     expect(String(update.$set.seats[0].userDbId)).toBe(userId);
     expect(update.$set.seats[1]).not.toHaveProperty("userDbId");
   });
+
+  it("does not overwrite a completed replay when archiving a live relay", async () => {
+    await archiveReplayLog({
+      matchId: "relay-1",
+      source: "tenhou",
+      sourceGameId: "2026081004gm-0009-11017-9b9f92d7",
+      sourceGameIdAliases: ["167FAFE2"],
+      insertOnly: true,
+      startedAt: new Date(100),
+      endedAt: new Date(200),
+      ruleSet: "tenhou-default",
+      events: [],
+      seats: [],
+    });
+
+    expect(mocks.updateReplayLog).toHaveBeenCalledTimes(2);
+    expect(mocks.updateReplayLog.mock.calls[0][1]).toEqual({
+      $setOnInsert: expect.objectContaining({
+        source: "tenhou",
+        sourceGameId: "2026081004gm-0009-11017-9b9f92d7",
+        ruleSet: "tenhou-default",
+      }),
+    });
+    expect(mocks.updateReplayLog.mock.calls[0][1]).not.toHaveProperty("$set");
+    expect(mocks.updateReplayLog.mock.calls[1]).toEqual([
+      {
+        source: "tenhou",
+        sourceGameId: "2026081004gm-0009-11017-9b9f92d7",
+      },
+      {
+        $addToSet: {
+          sourceGameIdAliases: { $each: ["167FAFE2"] },
+        },
+      },
+    ]);
+  });
 });

@@ -5,7 +5,7 @@
  * decoder (Tenhou live spectating) and fan out to spectators through the
  * normal omniscient public projection.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MatchProcess } from "./match";
 import {
@@ -34,6 +34,10 @@ const recordingRepository: MatchRepository = {
   markCheckpointTerminal: async () => undefined,
   deleteCheckpoint: async () => undefined,
 };
+
+beforeEach(() => {
+  archiveReplayLogMock.mockClear();
+});
 
 function relayEvents(): GameEvent[] {
   return [
@@ -192,10 +196,13 @@ describe("MatchProcess relay", () => {
   it("archives a tenhou ReplayLog on close", async () => {
     const match = MatchProcess.createRelayMatch(
       "relay-4",
-      "0E342071",
+      null,
       { repository: recordingRepository },
       "tenhou"
     );
+    match.setRelayReplayIdentity("2026081004gm-0009-11017-9b9f92d7", [
+      "0E342071",
+    ]);
     for (const event of relayEvents()) {
       match.injectRelayEvent(event);
     }
@@ -205,10 +212,30 @@ describe("MatchProcess relay", () => {
     expect(archiveReplayLogMock).toHaveBeenCalledTimes(1);
     const arg = archiveReplayLogMock.mock.calls[0][0];
     expect(arg.source).toBe("tenhou");
-    expect(arg.sourceGameId).toBe("0E342071");
+    expect(arg.sourceGameId).toBe(
+      "2026081004gm-0009-11017-9b9f92d7"
+    );
+    expect(arg.sourceGameIdAliases).toEqual(["0E342071"]);
+    expect(arg.insertOnly).toBe(true);
     expect(arg.events).toHaveLength(relayEvents().length);
     expect(arg.seats).toHaveLength(4);
     expect(arg.seats[0].displayName).toBe("East");
+  });
+
+  it("does not archive a relay under its temporary watch id", async () => {
+    const match = MatchProcess.createRelayMatch(
+      "relay-without-canonical-id",
+      null,
+      { repository: recordingRepository }
+    );
+    for (const event of relayEvents()) {
+      match.injectRelayEvent(event);
+    }
+
+    await match.closeRelay();
+
+    expect(match.status).toBe("finished");
+    expect(archiveReplayLogMock).not.toHaveBeenCalled();
   });
 
   it("ignores injections after close", async () => {

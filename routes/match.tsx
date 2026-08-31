@@ -517,6 +517,16 @@ function ReadyCheckOverlay({
     deadline: null,
     seconds: -1,
   });
+  const [submittedDeadline, setSubmittedDeadline] = useState<number | null>(
+    null
+  );
+  const humanAcked =
+    readyCheck !== null && mySeat !== null
+      ? readyCheck.acked[mySeat as 0 | 1 | 2 | 3]
+      : false;
+  const locallyReady =
+    humanAcked ||
+    (readyDeadline !== null && submittedDeadline === readyDeadline);
 
   useEffect(() => {
     if (readyDeadline === null) {
@@ -542,7 +552,8 @@ function ReadyCheckOverlay({
     const tick = advanceReadyCheckTick(
       lastTickRef.current,
       readyDeadline,
-      seconds
+      seconds,
+      locallyReady
     );
     lastTickRef.current = tick.next;
     if (tick.play && mySeat !== null && readyDeadline !== null) {
@@ -552,7 +563,7 @@ function ReadyCheckOverlay({
         seconds
       );
     }
-  }, [mySeat, readyDeadline, seconds]);
+  }, [locallyReady, mySeat, readyDeadline, seconds]);
 
   if (!readyCheck || mySeat === null) {
     return null;
@@ -570,8 +581,6 @@ function ReadyCheckOverlay({
   const rightSeat = ((mySeat + 1) % 4) as 0 | 1 | 2 | 3;
   const topSeat = ((mySeat + 2) % 4) as 0 | 1 | 2 | 3;
   const leftSeat = ((mySeat + 3) % 4) as 0 | 1 | 2 | 3;
-
-  const humanAcked = readyCheck.acked[mySeat as 0 | 1 | 2 | 3];
 
   // Compact variant: when the renderer is showing a hand-result
   // panel (post-hand ready check), pin the OK button + countdown
@@ -598,15 +607,16 @@ function ReadyCheckOverlay({
       >
         <button
           type="button"
-          disabled={humanAcked}
+          disabled={locallyReady}
           onClick={() => {
-            if (!humanAcked) {
+            if (!locallyReady) {
+              setSubmittedDeadline(readyDeadline);
               onReady();
             }
           }}
           className="rounded bg-emerald-500 px-4 py-1.5 text-base font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
         >
-          {humanAcked ? "READY" : "OK"}
+          {locallyReady ? "READY" : "OK"}
         </button>
         <div className="font-mono text-base text-emerald-200">{seconds}s</div>
       </div>
@@ -661,15 +671,16 @@ function ReadyCheckOverlay({
         </div>
         <button
           type="button"
-          disabled={humanAcked}
+          disabled={locallyReady}
           onClick={() => {
-            if (!humanAcked) {
+            if (!locallyReady) {
+              setSubmittedDeadline(readyDeadline);
               onReady();
             }
           }}
           className="flex flex-row items-center gap-2 rounded-lg bg-emerald-500 px-8 py-3 text-2xl font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
         >
-          <span>{humanAcked ? "READY" : "GO"}</span>
+          <span>{locallyReady ? "READY" : "GO"}</span>
           <span className="font-mono text-xs font-normal opacity-80">
             {seconds}s
           </span>

@@ -237,6 +237,8 @@ export interface ArchiveReplayLogArgs {
   matchId: string;
   source?: string;
   sourceGameId?: string;
+  sourceGameIdAliases?: string[];
+  insertOnly?: boolean;
   startedAt: Date;
   endedAt: Date;
   ruleSet: string;

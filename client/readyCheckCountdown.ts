@@ -52,7 +52,8 @@ function trackedReadyCheckSeconds(
 export function advanceReadyCheckTick(
   previous: ReadyCheckTickState,
   deadline: number | null,
-  seconds: number
+  seconds: number,
+  acknowledged: boolean = false
 ): { play: boolean; next: ReadyCheckTickState } {
   if (deadline === null) {
     return {
@@ -63,6 +64,7 @@ export function advanceReadyCheckTick(
 
   return {
     play:
+      !acknowledged &&
       seconds > 0 &&
       (previous.deadline !== deadline ||
         previous.seconds < 0 ||
