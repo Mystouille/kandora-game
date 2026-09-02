@@ -11,10 +11,7 @@ import type {
   SeatEnrichment,
 } from "~/game/client/pixi/TableRenderer";
 import { useMatchStore } from "~/game/client/store";
-import {
-  GameWS,
-  GameWSConnectionDetailsError,
-} from "~/game/client/ws";
+import { GameWS, GameWSConnectionDetailsError } from "~/game/client/ws";
 import { mergeSeatNames } from "~/game/client/spectatorNames";
 import {
   readWebTableLayoutMode,
@@ -26,6 +23,7 @@ import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   replayArrivalSoundTarget,
   replaySoundTarget,
+  tenhouLiveSoundOverride,
   type ReplaySoundTarget,
 } from "~/game/client/replaySound";
 import {
@@ -103,6 +101,7 @@ export async function loader({ params }: LoaderFunctionArgs) {
   return {
     matchId,
     flag: getClientGameFlag(),
+    tenhouRelay: false,
   };
 }
 
@@ -225,7 +224,7 @@ function beaconTelemetry(event: string, meta: Record<string, unknown>): void {
 export default function GameSpectateRoute({
   loaderData,
 }: GameSpectateRouteProps) {
-  const { matchId } = loaderData;
+  const { matchId, tenhouRelay } = loaderData;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   // `?delay=<ms>` — non-negative integer. Defaults to 0 (live).
@@ -291,6 +290,9 @@ export default function GameSpectateRoute({
   const [conn, setConn] = useState<string>("idle");
   const [viewers, setViewers] = useState<ViewerPresence[]>([]);
   const [showViewerList, setShowViewerList] = useState(true);
+  const [tenhouStreamStatus, setTenhouStreamStatus] = useState<
+    "connecting" | "waiting" | "started"
+  >("connecting");
   const lastRelaySeqRef = useRef(-1);
 
   // Refs for stale-closure-safe access inside the WS callback.
@@ -345,9 +347,7 @@ export default function GameSpectateRoute({
           followLive
             ? {
                 onDiscardLand: (_seat, isRiichiDeclaration) =>
-                  playGameSound(
-                    isRiichiDeclaration ? "riichi" : "discard"
-                  ),
+                  playGameSound(isRiichiDeclaration ? "riichi" : "discard"),
                 onDrawLand: () => playGameSound("draw"),
               }
             : undefined
@@ -456,108 +456,113 @@ export default function GameSpectateRoute({
       spectate: true,
       ...(delayMs > 0 ? { delayMs } : {}),
       onMessage: (msg: ServerMessage) => {
-            if (msg.type === "viewer_state") {
-              setViewers(msg.viewers);
-              return;
+        if (msg.type === "viewer_state") {
+          setViewers(msg.viewers);
+          return;
+        }
+        if (msg.type === "snapshot") {
+          rendererRef.current?.snapNextAnimation();
+          pendingSoundTargetRef.current = null;
+          lastRelaySeqRef.current = msg.seq;
+          if (msg.state.seatNames) {
+            setSeatNames((current) =>
+              mergeSeatNames(current, msg.state.seatNames ?? [])
+            );
+          }
+          setBaseline(snapshotToReplayView(msg.state));
+          setEvents([]);
+          setPlayIndex(-1);
+          setLive(true);
+          return;
+        }
+        if (msg.type === "event") {
+          const startSeq = msg.seq - msg.events.length + 1;
+          if (msg.seq <= lastRelaySeqRef.current) {
+            return;
+          }
+          if (msg.events.some((event) => event.type === "hand_start")) {
+            setTenhouStreamStatus("started");
+          } else if (msg.events.some((event) => event.type === "match_start")) {
+            setTenhouStreamStatus((current) =>
+              current === "started" ? current : "waiting"
+            );
+          }
+
+          // Relay feeds carry player names only on `match_start`
+          // (no room_state). Fill any seat not already named by a
+          // more authoritative source.
+          const relayNames = seatNamesFromEvents(msg.events);
+          if (relayNames) {
+            setSeatNames((current) => mergeSeatNames(current, relayNames));
+          }
+
+          // Relay attach/reconnect sends the complete event history as a
+          // seq-0 batch. It is an authoritative state baseline, not new
+          // playback: animating it would rapidly replay the whole match.
+          // The following resync response overlaps this batch, so the seq
+          // guard above also prevents duplicate catch-up events.
+          if (startSeq === 0 && msg.events.length > 1) {
+            rendererRef.current?.snapNextAnimation();
+            pendingSoundTargetRef.current = null;
+            let hydrated = initialView();
+            for (const event of msg.events) {
+              hydrated = applyReplayEvent(hydrated, event);
             }
-            if (msg.type === "snapshot") {
-              rendererRef.current?.snapNextAnimation();
-              pendingSoundTargetRef.current = null;
-              lastRelaySeqRef.current = msg.seq;
-              if (msg.state.seatNames) {
-                setSeatNames((current) =>
-                  mergeSeatNames(current, msg.state.seatNames ?? [])
-                );
-              }
-              setBaseline(snapshotToReplayView(msg.state));
-              setEvents([]);
-              setPlayIndex(-1);
-              setLive(true);
-              return;
-            }
-            if (msg.type === "event") {
-              const startSeq = msg.seq - msg.events.length + 1;
-              if (msg.seq <= lastRelaySeqRef.current) {
-                return;
-              }
+            lastRelaySeqRef.current = msg.seq;
+            setBaseline(hydrated);
+            setEvents([]);
+            setPlayIndex(-1);
+            setLive(true);
+            return;
+          }
 
-              // Relay feeds carry player names only on `match_start`
-              // (no room_state). Fill any seat not already named by a
-              // more authoritative source.
-              const relayNames = seatNamesFromEvents(msg.events);
-              if (relayNames) {
-                setSeatNames((current) =>
-                  mergeSeatNames(current, relayNames)
-                );
-              }
-
-              // Relay attach/reconnect sends the complete event history as a
-              // seq-0 batch. It is an authoritative state baseline, not new
-              // playback: animating it would rapidly replay the whole match.
-              // The following resync response overlaps this batch, so the seq
-              // guard above also prevents duplicate catch-up events.
-              if (startSeq === 0 && msg.events.length > 1) {
-                rendererRef.current?.snapNextAnimation();
-                pendingSoundTargetRef.current = null;
-                let hydrated = initialView();
-                for (const event of msg.events) {
-                  hydrated = applyReplayEvent(hydrated, event);
-                }
-                lastRelaySeqRef.current = msg.seq;
-                setBaseline(hydrated);
-                setEvents([]);
-                setPlayIndex(-1);
-                setLive(true);
-                return;
-              }
-
-              const unseenOffset = Math.max(
-                0,
-                lastRelaySeqRef.current - startSeq + 1
+          const unseenOffset = Math.max(
+            0,
+            lastRelaySeqRef.current - startSeq + 1
+          );
+          const incoming = msg.events.slice(unseenOffset);
+          if (incoming.length === 0) {
+            return;
+          }
+          if (liveRef.current && incoming.length > 1) {
+            rendererRef.current?.snapNextAnimation();
+          }
+          lastRelaySeqRef.current = msg.seq;
+          // Relay matches have no engine snapshot. If no history batch
+          // preceded this event, seed the reducer with its empty baseline.
+          setBaseline((current) => current ?? initialView());
+          setEvents((prev) => {
+            const next = [...prev, ...incoming];
+            if (liveRef.current) {
+              pendingSoundTargetRef.current = replayArrivalSoundTarget(
+                next.length,
+                incoming,
+                pendingSoundTargetRef.current
               );
-              const incoming = msg.events.slice(unseenOffset);
-              if (incoming.length === 0) {
-                return;
-              }
-              if (liveRef.current && incoming.length > 1) {
-                rendererRef.current?.snapNextAnimation();
-              }
-              lastRelaySeqRef.current = msg.seq;
-              // Relay matches have no engine snapshot. If no history batch
-              // preceded this event, seed the reducer with its empty baseline.
-              setBaseline((current) => current ?? initialView());
-              setEvents((prev) => {
-                const next = [...prev, ...incoming];
-                if (liveRef.current) {
-                  pendingSoundTargetRef.current = replayArrivalSoundTarget(
-                    next.length,
-                    incoming,
-                    pendingSoundTargetRef.current
-                  );
-                  // Snap playhead to the last event in the new buffer.
-                  // Use a setTimeout-free direct call: `setPlayIndex`
-                  // is safe inside an updater because React batches
-                  // both updates in the same tick.
-                  setPlayIndex(next.length - 1);
-                }
-                return next;
-              });
-              return;
+              // Snap playhead to the last event in the new buffer.
+              // Use a setTimeout-free direct call: `setPlayIndex`
+              // is safe inside an updater because React batches
+              // both updates in the same tick.
+              setPlayIndex(next.length - 1);
             }
-            if (msg.type === "room_state") {
-              const names: [string, string, string, string] = ["", "", "", ""];
-              for (const s of msg.seats) {
-                const occ = s.occupant;
-                if (occ.kind !== "empty") {
-                  names[s.seat] = occ.displayName;
-                }
-              }
-              setSeatNames((current) => mergeSeatNames(current, names));
-              // Capture the full room state so the renderer can
-              // surface the per-seat `connected` flag (used to
-              // paint the "disconnected" badge on nameplates).
-              setRoomState(msg);
+            return next;
+          });
+          return;
+        }
+        if (msg.type === "room_state") {
+          const names: [string, string, string, string] = ["", "", "", ""];
+          for (const s of msg.seats) {
+            const occ = s.occupant;
+            if (occ.kind !== "empty") {
+              names[s.seat] = occ.displayName;
             }
+          }
+          setSeatNames((current) => mergeSeatNames(current, names));
+          // Capture the full room state so the renderer can
+          // surface the per-seat `connected` flag (used to
+          // paint the "disconnected" badge on nameplates).
+          setRoomState(msg);
+        }
       },
     });
     wsRef.current = ws;
@@ -687,12 +692,23 @@ export default function GameSpectateRoute({
       return;
     }
     try {
+      const tenhouOverride =
+        tenhouRelay && live
+          ? tenhouLiveSoundOverride(events, target.eventIndex)
+          : null;
+      if (tenhouOverride === "suppress") {
+        return;
+      }
+      if (tenhouOverride === "matchStart") {
+        playGameSound("matchStart");
+        return;
+      }
       playSoundForEvent(event, null);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("[game] spectator sound dispatch threw", err);
     }
-  }, [playIndex, events, live]);
+  }, [playIndex, events, live, tenhouRelay]);
 
   useEffect(() => {
     const renderer = rendererRef.current;
@@ -718,9 +734,7 @@ export default function GameSpectateRoute({
       return;
     }
     r.setShowLayoutDebug(overlays.showLayoutDebug);
-    r.setWebTableLayoutMode(
-      overlays.compactLayout ? "compact" : "standard"
-    );
+    r.setWebTableLayoutMode(overlays.compactLayout ? "compact" : "standard");
     r.setShowWaits(overlays.showWaits);
     r.setShowHands(overlays.showHands);
     r.setShowTsumogiri(overlays.showTsumogiri);
@@ -979,6 +993,26 @@ export default function GameSpectateRoute({
         </span>
         <span className="min-w-0 truncate text-xs opacity-50">{conn}</span>
       </div>
+      {tenhouRelay && tenhouStreamStatus === "waiting" && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/40 px-4">
+          <section
+            role="status"
+            aria-live="polite"
+            className="w-[min(26rem,calc(100vw-2rem))] rounded-xl border border-white/25 bg-black/85 px-7 py-6 text-center text-white shadow-2xl"
+          >
+            <h2 className="text-xl font-bold">Waiting for Tenhou</h2>
+            <div className="my-4 h-px w-full bg-white/25" />
+            <p className="text-sm leading-6 text-white/80">
+              Tenhou makes live games available to spectators 5 minutes after
+              the game starts.
+            </p>
+            <p className="mt-2 text-sm leading-6 text-white/65">
+              This viewer will begin automatically when the delayed stream is
+              ready.
+            </p>
+          </section>
+        </div>
+      )}
       <WebTableTopControls
         compactLayout={overlays.compactLayout}
         onCompactLayoutChange={(compactLayout) => {
@@ -1166,10 +1200,7 @@ export default function GameSpectateRoute({
         </button>
       )}
 
-      <ReplayOverlayPanel
-        overlays={overlays}
-        onChange={handleOverlayChange}
-      />
+      <ReplayOverlayPanel overlays={overlays} onChange={handleOverlayChange} />
 
       <div ref={containerRef} className="w-full h-full" />
     </main>

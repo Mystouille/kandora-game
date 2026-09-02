@@ -250,6 +250,21 @@ describe("enumerateCalls — ron", () => {
     const s2 = out.find((o) => o.seat === 2);
     expect(s2?.options.some((o) => o.kind === "ron") ?? false).toBe(false);
   });
+
+  it("offers ron when houtei is the only yaku", () => {
+    const seat2 = tiles("1m1m3p3p2s3s4s5s6s7s5p6p7p");
+    const out = enumerateCalls(
+      craft({
+        hands: [FILLER, FILLER, seat2, FILLER],
+        discarder: 0,
+        tile: "3p",
+        liveWall: [],
+      })
+    );
+
+    const s2 = out.find((o) => o.seat === 2);
+    expect(s2?.options.some((o) => o.kind === "ron")).toBe(true);
+  });
 });
 
 describe("enumerateCalls — preconditions", () => {

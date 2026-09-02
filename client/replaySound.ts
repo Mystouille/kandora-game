@@ -7,6 +7,32 @@ export interface ReplaySoundTarget {
   eventIndex: number;
 }
 
+export type TenhouLiveSoundOverride = "suppress" | "matchStart";
+
+export function tenhouLiveSoundOverride(
+  events: readonly Pick<GameEvent, "type">[],
+  eventIndex: number
+): TenhouLiveSoundOverride | null {
+  const event = events[eventIndex];
+  if (event?.type === "match_start") {
+    return "suppress";
+  }
+  if (event?.type !== "hand_start") {
+    return null;
+  }
+
+  for (let cursor = eventIndex - 1; cursor >= 0; cursor--) {
+    const priorType = events[cursor]?.type;
+    if (priorType === "hand_start") {
+      return null;
+    }
+    if (priorType === "match_start") {
+      return "matchStart";
+    }
+  }
+  return null;
+}
+
 export function replaySoundTarget(
   currentIndex: number,
   nextIndex: number,

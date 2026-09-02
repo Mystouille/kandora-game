@@ -183,6 +183,28 @@ describe("step — haitei / houtei", () => {
     expect(winEv.score.yaku["河底撈魚"]).toBeDefined();
   });
 
+  it("rejects a houtei-only ron while in self-discard furiten", () => {
+    const winner = tiles("11m33p2s3s4s5s6s7s5p6p7p");
+    const state = craftEndOfWallState({
+      hands: [
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        winner,
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+        tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p"),
+      ],
+      turn: 1,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 0, tile: "3p" },
+      liveWall: [],
+    });
+    state.discards[1] = ["3p"];
+
+    const { events } = step(state, { type: "ron", seat: 1 });
+
+    expect(events).toEqual([]);
+  });
+
   it("does NOT award houtei when the live wall still has tiles", () => {
     const winner = tiles("11m22p33s44m55p66s7z");
     const state = craftEndOfWallState({

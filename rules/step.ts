@@ -466,6 +466,8 @@ export function isFuritenForRon(state: MatchState, seat: Seat): boolean {
       melds: state.melds[seat],
       noKuitan: !state.ruleSet.kuitan,
       noAka: isAkaDisabled(state.ruleSet),
+      haiteiOrHoutei:
+        state.phase === "awaiting_draw" && state.liveWall.length === 0,
     });
     if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {
       return true;

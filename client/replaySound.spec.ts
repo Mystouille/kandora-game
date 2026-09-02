@@ -1,5 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { replayArrivalSoundTarget, replaySoundTarget } from "./replaySound";
+import {
+  replayArrivalSoundTarget,
+  replaySoundTarget,
+  tenhouLiveSoundOverride,
+} from "./replaySound";
+
+describe("tenhouLiveSoundOverride", () => {
+  it("moves the gong from roster metadata to the first streamed hand", () => {
+    const events = [
+      { type: "match_start" as const },
+      { type: "hand_start" as const },
+      { type: "draw" as const },
+    ];
+
+    expect(tenhouLiveSoundOverride(events, 0)).toBe("suppress");
+    expect(tenhouLiveSoundOverride(events, 1)).toBe("matchStart");
+    expect(tenhouLiveSoundOverride(events, 2)).toBeNull();
+  });
+
+  it("leaves later hands and hand starts without roster metadata unchanged", () => {
+    const laterHand = [
+      { type: "match_start" as const },
+      { type: "hand_start" as const },
+      { type: "hand_end" as const },
+      { type: "hand_start" as const },
+    ];
+
+    expect(tenhouLiveSoundOverride(laterHand, 3)).toBeNull();
+    expect(tenhouLiveSoundOverride([{ type: "hand_start" }], 0)).toBeNull();
+  });
+});
 
 describe("replaySoundTarget", () => {
   it("arms sound for an explicit forward single-event step", () => {
