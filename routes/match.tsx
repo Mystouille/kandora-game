@@ -21,7 +21,6 @@ import {
 } from "~/game/client/ws";
 import { findTileAction } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
-import { MatchSoundToggle } from "~/game/client/MatchSoundToggle";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
 import { ViewerList } from "~/game/components/ViewerList";
 import {
@@ -1438,9 +1437,7 @@ export default function GameMatchRoute({
               ? "Leave waiting room"
               : "Quit game"
           }
-        >
-          <MatchSoundToggle />
-        </WebTableTopControls>
+        />
         {/* Left-side live-play options menu (semi-collapsible).
             UI only for now; behaviour wiring lands in a
             follow-up. */}

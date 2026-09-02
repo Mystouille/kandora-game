@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { isGameSoundEnabled, setGameSoundEnabled } from "./sound";
 
 interface WebTableTopControlsProps {
   compactLayout: boolean;
@@ -24,25 +25,30 @@ export function WebTableTopControls({
   quitLabel,
   children,
 }: WebTableTopControlsProps): React.JSX.Element {
-  const [parametersOpen, setParametersOpen] = useState(false);
-  const parametersRef = useRef<HTMLDivElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const settingsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!parametersOpen) {
+    setSoundEnabled(isGameSoundEnabled());
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) {
       return;
     }
 
     const handlePointerDown = (event: PointerEvent): void => {
       if (
         event.target instanceof Node &&
-        !parametersRef.current?.contains(event.target)
+        !settingsRef.current?.contains(event.target)
       ) {
-        setParametersOpen(false);
+        setSettingsOpen(false);
       }
     };
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
-        setParametersOpen(false);
+        setSettingsOpen(false);
       }
     };
 
@@ -52,29 +58,29 @@ export function WebTableTopControls({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [parametersOpen]);
+  }, [settingsOpen]);
 
   return (
     <div className="pointer-events-auto absolute right-2 top-2 z-[130] flex items-center gap-2">
       {children}
-      <div ref={parametersRef} className="relative">
+      <div ref={settingsRef} className="relative">
         <button
           type="button"
           onClick={() => {
-            setParametersOpen((open) => !open);
+            setSettingsOpen((open) => !open);
           }}
-          aria-label="Table parameters"
-          aria-expanded={parametersOpen}
-          title="Table parameters"
+          aria-label="Settings"
+          aria-expanded={settingsOpen}
+          title="Settings"
           className={`${WEB_TABLE_TOP_CONTROL_CLASS} w-11`}
         >
           <SettingOutlined />
         </button>
         <div
-          hidden={!parametersOpen}
+          hidden={!settingsOpen}
           className="absolute right-0 top-[calc(100%+0.5rem)] w-52 rounded border border-emerald-700/60 bg-black/90 p-2 text-emerald-100 shadow-2xl"
           role="group"
-          aria-label="Table parameters"
+          aria-label="Settings"
         >
           <button
             type="button"
@@ -95,6 +101,31 @@ export function WebTableTopControls({
               <span
                 className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
                   compactLayout ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </span>
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={soundEnabled}
+            onClick={() => {
+              const next = !soundEnabled;
+              setGameSoundEnabled(next);
+              setSoundEnabled(next);
+            }}
+            className="flex w-full items-center justify-between gap-4 rounded px-3 py-2 text-sm font-medium hover:bg-emerald-900/80"
+          >
+            <span>Sound</span>
+            <span
+              aria-hidden="true"
+              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                soundEnabled ? "bg-emerald-500" : "bg-slate-600"
+              }`}
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                  soundEnabled ? "translate-x-4" : "translate-x-0"
                 }`}
               />
             </span>

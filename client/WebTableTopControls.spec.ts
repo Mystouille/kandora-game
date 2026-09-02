@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { WebTableTopControls } from "./WebTableTopControls";
 
 describe("WebTableTopControls", () => {
-  it("renders table parameters and the shared quit control", () => {
+  it("renders shared settings and the quit control", () => {
     const html = renderToStaticMarkup(
       createElement(WebTableTopControls, {
         compactLayout: false,
@@ -14,10 +14,12 @@ describe("WebTableTopControls", () => {
       })
     );
 
-    expect(html).toContain('aria-label="Table parameters"');
-    expect(html).toContain('role="switch"');
+    expect(html).toContain('aria-label="Settings"');
+    expect(html.match(/role="switch"/g)).toHaveLength(2);
     expect(html).toContain('aria-checked="false"');
     expect(html).toContain("Compact table");
+    expect(html).toContain("Sound");
+    expect(html).toContain('aria-checked="true"');
     expect(html).toContain("left-0.5");
     expect(html).toContain("translate-x-0");
     expect(html).toContain('aria-label="Quit replay"');
