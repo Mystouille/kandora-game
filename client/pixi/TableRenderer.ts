@@ -190,6 +190,23 @@ export function focusedHandTileMetrics(
   };
 }
 
+export function focusedHandLongAxisOffset(
+  layout: TableLayout,
+  presentation: TableRendererPresentation,
+  seat: number,
+  meldCount: number
+): number {
+  if (presentation !== "mobile" || seat !== 0 || meldCount > 0) {
+    return 0;
+  }
+  const metrics = focusedHandTileMetrics(layout, presentation);
+  const fullHandWidth =
+    14 * (metrics.tile.w + metrics.tile.gap) -
+    metrics.tile.gap +
+    TSUMO_GAP;
+  return Math.max(0, (layout.hands[0].w - fullHandWidth) / 2);
+}
+
 export function mobileDoraIndicatorSlots(
   indicators: readonly string[]
 ): Array<string | null> {
@@ -572,6 +589,8 @@ const RESULT_SCORE_BOX_NAME_GAP = 8;
 const RESULT_YAKU_REVEAL_INTERVAL_MS = 750;
 const RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS = 2000;
 const RESULT_SCORE_REVEAL_WITHOUT_URA_MS = 750;
+const CALL_EFFECT_GAP_FRACTION = 0.42;
+const CALL_EFFECT_Z_INDEX = 900;
 
 export function wallZIndex(seat: number): number {
   return seat === 0 ? 2 : seat === 2 ? 0 : 1;
@@ -651,6 +670,43 @@ export function playerIdentityCenter(
     center.x += Math.max(0, gap) / 2;
   }
   return center;
+}
+
+export function callEffectAnchor(
+  layout: Pick<TableLayout, "center" | "hands">,
+  seat: Seat
+): { x: number; y: number } {
+  const center = layout.center;
+  const hand = layout.hands[seat];
+  const centerX = center.x + center.w / 2;
+  const centerY = center.y + center.h / 2;
+
+  if (seat === 0) {
+    const centerEdge = center.y + center.h;
+    return {
+      x: centerX,
+      y: centerEdge + (hand.y - centerEdge) * CALL_EFFECT_GAP_FRACTION,
+    };
+  }
+  if (seat === 1) {
+    const centerEdge = center.x + center.w;
+    return {
+      x: centerEdge + (hand.x - centerEdge) * CALL_EFFECT_GAP_FRACTION,
+      y: centerY,
+    };
+  }
+  if (seat === 2) {
+    const handEdge = hand.y + hand.h;
+    return {
+      x: centerX,
+      y: center.y - (center.y - handEdge) * CALL_EFFECT_GAP_FRACTION,
+    };
+  }
+  const handEdge = hand.x + hand.w;
+  return {
+    x: center.x - (center.x - handEdge) * CALL_EFFECT_GAP_FRACTION,
+    y: centerY,
+  };
 }
 
 /** Stylized wind kanji indexed by `(seat - dealer + 4) % 4`:
@@ -1369,7 +1425,12 @@ export class TableRenderer {
   /** Action thunk recorded by the seat-0 pointerdown handler. Invoked
    * for a quick click or an upward-discard release, preserving the
    * original discard/riichi closure context for the physical tile. */
-  private pendingHandClickCallback: ((rawIdx: number) => void) | null = null;
+  private pendingHandClickCallback:
+    | ((
+        rawIdx: number,
+        draggedSourceCenter: { x: number; y: number } | null
+      ) => void)
+    | null = null;
   /** Cached previous-frame view, used only by the focused-hand
    * sorter to detect hand boundaries (a `totalDiscards` reset).
    * Kept separate from `lastView` because the discard animator's
@@ -1750,7 +1811,10 @@ export class TableRenderer {
         // surrounding closure context).
         const cb = this.pendingHandClickCallback;
         if (cb) {
-          cb(result.rawIdx);
+          cb(
+            result.rawIdx,
+            result.kind === "discard" ? result.draggedTileCenter : null
+          );
         }
       }
       this.pendingHandClickCallback = null;
@@ -2870,6 +2934,7 @@ export class TableRenderer {
       // Wall stacks + dora indicators around the centre.
       this.renderWalls(view, layout);
     }
+    this.renderCallEffect(layout);
 
     // HUD — only meaningful on live matches; suppressed for replays
     // (no WS, no seq, no meaningful conn status). Count every draw,
@@ -4249,6 +4314,36 @@ export class TableRenderer {
     this.renderResultScoreBoxes(view, r, inner, overlay, scoreDeltaRevealed);
 
     return { x: inner.x, y: inner.y, w: inner.w, h: inner.h };
+  }
+
+  private renderCallEffect(
+    layout: Pick<TableLayout, "center" | "hands">
+  ): void {
+    if (!this.root) {
+      return;
+    }
+    const effect = this.meldAnimator.getCallEffect();
+    if (!effect) {
+      return;
+    }
+    const anchor = callEffectAnchor(layout, effect.seat as Seat);
+    const text = new Text({
+      text: effect.label,
+      style: new TextStyle({
+        fontFamily: KANJI_FONT_FAMILY,
+        fontSize: 54,
+        fontWeight: "700",
+        fill: 0xffffff,
+        stroke: { color: 0x000000, width: 8 },
+      }),
+    });
+    text.anchor.set(0.5);
+    text.position.set(anchor.x, anchor.y);
+    text.alpha = effect.alpha;
+    text.scale.set(effect.scale);
+    text.zIndex = CALL_EFFECT_Z_INDEX;
+    this.root.sortableChildren = true;
+    this.root.addChild(text);
   }
 
   /**
@@ -6161,7 +6256,10 @@ export class TableRenderer {
             // if the gesture stays under the drag-promotion
             // threshold. If it promotes to a drag, the thunk
             // is discarded and the sorter handles the drop.
-            const fireClick = (discardRawIdx: number): void => {
+            const fireClick = (
+              discardRawIdx: number,
+              draggedSourceCenter: { x: number; y: number } | null
+            ): void => {
               if (inRiichiMode) {
                 if (riichiLegal && this.onActionClick) {
                   this.riichiMode = false;
@@ -6196,7 +6294,8 @@ export class TableRenderer {
                 this.animator.setNextDiscardSourceHint(
                   seat,
                   localTile,
-                  currentOrd
+                  currentOrd,
+                  draggedSourceCenter
                 );
                 this.onTileClick({
                   seat,
@@ -6290,20 +6389,21 @@ export class TableRenderer {
     // the run is centred along the long axis and aligned to the
     // strip's *inner* edge (facing the centre of the table).
     const handRect = layout.hands[seat];
-    const longAxisLen = seat % 2 === 0 ? handRect.w : handRect.h;
     const sideHandScreenWidth = sideHandRevealed
       ? SIDE_TILE_W
       : layout.tileSide.w;
     // The hand is left-aligned in the band (player's POV): the
     // leftmost tile sits at the band's player-left edge. The meld
     // strip is right-aligned at the band's player-right edge (see
-    // `renderMelds`).
-    const longAxisOffset =
-      this.presentation === "mobile" &&
-      seat === 0 &&
-      presentation.displayMelds.length === 0
-        ? Math.max(0, (longAxisLen - handWidth) / 2)
-        : 0;
+    // `renderMelds`). An unmelded mobile hand reserves its full
+    // 14-tile footprint so drawing and discarding only changes the
+    // right edge; the closed run never shifts horizontally.
+    const longAxisOffset = focusedHandLongAxisOffset(
+      layout,
+      this.presentation,
+      seat,
+      presentation.displayMelds.length
+    );
     switch (seat) {
       case 0: {
         // bottom — +x to the right, +y downward (no rotation).
@@ -6609,18 +6709,21 @@ export class TableRenderer {
         posX = nudgedX + (finalX - nudgedX) * progress;
         posY = nudgedY + (finalY - nudgedY) * progress;
       } else {
-        const slotIdx = seatDiscardAnim.sourceSlot?.handIndex ?? 0;
-        const source = this.computeHandSlotInDiscardLocal(
-          handContainer,
-          discardContainer,
-          seat,
-          slotIdx,
-          layout,
-          isFreshlyDrawn,
-          hand.length,
-          isSideHand,
-          sideHandRevealed
-        );
+        const source = seatDiscardAnim.draggedSourceCenter
+          ? discardContainer.toLocal(
+              handContainer.toGlobal(seatDiscardAnim.draggedSourceCenter)
+            )
+          : this.computeHandSlotInDiscardLocal(
+              handContainer,
+              discardContainer,
+              seat,
+              seatDiscardAnim.sourceSlot?.handIndex ?? 0,
+              layout,
+              isFreshlyDrawn,
+              hand.length,
+              isSideHand,
+              sideHandRevealed
+            );
         posX = source.x + (nudgedX - source.x) * progress;
         posY = source.y + (nudgedY - source.y) * progress;
       }

@@ -649,7 +649,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       pendingDiscard: null,
       lastHandResult: null,
       matchEnded: null,
-      freshlyDrawnSeat: null,
+      freshlyDrawnSeat: snap.freshlyDrawnSeat ?? null,
       freshlyDiscardedSeat: null,
       // Furiten state: the snapshot carries the recipient's own
       // status truthfully and `false` for the other three seats

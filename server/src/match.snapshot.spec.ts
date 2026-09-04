@@ -94,6 +94,51 @@ describe("snapshot hydration", () => {
     expect(view.lastSeq).toBe(parsed.data.seq);
   });
 
+  it("preserves fresh draws without marking chi or pon discard turns", async () => {
+    const m = makeMatch(1);
+    m.attachHuman(0, () => undefined);
+    await m.start();
+    const state = (
+      m as unknown as {
+        state: {
+          phase: string;
+          turn: 0 | 1 | 2 | 3;
+          lastDrawn: Array<string | null>;
+        };
+      }
+    ).state;
+    state.phase = "awaiting_discard";
+    state.turn = 0;
+    state.lastDrawn = ["9s", null, null, null];
+
+    const drawnSnapshot = ServerMessageSchema.parse(
+      m.buildSnapshotForSeat(0)
+    );
+    expect(drawnSnapshot.type).toBe("snapshot");
+    if (drawnSnapshot.type !== "snapshot") {
+      return;
+    }
+    expect(drawnSnapshot.state.freshlyDrawnSeat).toBe(0);
+    useMatchStore
+      .getState()
+      .hydrateSnapshot(drawnSnapshot.state, drawnSnapshot.seq);
+    expect(useMatchStore.getState().freshlyDrawnSeat).toBe(0);
+
+    state.lastDrawn[0] = null;
+    const callTurnSnapshot = ServerMessageSchema.parse(
+      m.buildSnapshotForSeat(0)
+    );
+    expect(callTurnSnapshot.type).toBe("snapshot");
+    if (callTurnSnapshot.type !== "snapshot") {
+      return;
+    }
+    expect(callTurnSnapshot.state.freshlyDrawnSeat).toBeNull();
+    useMatchStore
+      .getState()
+      .hydrateSnapshot(callTurnSnapshot.state, callTurnSnapshot.seq);
+    expect(useMatchStore.getState().freshlyDrawnSeat).toBeNull();
+  });
+
   it("hydrateSnapshot clears stale lastHandResult and matchEnded", () => {
     // Pre-populate the store as if a previous hand had ended.
     useMatchStore.setState({

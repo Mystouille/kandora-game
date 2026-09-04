@@ -61,6 +61,19 @@ function isPastUpwardDiscardThreshold(drag: DragState): boolean {
   );
 }
 
+function draggedTileCenter(drag: DragState): { x: number; y: number } {
+  return {
+    x:
+      drag.downTileLeftX +
+      (drag.currentLocalX - drag.downLocalX) +
+      drag.tileLongAxisLen / 2,
+    y:
+      drag.downTileTopY +
+      (drag.currentLocalY - drag.downLocalY) +
+      drag.tileHeight / 2,
+  };
+}
+
 /** Linear → ease-out cubic for slide animations. */
 export function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
@@ -71,7 +84,11 @@ export function easeOutCubic(t: number): number {
 export type PointerUpResult =
   | { kind: "click"; rawIdx: number }
   | { kind: "drop"; rawIdx: number }
-  | { kind: "discard"; rawIdx: number }
+  | {
+      kind: "discard";
+      rawIdx: number;
+      draggedTileCenter: { x: number; y: number };
+    }
   | { kind: "none" };
 
 /** Snapshot of a tile's last-rendered x and (optionally) an
@@ -233,16 +250,7 @@ export class HandSorter {
     if (this.drag === null || !this.drag.promoted) {
       return null;
     }
-    return {
-      x:
-        this.drag.downTileLeftX +
-        (this.drag.currentLocalX - this.drag.downLocalX) +
-        this.drag.tileLongAxisLen / 2,
-      y:
-        this.drag.downTileTopY +
-        (this.drag.currentLocalY - this.drag.downLocalY) +
-        this.drag.tileHeight / 2,
-    };
+    return draggedTileCenter(this.drag);
   }
 
   /** Hide the released large hand tile until the discard event mutates hand. */
@@ -779,7 +787,11 @@ export class HandSorter {
     }
     if (isPastUpwardDiscardThreshold(drag)) {
       this.releasedDiscardRawIdx = drag.rawIdx;
-      return { kind: "discard", rawIdx: drag.rawIdx };
+      return {
+        kind: "discard",
+        rawIdx: drag.rawIdx,
+        draggedTileCenter: draggedTileCenter(drag),
+      };
     }
     if (drag.initialOrder !== null && drag.previewOrder !== null) {
       const initialSlot = drag.initialOrder.indexOf(drag.rawIdx);

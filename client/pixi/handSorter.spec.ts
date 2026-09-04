@@ -105,7 +105,11 @@ describe("HandSorter two-dimensional drag", () => {
       { rawIndices: [0, 1, 2], freshGap: false }
     );
 
-    expect(sorter.pointerUp()).toEqual({ kind: "discard", rawIdx: 1 });
+    expect(sorter.pointerUp()).toEqual({
+      kind: "discard",
+      rawIdx: 1,
+      draggedTileCenter: { x: 260, y: -151 },
+    });
     expect(sorter.getDraggedTileCenter()).toBeNull();
     expect(sorter.isSortFlagOn()).toBe(true);
     expect(sortChanges).toEqual([]);
@@ -118,7 +122,11 @@ describe("HandSorter two-dimensional drag", () => {
 
     sorter.pointerMove(260, 99, [2, 0, 1]);
     expect(sorter.maybeSwap([50, 150, 250])).toBe(false);
-    expect(sorter.pointerUp()).toEqual({ kind: "discard", rawIdx: 1 });
+    expect(sorter.pointerUp()).toEqual({
+      kind: "discard",
+      rawIdx: 1,
+      draggedTileCenter: { x: 260, y: -151 },
+    });
     expect(sorter.isSortFlagOn()).toBe(false);
     expect(sorter.getDisplayOrder(["1m", "2m", "3m"], false, [0, 1, 2])).toEqual(
       { rawIndices: [2, 0, 1], freshGap: false }
@@ -131,7 +139,11 @@ describe("HandSorter two-dimensional drag", () => {
     beginDrag(sorter);
     sorter.pointerMove(230, 99, [0, 1, 2]);
 
-    expect(sorter.pointerUp()).toEqual({ kind: "discard", rawIdx: 1 });
+    expect(sorter.pointerUp()).toEqual({
+      kind: "discard",
+      rawIdx: 1,
+      draggedTileCenter: { x: 230, y: -151 },
+    });
     expect(sorter.isReleasedDragDiscard(1)).toBe(true);
     sorter.reconcile(["1m", "2m", "3m"]);
     expect(sorter.isReleasedDragDiscard(1)).toBe(true);
@@ -177,6 +189,7 @@ describe("HandSorter two-dimensional drag", () => {
     expect(beyondThreshold.pointerUp()).toEqual({
       kind: "discard",
       rawIdx: 1,
+      draggedTileCenter: { x: 150, y: -151 },
     });
     expect(beyondThreshold.isDraggedPastDiscardThreshold(1)).toBe(false);
 

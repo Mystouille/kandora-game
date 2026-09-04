@@ -3,6 +3,14 @@ import type { Meld } from "~/game/protocol/messages";
 
 export const MELD_SLIDE_DURATION_MS = 350;
 export const MELD_SLIDE_TILE_WIDTHS = 3;
+export const CALL_EFFECT_DURATION_MS = 750;
+
+export interface CallEffectFrame {
+  seat: number;
+  label: "Chii" | "Pon" | "Kan";
+  alpha: number;
+  scale: number;
+}
 
 interface MeldAnimatorOptions {
   now?: () => number;
@@ -13,6 +21,12 @@ interface MeldAnimation {
   meldIndex: number;
   startMs: number;
   kind: "meld" | "shouminkan";
+}
+
+interface CallEffectAnimation {
+  seat: number;
+  label: CallEffectFrame["label"];
+  startMs: number;
 }
 
 function animationKey(seat: number, meldIndex: number): string {
@@ -62,6 +76,29 @@ function easeOutCubic(progress: number): number {
   return 1 - Math.pow(1 - progress, 3);
 }
 
+function callEffectLabel(meld: Meld): CallEffectFrame["label"] {
+  if (meld.type === "chi") {
+    return "Chii";
+  }
+  if (meld.type === "pon") {
+    return "Pon";
+  }
+  return "Kan";
+}
+
+export function callEffectPresentation(progress: number): {
+  alpha: number;
+  scale: number;
+} {
+  const clamped = Math.max(0, Math.min(1, progress));
+  const fadeIn = Math.min(1, clamped / 0.15);
+  const fadeOut = Math.min(1, (1 - clamped) / 0.35);
+  return {
+    alpha: Math.min(fadeIn, fadeOut),
+    scale: 0.96 + 0.08 * easeOutCubic(clamped),
+  };
+}
+
 export function rotateMeldLocalPoint(
   localX: number,
   localY: number,
@@ -85,6 +122,7 @@ export class MeldAnimator {
   private readonly now: () => number;
   private previousMelds: Meld[][] | null = null;
   private readonly animations = new Map<string, MeldAnimation>();
+  private callEffect: CallEffectAnimation | null = null;
   private enabled = true;
   private snapNextFlag = false;
 
@@ -96,17 +134,20 @@ export class MeldAnimator {
     this.enabled = enabled;
     if (!enabled) {
       this.animations.clear();
+      this.callEffect = null;
     }
   }
 
   snapNext(): void {
     this.snapNextFlag = true;
     this.animations.clear();
+    this.callEffect = null;
   }
 
   reset(): void {
     this.previousMelds = null;
     this.animations.clear();
+    this.callEffect = null;
     this.snapNextFlag = false;
   }
 
@@ -120,6 +161,7 @@ export class MeldAnimator {
     if (this.snapNextFlag) {
       this.snapNextFlag = false;
       this.animations.clear();
+      this.callEffect = null;
       return;
     }
     if (!previousMelds || !this.enabled) {
@@ -185,6 +227,7 @@ export class MeldAnimator {
     if (ambiguousChange || candidates.length !== 1) {
       if (ambiguousChange || candidates.length > 1) {
         this.animations.clear();
+        this.callEffect = null;
       }
       return;
     }
@@ -194,6 +237,13 @@ export class MeldAnimator {
       ...candidate,
       startMs: now,
     });
+    this.callEffect = {
+      seat: candidate.seat,
+      label: callEffectLabel(
+        currentMelds[candidate.seat][candidate.meldIndex]
+      ),
+      startMs: now,
+    };
   }
 
   getMeldOffsetX(seat: number, meldIndex: number, distance: number): number {
@@ -206,6 +256,21 @@ export class MeldAnimator {
     distance: number
   ): number {
     return this.getOffset(seat, meldIndex, distance, "shouminkan");
+  }
+
+  getCallEffect(): CallEffectFrame | null {
+    const now = this.now();
+    this.dropCompleted(now);
+    if (!this.callEffect) {
+      return null;
+    }
+    const progress =
+      (now - this.callEffect.startMs) / CALL_EFFECT_DURATION_MS;
+    return {
+      seat: this.callEffect.seat,
+      label: this.callEffect.label,
+      ...callEffectPresentation(progress),
+    };
   }
 
   private getOffset(
@@ -229,7 +294,7 @@ export class MeldAnimator {
 
   hasActive(): boolean {
     this.dropCompleted(this.now());
-    return this.animations.size > 0;
+    return this.animations.size > 0 || this.callEffect !== null;
   }
 
   private dropCompleted(now: number): void {
@@ -237,6 +302,12 @@ export class MeldAnimator {
       if (now - animation.startMs >= MELD_SLIDE_DURATION_MS) {
         this.animations.delete(key);
       }
+    }
+    if (
+      this.callEffect &&
+      now - this.callEffect.startMs >= CALL_EFFECT_DURATION_MS
+    ) {
+      this.callEffect = null;
     }
   }
 }

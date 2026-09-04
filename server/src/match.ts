@@ -3523,6 +3523,11 @@ export class MatchProcess {
         drawsTaken: 70 - this.state.liveWall.length,
         doraIndicators: [...this.state.doraIndicators],
         turn: this.state.turn,
+        freshlyDrawnSeat:
+          this.state.phase === "awaiting_discard" &&
+          this.state.lastDrawn[this.state.turn] !== null
+            ? this.state.turn
+            : null,
         dealer: this.state.dealer,
         roundWind: this.state.roundWind,
         roundNumber: this.state.roundNumber,
@@ -3618,6 +3623,11 @@ export class MatchProcess {
         drawsTaken: 70 - this.state.liveWall.length,
         doraIndicators: [...this.state.doraIndicators],
         turn: this.state.turn,
+        freshlyDrawnSeat:
+          this.state.phase === "awaiting_discard" &&
+          this.state.lastDrawn[this.state.turn] !== null
+            ? this.state.turn
+            : null,
         dealer: this.state.dealer,
         roundWind: this.state.roundWind,
         roundNumber: this.state.roundNumber,

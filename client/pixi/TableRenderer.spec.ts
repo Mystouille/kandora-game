@@ -8,6 +8,7 @@ import {
   actionButtonStyle,
   ankanTilesForDisplay,
   buildResultYakuEntries,
+  callEffectAnchor,
   canApplyFocusedHandHover,
   canInteractWithFocusedHand,
   centerCounterCells,
@@ -18,6 +19,7 @@ import {
   CENTER_DORA_INDICATOR_GAP,
   darkenTileTint,
   discardContainerZIndex,
+  focusedHandLongAxisOffset,
   focusedHandTileMetrics,
   focusedHandOrderPolicy,
   formatTableScore,
@@ -178,6 +180,36 @@ describe("activePlayerIndicatorSeat", () => {
   });
 });
 
+describe("call effect placement", () => {
+  it.each([
+    ["standard", currentTableLayout],
+    ["compact", compactWebTableLayout],
+    ["mobile", mobileTableLayout],
+  ] as const)("places every caller between the center and hand in %s", (_, config) => {
+    const layout = tableLayoutFromConfig(config);
+    const bottom = callEffectAnchor(layout, 0);
+    const right = callEffectAnchor(layout, 1);
+    const top = callEffectAnchor(layout, 2);
+    const left = callEffectAnchor(layout, 3);
+
+    expect(bottom.x).toBe(layout.center.x + layout.center.w / 2);
+    expect(bottom.y).toBeGreaterThan(layout.center.y + layout.center.h);
+    expect(bottom.y).toBeLessThan(layout.hands[0].y);
+
+    expect(right.x).toBeGreaterThan(layout.center.x + layout.center.w);
+    expect(right.x).toBeLessThan(layout.hands[1].x);
+    expect(right.y).toBe(layout.center.y + layout.center.h / 2);
+
+    expect(top.x).toBe(layout.center.x + layout.center.w / 2);
+    expect(top.y).toBeGreaterThan(layout.hands[2].y + layout.hands[2].h);
+    expect(top.y).toBeLessThan(layout.center.y);
+
+    expect(left.x).toBeGreaterThan(layout.hands[3].x + layout.hands[3].w);
+    expect(left.x).toBeLessThan(layout.center.x);
+    expect(left.y).toBe(layout.center.y + layout.center.h / 2);
+  });
+});
+
 describe("scoreCartridgeTextLayout", () => {
   it("keeps the seat indicator closer to the player-relative left edge", () => {
     const chipWidth = 120;
@@ -251,6 +283,20 @@ describe("mobile table presentation", () => {
     expect(metrics.spriteH).toBeCloseTo(115);
     expect(metrics.spriteH).toBeCloseTo(layout.hands[0].h);
     expect(metrics.tile.w * 14 + 8).toBeLessThan(layout.hands[0].w);
+  });
+
+  it("keeps the focused closed hand fixed on the left across draws", () => {
+    const metrics = focusedHandTileMetrics(layout, "mobile");
+    const offset = focusedHandLongAxisOffset(layout, "mobile", 0, 0);
+    const fullHandWidth = metrics.tile.w * 14 + 8;
+    const closedHandWidth = metrics.tile.w * 13;
+
+    expect(offset).toBeCloseTo((layout.hands[0].w - fullHandWidth) / 2);
+    expect(offset).toBeLessThan(
+      (layout.hands[0].w - closedHandWidth) / 2
+    );
+    expect(focusedHandLongAxisOffset(layout, "standard", 0, 0)).toBe(0);
+    expect(focusedHandLongAxisOffset(layout, "mobile", 0, 1)).toBe(0);
   });
 
   it("shows five dead-wall indicator tops with unrevealed backs", () => {

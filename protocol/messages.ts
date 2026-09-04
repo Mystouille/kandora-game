@@ -548,6 +548,10 @@ export const SnapshotStateSchema = z.object({
   drawsTaken: z.number().int().nonnegative().optional(),
   doraIndicators: z.array(TileSchema),
   turn: SeatSchema,
+  /** Seat whose rightmost concealed tile is a fresh draw. Null after
+   * chi/pon, even though that caller is also awaiting a discard.
+   * Optional for compatibility with older game servers. */
+  freshlyDrawnSeat: SeatSchema.nullable().optional(),
   dealer: SeatSchema,
   roundWind: z.enum(["E", "S", "W", "N"]),
   roundNumber: z.number().int().positive(),

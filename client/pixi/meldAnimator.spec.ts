@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import type { Meld } from "~/game/protocol/messages";
 import {
+  CALL_EFFECT_DURATION_MS,
   MELD_SLIDE_DURATION_MS,
   MeldAnimator,
+  callEffectPresentation,
   rotateMeldLocalPoint,
 } from "./meldAnimator";
 
@@ -85,7 +87,50 @@ describe("MeldAnimator", () => {
     expect(animator.getMeldOffsetX(1, 0, 120)).toBeLessThan(0);
     now += MELD_SLIDE_DURATION_MS / 2;
     expect(animator.getMeldOffsetX(1, 0, 120)).toBe(0);
+    expect(animator.hasActive()).toBe(true);
+    now += CALL_EFFECT_DURATION_MS - MELD_SLIDE_DURATION_MS;
     expect(animator.hasActive()).toBe(false);
+  });
+
+  it.each([
+    [CHI, "Chii"],
+    [PON, "Pon"],
+    [DAIMINKAN, "Kan"],
+    [ANKAN, "Kan"],
+  ] as const)("exposes a $type declaration cue", (meld, label) => {
+    let now = 0;
+    const animator = new MeldAnimator({ now: () => now });
+    animator.beginFrame(view([[], [], [], []]));
+    animator.beginFrame(view([[], [], [meld], []]));
+
+    expect(animator.getCallEffect()).toEqual({
+      seat: 2,
+      label,
+      alpha: 0,
+      scale: 0.96,
+    });
+    now += CALL_EFFECT_DURATION_MS / 2;
+    expect(animator.getCallEffect()).toMatchObject({
+      seat: 2,
+      label,
+      alpha: 1,
+    });
+    expect(animator.getCallEffect()?.scale).toBeGreaterThan(1);
+    now += CALL_EFFECT_DURATION_MS / 2;
+    expect(animator.getCallEffect()).toBeNull();
+  });
+
+  it("fades at both ends while enlarging faintly", () => {
+    const start = callEffectPresentation(0);
+    const middle = callEffectPresentation(0.5);
+    const end = callEffectPresentation(1);
+
+    expect(start.alpha).toBe(0);
+    expect(middle.alpha).toBe(1);
+    expect(end.alpha).toBe(0);
+    expect(start.scale).toBeLessThan(middle.scale);
+    expect(middle.scale).toBeLessThan(end.scale);
+    expect(end.scale - start.scale).toBeCloseTo(0.08);
   });
 
   it.each([CHI, PON, DAIMINKAN, ANKAN])(
@@ -172,6 +217,17 @@ describe("MeldAnimator", () => {
 
     animator.beginFrame(view([[PON, CHI], [PON], [], []]));
     expect(animator.hasActive()).toBe(false);
+    expect(animator.getCallEffect()).toBeNull();
+  });
+
+  it("clears an in-flight cue when the view jumps across multiple calls", () => {
+    const animator = new MeldAnimator({ now: () => 0 });
+    animator.beginFrame(view([[], [], [], []]));
+    animator.beginFrame(view([[PON], [], [], []]));
+    expect(animator.getCallEffect()?.label).toBe("Pon");
+
+    animator.beginFrame(view([[PON, CHI], [PON], [], []]));
+    expect(animator.getCallEffect()).toBeNull();
   });
 
   it("snapNext suppresses only the upcoming call transition", () => {
