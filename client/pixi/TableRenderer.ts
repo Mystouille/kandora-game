@@ -52,6 +52,11 @@ import { HandSorter, naturalOrderRawIndices } from "./handSorter";
 import { ACTIVE_TILE_DESIGN } from "./tiles/activeTileDesign";
 import { ACTIVE_TABLE_LAYOUT } from "./layouts/activeTableLayout";
 import {
+  MOBILE_DISCARD_PANEL_PADDING,
+  mobileDiscardLayoutOptions,
+  mobileTableLayout,
+} from "./layouts/mobileTableLayout";
+import {
   webDiscardLayoutOptions,
   webTableLayoutConfig,
   type WebTableLayoutMode,
@@ -60,11 +65,13 @@ import type { TileDesign } from "./tiles/tileDesign";
 import { TileTextureStore } from "./tiles/tileTextureStore";
 import { TileSpriteFactory } from "./tiles/tileSpriteFactory";
 import {
+  discardCellSize,
   layoutDiscards,
   layoutSideHand,
   layoutTopHand,
   meldTileDims,
   potentialDiscardBounds,
+  type DiscardLayoutOptions,
   type TilePlacement,
 } from "./tileAreaLayout";
 import { localRectToTable, seatTransform } from "./seatTransform";
@@ -157,7 +164,6 @@ const DISCARD_ROW_OVERLAP_HORIZ = 14.5;
  * tile and the sorted 13-tile run. 0.8% of the 1000 px design
  * width. */
 const TSUMO_GAP = 8;
-const MOBILE_FOCUSED_TILE_MAX_H = 115;
 export const MOBILE_DORA_INDICATOR_GAP = 0;
 
 interface FocusedHandTileMetrics {
@@ -180,7 +186,7 @@ export function focusedHandTileMetrics(
 
   const widthForFourteenTiles = (layout.hands[0].w - TSUMO_GAP) / 14;
   const widthAtHeightCap =
-    MOBILE_FOCUSED_TILE_MAX_H * (BIG_TILE_SRC.w / BIG_TILE_SRC.h);
+    layout.hands[0].h * (BIG_TILE_SRC.w / BIG_TILE_SRC.h);
   const spriteW = Math.min(widthForFourteenTiles, widthAtHeightCap);
   const spriteH = spriteW * (BIG_TILE_SRC.h / BIG_TILE_SRC.w);
   return {
@@ -215,6 +221,7 @@ export function mobileDoraIndicatorSlots(
 
 export interface MobileDoraRowGeometry {
   x: number;
+  y: number;
   width: number;
   tileW: number;
   tileH: number;
@@ -240,6 +247,7 @@ export function mobileDoraRowGeometry(
   const tileW = slotCount > 0 ? width / slotCount : 0;
   return {
     x,
+    y: inner.y,
     width,
     tileW,
     tileH: tileW * (SMALL_TILE_H / SMALL_TILE_W),
@@ -322,9 +330,10 @@ interface RiichiStickMetrics {
 }
 
 const WEB_RIICHI_STICK_SCALE = 1.35;
+const DEFAULT_MOBILE_LAYOUT = tableLayoutFromConfig(mobileTableLayout);
 
 export const WEB_RIICHI_STICK: RiichiStickMetrics = {
-  width: 90 * WEB_RIICHI_STICK_SCALE,
+  width: discardCellSize(ACTIVE_TILE_DESIGN, 0).w * 3,
   height: 8 * WEB_RIICHI_STICK_SCALE,
   gap: 10 * WEB_RIICHI_STICK_SCALE,
   dotRadius: 2.5 * WEB_RIICHI_STICK_SCALE,
@@ -332,7 +341,15 @@ export const WEB_RIICHI_STICK: RiichiStickMetrics = {
 };
 
 export const MOBILE_RIICHI_STICK: RiichiStickMetrics = {
-  width: 120,
+  width:
+    discardCellSize(
+      ACTIVE_TILE_DESIGN,
+      0,
+      mobileDiscardLayoutOptions(
+        ACTIVE_TILE_DESIGN,
+        DEFAULT_MOBILE_LAYOUT
+      )
+    ).w * 3,
   height: 12,
   gap: 1,
   dotRadius: 3.5,
@@ -340,11 +357,16 @@ export const MOBILE_RIICHI_STICK: RiichiStickMetrics = {
 };
 
 export function riichiStickMetrics(
-  presentation: TableRendererPresentation
+  presentation: TableRendererPresentation,
+  design: TileDesign,
+  options?: DiscardLayoutOptions
 ): RiichiStickMetrics {
-  return presentation === "mobile"
-    ? MOBILE_RIICHI_STICK
-    : WEB_RIICHI_STICK;
+  const profile =
+    presentation === "mobile" ? MOBILE_RIICHI_STICK : WEB_RIICHI_STICK;
+  return {
+    ...profile,
+    width: discardCellSize(design, 0, options).w * 3,
+  };
 }
 
 export interface RiichiStickPlacement {
@@ -357,9 +379,10 @@ export interface RiichiStickPlacement {
 export function mobileRiichiStickPlacement(
   discardPanel: Rect,
   center: Rect,
-  seat: Seat
+  seat: Seat,
+  metrics: RiichiStickMetrics
 ): RiichiStickPlacement {
-  const { width, height, gap } = MOBILE_RIICHI_STICK;
+  const { width, height, gap } = metrics;
   const centerX = center.x + center.w / 2;
   const centerY = center.y + center.h / 2;
   switch (seat) {
@@ -453,18 +476,18 @@ const STANDARD_ACTION_BUTTON_STYLE: ActionButtonStyle = {
 };
 
 const MOBILE_ACTION_BUTTON_STYLE: ActionButtonStyle = {
-  height: 108,
+  height: 96,
   gap: 10,
   rightInset: 12,
   bottomOffset: 240,
   optionGap: 10,
   optionRowGap: 12,
-  minActionWidth: 156,
-  minGroupWidth: 168,
-  minRiichiWidth: 168,
-  horizontalPadding: 28,
-  optionPadding: 16,
-  optionTileInset: 14,
+  minActionWidth: 165,
+  minGroupWidth: 180,
+  minRiichiWidth: 165,
+  horizontalPadding: 33,
+  optionPadding: 18,
+  optionTileInset: 18,
   radius: 8,
   fillAlpha: 0.72,
   optionFillAlpha: 0.82,
@@ -477,6 +500,105 @@ export function actionButtonStyle(
   return presentation === "mobile"
     ? MOBILE_ACTION_BUTTON_STYLE
     : STANDARD_ACTION_BUTTON_STYLE;
+}
+
+export interface ActionButtonPlacement extends Rect {
+  row: number;
+}
+
+export function layoutActionButtonRows(
+  widths: readonly number[],
+  leftEdge: number,
+  rightEdge: number,
+  bottomEdge: number,
+  height: number,
+  gap: number,
+  rowGap: number
+): { placements: ActionButtonPlacement[]; rowCount: number } {
+  if (widths.length === 0) {
+    return { placements: [], rowCount: 0 };
+  }
+  const placements = new Array<ActionButtonPlacement>(widths.length);
+  let row = 0;
+  let cursor = rightEdge;
+  for (let index = widths.length - 1; index >= 0; index -= 1) {
+    const width = widths[index];
+    if (cursor < rightEdge && cursor - width < leftEdge) {
+      row += 1;
+      cursor = rightEdge;
+    }
+    const x = Math.max(leftEdge, cursor - width);
+    placements[index] = {
+      x,
+      y: bottomEdge - height - row * (height + rowGap),
+      w: width,
+      h: height,
+      row,
+    };
+    cursor = x - gap;
+  }
+  return { placements, rowCount: row + 1 };
+}
+
+export interface TapSample {
+  x: number;
+  y: number;
+  timeMs: number;
+}
+
+export function isDoubleTapGesture(
+  previous: TapSample | null,
+  current: TapSample,
+  maxDelayMs = 320,
+  maxDistancePx = 40
+): boolean {
+  if (previous === null) {
+    return false;
+  }
+  const elapsed = current.timeMs - previous.timeMs;
+  const dx = current.x - previous.x;
+  const dy = current.y - previous.y;
+  return (
+    elapsed >= 0 &&
+    elapsed <= maxDelayMs &&
+    dx * dx + dy * dy <= maxDistancePx * maxDistancePx
+  );
+}
+
+export function isMobileDoubleTapShortcutTarget(
+  point: { x: number; y: number },
+  center: Rect,
+  focusedHand: Rect,
+  actionButtons: readonly Rect[] = []
+): boolean {
+  return (
+    !pointInsideRect(point, center) &&
+    !pointInsideRect(point, focusedHand) &&
+    !actionButtons.some((rect) => pointInsideRect(point, rect))
+  );
+}
+
+export function genericPassOrTsumogiriAction(
+  view: Pick<MatchView, "legalActions" | "mySeat" | "hands">
+): LegalAction | undefined {
+  const pass = view.legalActions.find((action) => action.type === "pass");
+  if (pass) {
+    return pass;
+  }
+  if (view.mySeat === null) {
+    return undefined;
+  }
+  const hand = view.hands[view.mySeat];
+  const drawn = hand?.[hand.length - 1];
+  if (drawn === null || drawn === undefined) {
+    return undefined;
+  }
+  return findTileAction(
+    view.legalActions,
+    "discard",
+    drawn,
+    "draw"
+  );
 }
 
 export interface MeldStripGroupPlacement {
@@ -561,10 +683,9 @@ const SEAT_CONTAINER_ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2] as const;
 /** zIndex for the shadow wraps within each area container: far below
  * every tile wrap so all drop-shadows render behind all tiles. */
 const SHADOW_LAYER_Z = -1_000_000;
-/** Root z for a flying discard's drop shadow: below every board tile
- * (all >= 0) but above the felt mats (-10), so a pond lifted above the
- * walls while a tile flies can't drag its shadow over a neighbour. */
-const DISCARD_FLY_SHADOW_Z = -5;
+/** Root layers keep discard shadows below sticks in settled and animated frames. */
+export const DISCARD_SHADOW_Z_INDEX = -5;
+export const RIICHI_STICK_Z_INDEX = 0;
 
 const BG_COLOR: ColorSource = 0x2a2a2a;
 const FELT_COLOR: ColorSource = 0x007f0e;
@@ -1045,14 +1166,50 @@ function scoreCartridgeMetrics(center: Rect): {
 
 export function scoreCartridgeTextLayout(
   chipWidth: number,
-  chipHeight: number
+  chipHeight: number,
+  presentation: TableRendererPresentation = "standard"
 ): { scoreRightX: number; seatIndicatorLeftX: number } {
-  const scoreRightMargin = Math.round(chipHeight * 0.35);
+  const scoreRightMargin = Math.round(
+    chipHeight * (presentation === "mobile" ? 0.12 : 0.35)
+  );
   const seatIndicatorLeftMargin = Math.round(chipHeight * 0.12);
   return {
     scoreRightX: chipWidth / 2 - scoreRightMargin,
     seatIndicatorLeftX: -chipWidth / 2 + seatIndicatorLeftMargin,
   };
+}
+
+export function scoreCartridgeScoreScale(
+  chipWidth: number,
+  chipHeight: number,
+  scoreWidth: number,
+  seatIndicatorWidth: number
+): number {
+  if (scoreWidth <= 0) {
+    return 1;
+  }
+  const { scoreRightX, seatIndicatorLeftX } = scoreCartridgeTextLayout(
+    chipWidth,
+    chipHeight,
+    "mobile"
+  );
+  const contentGap = Math.max(1, Math.round(chipHeight * 0.06));
+  const availableWidth = Math.max(
+    0,
+    scoreRightX -
+      (seatIndicatorLeftX + seatIndicatorWidth + contentGap)
+  );
+  return Math.min(1, availableWidth / scoreWidth);
+}
+
+export function scoreCartridgeFontSize(
+  chipHeight: number,
+  presentation: TableRendererPresentation
+): number {
+  return Math.max(
+    12,
+    Math.round(chipHeight * (presentation === "mobile" ? 0.68 : 0.6))
+  );
 }
 
 export function resultScoreBoxLayout(
@@ -1210,6 +1367,10 @@ export class TableRenderer {
    */
   private feltBoxDesign: { x: number; y: number; w: number; h: number } | null =
     null;
+  /** Canvas-space x-coordinate that mobile action buttons must stay left of. */
+  private mobileActionButtonRightBoundaryPx: number | null = null;
+  /** Current design-space bounds of interactive action controls. */
+  private actionButtonBounds: Rect[] = [];
   /** Cached deadline (Unix ms) read from the last `render(view)`
    * call. The ticker reads this each frame to format the
    * countdown. */
@@ -1438,7 +1599,7 @@ export class TableRenderer {
   private prevHandSorterView: MatchView | null = null;
   /** DOM listener detacher for canvas interactions installed in
    * {@link mount}. Invoked during {@link destroy}. */
-  private rightClickCleanup: (() => void) | null = null;
+  private canvasShortcutCleanup: (() => void) | null = null;
   /** Localized labels for the three center-square status lines.
    * Defaults to English; the React layer calls `setCenterLabels`
    * with translated strings after mount. */
@@ -1597,12 +1758,10 @@ export class TableRenderer {
     container.appendChild(app.canvas);
     this.app = app;
 
-    // Right-click anywhere on the canvas acts as a generic
-    // "pass / tsumogiri" shortcut: if a `pass` legal action is
-    // available (call decision), fire it; otherwise if it's the
-    // player's turn after a fresh draw, discard the drawn tile
-    // (tsumogiri). Always suppress the browser context menu so
-    // the gesture feels native to the table.
+    // Right-click, plus a mobile double tap outside the center, focused hand,
+    // and action controls, acts as a generic pass / tsumogiri shortcut.
+    // Always suppress the browser context menu so the mouse gesture feels
+    // native to the table.
     const onContextMenu = (e: MouseEvent): void => {
       e.preventDefault();
     };
@@ -1611,7 +1770,107 @@ export class TableRenderer {
         return;
       }
       e.preventDefault();
-      this.handleRightClick();
+      this.handlePassOrTsumogiriShortcut();
+    };
+    let touchStart:
+      | {
+          pointerId: number;
+          clientX: number;
+          clientY: number;
+          eligible: boolean;
+        }
+      | null = null;
+    let previousTap: TapSample | null = null;
+    const isEligibleMobileShortcutTarget = (
+      clientX: number,
+      clientY: number
+    ): boolean => {
+      if (
+        this.presentation !== "mobile" ||
+        this.root === null ||
+        this.root.scale.x <= 0 ||
+        this.root.scale.y <= 0 ||
+        this.lastView === null ||
+        genericPassOrTsumogiriAction(this.lastView) === undefined
+      ) {
+        return false;
+      }
+      const canvasRect = app.canvas.getBoundingClientRect();
+      const screenPoint = {
+        x:
+          ((clientX - canvasRect.left) * app.screen.width) /
+          canvasRect.width,
+        y:
+          ((clientY - canvasRect.top) * app.screen.height) /
+          canvasRect.height,
+      };
+      const designPoint = {
+        x: (screenPoint.x - this.root.position.x) / this.root.scale.x,
+        y: (screenPoint.y - this.root.position.y) / this.root.scale.y,
+      };
+      const layout = tableLayoutFromConfig(this.layoutConfig);
+      return isMobileDoubleTapShortcutTarget(
+        designPoint,
+        layout.center,
+        layout.hands[0],
+        this.actionButtonBounds
+      );
+    };
+    const onTouchPointerDown = (e: PointerEvent): void => {
+      if (e.pointerType !== "touch" || !e.isPrimary) {
+        return;
+      }
+      const eligible = isEligibleMobileShortcutTarget(e.clientX, e.clientY);
+      touchStart = {
+        pointerId: e.pointerId,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        eligible,
+      };
+      if (!eligible) {
+        previousTap = null;
+      }
+    };
+    const onTouchPointerUp = (e: PointerEvent): void => {
+      if (
+        e.pointerType !== "touch" ||
+        !e.isPrimary ||
+        touchStart?.pointerId !== e.pointerId
+      ) {
+        return;
+      }
+      const start = touchStart;
+      touchStart = null;
+      const dx = e.clientX - start.clientX;
+      const dy = e.clientY - start.clientY;
+      if (
+        !start.eligible ||
+        dx * dx + dy * dy > 20 * 20 ||
+        !isEligibleMobileShortcutTarget(e.clientX, e.clientY)
+      ) {
+        previousTap = null;
+        return;
+      }
+      const currentTap = {
+        x: e.clientX,
+        y: e.clientY,
+        timeMs: e.timeStamp,
+      };
+      if (!isDoubleTapGesture(previousTap, currentTap)) {
+        previousTap = currentTap;
+        return;
+      }
+      previousTap = null;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      this.handlePassOrTsumogiriShortcut();
+    };
+    const cancelTouchTap = (e: PointerEvent): void => {
+      if (touchStart?.pointerId === e.pointerId) {
+        touchStart = null;
+        previousTap = null;
+      }
     };
     const onResultPointerDown = (e: PointerEvent): void => {
       if (
@@ -1649,12 +1908,18 @@ export class TableRenderer {
     };
     app.canvas.addEventListener("contextmenu", onContextMenu);
     app.canvas.addEventListener("mousedown", onCanvasMouseDown);
+    app.canvas.addEventListener("pointerdown", onTouchPointerDown, true);
+    app.canvas.addEventListener("pointerup", onTouchPointerUp, true);
+    app.canvas.addEventListener("pointercancel", cancelTouchTap, true);
     app.canvas.addEventListener("pointerdown", onResultPointerDown, true);
     window.addEventListener("pointerup", restoreHandResult);
     window.addEventListener("pointercancel", restoreHandResult);
-    this.rightClickCleanup = (): void => {
+    this.canvasShortcutCleanup = (): void => {
       app.canvas.removeEventListener("contextmenu", onContextMenu);
       app.canvas.removeEventListener("mousedown", onCanvasMouseDown);
+      app.canvas.removeEventListener("pointerdown", onTouchPointerDown, true);
+      app.canvas.removeEventListener("pointerup", onTouchPointerUp, true);
+      app.canvas.removeEventListener("pointercancel", cancelTouchTap, true);
       app.canvas.removeEventListener("pointerdown", onResultPointerDown, true);
       window.removeEventListener("pointerup", restoreHandResult);
       window.removeEventListener("pointercancel", restoreHandResult);
@@ -1696,6 +1961,7 @@ export class TableRenderer {
     }
 
     const root = new Container();
+    root.sortableChildren = true;
     app.stage.addChild(root);
     this.root = root;
 
@@ -2055,7 +2321,7 @@ export class TableRenderer {
   }
 
   /**
-   * Right-click shortcut: dispatch a generic
+  * Canvas shortcut: dispatch a generic
    * "pass / tsumogiri" action. Wired up to the canvas DOM in
    * {@link mount}. Picks the first matching legal action in this
    * order:
@@ -2067,41 +2333,17 @@ export class TableRenderer {
    *      the last tile in the hand, which is the conventional
    *      "drawn" slot in our renderer.
    *
-   * No-op when neither is available, so right-clicking outside
-   * of an active decision window is harmless.
+  * No-op when neither is available, so invoking the shortcut outside an
+  * active decision window is harmless.
    */
-  private handleRightClick(): void {
+  private handlePassOrTsumogiriShortcut(): void {
     const view = this.lastView;
     if (!view || !this.onActionClick) {
       return;
     }
-    const pass = view.legalActions.find((a) => a.type === "pass");
-    if (pass) {
-      this.onActionClick({ action: pass });
-      return;
-    }
-    if (view.mySeat == null) {
-      return;
-    }
-    const hand = view.hands[view.mySeat];
-    if (!hand || hand.length === 0) {
-      return;
-    }
-    // After a fresh draw the drawn tile is the last entry of
-    // `hand` (see `sortHand` with `isFreshlyDrawn`). Match a
-    // discard legal-action against that tile for tsumogiri.
-    const drawn = hand[hand.length - 1];
-    if (drawn == null) {
-      return;
-    }
-    const tsumogiri = findTileAction(
-      view.legalActions,
-      "discard",
-      drawn,
-      "draw"
-    );
-    if (tsumogiri) {
-      this.onActionClick({ action: tsumogiri });
+    const action = genericPassOrTsumogiriAction(view);
+    if (action) {
+      this.onActionClick({ action });
     }
   }
 
@@ -2117,6 +2359,14 @@ export class TableRenderer {
 
   setConnectionDiagnosticsVisible(flag: boolean): void {
     this.showConnectionDiagnostics = flag;
+  }
+
+  setMobileActionButtonRightBoundary(boundaryPx: number | null): void {
+    if (this.mobileActionButtonRightBoundaryPx === boundaryPx) {
+      return;
+    }
+    this.mobileActionButtonRightBoundaryPx = boundaryPx;
+    this.requestRender();
   }
 
   /** Render each tenpai seat's wait tiles. Driven by
@@ -2698,9 +2948,9 @@ export class TableRenderer {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
-    if (this.rightClickCleanup) {
-      this.rightClickCleanup();
-      this.rightClickCleanup = null;
+    if (this.canvasShortcutCleanup) {
+      this.canvasShortcutCleanup();
+      this.canvasShortcutCleanup = null;
     }
     // Free the framed sub-textures the store created; base atlas
     // sources stay in the Pixi asset cache (see the note below).
@@ -2960,7 +3210,7 @@ export class TableRenderer {
 
     // Call / action buttons (chi/pon/kan/ron/pass). Discard-style
     // legals stay tile-driven; only "decision" actions surface here.
-    this.renderActionButtons(view, cx);
+    this.renderActionButtons(view, layout);
 
     // Hand-result panel — shown after a hand ends and stays up
     // until the next `hand_start` clears `lastHandResult`. Both
@@ -3175,14 +3425,18 @@ export class TableRenderer {
         ),
         style: new TextStyle({
           fontFamily: "Inter, system-ui, sans-serif",
-          fontSize: Math.max(12, Math.round(chipH * 0.6)),
+          fontSize: scoreCartridgeFontSize(chipH, this.presentation),
           fontWeight: "700",
           // Sinking seats (Buu mode, score <= sinkThreshold) get
           // a red score; everyone else stays white.
           fill: view.sinking[seat] ? 0xff6b6b : 0xffffff,
         }),
       });
-      const textLayout = scoreCartridgeTextLayout(chipW, chipH);
+      const textLayout = scoreCartridgeTextLayout(
+        chipW,
+        chipH,
+        this.presentation
+      );
       txt.anchor.set(1, 0.5);
       txt.position.set(textLayout.scoreRightX, 0);
       // Seat wind kanji, anchored to the left edge of the chip.
@@ -3202,6 +3456,16 @@ export class TableRenderer {
       });
       windTxt.anchor.set(0, 0.5);
       windTxt.position.set(textLayout.seatIndicatorLeftX, 0);
+      if (this.presentation === "mobile") {
+        txt.scale.set(
+          scoreCartridgeScoreScale(
+            chipW,
+            chipH,
+            txt.width,
+            windTxt.width
+          )
+        );
+      }
       chip.addChild(bg, windTxt, txt);
       // Seat display names are rendered separately by
       // `renderPlayerNames` next to each discard pond.
@@ -3333,11 +3597,10 @@ export class TableRenderer {
       return;
     }
     const cx = center.x + center.w / 2;
-    const inner = mobileCenterInnerRect(center);
     const doraGap = MOBILE_DORA_INDICATOR_GAP;
     const slots = mobileDoraIndicatorSlots(view.doraIndicators);
     const dora = mobileDoraRowGeometry(center, slots.length);
-    const doraY = inner.y + 5;
+    const doraY = dora.y;
 
     slots.forEach((tile, index) => {
       const sprite = this.spriteFactory!.create({
@@ -6525,26 +6788,27 @@ export class TableRenderer {
       seatDiscardAnim != null &&
       lastIdx >= 0 &&
       seatDiscardAnim.discardIndex === lastIdx;
+    // Keep every discard shadow in a low-z root sibling. If settled
+    // shadows inherited the pond's root zIndex while only flying
+    // shadows moved here, they would switch sides of a riichi stick
+    // at animation boundaries.
+    const discardShadowHost = new Container();
+    discardShadowHost.zIndex = DISCARD_SHADOW_Z_INDEX;
+    discardShadowHost.sortableChildren = true;
+    this.root.addChild(discardShadowHost);
     // Lift the pond above the walls (zIndex 0..2) while a tile flies.
-    // Its shadows must NOT ride along (they would cover neighbouring
-    // ponds), so host them in a low-z sibling — its transform is
-    // matched to the pond after the position switch below.
-    let flyShadowHost: Container | null = null;
     if (lastIsAnimating) {
       discardContainer.zIndex = 5;
-      flyShadowHost = new Container();
-      flyShadowHost.zIndex = DISCARD_FLY_SHADOW_Z;
-      flyShadowHost.sortableChildren = true;
-      this.root.addChild(flyShadowHost);
     }
     // Pure container-local geometry per tile. Tint and the last-tile
     // fresh-nudge / animation remain renderer-owned below.
+    const discardOptions = this.discardLayoutOptions(layout);
     const discardPlacements = layoutDiscards(
       this.tileDesign,
       seat as Seat,
       discards,
       riichiIdx,
-      this.discardLayoutOptions(layout, seat as Seat)
+      discardOptions
     );
     let animLastPlacement: TilePlacement | null = null;
     for (const placement of discardPlacements) {
@@ -6593,10 +6857,7 @@ export class TableRenderer {
       const rot = SEAT_CONTAINER_ROT[seat];
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
-      const layer = this.screenShadowLayer(
-        flyShadowHost ?? discardContainer,
-        rot
-      );
+      const layer = this.screenShadowLayer(discardShadowHost, rot);
       this.placeColumnShadows(
         layer,
         discardPlacements
@@ -6674,13 +6935,11 @@ export class TableRenderer {
       }
     }
     this.root.addChild(discardContainer);
-    if (flyShadowHost) {
-      flyShadowHost.position.set(
-        discardContainer.position.x,
-        discardContainer.position.y
-      );
-      flyShadowHost.rotation = discardContainer.rotation;
-    }
+    discardShadowHost.position.set(
+      discardContainer.position.x,
+      discardContainer.position.y
+    );
+    discardShadowHost.rotation = discardContainer.rotation;
 
     // -----------------------------------------------------------------
     // Animated last-discard overlay.
@@ -6772,10 +7031,10 @@ export class TableRenderer {
       wrap.zIndex = animLastPlacement.zIndex;
       discardContainer.addChild(wrap);
       if (shadow) {
-        // Same low-z host as the static shadows (created with the pond
-        // lift): keeps the flying shadow below every seat's tiles.
+        // The permanent host keeps this shadow on the same root layer
+        // as settled shadows throughout both animation phases.
         this.placeTileShadow(
-          flyShadowHost ?? discardContainer,
+          discardShadowHost,
           shadow,
           posX,
           posY,
@@ -6788,15 +7047,24 @@ export class TableRenderer {
     // laid in front of each seat that has declared riichi. Sits
     // just inboard (table-center side) of the discard pile.
     if (view.riichiDeclared[seat]) {
-      const stickW = 90;
-      const stickH = 8;
-      const stickGap = 10;
+      const metrics = riichiStickMetrics(
+        this.presentation,
+        this.tileDesign,
+        this.discardLayoutOptions(layout)
+      );
+      const {
+        width: stickW,
+        height: stickH,
+        gap: stickGap,
+        dotRadius,
+        cornerRadius,
+      } = metrics;
       const stick = new Container();
       const bar = new Graphics()
-        .roundRect(0, 0, stickW, stickH, 3)
+        .roundRect(0, 0, stickW, stickH, cornerRadius)
         .fill({ color: 0xf5f5f5 });
       const dot = new Graphics()
-        .circle(stickW / 2, stickH / 2, 2.5)
+        .circle(stickW / 2, stickH / 2, dotRadius)
         .fill({ color: 0xc04040 });
       stick.addChild(bar, dot);
       // The stick sits just inboard (table-centre side) of the
@@ -6804,37 +7072,49 @@ export class TableRenderer {
       // place the stick centred along the perpendicular axis.
       const centerX = layout.center.x + layout.center.w / 2;
       const centerY = layout.center.y + layout.center.h / 2;
-      switch (seat) {
-        case 0: {
-          // bottom — horizontal, stick above the pond's top edge
-          stick.position.set(centerX - stickW / 2, discardRect.y - stickGap);
-          break;
-        }
-        case 1: {
-          // right — vertical, stick to the left of the pond's left edge
-          stick.rotation = -Math.PI / 2;
-          stick.position.set(discardRect.x - stickGap, centerY + stickW / 2);
-          break;
-        }
-        case 2: {
-          // top — horizontal, mirrored, below the pond's bottom edge
-          stick.rotation = Math.PI;
-          stick.position.set(
-            centerX + stickW / 2,
-            discardRect.y + discardRect.h + stickGap
-          );
-          break;
-        }
-        case 3: {
-          // left — vertical, to the right of the pond's right edge
-          stick.rotation = Math.PI / 2;
-          stick.position.set(
-            discardRect.x + discardRect.w + stickGap,
-            centerY - stickW / 2
-          );
-          break;
+      if (this.presentation === "mobile") {
+        const placement = mobileRiichiStickPlacement(
+          discardRect,
+          layout.center,
+          seat as Seat,
+          metrics
+        );
+        stick.position.set(placement.x, placement.y);
+        stick.rotation = placement.rotation;
+      } else {
+        switch (seat) {
+          case 0: {
+            // bottom — horizontal, stick above the pond's top edge
+            stick.position.set(centerX - stickW / 2, discardRect.y - stickGap);
+            break;
+          }
+          case 1: {
+            // right — vertical, stick to the left of the pond's left edge
+            stick.rotation = -Math.PI / 2;
+            stick.position.set(discardRect.x - stickGap, centerY + stickW / 2);
+            break;
+          }
+          case 2: {
+            // top — horizontal, mirrored, below the pond's bottom edge
+            stick.rotation = Math.PI;
+            stick.position.set(
+              centerX + stickW / 2,
+              discardRect.y + discardRect.h + stickGap
+            );
+            break;
+          }
+          case 3: {
+            // left — vertical, to the right of the pond's right edge
+            stick.rotation = Math.PI / 2;
+            stick.position.set(
+              discardRect.x + discardRect.w + stickGap,
+              centerY - stickW / 2
+            );
+            break;
+          }
         }
       }
+      stick.zIndex = RIICHI_STICK_Z_INDEX;
       this.root.addChild(stick);
     }
   }
@@ -6930,10 +7210,8 @@ export class TableRenderer {
 
   /**
    * Static darkened mats behind the four 6×3 discard ponds. Each mat
-   * extends 4 design pixels past each horizontal edge and each edge
-   * of its inset vertical footprint. The screen-top edge starts from
-   * a one-tile-overlap inset so the mat hugs the visible stacked
-   * footprint rather than filling the whole layout zone.
+    * hugs the visible mobile footprint and extends 4 design pixels past
+    * the tiles in standard presentations.
    */
   private renderDiscardPanels(layout: TableLayout): void {
     if (!this.root) {
@@ -6999,15 +7277,15 @@ export class TableRenderer {
     }
   }
 
-  private discardLayoutOptions(layout: TableLayout, seat: Seat) {
-    return this.presentation === "standard"
-      ? webDiscardLayoutOptions(
-          this.webTableLayoutMode,
-          this.tileDesign,
-          layout,
-          seat
-        )
-      : undefined;
+  private discardLayoutOptions(layout: TableLayout) {
+    if (this.presentation === "mobile") {
+      return mobileDiscardLayoutOptions(this.tileDesign, layout);
+    }
+    return webDiscardLayoutOptions(
+      this.webTableLayoutMode,
+      this.tileDesign,
+      layout
+    );
   }
 
   private discardPanelRects(layout: TableLayout): [Rect, Rect, Rect, Rect] {
@@ -7029,7 +7307,7 @@ export class TableRenderer {
         this.tileDesign,
         typedSeat,
         18,
-        this.discardLayoutOptions(layout, typedSeat)
+        this.discardLayoutOptions(layout)
       );
       this.discardFootprintBySeat.set(cacheKey, localFootprint);
     }
@@ -7038,7 +7316,8 @@ export class TableRenderer {
       pond,
       localFootprint
     );
-    const padding = 4;
+    const padding =
+      this.presentation === "mobile" ? MOBILE_DISCARD_PANEL_PADDING : 4;
     return {
       x: footprint.x - padding,
       y: footprint.y - padding,
@@ -7667,10 +7946,11 @@ export class TableRenderer {
     this.lastTimerSeconds = totalSec;
   }
 
-  private renderActionButtons(view: MatchView, _cx: number): void {
+  private renderActionButtons(view: MatchView, layout: TableLayout): void {
     if (!this.root) {
       return;
     }
+    this.actionButtonBounds = [];
     // Once a hand has ended (or the match is over) the action
     // strip is meaningless — `legalActions` may still contain
     // the just-fired win for a beat before the server's
@@ -7763,18 +8043,29 @@ export class TableRenderer {
       return;
     }
 
-    // Big, right-anchored strip in the empty zone between the
-    // central wall and the right-side discard pond. Right edge
-    // hugs the inside of the green felt so the buttons never
-    // bleed into the dark canvas margin.
-    const BTN_H = 64;
-    const BTN_GAP = 14;
+    // Right-anchored rows end at the focused hand's top edge. On mobile,
+    // the host may reserve the DOM game menu's horizontal footprint.
+    const style = actionButtonStyle(this.presentation);
     const felt = this.feltBoxDesign;
     if (!felt) {
       return;
     }
-    const RIGHT_EDGE = felt.x + felt.w - 16;
-    const BASE_Y = felt.y + felt.h - 240;
+    const leftEdge = felt.x + style.rightInset;
+    let rightEdge = felt.x + felt.w - style.rightInset;
+    if (
+      this.presentation === "mobile" &&
+      this.mobileActionButtonRightBoundaryPx !== null &&
+      this.root.scale.x > 0
+    ) {
+      const boundaryDesignX =
+        (this.mobileActionButtonRightBoundaryPx - this.root.position.x) /
+        this.root.scale.x;
+      rightEdge = Math.min(rightEdge, boundaryDesignX - style.gap);
+    }
+    const bottomEdge =
+      this.presentation === "mobile"
+        ? layout.hands[0].y
+        : felt.y + felt.h - style.bottomOffset + style.height;
 
     const strip = new Container();
     // Walls set `wallContainer.zIndex` up to 2 via the root's
@@ -7787,23 +8078,31 @@ export class TableRenderer {
     const rendered: Array<{ c: Container; w: number }> = [];
     for (const entry of entries) {
       if (entry.kind === "riichi") {
-        rendered.push(this.drawRiichiToggleButton(BTN_H));
+        rendered.push(this.drawRiichiToggleButton());
       } else if (entry.kind === "group") {
         rendered.push(
-          this.drawCallGroupButton(entry.group, entry.actions.length, BTN_H)
+          this.drawCallGroupButton(entry.group, entry.actions.length)
         );
       } else {
-        rendered.push(this.drawActionButton(entry.action, BTN_H));
+        rendered.push(this.drawActionButton(entry.action));
       }
     }
-    const totalW =
-      rendered.reduce((acc, r) => acc + r.w, 0) +
-      BTN_GAP * (rendered.length - 1);
-    let x = RIGHT_EDGE - totalW;
-    rendered.forEach(({ c, w }) => {
-      c.position.set(x, BASE_Y);
+    const mainLayout = layoutActionButtonRows(
+      rendered.map(({ w }) => w),
+      leftEdge,
+      rightEdge,
+      bottomEdge,
+      style.height,
+      style.gap,
+      style.optionRowGap
+    );
+    this.actionButtonBounds.push(
+      ...mainLayout.placements.map(({ x, y, w, h }) => ({ x, y, w, h }))
+    );
+    rendered.forEach(({ c }, index) => {
+      const placement = mainLayout.placements[index];
+      c.position.set(placement.x, placement.y);
       strip.addChild(c);
-      x += w + BTN_GAP;
     });
 
     // Expanded option row — drawn ABOVE the group row, anchored to
@@ -7817,20 +8116,29 @@ export class TableRenderer {
             ? pon
             : kan;
       if (opts.length > 0) {
-        const OPT_GAP = 12;
         const optRendered: Array<{ c: Container; w: number }> = [];
         for (const a of opts) {
-          optRendered.push(this.drawCallOptionButton(a, BTN_H));
+          optRendered.push(this.drawCallOptionButton(a));
         }
-        const optTotal =
-          optRendered.reduce((acc, r) => acc + r.w, 0) +
-          OPT_GAP * (optRendered.length - 1);
-        let ox = RIGHT_EDGE - optTotal;
-        const optY = BASE_Y - BTN_H - 14;
-        optRendered.forEach(({ c, w }) => {
-          c.position.set(ox, optY);
+        const optionBottomEdge =
+          bottomEdge -
+          mainLayout.rowCount * (style.height + style.optionRowGap);
+        const optionLayout = layoutActionButtonRows(
+          optRendered.map(({ w }) => w),
+          leftEdge,
+          rightEdge,
+          optionBottomEdge,
+          style.height,
+          style.optionGap,
+          style.optionRowGap
+        );
+        this.actionButtonBounds.push(
+          ...optionLayout.placements.map(({ x, y, w, h }) => ({ x, y, w, h }))
+        );
+        optRendered.forEach(({ c }, index) => {
+          const placement = optionLayout.placements[index];
+          c.position.set(placement.x, placement.y);
           strip.addChild(c);
-          ox += w + OPT_GAP;
         });
       }
     }
@@ -7843,10 +8151,12 @@ export class TableRenderer {
    * next render then dims non-riichi-legal tiles and routes hand
    * clicks to the matching `riichi:TILE` legal action.
    */
-  private drawRiichiToggleButton(height = 44): {
+  private drawRiichiToggleButton(): {
     c: Container;
     w: number;
   } {
+    const style = actionButtonStyle(this.presentation);
+    const height = style.height;
     const labelStyle = new TextStyle({
       fontFamily: "Inter, system-ui, sans-serif",
       fontSize: Math.round(height * 0.42),
@@ -7856,11 +8166,23 @@ export class TableRenderer {
     const active = this.riichiMode;
     const text = active ? "Cancel" : "Riichi";
     const labelNode = new Text({ text, style: labelStyle });
-    const padX = 22;
-    const width = Math.max(110, labelNode.width + padX * 2);
+    const width = Math.max(
+      style.minRiichiWidth,
+      labelNode.width + style.horizontalPadding * 2
+    );
     const bg = new Graphics()
-      .roundRect(0, 0, width, height, 10)
-      .fill({ color: active ? 0xe0c060 : 0xc0a040 });
+      .roundRect(0, 0, width, height, style.radius)
+      .fill({
+        color: active ? 0xe0c060 : 0xc0a040,
+        alpha: style.fillAlpha,
+      });
+    if (style.borderAlpha > 0) {
+      bg.roundRect(0, 0, width, height, style.radius).stroke({
+        color: 0xffffff,
+        width: 2,
+        alpha: style.borderAlpha,
+      });
+    }
     labelNode.anchor.set(0.5);
     labelNode.position.set(width / 2, height / 2);
     const c = new Container();
@@ -7884,9 +8206,10 @@ export class TableRenderer {
    */
   private drawCallGroupButton(
     group: "chi" | "pon" | "kan",
-    optionCount: number,
-    height = 64
+    optionCount: number
   ): { c: Container; w: number } {
+    const style = actionButtonStyle(this.presentation);
+    const height = style.height;
     const palette: Record<typeof group, ColorSource> = {
       chi: 0x4a7fb4,
       pon: 0xb47f3a,
@@ -7902,16 +8225,24 @@ export class TableRenderer {
     const labelText = group === "chi" ? "Chi" : group === "pon" ? "Pon" : "Kan";
     const text = `${labelText} ${active ? "▴" : "▾"}`;
     const labelNode = new Text({ text, style: labelStyle });
-    const padX = 22;
-    const width = Math.max(120, labelNode.width + padX * 2);
+    const width = Math.max(
+      style.minGroupWidth,
+      labelNode.width + style.horizontalPadding * 2
+    );
     const fillColor = palette[group];
     const bg = new Graphics()
-      .roundRect(0, 0, width, height, 10)
-      .fill({ color: fillColor });
+      .roundRect(0, 0, width, height, style.radius)
+      .fill({ color: fillColor, alpha: style.fillAlpha });
     if (active) {
-      bg.roundRect(0, 0, width, height, 10).stroke({
+      bg.roundRect(0, 0, width, height, style.radius).stroke({
         color: 0xffffff,
         width: 3,
+      });
+    } else if (style.borderAlpha > 0) {
+      bg.roundRect(0, 0, width, height, style.radius).stroke({
+        color: 0xffffff,
+        width: 2,
+        alpha: style.borderAlpha,
       });
     }
     labelNode.anchor.set(0.5);
@@ -7939,10 +8270,9 @@ export class TableRenderer {
    * using the `bottomSmall` sprite sheet, sized to fit the strip
    * height. Clicking dispatches the underlying `LegalAction`.
    */
-  private drawCallOptionButton(
-    action: LegalAction,
-    height = 64
-  ): { c: Container; w: number } {
+  private drawCallOptionButton(action: LegalAction): { c: Container; w: number } {
+    const style = actionButtonStyle(this.presentation);
+    const height = style.height;
     // Compose the visible meld:
     //   chi / pon / daiminkan: caller's tiles + called tile (from
     //                          the discard)
@@ -7968,10 +8298,10 @@ export class TableRenderer {
       ...sortTilesForDisplay(previewTiles)
     );
 
-    const tileH = height - 12;
+    const tileH = height - style.optionTileInset;
     const tileW = (tileH * SMALL_TILE_W) / SMALL_TILE_H;
-    const tileGap = 2;
-    const padX = 12;
+    const tileGap = this.presentation === "mobile" ? 3 : 2;
+    const padX = style.optionPadding;
     const width =
       padX * 2 +
       previewTiles.length * tileW +
@@ -7983,8 +8313,18 @@ export class TableRenderer {
       kan: 0x7a4ab4,
     };
     const bg = new Graphics()
-      .roundRect(0, 0, width, height, 10)
-      .fill({ color: palette[action.type] ?? 0x666666 });
+      .roundRect(0, 0, width, height, style.radius)
+      .fill({
+        color: palette[action.type] ?? 0x666666,
+        alpha: style.optionFillAlpha,
+      });
+    if (style.borderAlpha > 0) {
+      bg.roundRect(0, 0, width, height, style.radius).stroke({
+        color: 0xffffff,
+        width: 2,
+        alpha: style.borderAlpha,
+      });
+    }
 
     const c = new Container();
     c.addChild(bg);
@@ -8014,10 +8354,9 @@ export class TableRenderer {
     return { c, w: width };
   }
 
-  private drawActionButton(
-    action: LegalAction,
-    height = 44
-  ): { c: Container; w: number } {
+  private drawActionButton(action: LegalAction): { c: Container; w: number } {
+    const style = actionButtonStyle(this.presentation);
+    const height = style.height;
     const labelStyle = new TextStyle({
       fontFamily: "Inter, system-ui, sans-serif",
       fontSize: Math.round(height * 0.42),
@@ -8048,11 +8387,23 @@ export class TableRenderer {
       text = labelForAction(action);
     }
     const labelNode = new Text({ text, style: labelStyle });
-    const padX = 22;
-    const width = Math.max(110, labelNode.width + padX * 2);
+    const width = Math.max(
+      style.minActionWidth,
+      labelNode.width + style.horizontalPadding * 2
+    );
     const bg = new Graphics()
-      .roundRect(0, 0, width, height, 10)
-      .fill({ color: palette[action.type] ?? 0x666666 });
+      .roundRect(0, 0, width, height, style.radius)
+      .fill({
+        color: palette[action.type] ?? 0x666666,
+        alpha: style.fillAlpha,
+      });
+    if (style.borderAlpha > 0) {
+      bg.roundRect(0, 0, width, height, style.radius).stroke({
+        color: 0xffffff,
+        width: 2,
+        alpha: style.borderAlpha,
+      });
+    }
     labelNode.anchor.set(0.5);
     labelNode.position.set(width / 2, height / 2);
     const c = new Container();

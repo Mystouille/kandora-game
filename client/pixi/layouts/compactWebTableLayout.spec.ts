@@ -64,16 +64,15 @@ describe("compactWebTableLayout", () => {
     }
   });
 
-  it("scales compact discard mats to the matching center edge", () => {
+  it("uses one compact discard scale while filling the horizontal center edge", () => {
     const panelPadding = COMPACT_DISCARD_PANEL_PADDING;
+    const scales: number[] = [];
+    const panelSpans: number[] = [];
     for (const seat of [0, 1, 2, 3] as const) {
-      const targetPanelSpan =
-        seat % 2 === 0 ? layout.center.w : layout.center.h;
       const options = webDiscardLayoutOptions(
         "compact",
         tenhouTileDesign,
-        layout,
-        seat
+        layout
       );
       expect(options).toBeDefined();
       const localBounds = potentialDiscardBounds(
@@ -96,12 +95,14 @@ describe("compactWebTableLayout", () => {
       const panelSpan = seat % 2 === 0 ? panelBounds.w : panelBounds.h;
 
       expect(options?.scale).toBeGreaterThan(1);
-      expect(panelSpan).toBeCloseTo(targetPanelSpan, 8);
-      expect(
-        containsRect(layout.discards[seat], panelBounds, 1e-8),
-        `seat ${seat}: ${JSON.stringify(panelBounds)}`
-      ).toBe(true);
+      scales.push(options?.scale ?? 0);
+      panelSpans.push(panelSpan);
     }
+
+    expect(scales).toEqual([scales[0], scales[0], scales[0], scales[0]]);
+    expect(panelSpans[0]).toBeCloseTo(layout.center.w, 8);
+    expect(panelSpans[2]).toBeCloseTo(layout.center.w, 8);
+    expect(panelSpans[1]).toBeCloseTo(panelSpans[3], 8);
   });
 
   it("leaves clearance between full ponds and regular hand strips", () => {

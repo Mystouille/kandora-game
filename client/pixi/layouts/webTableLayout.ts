@@ -1,4 +1,3 @@
-import type { Seat } from "../tableGeometry";
 import type { TableLayout, TableLayoutConfig } from "../tableLayout";
 import {
   discardScaleForTargetSpan,
@@ -26,19 +25,16 @@ export function webTableLayoutConfig(
 export function webDiscardLayoutOptions(
   mode: WebTableLayoutMode,
   design: TileDesign,
-  layout: TableLayout,
-  seat: Seat
+  layout: TableLayout
 ): DiscardLayoutOptions | undefined {
   if (mode !== "compact") {
     return undefined;
   }
-  const targetPanelSpan =
-    seat % 2 === 0 ? layout.center.w : layout.center.h;
   return {
     scale: discardScaleForTargetSpan(
       design,
-      seat,
-      targetPanelSpan - COMPACT_DISCARD_PANEL_PADDING * 2,
+      0,
+      layout.center.w - COMPACT_DISCARD_PANEL_PADDING * 2,
       18
     ),
     offsetX: COMPACT_DISCARD_PANEL_PADDING,

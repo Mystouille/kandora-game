@@ -19,12 +19,17 @@ import {
   CENTER_DORA_INDICATOR_GAP,
   darkenTileTint,
   discardContainerZIndex,
+  DISCARD_SHADOW_Z_INDEX,
   focusedHandLongAxisOffset,
   focusedHandTileMetrics,
   focusedHandOrderPolicy,
   formatTableScore,
+  genericPassOrTsumogiriAction,
   handResultDealerSeat,
+  isDoubleTapGesture,
   isPendingDiscardDisplaySlot,
+  isMobileDoubleTapShortcutTarget,
+  layoutActionButtonRows,
   layoutMeldStripGroups,
   layoutTouchingMeldColumn,
   MOBILE_RIICHI_STICK,
@@ -33,12 +38,15 @@ import {
   mobileRiichiStickPlacement,
   playerIdentityCenter,
   pointInsideRect,
+  RIICHI_STICK_Z_INDEX,
   resolveActionTimerState,
   resolveSeatHandPresentation,
   riichiStickMetrics,
   riichiSelectionTileTint,
   resultUraDoraIndicators,
   resultScoreBoxLayout,
+  scoreCartridgeFontSize,
+  scoreCartridgeScoreScale,
   scoreCartridgeTextLayout,
   shouldRevealWinScoreSummary,
   shouldRevealWinScoreDelta,
@@ -52,10 +60,16 @@ import {
   wallZIndex,
   winResultRevealKey,
 } from "./TableRenderer";
-import { mobileTableLayout } from "./layouts/mobileTableLayout";
+import {
+  mobileDiscardLayoutOptions,
+  mobileTableLayout,
+} from "./layouts/mobileTableLayout";
 import { compactWebTableLayout } from "./layouts/compactWebTableLayout";
 import { currentTableLayout } from "./layouts/currentTableLayout";
+import { webDiscardLayoutOptions } from "./layouts/webTableLayout";
 import { tableLayoutFromConfig } from "./tableLayout";
+import { discardCellSize } from "./tileAreaLayout";
+import { tenhouTileDesign } from "./tiles/designs/tenhouTileDesign";
 
 describe("route-facing renderer API", () => {
   it("keeps layout and replay controls available on the renderer", () => {
@@ -66,6 +80,9 @@ describe("route-facing renderer API", () => {
       typeof TableRenderer.prototype.setMinimumDrawToDiscardDelayEnabled
     ).toBe("function");
     expect(typeof TableRenderer.prototype.setShowTsumogiri).toBe("function");
+    expect(
+      typeof TableRenderer.prototype.setMobileActionButtonRightBoundary
+    ).toBe("function");
   });
 });
 
@@ -211,7 +228,7 @@ describe("call effect placement", () => {
 });
 
 describe("scoreCartridgeTextLayout", () => {
-  it("keeps the seat indicator closer to the player-relative left edge", () => {
+  it("keeps standard web score anchors unchanged", () => {
     const chipWidth = 120;
     const chipHeight = 40;
     const layout = scoreCartridgeTextLayout(chipWidth, chipHeight);
@@ -224,6 +241,38 @@ describe("scoreCartridgeTextLayout", () => {
       chipWidth / 2 - layout.scoreRightX
     );
   });
+
+  it("uses more of the mobile cartridge width for score text", () => {
+    expect(scoreCartridgeTextLayout(128, 32, "mobile")).toEqual({
+      scoreRightX: 60,
+      seatIndicatorLeftX: -60,
+    });
+    expect(scoreCartridgeFontSize(32, "mobile")).toBe(22);
+    expect(scoreCartridgeFontSize(32, "standard")).toBe(19);
+  });
+
+  it("shrinks a long relative score before it reaches the seat indicator", () => {
+    const chipWidth = 128;
+    const chipHeight = 32;
+    const scoreWidth = 96;
+    const seatIndicatorWidth = 32;
+    const layout = scoreCartridgeTextLayout(chipWidth, chipHeight, "mobile");
+    const scale = scoreCartridgeScoreScale(
+      chipWidth,
+      chipHeight,
+      scoreWidth,
+      seatIndicatorWidth
+    );
+    const scoreLeftX = layout.scoreRightX - scoreWidth * scale;
+    const seatIndicatorRightX =
+      layout.seatIndicatorLeftX + seatIndicatorWidth;
+
+    expect(scale).toBeLessThan(1);
+    expect(scoreLeftX - seatIndicatorRightX).toBeGreaterThanOrEqual(
+      Math.max(1, Math.round(chipHeight * 0.06))
+    );
+    expect(scoreCartridgeScoreScale(chipWidth, chipHeight, 60, 32)).toBe(1);
+  });
 });
 
 describe("mobile action buttons", () => {
@@ -233,15 +282,124 @@ describe("mobile action buttons", () => {
 
     expect(desktop.height).toBe(64);
     expect(desktop.fillAlpha).toBe(1);
-    expect(mobile.height).toBe(108);
-    expect(mobile.height).toBeGreaterThan(desktop.height);
-    expect(mobile.minActionWidth).toBeGreaterThan(desktop.minActionWidth);
+    expect(mobile.height).toBe(96);
+    expect(mobile.minActionWidth).toBe(165);
+    expect(mobile.minGroupWidth).toBe(180);
+    expect(mobile.minRiichiWidth).toBe(165);
+    expect(mobile.horizontalPadding).toBe(33);
     expect(mobile.fillAlpha).toBeGreaterThan(0);
     expect(mobile.fillAlpha).toBeLessThan(1);
   });
 
   it("labels the pass transport action as Skip", () => {
     expect(actionButtonLabel({ id: "pass", type: "pass" })).toBe("Skip");
+  });
+
+  it("bottom-aligns calls to the hand and wraps overflow upward", () => {
+    const layout = layoutActionButtonRows(
+      [165, 180, 165, 165],
+      114,
+      700,
+      585,
+      96,
+      10,
+      12
+    );
+
+    expect(layout.rowCount).toBe(2);
+    expect(layout.placements.map(({ row }) => row)).toEqual([1, 0, 0, 0]);
+    for (const placement of layout.placements) {
+      expect(placement.x).toBeGreaterThanOrEqual(114);
+      expect(placement.x + placement.w).toBeLessThanOrEqual(700);
+      expect(placement.y + placement.h).toBeLessThanOrEqual(585);
+    }
+    expect(layout.placements[1].y + layout.placements[1].h).toBe(585);
+    expect(layout.placements[0].y + layout.placements[0].h).toBe(477);
+  });
+});
+
+describe("mobile double-tap shortcut", () => {
+  const center = { x: 300, y: 180, w: 200, h: 180 };
+  const focusedHand = { x: 0, y: 500, w: 800, h: 100 };
+  const actionButton = { x: 600, y: 400, w: 150, h: 80 };
+
+  it("accepts table taps but excludes center, hand, and action controls", () => {
+    expect(
+      isMobileDoubleTapShortcutTarget(
+        { x: 100, y: 200 },
+        center,
+        focusedHand,
+        [actionButton]
+      )
+    ).toBe(true);
+    expect(
+      isMobileDoubleTapShortcutTarget(
+        { x: 350, y: 220 },
+        center,
+        focusedHand,
+        [actionButton]
+      )
+    ).toBe(false);
+    expect(
+      isMobileDoubleTapShortcutTarget(
+        { x: 400, y: 550 },
+        center,
+        focusedHand,
+        [actionButton]
+      )
+    ).toBe(false);
+    expect(
+      isMobileDoubleTapShortcutTarget(
+        { x: 650, y: 440 },
+        center,
+        focusedHand,
+        [actionButton]
+      )
+    ).toBe(false);
+  });
+
+  it("requires two nearby taps within the gesture window", () => {
+    const first = { x: 100, y: 100, timeMs: 1_000 };
+
+    expect(
+      isDoubleTapGesture(first, { x: 124, y: 112, timeMs: 1_280 })
+    ).toBe(true);
+    expect(
+      isDoubleTapGesture(first, { x: 100, y: 100, timeMs: 1_400 })
+    ).toBe(false);
+    expect(
+      isDoubleTapGesture(first, { x: 145, y: 100, timeMs: 1_200 })
+    ).toBe(false);
+  });
+
+  it("prefers pass, then falls back to the drawn-tile discard", () => {
+    const drawnDiscard = {
+      id: "discard:draw:5m",
+      type: "discard" as const,
+      tile: "5m" as const,
+      discardSource: "draw" as const,
+    };
+    const pass = { id: "pass", type: "pass" as const };
+    const view = {
+      legalActions: [drawnDiscard, pass],
+      mySeat: 0 as const,
+      hands: [["1m", "5m"], [], [], []],
+    };
+
+    expect(genericPassOrTsumogiriAction(view)).toBe(pass);
+    expect(
+      genericPassOrTsumogiriAction({
+        ...view,
+        legalActions: [drawnDiscard],
+      })
+    ).toBe(drawnDiscard);
+    expect(
+      genericPassOrTsumogiriAction({
+        ...view,
+        hands: [["1m", "6m"], [], [], []],
+        legalActions: [drawnDiscard],
+      })
+    ).toBeUndefined();
   });
 });
 
@@ -280,7 +438,7 @@ describe("mobile table presentation", () => {
   it("caps the focused tiles so a full pond remains clear", () => {
     const metrics = focusedHandTileMetrics(layout, "mobile");
 
-    expect(metrics.spriteH).toBeCloseTo(115);
+    expect(metrics.spriteH).toBeCloseTo(135);
     expect(metrics.spriteH).toBeCloseTo(layout.hands[0].h);
     expect(metrics.tile.w * 14 + 8).toBeLessThan(layout.hands[0].w);
   });
@@ -316,11 +474,13 @@ describe("mobile table presentation", () => {
   it("fits the dora row directly between both side score cartridges", () => {
     const center = layout.center;
     const dora = centerDoraRowGeometry(center, 5);
+    const inner = centerInfoInnerRect(center);
 
-    expect(dora.x).toBe(561);
-    expect(dora.width).toBe(158);
+    expect(dora.x).toBe(560);
+    expect(dora.y).toBe(inner.y);
+    expect(dora.width).toBe(160);
     expect(dora.tileW * 5).toBeCloseTo(dora.width);
-    expect(dora.x + dora.width).toBe(719);
+    expect(dora.x + dora.width).toBe(720);
   });
 
   it("bounds all three counters inside the score-cartridge borders", () => {
@@ -328,7 +488,7 @@ describe("mobile table presentation", () => {
     const inner = centerInfoInnerRect(center);
     const cells = centerCounterCells(center, 3);
 
-    expect(inner).toEqual({ x: 561, y: 278, w: 158, h: 114 });
+    expect(inner).toEqual({ x: 560, y: 273, w: 160, h: 104 });
     expect(cells).toHaveLength(3);
     expect(cells[0].x).toBe(inner.x);
     expect(cells[2].x + cells[2].w).toBeCloseTo(inner.x + inner.w);
@@ -364,9 +524,24 @@ describe("mobile table presentation", () => {
 
     expect(MOBILE_RIICHI_STICK.width).toBeGreaterThan(90);
     expect(MOBILE_RIICHI_STICK.height).toBeGreaterThan(8);
-    const placements = discardPanels.map((panel, seat) =>
-      mobileRiichiStickPlacement(panel, layout.center, seat as 0 | 1 | 2 | 3)
+    const options = mobileDiscardLayoutOptions(
+      tenhouTileDesign,
+      layout
     );
+    const metrics = riichiStickMetrics(
+      "mobile",
+      tenhouTileDesign,
+      options
+    );
+    const placements = discardPanels.map((panel, seat) => {
+      const typedSeat = seat as 0 | 1 | 2 | 3;
+      return mobileRiichiStickPlacement(
+        panel,
+        layout.center,
+        typedSeat,
+        metrics
+      );
+    });
     expect(placements[0].bounds.y + placements[0].bounds.h).toBe(
       discardPanels[0].y - MOBILE_RIICHI_STICK.gap
     );
@@ -426,27 +601,53 @@ describe("mobile table presentation", () => {
 });
 
 describe("riichi stick presentation", () => {
-  it("scales every web stick dimension and visual proportion by 80 percent", () => {
-    expect(WEB_RIICHI_STICK).toEqual({
-      width: 90 * 1.35,
+  it("keeps the established web and mobile stick profiles", () => {
+    expect(WEB_RIICHI_STICK).toMatchObject({
       height: 8 * 1.35,
       gap: 10 * 1.35,
       dotRadius: 2.5 * 1.35,
       cornerRadius: 3 * 1.35,
     });
-    expect(riichiStickMetrics("standard")).toBe(WEB_RIICHI_STICK);
-  });
-
-  it("keeps the standalone mobile stick metrics unchanged", () => {
-    expect(MOBILE_RIICHI_STICK).toEqual({
-      width: 120,
+    expect(MOBILE_RIICHI_STICK).toMatchObject({
       height: 12,
       gap: 1,
       dotRadius: 3.5,
       cornerRadius: 3,
     });
-    expect(riichiStickMetrics("mobile")).toBe(MOBILE_RIICHI_STICK);
   });
+
+  it.each([
+    ["standard", "standard", currentTableLayout],
+    ["compact", "standard", compactWebTableLayout],
+    ["mobile", "mobile", mobileTableLayout],
+  ] as const)(
+    "makes every %s stick the same three-upright-tile length",
+    (mode, presentation, config) => {
+      const layout = tableLayoutFromConfig(config);
+      const options =
+        mode === "mobile"
+          ? mobileDiscardLayoutOptions(tenhouTileDesign, layout)
+          : webDiscardLayoutOptions(
+              mode === "compact" ? "compact" : "standard",
+              tenhouTileDesign,
+              layout
+            );
+      const expectedWidth =
+        discardCellSize(tenhouTileDesign, 0, options).w * 3;
+      const widths = ([0, 1, 2, 3] as const).map(() => {
+        return riichiStickMetrics(
+          presentation,
+          tenhouTileDesign,
+          options
+        ).width;
+      });
+
+      expect(new Set(widths)).toHaveLength(1);
+      for (const width of widths) {
+        expect(width).toBeCloseTo(expectedWidth, 8);
+      }
+    }
+  );
 });
 
 describe("web table layouts", () => {
@@ -482,6 +683,13 @@ describe("web table layouts", () => {
     expect(right).toBe(top + 1);
     expect(left).toBe(top + 2);
     expect(bottom).toBe(top + 3);
+  });
+
+  it("keeps riichi sticks above every discard shadow and below every tile", () => {
+    expect(DISCARD_SHADOW_Z_INDEX).toBeLessThan(RIICHI_STICK_Z_INDEX);
+    for (const seat of [0, 1, 2, 3] as const) {
+      expect(RIICHI_STICK_Z_INDEX).toBeLessThan(discardContainerZIndex(seat));
+    }
   });
 
   it("halves the player-local top gap to the discard on the right", () => {
