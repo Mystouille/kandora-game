@@ -1342,6 +1342,21 @@ export function resolveActionTimerState(
   };
 }
 
+export function actionTimerTickDecision(
+  previousTotalSeconds: number | null,
+  allocationSeconds: number,
+  bufferSeconds: number
+): { displayedTotalSeconds: number; play: boolean } {
+  const displayedTotalSeconds = allocationSeconds + bufferSeconds;
+  return {
+    displayedTotalSeconds,
+    play:
+      displayedTotalSeconds > 0 &&
+      displayedTotalSeconds < 5 &&
+      displayedTotalSeconds !== previousTotalSeconds,
+  };
+}
+
 export class TableRenderer {
   private app: Application | null = null;
   private root: Container | null = null;
@@ -1385,9 +1400,8 @@ export class TableRenderer {
   /**
    * Last whole-second value of `total_remaining` shown by
    * `tickTimer`. Used to fire `timer-tick` SFX on every
-   * second-crossing while `total_remaining <= 5s`, and to skip
-   * the tick on the first frame after the timer appears (no
-   * audible "5" before the player has had a chance to act).
+    * displayed second-crossing while allocation + buffer is below
+    * 5s.
    */
   private lastTimerSeconds: number | null = null;
   /** Bound ticker callback retained so we can remove it on
@@ -7910,7 +7924,6 @@ export class TableRenderer {
       0,
       bufferStartMs - baseElapsedOverflowMs
     );
-    const totalRemainingMs = baseRemainingMs + bufferRemainingMs;
     const baseSec = Math.ceil(baseRemainingMs / 1000);
     const bufferSec = Math.ceil(bufferRemainingMs / 1000);
     const nextText =
@@ -7920,9 +7933,14 @@ export class TableRenderer {
     if (timer.text !== nextText) {
       timer.text = nextText;
     }
+    const tickDecision = actionTimerTickDecision(
+      this.lastTimerSeconds,
+      baseSec,
+      bufferSec
+    );
+    const totalSec = tickDecision.displayedTotalSeconds;
     // Tint thresholds: yellow when in the buffer pool, red when
-    // total ≤ 5s (matches the tick-sound threshold).
-    const totalSec = Math.ceil(totalRemainingMs / 1000);
+    // the displayed allocation + buffer total is at most 5s.
     const nextStyle =
       totalSec <= 5
         ? timerStyleDanger
@@ -7935,12 +7953,10 @@ export class TableRenderer {
     if (!timer.visible) {
       timer.visible = true;
     }
-    // Fire `timer-tick` on every whole-second crossing while the
-    // total remaining is at or below 5s (including the first
-    // frame the timer paints at ≤5s, so the player gets the
-    // full 5-4-3-2-1 sequence even if the window opens already
-    // inside the danger zone).
-    if (totalSec > 0 && totalSec <= 5 && totalSec !== this.lastTimerSeconds) {
+    // Text and visibility are committed above before audio is
+    // requested, keeping each 4-3-2-1 cue aligned with the newly
+    // displayed allocation + buffer total.
+    if (tickDecision.play) {
       playGameCountdownSound("timer-tick", `action:${deadline}`, totalSec);
     }
     this.lastTimerSeconds = totalSec;

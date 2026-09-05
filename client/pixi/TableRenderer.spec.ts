@@ -6,6 +6,7 @@ import {
   advanceMatchEndRevealSound,
   actionButtonLabel,
   actionButtonStyle,
+  actionTimerTickDecision,
   ankanTilesForDisplay,
   buildResultYakuEntries,
   callEffectAnchor,
@@ -108,6 +109,33 @@ describe("action timer ownership", () => {
         actionBufferMs: 30_000,
       })
     ).toEqual({ deadline: 15_000, bufferMs: 30_000 });
+  });
+
+  it("ticks only on new displayed totals below five seconds", () => {
+    expect(actionTimerTickDecision(null, 2, 3)).toEqual({
+      displayedTotalSeconds: 5,
+      play: false,
+    });
+    expect(actionTimerTickDecision(5, 1, 3)).toEqual({
+      displayedTotalSeconds: 4,
+      play: true,
+    });
+    expect(actionTimerTickDecision(null, 1, 3)).toEqual({
+      displayedTotalSeconds: 4,
+      play: true,
+    });
+    expect(actionTimerTickDecision(4, 1, 3)).toEqual({
+      displayedTotalSeconds: 4,
+      play: false,
+    });
+    expect(actionTimerTickDecision(4, 0, 3)).toEqual({
+      displayedTotalSeconds: 3,
+      play: true,
+    });
+    expect(actionTimerTickDecision(1, 0, 0)).toEqual({
+      displayedTotalSeconds: 0,
+      play: false,
+    });
   });
 });
 
