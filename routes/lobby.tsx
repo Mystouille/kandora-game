@@ -54,6 +54,10 @@ const PLACEHOLDER_HAND = "123456789m1234p";
 const PLACEHOLDER_DRAWS = "555z";
 const PLACEHOLDER_LEFT = "123z";
 
+export function soloMatchPath(matchId: string): string {
+  return `/game/${encodeURIComponent(matchId)}?solo=1`;
+}
+
 function formatGameLogTime(timestamp: number): string {
   const iso = new Date(timestamp).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
@@ -236,7 +240,7 @@ export default function LobbyRoute() {
       return;
     }
     saveAutoStart(matchId);
-    openAppLink(`/game/${matchId}`);
+    openAppLink(soloMatchPath(matchId));
   }
 
   async function createRoom() {
@@ -251,7 +255,7 @@ export default function LobbyRoute() {
       setStarting(false);
       return;
     }
-    openAppLink(`/game/${matchId}`);
+    openAppLink(`/game/${encodeURIComponent(matchId)}`);
   }
 
   function joinRoom() {

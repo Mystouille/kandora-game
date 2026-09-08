@@ -21,7 +21,7 @@ vi.mock("react-router", async (importOriginal) => {
   };
 });
 
-import LobbyRoute from "./lobby";
+import LobbyRoute, { soloMatchPath } from "./lobby";
 
 describe("game lobby", () => {
   beforeEach(() => {
@@ -50,6 +50,10 @@ describe("game lobby", () => {
         },
       ],
     };
+  });
+
+  it("marks only the solo handoff for native auto-start", () => {
+    expect(soloMatchPath("ROOM/123")).toBe("/game/ROOM%2F123?solo=1");
   });
 
   it("uses document links for Tenhou streams and completed replays", () => {
