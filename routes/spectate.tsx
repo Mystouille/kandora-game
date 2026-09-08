@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EyeOutlined } from "@ant-design/icons";
-import {
-  useNavigate,
-  useSearchParams,
-  type LoaderFunctionArgs,
-} from "react-router";
+import { useNavigate, type LoaderFunctionArgs } from "react-router";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
 import type {
   TableRenderer,
@@ -226,10 +222,6 @@ export default function GameSpectateRoute({
 }: GameSpectateRouteProps) {
   const { matchId, tenhouRelay } = loaderData;
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  // `?delay=<ms>` — non-negative integer. Defaults to 0 (live).
-  // The server caps this at 30 min.
-  const delayMs = Math.max(0, Number(searchParams.get("delay") ?? 0)) | 0;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<TableRenderer | null>(null);
   const wsRef = useRef<GameWS | null>(null);
@@ -454,7 +446,6 @@ export default function GameSpectateRoute({
       },
       matchId,
       spectate: true,
-      ...(delayMs > 0 ? { delayMs } : {}),
       onMessage: (msg: ServerMessage) => {
         if (msg.type === "viewer_state") {
           setViewers(msg.viewers);
@@ -974,7 +965,7 @@ export default function GameSpectateRoute({
         <span
           className={`inline-block w-2 h-2 rounded-full ${
             isLive
-              ? delayMs > 0
+              ? tenhouRelay
                 ? "bg-amber-400"
                 : "bg-red-500"
               : "bg-slate-400"
@@ -982,8 +973,8 @@ export default function GameSpectateRoute({
         />
         <span>
           {isLive
-            ? delayMs > 0
-              ? `Live (${Math.round(delayMs / 60_000)}min delay)`
+            ? tenhouRelay
+              ? "Pseudo-live (5min delay)"
               : "Live"
             : "Paused"}
         </span>

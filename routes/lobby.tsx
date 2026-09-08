@@ -1,6 +1,7 @@
-import { Link, useLoaderData, useNavigate, useRevalidator } from "react-router";
+import { useLoaderData, useRevalidator } from "react-router";
 import { useCallback, useEffect, useState } from "react";
 import { PlayCircleOutlined } from "@ant-design/icons";
+import { openAppLink } from "~/game/client/appLinkNavigation";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
 import type { MatchDebug } from "~/game/protocol/messages";
 
@@ -73,7 +74,6 @@ interface LiveRoom {
 export default function LobbyRoute() {
   const { presets, tenhouLiveGames, gameLogs } =
     useLoaderData<LobbyLoaderData>();
-  const navigate = useNavigate();
   const revalidator = useRevalidator();
   const presetNameById = new Map(
     presets.map((preset) => [preset.id, preset.displayName])
@@ -236,7 +236,7 @@ export default function LobbyRoute() {
       return;
     }
     saveAutoStart(matchId);
-    void navigate(`/game/${matchId}`);
+    openAppLink(`/game/${matchId}`);
   }
 
   async function createRoom() {
@@ -251,7 +251,7 @@ export default function LobbyRoute() {
       setStarting(false);
       return;
     }
-    void navigate(`/game/${matchId}`);
+    openAppLink(`/game/${matchId}`);
   }
 
   function joinRoom() {
@@ -262,27 +262,7 @@ export default function LobbyRoute() {
       return;
     }
     setStarting(true);
-    void navigate(`/game/${encodeURIComponent(id)}`);
-  }
-
-  function watchLive(id: string) {
-    setError(null);
-    setStarting(true);
-    void navigate(`/spectate/${encodeURIComponent(id)}`);
-  }
-
-  function watchLiveDelayed(id: string) {
-    setError(null);
-    setStarting(true);
-    // 5-minute delay — long enough to defeat real-time relaying
-    // without making the watch unwatchable.
-    void navigate(`/spectate/${encodeURIComponent(id)}?delay=${5 * 60_000}`);
-  }
-
-  function joinRoomById(id: string) {
-    setError(null);
-    setStarting(true);
-    void navigate(`/game/${encodeURIComponent(id)}`);
+    openAppLink(`/game/${encodeURIComponent(id)}`);
   }
 
   return (
@@ -431,12 +411,12 @@ export default function LobbyRoute() {
                       .join(" · ")}
                   </div>
                 </div>
-                <Link
-                  to={`/watch/live/${encodeURIComponent(game.watchId)}`}
+                <a
+                  href={`/watch/live/${encodeURIComponent(game.watchId)}`}
                   className="px-4 py-2 text-sm bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-md"
                 >
                   5min delay
-                </Link>
+                </a>
               </li>
             ))}
             {rooms?.map((r) => {
@@ -478,39 +458,37 @@ export default function LobbyRoute() {
                   </div>
                   <div className="flex gap-2">
                     {r.status === "playing" ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            watchLive(r.matchId);
-                          }}
-                          disabled={starting}
-                          className="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-semibold rounded-md"
-                        >
-                          Watch live
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            watchLiveDelayed(r.matchId);
-                          }}
-                          disabled={starting}
-                          className="px-4 py-2 text-sm bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-semibold rounded-md"
-                        >
-                          5min delay
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          joinRoomById(r.matchId);
+                      <a
+                        href={`/spectate/${encodeURIComponent(r.matchId)}`}
+                        aria-disabled={starting}
+                        onClick={(event) => {
+                          if (starting) {
+                            event.preventDefault();
+                            return;
+                          }
+                          setError(null);
+                          setStarting(true);
                         }}
-                        disabled={starting}
-                        className="px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-md"
+                        className="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 aria-disabled:pointer-events-none aria-disabled:opacity-60 text-white font-semibold rounded-md"
+                      >
+                        Watch live
+                      </a>
+                    ) : (
+                      <a
+                        href={`/game/${encodeURIComponent(r.matchId)}`}
+                        aria-disabled={starting}
+                        onClick={(event) => {
+                          if (starting) {
+                            event.preventDefault();
+                            return;
+                          }
+                          setError(null);
+                          setStarting(true);
+                        }}
+                        className="px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 aria-disabled:pointer-events-none aria-disabled:opacity-60 text-white font-semibold rounded-md"
                       >
                         Join game
-                      </button>
+                      </a>
                     )}
                   </div>
                 </li>
@@ -569,13 +547,13 @@ export default function LobbyRoute() {
                         ))}
                     </ol>
                   </div>
-                  <Link
-                    to={`/watch/replay/${encodeURIComponent(log.gameId)}`}
+                  <a
+                    href={`/watch/replay/${encodeURIComponent(log.gameId)}`}
                     className="inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-white bg-sky-600 hover:bg-sky-700 rounded-md"
                   >
                     <PlayCircleOutlined aria-hidden="true" />
                     Open replay
-                  </Link>
+                  </a>
                 </div>
               </li>
             ))}
