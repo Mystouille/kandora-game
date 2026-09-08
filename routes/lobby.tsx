@@ -1,4 +1,4 @@
-import { Link, useLoaderData, useNavigate } from "react-router";
+import { Link, useLoaderData, useNavigate, useRevalidator } from "react-router";
 import { useCallback, useEffect, useState } from "react";
 import { PlayCircleOutlined } from "@ant-design/icons";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
@@ -24,6 +24,15 @@ export interface LobbyLoaderData {
     id: string;
     displayName: string;
     description?: string;
+  }>;
+  tenhouLiveGames: Array<{
+    watchId: string;
+    leagueName: string;
+    startTime: number | null;
+    players: Array<{
+      seat: number;
+      displayName: string;
+    }>;
   }>;
   gameLogs: Array<{
     gameId: string;
@@ -62,8 +71,10 @@ interface LiveRoom {
 }
 
 export default function LobbyRoute() {
-  const { presets, gameLogs } = useLoaderData<LobbyLoaderData>();
+  const { presets, tenhouLiveGames, gameLogs } =
+    useLoaderData<LobbyLoaderData>();
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
   const presetNameById = new Map(
     presets.map((preset) => [preset.id, preset.displayName])
   );
@@ -361,11 +372,14 @@ export default function LobbyRoute() {
             type="button"
             onClick={() => {
               void refreshRooms();
+              void revalidator.revalidate();
             }}
-            disabled={roomsLoading}
+            disabled={roomsLoading || revalidator.state !== "idle"}
             className="px-3 py-1.5 text-sm bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 disabled:opacity-60 text-gray-800 dark:text-gray-100 rounded-md"
           >
-            {roomsLoading ? "Refreshing…" : "Refresh"}
+            {roomsLoading || revalidator.state !== "idle"
+              ? "Refreshing…"
+              : "Refresh"}
           </button>
         </div>
         {roomsError && (
@@ -373,14 +387,59 @@ export default function LobbyRoute() {
             {roomsError}
           </p>
         )}
-        {rooms !== null && rooms.length === 0 && !roomsError && (
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            No live games right now.
-          </p>
-        )}
-        {rooms !== null && rooms.length > 0 && (
+        {rooms !== null &&
+          rooms.length === 0 &&
+          tenhouLiveGames.length === 0 &&
+          !roomsError && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              No live games right now.
+            </p>
+          )}
+        {(tenhouLiveGames.length > 0 || (rooms?.length ?? 0) > 0) && (
           <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-            {rooms.map((r) => {
+            {tenhouLiveGames.map((game) => (
+              <li
+                key={`tenhou:${game.watchId}`}
+                className="py-3 flex flex-wrap items-center gap-3"
+              >
+                <div className="flex-1 min-w-[240px]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-block px-2 py-0.5 text-xs font-semibold rounded bg-emerald-200 text-emerald-900 dark:bg-emerald-700 dark:text-emerald-50">
+                      playing
+                    </span>
+                    <span className="text-sm font-medium text-gray-800 dark:text-gray-100">
+                      {game.leagueName}
+                    </span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Tenhou
+                    </span>
+                    {game.startTime !== null && (
+                      <time
+                        dateTime={new Date(game.startTime).toISOString()}
+                        className="text-xs text-gray-500 dark:text-gray-400"
+                      >
+                        {formatGameLogTime(game.startTime)}
+                      </time>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">
+                    {game.players
+                      .map(
+                        (player) =>
+                          `[${player.seat + 1}] ${player.displayName || "?"}`
+                      )
+                      .join(" · ")}
+                  </div>
+                </div>
+                <Link
+                  to={`/watch/live/${encodeURIComponent(game.watchId)}`}
+                  className="px-4 py-2 text-sm bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-md"
+                >
+                  5min delay
+                </Link>
+              </li>
+            ))}
+            {rooms?.map((r) => {
               const seatLabels = r.seats.map((s, i) => {
                 if (s === null) {
                   return `[${i + 1}] empty`;
