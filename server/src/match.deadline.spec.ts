@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type AutomaticActionContext,
   MatchProcess,
   setNextHandDelayMs,
   setDelayAfterDiscardMs,
@@ -22,7 +23,10 @@ import {
 import { ephemeralMatchRepository } from "./repository";
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
 
-function makeMatch(seed: number): MatchProcess {
+function makeMatch(
+  seed: number,
+  onAutomaticAction?: (context: AutomaticActionContext) => void
+): MatchProcess {
   return new MatchProcess(
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
     seed,
@@ -32,7 +36,7 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
     ],
-    { repository: ephemeralMatchRepository }
+    { repository: ephemeralMatchRepository, onAutomaticAction }
   );
 }
 
@@ -89,7 +93,8 @@ describe("MatchProcess — deadline enforcement", () => {
   });
 
   it("auto-discards (tsumogiri) when the human's discard window expires", async () => {
-    const m = makeMatch(11);
+    const onAutomaticAction = vi.fn();
+    const m = makeMatch(11, onAutomaticAction);
     const s = sink();
     m.attachHuman(0, s.send);
     await m.start();
@@ -102,6 +107,16 @@ describe("MatchProcess — deadline enforcement", () => {
       (e) => e.type === "discard" && e.seat === 0
     );
     expect(discards.length).toBeGreaterThan(before);
+    expect(onAutomaticAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchId: m.matchId,
+        gameId: m.matchId,
+        seat: 0,
+        actionId: expect.stringMatching(/^discard:draw:/),
+        reason: "deadline",
+        bufferMs: 0,
+      })
+    );
   });
 
   it("clears the deadline timer when the human acts in time", async () => {

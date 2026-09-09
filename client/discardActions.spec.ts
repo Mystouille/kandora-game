@@ -4,6 +4,7 @@ import {
   discardIndexForSource,
   discardSourceForRawIndex,
   findTileAction,
+  isCurrentAutoDiscardWindow,
 } from "./discardActions";
 
 describe("discard action identity", () => {
@@ -49,5 +50,40 @@ describe("discard action identity", () => {
     expect(findTileAction(legacy, "discard", "5m", "hand")?.id).toBe(
       "discard:5m"
     );
+  });
+
+  it("binds a delayed auto-discard to one authoritative action window", () => {
+    const expected = {
+      matchId: "match-1",
+      seat: 1 as const,
+      lastSeq: 42,
+      actionDeadline: 10_000,
+      actionId: "discard:draw:5m",
+    };
+    const current = {
+      matchId: "match-1",
+      mySeat: 1 as const,
+      lastSeq: 42,
+      actionDeadline: 10_000,
+      freshlyDrawnSeat: 1 as const,
+      legalActions: actions,
+    };
+
+    expect(isCurrentAutoDiscardWindow(current, expected)).toBe(true);
+    expect(
+      isCurrentAutoDiscardWindow({ ...current, lastSeq: 43 }, expected)
+    ).toBe(false);
+    expect(
+      isCurrentAutoDiscardWindow(
+        { ...current, actionDeadline: 11_000 },
+        expected
+      )
+    ).toBe(false);
+    expect(
+      isCurrentAutoDiscardWindow(
+        { ...current, freshlyDrawnSeat: null },
+        expected
+      )
+    ).toBe(false);
   });
 });

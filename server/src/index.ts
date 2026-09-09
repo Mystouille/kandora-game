@@ -118,6 +118,20 @@ const matches = new Map<string, MatchProcess>();
 const nativeMatchDependencies = {
   repository: mongoMatchRepository,
   eventJournalStore: mongoMatchEventJournalStore,
+  onAutomaticAction: (context: {
+    matchId: string;
+    gameId: string;
+    seat: Seat;
+    actionId: string;
+    reason: "deadline" | "disconnected" | "afk";
+    nextSeq: number;
+    bufferMs: number;
+    actionWindowElapsedMs: number | null;
+  }): void => {
+    console.log(
+      `[game-server] automatic action ${JSON.stringify(context)}`
+    );
+  },
   onEventJournalError: (context: {
     matchId: string;
     durableNextSeq: number;

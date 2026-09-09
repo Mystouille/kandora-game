@@ -1,6 +1,35 @@
-import type { LegalAction } from "~/game/protocol/messages";
+import type { LegalAction, Seat } from "~/game/protocol/messages";
 
 export type DiscardSource = NonNullable<LegalAction["discardSource"]>;
+
+export interface AutoDiscardWindowIdentity {
+  matchId: string | null;
+  seat: Seat;
+  lastSeq: number;
+  actionDeadline: number | null;
+  actionId: string;
+}
+
+export function isCurrentAutoDiscardWindow(
+  state: {
+    matchId: string | null;
+    mySeat: Seat | null;
+    lastSeq: number;
+    actionDeadline: number | null;
+    freshlyDrawnSeat: Seat | null;
+    legalActions: readonly LegalAction[];
+  },
+  expected: AutoDiscardWindowIdentity
+): boolean {
+  return (
+    state.matchId === expected.matchId &&
+    state.mySeat === expected.seat &&
+    state.lastSeq === expected.lastSeq &&
+    state.actionDeadline === expected.actionDeadline &&
+    state.freshlyDrawnSeat === expected.seat &&
+    state.legalActions.some((action) => action.id === expected.actionId)
+  );
+}
 
 export function discardSourceForRawIndex(
   rawIndex: number,

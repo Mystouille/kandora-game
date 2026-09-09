@@ -19,7 +19,10 @@ import {
   GameWS,
   GameWSConnectionDetailsError,
 } from "~/game/client/ws";
-import { findTileAction } from "~/game/client/discardActions";
+import {
+  findTileAction,
+  isCurrentAutoDiscardWindow,
+} from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
 import { ViewerList } from "~/game/components/ViewerList";
@@ -47,6 +50,7 @@ import { writeWebTableLayoutMode } from "~/game/client/webTableLayoutPreference"
 import { rotateHandResult, rotateMatchView } from "~/game/replay/player";
 import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
+import { useTelemetry } from "~/contexts/TelemetryContext";
 import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
 
@@ -63,6 +67,14 @@ const tntLogoWhiteUrl = `${publicBasePath}banner/TNT_logo-WHITE.png`;
  * seat (auto-played or otherwise) shares the same cadence.
  */
 const DRAW_TO_DISCARD_DELAY_MS = 700;
+
+type GameActionIntentOrigin =
+  | "tile_click"
+  | "action_button"
+  | "context_menu"
+  | "auto_discard"
+  | "auto_pass"
+  | "auto_win";
 
 const DEBUG_PLAYER_NAME_POOL = [
   "Akari",
@@ -702,6 +714,29 @@ export default function GameMatchRoute({
 
   const view = useMatchStore();
   const { t } = useLocale();
+  const { track } = useTelemetry();
+  const trackGameActionIntent = useCallback(
+    (
+      origin: GameActionIntentOrigin,
+      actionId: string,
+      state: Pick<
+        MatchView,
+        "mySeat" | "lastSeq" | "actionDeadline" | "actionBufferMs"
+      >
+    ): void => {
+      track("game_action_intent", {
+        matchId,
+        seat: state.mySeat,
+        actionId,
+        origin,
+        lastSeq: state.lastSeq,
+        actionDeadline: state.actionDeadline,
+        actionBufferMs: state.actionBufferMs,
+        clientTs: Date.now(),
+      });
+    },
+    [matchId, track]
+  );
 
   // Eye-button state: after the hand-result auto-advance clears
   // `view.lastHandResult`, we keep the most recent result around
@@ -724,9 +759,23 @@ export default function GameMatchRoute({
   const [liveMenuFlags, setLiveMenuFlags] = useState<LivePlayMenuFlags>(
     buildInitialLivePlayMenuFlags
   );
+  const liveMenuFlagsRef = useRef(liveMenuFlags);
+  const autoDiscardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const cancelAutoDiscardTimer = useCallback((): void => {
+    if (autoDiscardTimerRef.current !== null) {
+      clearTimeout(autoDiscardTimerRef.current);
+      autoDiscardTimerRef.current = null;
+    }
+  }, []);
   const noCallRef = useRef(liveMenuFlags.noCall);
   const handleLiveMenuChange = useCallback((next: LivePlayMenuFlags) => {
+    liveMenuFlagsRef.current = next;
     noCallRef.current = next.noCall;
+    if (!next.autoDiscard) {
+      cancelAutoDiscardTimer();
+    }
     setLiveMenuFlags((prev) => {
       if (next.autoSort !== prev.autoSort) {
         // Persist the autoSort preference so it survives both
@@ -751,7 +800,10 @@ export default function GameMatchRoute({
       }
       return next;
     });
-  }, []);
+  }, [cancelAutoDiscardTimer]);
+  useEffect(() => {
+    liveMenuFlagsRef.current = liveMenuFlags;
+  }, [liveMenuFlags]);
   useEffect(() => {
     noCallRef.current = liveMenuFlags.noCall;
   }, [liveMenuFlags.noCall]);
@@ -785,15 +837,8 @@ export default function GameMatchRoute({
   // unrelated store mutations that arrive before the server's
   // ack clears `legalActions`.
   const lastAutoActedIdRef = useRef<string | null>(null);
-  // Pending timer for the human auto-discard delay (riichi or
-  // the `autoDiscard` toggle). Held in a ref so the effect can
-  // cancel it whenever the legal-actions snapshot changes
-  // before the timer fires (e.g. an interrupting ron window),
-  // and so the unmount cleanup can clear it too.
-  const autoDiscardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
   useEffect(() => {
+    cancelAutoDiscardTimer();
     const ws = wsRef.current;
     if (!ws) {
       return;
@@ -804,17 +849,14 @@ export default function GameMatchRoute({
     const actions = view.legalActions;
     if (actions.length === 0) {
       lastAutoActedIdRef.current = null;
-      if (autoDiscardTimerRef.current !== null) {
-        clearTimeout(autoDiscardTimerRef.current);
-        autoDiscardTimerRef.current = null;
-      }
       return;
     }
-    const fire = (id: string): void => {
+    const fire = (id: string, origin: GameActionIntentOrigin): void => {
       if (lastAutoActedIdRef.current === id) {
         return;
       }
       lastAutoActedIdRef.current = id;
+      trackGameActionIntent(origin, id, useMatchStore.getState());
       ws.act(id);
     };
     const hasWin = actions.some((a) => a.type === "ron" || a.type === "tsumo");
@@ -823,7 +865,7 @@ export default function GameMatchRoute({
     if (liveMenuFlags.autoWin) {
       const win = actions.find((a) => a.type === "ron" || a.type === "tsumo");
       if (win) {
-        fire(win.id);
+        fire(win.id, "auto_win");
         return;
       }
     }
@@ -832,7 +874,7 @@ export default function GameMatchRoute({
     //    player doesn't unintentionally skip a ron alongside.
     const noCallPass = findNoCallAutoPass(actions, liveMenuFlags.noCall);
     if (noCallPass) {
-      fire(noCallPass.id);
+      fire(noCallPass.id, "auto_pass");
       return;
     }
     // 3) Auto-discard — tsumogiri the drawn tile. Triggered
@@ -868,24 +910,25 @@ export default function GameMatchRoute({
       }
       const discard = findTileAction(actions, "discard", drawn, "draw");
       if (discard && lastAutoActedIdRef.current !== discard.id) {
-        // If a previous timer is still pending (shouldn't happen
-        // in practice — `legalActions` changing re-runs the
-        // effect and clears it), drop it before scheduling a new
-        // one so we never double-fire.
-        if (autoDiscardTimerRef.current !== null) {
-          clearTimeout(autoDiscardTimerRef.current);
-        }
+        const expectedWindow = {
+          matchId: view.matchId,
+          seat: mySeat,
+          lastSeq: view.lastSeq,
+          actionDeadline: view.actionDeadline,
+          actionId: discard.id,
+        };
         autoDiscardTimerRef.current = setTimeout(() => {
           autoDiscardTimerRef.current = null;
           // Re-check the live store: another event could have
           // landed during the delay (ron window opening, hand
           // ending, etc.) and invalidated this discard.
           const live = useMatchStore.getState();
-          if (live.mySeat !== mySeat) {
-            return;
-          }
-          const stillLegal = live.legalActions.some((a) => a.id === discard.id);
-          if (!stillLegal) {
+          if (
+            !isCurrentAutoDiscardWindow(live, expectedWindow) ||
+            live.pendingDiscard !== null ||
+            (!liveMenuFlagsRef.current.autoDiscard &&
+              !live.riichiDeclared[mySeat])
+          ) {
             return;
           }
           live.setPendingDiscard({
@@ -893,30 +936,32 @@ export default function GameMatchRoute({
             tile: drawn,
             displayIndex: hand.length - 1,
           });
-          fire(discard.id);
+          fire(discard.id, "auto_discard");
         }, DRAW_TO_DISCARD_DELAY_MS);
+        return cancelAutoDiscardTimer;
       }
     }
+    return;
   }, [
+    cancelAutoDiscardTimer,
     view.legalActions,
+    view.matchId,
     view.mySeat,
     view.hands,
     view.freshlyDrawnSeat,
+    view.lastSeq,
+    view.actionDeadline,
     view.riichiDeclared,
     liveMenuFlags.autoWin,
     liveMenuFlags.noCall,
     liveMenuFlags.autoDiscard,
+    trackGameActionIntent,
   ]);
   // Clear any pending auto-discard timer on unmount so it can't
   // fire against a closed `ws` or a stale store snapshot.
   useEffect(() => {
-    return () => {
-      if (autoDiscardTimerRef.current !== null) {
-        clearTimeout(autoDiscardTimerRef.current);
-        autoDiscardTimerRef.current = null;
-      }
-    };
-  }, []);
+    return cancelAutoDiscardTimer;
+  }, [cancelAutoDiscardTimer]);
   // Canvas-pixel centre of the focused seat's discard pond,
   // published by the renderer. Used to anchor the post-hand
   // "peek" eye button to the middle of the pond.
@@ -1004,37 +1049,12 @@ export default function GameMatchRoute({
     }
   }, [matchId, view.roomState]);
 
-  // AFK self-report: 25s after each call/discard prompt arrives,
-  // if the player hasn't clicked anything, send `afk: true` so
-  // the server flips us to disconnected (skips all our open and
-  // future windows). The timer resets every time a new legal-
-  // action set arrives (which happens on every action of ours,
-  // since the server echoes the post-act legals). Cleared when
-  // legals go empty (off-turn) or we're already flagged
-  // disconnected.
   const ownOccupant =
     view.mySeat !== null
       ? view.roomState?.seats[view.mySeat]?.occupant
       : undefined;
   const ownConnected =
     ownOccupant?.kind === "human" ? ownOccupant.connected !== false : true;
-  useEffect(() => {
-    if (
-      view.mySeat === null ||
-      view.legalActions.length === 0 ||
-      !ownConnected
-    ) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (wsRef.current) {
-        wsRef.current.sendAfk(true);
-      }
-    }, 25_000);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [view.legalActions, view.mySeat, ownConnected]);
 
   // Mount Pixi + WS once, tear down on unmount.
   useEffect(() => {
@@ -1082,6 +1102,7 @@ export default function GameMatchRoute({
             setResultPanelBounds(rect);
           });
           renderer.setOnTileClick(({ index, tile, discardSource }) => {
+            cancelAutoDiscardTimer();
             // Optimistic discard for own seat; the server confirmation
             // (a `discard` event) will clear `pendingDiscard`.
             const state = useMatchStore.getState();
@@ -1096,6 +1117,7 @@ export default function GameMatchRoute({
               discardSource
             );
             if (legal && wsRef.current) {
+              trackGameActionIntent("tile_click", legal.id, state);
               state.setPendingDiscard({
                 seat: state.mySeat,
                 tile,
@@ -1105,10 +1127,16 @@ export default function GameMatchRoute({
             }
           });
           renderer.setOnActionClick(({ action }) => {
+            cancelAutoDiscardTimer();
             // Generic dispatch for call / pass / ron / etc. buttons. The
             // server validated these into `legalActions`, so we just echo
             // the id back.
             if (wsRef.current) {
+              trackGameActionIntent(
+                "action_button",
+                action.id,
+                useMatchStore.getState()
+              );
               wsRef.current.act(action.id);
             }
             // Optimistically clear our legal actions so the call
@@ -1228,6 +1256,13 @@ export default function GameMatchRoute({
     wsRef.current = ws;
     ws.connect();
 
+    const onPrimaryPointerDown = (event: PointerEvent): void => {
+      if (event.button === 0) {
+        cancelAutoDiscardTimer();
+      }
+    };
+    container.addEventListener("pointerdown", onPrimaryPointerDown, true);
+
     // Right-click on the canvas → pass (during a call window) or
     // tsumogiri (discard the freshly-drawn tile). Always suppress
     // the browser context menu so the gesture is reliable. Lives
@@ -1235,6 +1270,7 @@ export default function GameMatchRoute({
     // store snapshot + the live WS handle.
     const onContextMenu = (e: MouseEvent): void => {
       e.preventDefault();
+      cancelAutoDiscardTimer();
       const ws = wsRef.current;
       if (!ws) {
         return;
@@ -1243,6 +1279,7 @@ export default function GameMatchRoute({
       const legals = state.legalActions;
       const pass = legals.find((a) => a.type === "pass");
       if (pass) {
+        trackGameActionIntent("context_menu", pass.id, state);
         ws.act(pass.id);
         return;
       }
@@ -1260,6 +1297,7 @@ export default function GameMatchRoute({
       }
       const discard = findTileAction(legals, "discard", drawn, "draw");
       if (discard) {
+        trackGameActionIntent("context_menu", discard.id, state);
         state.setPendingDiscard({
           seat: mySeat,
           tile: drawn,
@@ -1273,6 +1311,7 @@ export default function GameMatchRoute({
     return () => {
       cancelled = true;
       uninstallSound();
+      container.removeEventListener("pointerdown", onPrimaryPointerDown, true);
       container.removeEventListener("contextmenu", onContextMenu);
       if (wsRef.current) {
         wsRef.current.close();

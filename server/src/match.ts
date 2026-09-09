@@ -105,7 +105,19 @@ export interface MatchProcessDependencies {
   repository: MatchRepository;
   eventJournalStore?: MatchEventJournalStore;
   onEventJournalError?: (context: EventJournalErrorContext) => void;
+  onAutomaticAction?: (context: AutomaticActionContext) => void;
   runtime?: MatchRuntime;
+}
+
+export interface AutomaticActionContext {
+  matchId: string;
+  gameId: string;
+  seat: Seat;
+  actionId: string;
+  reason: "deadline" | "disconnected" | "afk";
+  nextSeq: number;
+  bufferMs: number;
+  actionWindowElapsedMs: number | null;
 }
 
 type Send = (msg: ServerMessage) => void;
@@ -1014,6 +1026,9 @@ export class MatchProcess {
   private readonly onEventJournalError:
     | ((context: EventJournalErrorContext) => void)
     | undefined;
+  private readonly onAutomaticAction:
+    | ((context: AutomaticActionContext) => void)
+    | undefined;
   private eventJournal: MatchEventJournal | null = null;
   private pausedCheckpoint: MatchCheckpoint | null = null;
   private checkpointSavePromise: Promise<MatchCheckpoint> | null = null;
@@ -1084,6 +1099,7 @@ export class MatchProcess {
     this.repository = dependencies.repository;
     this.eventJournalStore = dependencies.eventJournalStore ?? null;
     this.onEventJournalError = dependencies.onEventJournalError;
+    this.onAutomaticAction = dependencies.onAutomaticAction;
   }
 
   /**
@@ -4015,8 +4031,30 @@ export class MatchProcess {
     }
     this.broadcastRoomState();
     if (defaultActionId !== null) {
+      this.reportAutomaticAction(seat, defaultActionId, "afk");
       await this.handleActDirect(seat, defaultActionId);
     }
+  }
+
+  private reportAutomaticAction(
+    seat: Seat,
+    actionId: string,
+    reason: AutomaticActionContext["reason"]
+  ): void {
+    const actionStartedAt = this.currentActionStartMs[seat];
+    this.onAutomaticAction?.({
+      matchId: this.matchId,
+      gameId: this.currentGameMongoId(),
+      seat,
+      actionId,
+      reason,
+      nextSeq: this.nextSeq,
+      bufferMs: this.bufferMs[seat],
+      actionWindowElapsedMs:
+        actionStartedAt === null
+          ? null
+          : Math.max(0, this.runtime.now() - actionStartedAt),
+    });
   }
 
   private isAcceptedContinueVote(
@@ -5426,6 +5464,11 @@ export class MatchProcess {
     if (actionId === null) {
       return;
     }
+    this.reportAutomaticAction(
+      seat,
+      actionId,
+      this.disconnected[seat] ? "disconnected" : "deadline"
+    );
     const handoff = new Promise<void>((resolve) => {
       this.automaticDefaultHandoffResolve = resolve;
     });
