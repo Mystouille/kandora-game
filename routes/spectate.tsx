@@ -114,7 +114,7 @@ interface GameSpectateRouteProps {
  * just won't have data until the next `hand_start` event arrives
  * with a fresh omniscient wall.
  */
-function snapshotToReplayView(s: SnapshotState): ReplayView {
+export function snapshotToReplayView(s: SnapshotState): ReplayView {
   const base = initialView();
   return {
     ...base,
@@ -180,6 +180,7 @@ function snapshotToReplayView(s: SnapshotState): ReplayView {
     buuMode: s.chips !== undefined,
     scoreCap: s.scoreCap ?? null,
     uraDoraEnabled: s.uraDoraEnabled ?? true,
+    freshlyDrawnSeat: s.freshlyDrawnSeat ?? null,
   };
 }
 
