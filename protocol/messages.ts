@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MatchModeConfigSchema } from "./matchMode";
 
 /**
  * WebSocket protocol between game client and game-server.
@@ -178,6 +179,16 @@ const HandStartEvent = z.object({
    * that pre-date the annotation pass.
    */
   liveDrawSchedule: z.array(SeatSchema).optional(),
+  /** Fixed per-seat draw queues for an archived duplicate hand.
+   * Never sent to live players or spectators. */
+  duplicateDrawQueues: z
+    .tuple([
+      z.array(TileSchema),
+      z.array(TileSchema),
+      z.array(TileSchema),
+      z.array(TileSchema),
+    ])
+    .optional(),
 });
 
 const DrawEvent = z.object({
@@ -759,6 +770,8 @@ export type Keepalive = z.infer<typeof KeepaliveMsg>;
 const RoomStateMsg = z.object({
   type: z.literal("room_state"),
   matchId: z.string(),
+  /** Match-driving mode. Absent legacy frames are normal mode. */
+  mode: MatchModeConfigSchema.optional(),
   /** Lifecycle: `waiting` = pre-start; `playing` = match running;
    * `finished` = match ended (post-game lobby). */
   status: z.enum(["waiting", "playing", "finished"]),

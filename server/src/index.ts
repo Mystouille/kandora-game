@@ -30,6 +30,10 @@ import { nanoid } from "nanoid";
 import { adapter } from "~/game/portal-adapter";
 import { hashStringToSeed } from "~/game/rules";
 import {
+  MatchModeConfigSchema,
+  normalMatchMode,
+} from "~/game/protocol/matchMode";
+import {
   getPreset,
   presetToRuleSet,
   listPresetIds,
@@ -54,6 +58,7 @@ import {
 import { RelayController, RelayCapacityError } from "./relay/relayController";
 import { createWsTenhouClient } from "./relay/tenhouClient";
 import { listLobbyRoomSummaries } from "./lobbyRooms";
+import { duplicateMatchSeed } from "./match-drivers/duplicatePlan";
 
 // The host bootstrap (portal or standalone) injects the PortalAdapter via
 // `setAdapter(...)` before importing this module.
@@ -362,7 +367,7 @@ async function readJsonBody(
  * `matchId`. The portal calls this on behalf of the user, then
  * navigates the client to `/game/:matchId` to join via WS.
  *
- * Body: `{ token, debug?, preset? }`.
+ * Body: `{ token, debug?, preset?, mode? }`.
  *
  * Splitting creation off the WS upgrade is what makes the URL
  * itself idempotent: visiting `/game/:id` only joins; it never
@@ -388,10 +393,11 @@ async function handleCreateRoom(
     reply(400, { error: "invalid_body" });
     return;
   }
-  const { token, debug, preset } = body as {
+  const { token, debug, preset, mode } = body as {
     token?: unknown;
     debug?: unknown;
     preset?: unknown;
+    mode?: unknown;
   };
   if (typeof token !== "string" || token.length === 0) {
     reply(401, { error: "missing_token" });
@@ -411,6 +417,15 @@ async function handleCreateRoom(
     }
     parsedDebug = r.data;
   }
+  const parsedMode = MatchModeConfigSchema.safeParse(mode ?? normalMatchMode);
+  if (!parsedMode.success) {
+    reply(400, { error: "invalid_mode" });
+    return;
+  }
+  if (parsedMode.data.type === "duplicate" && parsedDebug !== undefined) {
+    reply(400, { error: "debug_not_allowed_in_duplicate_mode" });
+    return;
+  }
   let presetId = "buu-east";
   if (preset !== undefined) {
     if (typeof preset !== "string" || !listPresetIds().includes(preset)) {
@@ -420,13 +435,18 @@ async function handleCreateRoom(
     presetId = preset;
   }
   const matchId = nanoid(12);
+  const matchSeed =
+    parsedMode.data.type === "duplicate"
+      ? duplicateMatchSeed(parsedMode.data)
+      : hashStringToSeed(matchId);
   const match = MatchProcess.createWaitingRoom(
     matchId,
-    hashStringToSeed(matchId),
+    matchSeed,
     nativeMatchDependencies,
     parsedDebug,
     presetToRuleSet(getPreset(presetId)),
-    presetId
+    presetId,
+    parsedMode.data
   );
   matches.set(matchId, match);
   // Post-creation grace timer: if nobody connects within the
@@ -439,7 +459,7 @@ async function handleCreateRoom(
     evictWaitingRoomIfEmpty(matchId);
   }, WAITING_ROOM_GRACE_MS);
   waitingRoomGraceTimers.set(matchId, graceTimer);
-  reply(200, { matchId });
+  reply(200, { matchId, mode: parsedMode.data });
 }
 
 /**

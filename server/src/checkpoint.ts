@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MatchModeConfigSchema } from "~/game/protocol/matchMode";
 import {
   GameEventSchema,
   LegalActionSchema,
@@ -8,7 +9,7 @@ import {
 import { MatchStateSchema } from "~/game/rules/state";
 import { RuleSetSchema } from "~/game/rules/ruleSet";
 
-export const MATCH_CHECKPOINT_SCHEMA_VERSION = 1 as const;
+export const MATCH_CHECKPOINT_SCHEMA_VERSION = 2 as const;
 
 const CheckpointPlayerSchema = z
   .object({
@@ -43,6 +44,37 @@ const SeatSchema = z.union([
   z.literal(3),
 ]);
 
+const DuplicateHandKeySchema = z
+  .object({
+    gameIndex: z.number().int().nonnegative(),
+    roundWind: z.enum(["E", "S", "W", "N"]),
+    roundNumber: z.number().int().positive(),
+    honba: z.number().int().nonnegative(),
+    dealer: SeatSchema,
+  })
+  .strict();
+
+export const MatchDriverSnapshotSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("normal") }).strict(),
+  z
+    .object({
+      type: z.literal("duplicate"),
+      activeHand: z
+        .object({
+          key: DuplicateHandKeySchema,
+          cursors: z.tuple([
+            z.number().int().nonnegative(),
+            z.number().int().nonnegative(),
+            z.number().int().nonnegative(),
+            z.number().int().nonnegative(),
+          ]),
+        })
+        .strict()
+        .nullable(),
+    })
+    .strict(),
+]);
+
 export const WaitingRoomCheckpointSchema = z
   .object({
     schemaVersion: z.literal(MATCH_CHECKPOINT_SCHEMA_VERSION),
@@ -51,6 +83,8 @@ export const WaitingRoomCheckpointSchema = z
     matchId: z.string().min(1),
     seed: z.number().int(),
     presetId: z.string().min(1),
+    mode: MatchModeConfigSchema,
+    driver: MatchDriverSnapshotSchema,
     ruleSet: RuleSetSchema,
     debug: MatchDebugSchema,
     seats: z.tuple([
@@ -90,6 +124,8 @@ const PlayingCheckpointBaseShape = {
   matchId: z.string().min(1),
   seed: z.number().int(),
   presetId: z.string().min(1),
+  mode: MatchModeConfigSchema,
+  driver: MatchDriverSnapshotSchema,
   seats: z.tuple([
     CheckpointPlayerSchema,
     CheckpointPlayerSchema,
@@ -613,14 +649,35 @@ export const PlayingResultTransitionCheckpointSchema = z
 export type PlayingResultTransitionCheckpoint = z.infer<
   typeof PlayingResultTransitionCheckpointSchema
 >;
-export const MatchCheckpointSchema = z.union([
-  WaitingRoomCheckpointSchema,
-  PlayingActionCheckpointSchema,
-  PlayingCallCheckpointSchema,
-  PlayingReadyCheckpointSchema,
-  PlayingContinueVoteCheckpointSchema,
-  PlayingResultTransitionCheckpointSchema,
-]);
+function migrateLegacyCheckpoint(input: unknown): unknown {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    Array.isArray(input) ||
+    !("schemaVersion" in input) ||
+    input.schemaVersion !== 1
+  ) {
+    return input;
+  }
+  return {
+    ...input,
+    schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
+    mode: { type: "normal" },
+    driver: { type: "normal" },
+  };
+}
+
+export const MatchCheckpointSchema = z.preprocess(
+  migrateLegacyCheckpoint,
+  z.union([
+    WaitingRoomCheckpointSchema,
+    PlayingActionCheckpointSchema,
+    PlayingCallCheckpointSchema,
+    PlayingReadyCheckpointSchema,
+    PlayingContinueVoteCheckpointSchema,
+    PlayingResultTransitionCheckpointSchema,
+  ])
+);
 export type MatchCheckpoint = z.infer<typeof MatchCheckpointSchema>;
 
 export function parseMatchCheckpoint(input: unknown): MatchCheckpoint {

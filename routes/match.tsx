@@ -1678,6 +1678,15 @@ function WaitingRoomOverlay({
           </p>
         </header>
 
+        {roomState.mode?.type === "duplicate" && (
+          <div className="flex items-center justify-between gap-3 border-y border-cyan-700/60 py-2 text-sm text-cyan-100">
+            <span className="font-semibold">Duplicate</span>
+            <code className="min-w-0 truncate" title={roomState.mode.seed}>
+              {roomState.mode.seed}
+            </code>
+          </div>
+        )}
+
         <div className="flex items-center gap-2">
           <input
             type="text"

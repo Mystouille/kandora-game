@@ -15,6 +15,7 @@
  */
 
 import type { Seat, Tile } from "./types";
+import type { DealtMatch } from "./wall";
 
 export type DiscardSource = "hand" | "draw";
 
@@ -34,6 +35,10 @@ export interface DiscardAction {
 export interface DrawAction {
   type: "draw";
   seat: Seat;
+  /** Trusted orchestrator override for a deterministic tile source. */
+  tile?: Tile;
+  /** End the hand when an external per-seat source is exhausted. */
+  forceExhaustive?: boolean;
 }
 
 /** Self-drawn win — the seat declares tsumo on their most recent draw. */
@@ -112,6 +117,8 @@ export interface KanAction {
   seat: Seat;
   kind: "daiminkan" | "ankan" | "shouminkan";
   tile: Tile;
+  /** Trusted replacement draw supplied by an external match driver. */
+  replacementTile?: Tile;
 }
 
 /**
@@ -146,6 +153,8 @@ export interface AbortAction {
  */
 export interface StartNextHandAction {
   type: "start_next_hand";
+  /** Trusted prebuilt deal supplied by an external match driver. */
+  deal?: DealtMatch;
 }
 
 /**
@@ -158,6 +167,8 @@ export interface StartNextHandAction {
  */
 export interface CompleteShouminkanAction {
   type: "complete_shouminkan";
+  /** Trusted replacement draw supplied after the chankan window closes. */
+  replacementTile?: Tile;
 }
 
 export type Action =

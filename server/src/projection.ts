@@ -69,7 +69,11 @@ export function projectEvent(
       // omniscient field — `startingHands` powers the all-hands
       // table view, and `liveWall` / `deadWall` /
       // `liveDrawSchedule` power the wall-reveal overlay.
-      return event;
+      if (event.duplicateDrawQueues === undefined) {
+        return event;
+      }
+      const { duplicateDrawQueues: _privateQueues, ...projected } = event;
+      return projected;
     }
     case "furiten": {
       // Furiten state is private to the affected seat for other

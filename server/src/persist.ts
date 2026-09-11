@@ -69,6 +69,7 @@ export async function createMatchDoc(args: CreateMatchArgs): Promise<void> {
         _id: args.matchId,
         seed: args.seed,
         ruleSet: args.ruleSet,
+        mode: args.mode,
         players: args.players,
         status: "playing",
         startedAt: new Date(),
@@ -196,6 +197,7 @@ export async function archiveReplayLog(args: {
   startedAt: Date;
   endedAt: Date;
   ruleSet: string;
+  mode?: import("~/game/protocol/matchMode").MatchModeConfig;
   ruleSetDetails?: Record<string, unknown>;
   events: GameEvent[];
   seats: Array<{
@@ -225,6 +227,7 @@ export async function archiveReplayLog(args: {
     source,
     sourceGameId,
     ruleSet: args.ruleSet,
+    mode: args.mode,
     ruleSetDetails: args.ruleSetDetails,
     startedAt: args.startedAt.getTime(),
     endedAt: args.endedAt.getTime(),

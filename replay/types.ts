@@ -1,4 +1,5 @@
 import type { GameEvent } from "~/game/protocol/messages";
+import type { MatchModeConfig } from "~/game/protocol/matchMode";
 
 /**
  * Shared `ReplayLog` shape — Phase 4.5, step 1.
@@ -35,7 +36,7 @@ import type { GameEvent } from "~/game/protocol/messages";
  * the produced documents. Hydration re-parses logs whose
  * `schemaVersion` is older.
  */
-export const REPLAY_LOG_SCHEMA_VERSION = 6;
+export const REPLAY_LOG_SCHEMA_VERSION = 7;
 
 export type ReplaySource = "ingame" | "majsoul" | "tenhou" | "riichicity";
 
@@ -57,6 +58,8 @@ export interface ReplayLog {
   /** Canonical rule-set name (e.g. `"tenhou-default"`). Adapter-
    * specific flags go in `ruleSetDetails`. */
   ruleSet: string;
+  /** Match-driving mode. Absent legacy logs are normal mode. */
+  mode?: MatchModeConfig;
   /** Free-form per-platform flags (red fives, kuitan, agari-yame,
    * sanma, etc.). Documented per platform in the fidelity matrix. */
   ruleSetDetails?: Record<string, unknown>;

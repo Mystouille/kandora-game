@@ -32,6 +32,11 @@ import type {
   ViewerPresence,
 } from "~/game/protocol/messages";
 import {
+  MatchModeConfigSchema,
+  normalMatchMode,
+  type MatchModeConfig,
+} from "~/game/protocol/matchMode";
+import {
   createInitialState,
   enumerateCalls,
   isAkaDisabled,
@@ -88,6 +93,12 @@ import {
   type MatchTimer,
 } from "./runtime";
 import { createSystemMatchRuntime } from "./runtime";
+import {
+  createMatchDriver,
+  matchHandContext,
+  type MatchDriver,
+} from "./match-drivers/matchDriver";
+import { duplicateMatchSeed } from "./match-drivers/duplicatePlan";
 
 export interface MatchPlayerInit {
   userId: string;
@@ -516,6 +527,7 @@ export class MatchProcess {
     matchId: string;
     status: "waiting" | "playing" | "finished";
     presetId: string;
+    mode: MatchModeConfig;
     buuMode: boolean;
     seats: Array<{ name: string | null; isBot: boolean } | null>;
   } {
@@ -541,6 +553,7 @@ export class MatchProcess {
       matchId: this.matchId,
       status: this.statusValue,
       presetId: this.relayMode ? this.relayRuleSet : this.presetId,
+      mode: this.matchDriver.mode,
       buuMode,
       seats,
     };
@@ -938,6 +951,7 @@ export class MatchProcess {
    */
   private readonly ruleSetOverride?: RuleSetOverride;
   private readonly presetId: string;
+  private matchDriver: MatchDriver;
 
   // --- Buu multi-game session state ------------------------------------
   /**
@@ -1082,7 +1096,8 @@ export class MatchProcess {
     dependencies: MatchProcessDependencies,
     debug?: MatchDebug,
     ruleSetOverride?: RuleSetOverride,
-    presetId = "tenhou-hanchan"
+    presetId = "tenhou-hanchan",
+    mode: MatchModeConfig = normalMatchMode
   ) {
     if (players.length !== 4) {
       throw new Error("MatchProcess requires exactly 4 players");
@@ -1092,9 +1107,24 @@ export class MatchProcess {
     this.players = new Map(
       players.map((p, i) => [i as Seat, p as MatchPlayerInit | null])
     );
+    const parsedMode = MatchModeConfigSchema.parse(mode);
+    if (parsedMode.type === "duplicate" && debug !== undefined) {
+      throw new Error(
+        "MatchProcess: debug overrides are unavailable in duplicate mode"
+      );
+    }
+    if (
+      parsedMode.type === "duplicate" &&
+      seed !== duplicateMatchSeed(parsedMode)
+    ) {
+      throw new Error(
+        "MatchProcess: duplicate seed does not match public mode seed"
+      );
+    }
     this.debug = debug;
     this.ruleSetOverride = ruleSetOverride;
     this.presetId = presetId;
+    this.matchDriver = createMatchDriver(parsedMode, presetId);
     this.runtime = dependencies.runtime ?? createSystemMatchRuntime(seed);
     this.repository = dependencies.repository;
     this.eventJournalStore = dependencies.eventJournalStore ?? null;
@@ -1114,7 +1144,8 @@ export class MatchProcess {
     dependencies: MatchProcessDependencies,
     debug?: MatchDebug,
     ruleSetOverride?: RuleSetOverride,
-    presetId = "tenhou-hanchan"
+    presetId = "tenhou-hanchan",
+    mode: MatchModeConfig = normalMatchMode
   ): MatchProcess {
     // Build with four placeholder bots so every field initializer
     // and downstream invariant (players.size === 4) holds, then
@@ -1134,7 +1165,8 @@ export class MatchProcess {
       dependencies,
       debug,
       ruleSetOverride,
-      presetId
+      presetId,
+      mode
     );
     for (let s = 0; s < 4; s++) {
       m.players.set(s as Seat, null);
@@ -1505,6 +1537,8 @@ export class MatchProcess {
       matchId: this.matchId,
       seed: this.seed,
       presetId: this.presetId,
+      mode: this.matchDriver.mode,
+      driver: this.matchDriver.snapshot(),
       ruleSet: resolveRuleSet(this.ruleSetOverride),
       debug: this.debug
         ? {
@@ -1588,6 +1622,8 @@ export class MatchProcess {
       matchId: this.matchId,
       seed: this.seed,
       presetId: this.presetId,
+      mode: this.matchDriver.mode,
+      driver: this.matchDriver.snapshot(),
       seats: this.checkpointPlayers(true),
       state: this.state,
       startedAgoMs: Math.max(
@@ -1858,7 +1894,13 @@ export class MatchProcess {
         dependencies,
         checkpoint.debug,
         checkpoint.ruleSet,
-        checkpoint.presetId
+        checkpoint.presetId,
+        checkpoint.mode
+      );
+      match.matchDriver = createMatchDriver(
+        checkpoint.mode,
+        checkpoint.presetId,
+        { snapshot: checkpoint.driver, ruleSet: checkpoint.ruleSet }
       );
       for (let seat = 0; seat < 4; seat++) {
         const player = checkpoint.seats[seat];
@@ -1875,7 +1917,13 @@ export class MatchProcess {
       dependencies,
       undefined,
       checkpoint.state.ruleSet,
-      checkpoint.presetId
+      checkpoint.presetId,
+      checkpoint.mode
+    );
+    match.matchDriver = createMatchDriver(
+      checkpoint.mode,
+      checkpoint.presetId,
+      { snapshot: checkpoint.driver, ruleSet: checkpoint.state.ruleSet }
     );
     const restoredAt = match.runtime.now();
     match.statusValue = "playing";
@@ -2207,8 +2255,20 @@ export class MatchProcess {
     }
     this.statusValue = "playing";
     this.startedAt = new Date(this.runtime.now());
+    const initialRuleSet = resolveRuleSet(this.ruleSetOverride);
+    const initialDeal = this.matchDriver.prepareHand(
+      matchHandContext({
+        gameIndex: this.gameIndex,
+        roundWind: "E",
+        roundNumber: 1,
+        honba: 0,
+        dealer: 0,
+      }),
+      initialRuleSet
+    );
     this.state = createInitialState(this.seed, {
-      ruleSet: this.ruleSetOverride,
+      ruleSet: initialRuleSet,
+      deal: initialDeal,
     });
     // Snapshot starting chips for this game so `match_end` can
     // emit the per-game chip delta (Buu-only display in the
@@ -2258,6 +2318,7 @@ export class MatchProcess {
       matchId: this.currentGameMongoId(),
       seed: this.seed,
       ruleSet: this.presetId,
+      mode: this.matchDriver.mode,
       players: matchPlayers,
       initialEventSeq,
       ...(isBuu ? { sessionId: this.matchId, gameIndex: this.gameIndex } : {}),
@@ -3341,6 +3402,7 @@ export class MatchProcess {
     return {
       type: "room_state",
       matchId: this.matchId,
+      mode: this.matchDriver.mode,
       status: this.statusValue,
       mySeat: forSeat,
       hostSeat,
@@ -4260,7 +4322,28 @@ export class MatchProcess {
       );
     }
 
-    const drawRes = step(this.state, { type: "draw", seat: this.state.turn });
+    const drawingSeat = this.state.turn;
+    const drawDirective = this.matchDriver.peekDraw(drawingSeat);
+    const drawRes = step(
+      this.state,
+      drawDirective.kind === "tile"
+        ? { type: "draw", seat: drawingSeat, tile: drawDirective.tile }
+        : drawDirective.kind === "exhaustive"
+          ? { type: "draw", seat: drawingSeat, forceExhaustive: true }
+          : { type: "draw", seat: drawingSeat }
+    );
+    if (drawDirective.kind === "tile") {
+      const emittedDraw = drawRes.events.find(
+        (event) => event.type === "draw" && event.seat === drawingSeat
+      );
+      if (
+        emittedDraw?.type !== "draw" ||
+        emittedDraw.tile !== drawDirective.tile
+      ) {
+        throw new Error("MatchProcess.advanceTurn: duplicate draw was rejected");
+      }
+      this.matchDriver.commitDraw(drawingSeat, emittedDraw.tile);
+    }
     this.state = drawRes.state;
     for (const e of drawRes.events) {
       await this.emitEngineEvent(e);
@@ -4307,7 +4390,9 @@ export class MatchProcess {
     //     openChankanWindow which resolves and resumes the bot's
     //     awaiting_discard.
     if (seat !== 3 || this.leftDiscardQueue.length === 0) {
-      const selfKan = chooseBotSelfKan(this.state, seat);
+      const selfKan = this.matchDriver.canSupplyReplacement(seat)
+        ? chooseBotSelfKan(this.state, seat)
+        : null;
       if (selfKan !== null) {
         if (selfKan.kind === "ankan") {
           await this.applyEngineAction({
@@ -4398,7 +4483,16 @@ export class MatchProcess {
       await this.afterHandEnd();
       return;
     }
-    const calls = enumerateCalls(this.state);
+    const calls = enumerateCalls(this.state)
+      .map((call) => ({
+        ...call,
+        options: call.options.filter(
+          (option) =>
+            option.kind !== "daiminkan" ||
+            this.matchDriver.canSupplyReplacement(call.seat)
+        ),
+      }))
+      .filter((call) => call.options.length > 0);
 
     // Collect bot intent: ron always; pon / daiminkan only when the
     // discard is a yakuhai for that seat (see `chooseBotCall`).
@@ -5041,13 +5135,62 @@ export class MatchProcess {
   private async applyEngineAction(
     action: Parameters<typeof step>[1]
   ): Promise<void> {
-    const res = step(this.state, action);
+    let drivenAction = action;
+    let suppliedDraw: { seat: Seat; tile: Tile } | null = null;
+    if (action.type === "kan" && action.kind !== "shouminkan") {
+      const directive = this.matchDriver.peekDraw(action.seat);
+      if (directive.kind === "exhaustive") {
+        throw new Error(
+          `applyEngineAction: no replacement tile for seat ${action.seat}`
+        );
+      }
+      if (directive.kind === "tile") {
+        drivenAction = { ...action, replacementTile: directive.tile };
+        suppliedDraw = { seat: action.seat, tile: directive.tile };
+      }
+    } else if (action.type === "complete_shouminkan") {
+      const declarer = this.state.pendingShouminkan?.seat;
+      if (declarer === undefined) {
+        throw new Error(
+          "applyEngineAction: complete_shouminkan has no declarer"
+        );
+      }
+      const directive = this.matchDriver.peekDraw(declarer);
+      if (directive.kind === "exhaustive") {
+        throw new Error(
+          `applyEngineAction: no replacement tile for seat ${declarer}`
+        );
+      }
+      if (directive.kind === "tile") {
+        drivenAction = { ...action, replacementTile: directive.tile };
+        suppliedDraw = { seat: declarer, tile: directive.tile };
+      }
+    }
+
+    const res = step(this.state, drivenAction);
     if (res.events.length === 0) {
       throw new Error(
         `applyEngineAction: engine rejected ${action.type} for seat ${
           "seat" in action ? action.seat : "?"
         }`
       );
+    }
+    if (suppliedDraw !== null) {
+      const emittedDraw = res.events.find(
+        (event) =>
+          event.type === "draw" &&
+          event.seat === suppliedDraw.seat &&
+          event.fromDeadWall === true
+      );
+      if (
+        emittedDraw?.type !== "draw" ||
+        emittedDraw.tile !== suppliedDraw.tile
+      ) {
+        throw new Error(
+          "applyEngineAction: supplied replacement draw was not emitted"
+        );
+      }
+      this.matchDriver.commitDraw(suppliedDraw.seat, suppliedDraw.tile);
     }
     this.state = res.state;
     for (const e of res.events) {
@@ -5216,6 +5359,9 @@ export class MatchProcess {
     if (this.state.liveWall.length === 0) {
       return out;
     }
+    if (!this.matchDriver.canSupplyReplacement(seat)) {
+      return out;
+    }
     if (this.state.lastDrawn[seat] === null) {
       return out;
     }
@@ -5231,11 +5377,15 @@ export class MatchProcess {
     for (const [, group] of counts) {
       if (group.length >= 4) {
         const t = group[0];
+        const replacement = this.matchDriver.peekDraw(seat);
         const probe = step(this.state, {
           type: "kan",
           seat,
           kind: "ankan",
           tile: t,
+          ...(replacement.kind === "tile"
+            ? { replacementTile: replacement.tile }
+            : {}),
         });
         if (probe.events.length === 0) {
           continue;
@@ -5596,7 +5746,27 @@ export class MatchProcess {
   }
 
   private async beginNextHandAfterReady(): Promise<void> {
-    const result = step(this.state, { type: "start_next_hand" });
+    const preview = step(this.state, { type: "start_next_hand" });
+    const handStart = preview.events.find(
+      (event) => event.type === "hand_start"
+    );
+    const deal =
+      handStart?.type === "hand_start"
+        ? this.matchDriver.prepareHand(
+            matchHandContext({
+              gameIndex: this.gameIndex,
+              roundWind: handStart.roundWind,
+              roundNumber: handStart.roundNumber,
+              honba: handStart.honba,
+              dealer: handStart.dealer,
+            }),
+            this.state.ruleSet
+          )
+        : undefined;
+    const result =
+      deal === undefined
+        ? preview
+        : step(this.state, { type: "start_next_hand", deal });
     this.state = result.state;
     for (const ev of result.events) {
       await this.emitEngineEvent(ev);
@@ -5780,6 +5950,7 @@ export class MatchProcess {
         startedAt,
         endedAt: new Date(this.runtime.now()),
         ruleSet: this.presetId,
+        mode: this.matchDriver.mode,
         events: gameEvents.map((e) => e.event),
         seats: finalScores.map((f) => {
           const player = this.players.get(f.seat);
@@ -6030,8 +6201,20 @@ export class MatchProcess {
     // Advance session, derive deterministic next seed.
     this.gameIndex += 1;
     const nextSeed = (this.seed + this.gameIndex * 0x9e3779b9) | 0;
+    const nextRuleSet = resolveRuleSet(this.ruleSetOverride);
+    const nextDeal = this.matchDriver.prepareHand(
+      matchHandContext({
+        gameIndex: this.gameIndex,
+        roundWind: "E",
+        roundNumber: 1,
+        honba: 0,
+        dealer: 0,
+      }),
+      nextRuleSet
+    );
     this.state = createInitialState(nextSeed, {
-      ruleSet: this.ruleSetOverride,
+      ruleSet: nextRuleSet,
+      deal: nextDeal,
     });
     this.state.chips = [...this.sessionChips] as [
       number,
@@ -6089,6 +6272,7 @@ export class MatchProcess {
       matchId: this.currentGameMongoId(),
       seed: nextSeed,
       ruleSet: this.presetId,
+      mode: this.matchDriver.mode,
       players: matchPlayers,
       initialEventSeq,
       sessionId: this.matchId,
@@ -6701,10 +6885,11 @@ export class MatchProcess {
     if (event.type === "hand_start") {
       const liveWall = [...this.state.liveWall];
       const deadWall = [...this.state.deadWall];
+      const duplicateDrawQueues = this.matchDriver.drawQueuesForArchive();
       // Cache for mid-hand spectator snapshots. `state.liveWall`
       // at hand_start time is the full 70-tile starting wall (no
       // draws have happened yet for this hand).
-      this.handStartLiveWall = liveWall;
+      this.handStartLiveWall = duplicateDrawQueues === null ? liveWall : null;
       return {
         ...event,
         startingHands: this.state.hands.map((h) => [...h]) as [
@@ -6713,12 +6898,15 @@ export class MatchProcess {
           Tile[],
           Tile[],
         ],
-        // Omniscient live wall in draw order — 70 tiles remaining
-        // after the initial 4×13 deal. Used by replay clients for
-        // the `showWalls` overlay; the live wire copy never has
-        // this field (the projection layer / `emitEvent` pair
-        // only attaches it to the archived event).
-        liveWall,
+        ...(duplicateDrawQueues === null
+          ? {
+              // Omniscient live wall in draw order — 70 tiles remaining
+              // after the initial 4×13 deal. Used by replay clients for
+              // the `showWalls` overlay; duplicate hands instead archive
+              // their four independent queues below.
+              liveWall,
+            }
+          : { duplicateDrawQueues }),
         // Fixed 14-tile snapshot in protocol yama-index order.
         // Replay Show walls uses it for rinshan, dora, ura-dora,
         // and kan-indicator positions.

@@ -930,7 +930,7 @@ describe("MatchProcess checkpoints", () => {
     });
   });
 
-  it("rejects unsupported versions and duplicate human identities", () => {
+  it("migrates v1, then rejects unsupported versions and duplicate identities", () => {
     const room = MatchProcess.createWaitingRoom(
       "checkpoint-invalid",
       9,
@@ -939,8 +939,16 @@ describe("MatchProcess checkpoints", () => {
     room.claimSeat("alice", "Alice");
     const checkpoint = room.createCheckpoint();
 
+    const { mode: _mode, driver: _driver, ...legacyCheckpoint } = checkpoint;
+    expect(
+      parseMatchCheckpoint({ ...legacyCheckpoint, schemaVersion: 1 })
+    ).toMatchObject({
+      schemaVersion: 2,
+      mode: { type: "normal" },
+      driver: { type: "normal" },
+    });
     expect(() =>
-      parseMatchCheckpoint({ ...checkpoint, schemaVersion: 2 })
+      parseMatchCheckpoint({ ...checkpoint, schemaVersion: 3 })
     ).toThrow();
     expect(() =>
       parseMatchCheckpoint({

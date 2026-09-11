@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { GameEvent, Seat } from "~/game/protocol/messages";
+import type { MatchModeConfig } from "~/game/protocol/matchMode";
 import {
   MatchCheckpointSchema,
   parseMatchCheckpoint,
@@ -217,6 +218,7 @@ export interface CreateMatchArgs {
   matchId: string;
   seed: number;
   ruleSet: string;
+  mode?: MatchModeConfig;
   players: PersistedMatchPlayer[];
   initialEventSeq: number;
   sessionId?: string;
@@ -242,6 +244,7 @@ export interface ArchiveReplayLogArgs {
   startedAt: Date;
   endedAt: Date;
   ruleSet: string;
+  mode?: MatchModeConfig;
   ruleSetDetails?: Record<string, unknown>;
   events: GameEvent[];
   seats: Array<{

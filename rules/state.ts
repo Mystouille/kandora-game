@@ -104,6 +104,8 @@ export interface MatchOptions {
   ruleSet?: RuleSetOverride;
   /** Wall options forwarded to `dealMatch`. */
   wall?: WallOptions;
+  /** Trusted prebuilt deal supplied by an external match driver. */
+  deal?: DealtMatch;
 }
 
 export interface MatchState {
@@ -369,7 +371,7 @@ export function createInitialState(
     },
     ...(opts.wall ?? {}),
   };
-  const dealt: DealtMatch = dealMatch(seed, wallOpts);
+  const dealt: DealtMatch = opts.deal ?? dealMatch(seed, wallOpts);
   return {
     seed,
     ruleSet,

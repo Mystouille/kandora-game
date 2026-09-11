@@ -59,7 +59,10 @@ export function annotateWallSchedule(events: GameEvent[]): GameEvent[] {
         nextDrawFromDead = false;
       }
     }
-    out[i] = { ...ev, liveDrawSchedule: schedule };
+    out[i] =
+      ev.duplicateDrawQueues === undefined
+        ? { ...ev, liveDrawSchedule: schedule }
+        : ev;
     i = j;
   }
   return out;

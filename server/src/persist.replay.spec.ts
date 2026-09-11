@@ -29,6 +29,11 @@ describe("archiveReplayLog seat identity", () => {
       startedAt: new Date(100),
       endedAt: new Date(200),
       ruleSet: "m-league",
+      mode: {
+        type: "duplicate",
+        seed: "Board-A",
+        generationVersion: 1,
+      },
       events: [],
       seats: [
         {
@@ -54,6 +59,11 @@ describe("archiveReplayLog seat identity", () => {
     );
     expect(String(update.$set.seats[0].userDbId)).toBe(userId);
     expect(update.$set.seats[1]).not.toHaveProperty("userDbId");
+    expect(update.$set.mode).toEqual({
+      type: "duplicate",
+      seed: "Board-A",
+      generationVersion: 1,
+    });
   });
 
   it("does not overwrite a completed replay when archiving a live relay", async () => {

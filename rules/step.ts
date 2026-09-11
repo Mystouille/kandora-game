@@ -145,9 +145,20 @@ const WINDS: readonly Wind[] = ["E", "S", "W", "N"];
  * the live wall. The dead wall stays at 14 tiles while the number of
  * future normal draws decreases by one, as required after every kan.
  */
-function drawRinshan(next: MatchState): Tile | undefined {
+function drawRinshan(
+  next: MatchState,
+  replacementTile?: Tile
+): { tile: Tile; fixedDeadWall: boolean } | undefined {
   if (next.deadWall.length === 0 || next.liveWall.length === 0) {
     return undefined;
+  }
+  if (replacementTile !== undefined) {
+    const replacementIndex = next.liveWall.indexOf(replacementTile);
+    if (replacementIndex < 0) {
+      return undefined;
+    }
+    next.liveWall.splice(replacementIndex, 1);
+    return { tile: replacementTile, fixedDeadWall: true };
   }
   const rinshan = next.deadWall.shift();
   const reserved = next.liveWall.pop();
@@ -155,7 +166,7 @@ function drawRinshan(next: MatchState): Tile | undefined {
     return undefined;
   }
   next.deadWall.push(reserved);
-  return rinshan;
+  return { tile: rinshan, fixedDeadWall: false };
 }
 
 /**
@@ -180,7 +191,8 @@ function drawRinshan(next: MatchState): Tile | undefined {
 function captureKanDora(
   next: MatchState,
   kind: "minkan" | "ankan",
-  events: EngineEvent[]
+  events: EngineEvent[],
+  fixedDeadWall = false
 ): void {
   if (!next.ruleSet.kanDora) {
     return;
@@ -189,7 +201,7 @@ function captureKanDora(
   if (totalRevealed >= 5) {
     return;
   }
-  const nextIdx = 3 + totalRevealed * 2;
+  const nextIdx = (fixedDeadWall ? 4 : 3) + totalRevealed * 2;
   const indicator = next.deadWall[nextIdx];
   if (indicator === undefined) {
     return;
@@ -1182,7 +1194,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (state.phase !== "awaiting_draw" || action.seat !== state.turn) {
       return noop(state);
     }
-    if (state.liveWall.length === 0) {
+    if (state.liveWall.length === 0 || action.forceExhaustive === true) {
       const next = clone(state);
       // A seat is tenpai for payment purposes when at least one
       // wait tile exists. Riichi-declared seats are always
@@ -1276,7 +1288,16 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         state.lastDiscard.seat
       );
     }
-    const tile = next.liveWall.shift() as Tile;
+    let tile: Tile;
+    if (action.tile !== undefined) {
+      const suppliedIndex = next.liveWall.indexOf(action.tile);
+      if (suppliedIndex < 0) {
+        return noop(state);
+      }
+      [tile] = next.liveWall.splice(suppliedIndex, 1);
+    } else {
+      tile = next.liveWall.shift() as Tile;
+    }
     next.hands[next.turn].push(tile);
     next.lastDrawn[next.turn] = tile;
     next.lastDrawFromDeadWall = false;
@@ -1909,19 +1930,19 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       next.ippatsuEligible = [false, false, false, false];
       // Rinshan draw from the front of the dead wall, then reveal a
       // new dora indicator.
-      const rinshan = drawRinshan(next);
+      const rinshan = drawRinshan(next, action.replacementTile);
       if (rinshan === undefined) {
         return noop(state);
       }
-      next.hands[action.seat].push(rinshan);
-      next.lastDrawn[action.seat] = rinshan;
+      next.hands[action.seat].push(rinshan.tile);
+      next.lastDrawn[action.seat] = rinshan.tile;
       next.lastDrawFromDeadWall = true;
       const events: EngineEvent[] = [
         { type: "call", seat: action.seat, meld },
         {
           type: "draw",
           seat: action.seat,
-          tile: rinshan,
+          tile: rinshan.tile,
           wallRemaining: next.liveWall.length,
           fromDeadWall: true,
         },
@@ -1931,7 +1952,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       // layout. Cap at 4 additional reveals. Skipped entirely when
       // `ruleSet.kanDora` is off, and deferred to the declarer's next
       // discard when `ruleSet.instantlyRevealDoraForMinkan` is off.
-      captureKanDora(next, "minkan", events);
+      captureKanDora(next, "minkan", events, rinshan.fixedDeadWall);
       next.turn = action.seat;
       next.phase = "awaiting_discard";
       return { state: next, events };
@@ -1999,24 +2020,24 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     };
     next.melds[action.seat].push(meld);
     next.ippatsuEligible = [false, false, false, false];
-    const rinshan = drawRinshan(next);
+    const rinshan = drawRinshan(next, action.replacementTile);
     if (rinshan === undefined) {
       return noop(state);
     }
-    next.hands[action.seat].push(rinshan);
-    next.lastDrawn[action.seat] = rinshan;
+    next.hands[action.seat].push(rinshan.tile);
+    next.lastDrawn[action.seat] = rinshan.tile;
     next.lastDrawFromDeadWall = true;
     const events: EngineEvent[] = [
       { type: "call", seat: action.seat, meld },
       {
         type: "draw",
         seat: action.seat,
-        tile: rinshan,
+        tile: rinshan.tile,
         wallRemaining: next.liveWall.length,
         fromDeadWall: true,
       },
     ];
-    captureKanDora(next, "ankan", events);
+    captureKanDora(next, "ankan", events, rinshan.fixedDeadWall);
     // Phase stays awaiting_discard — the seat now holds 14-3*melds
     // tiles and must discard (or declare another kan / tsumo).
     return { state: next, events };
@@ -2087,12 +2108,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     const next = clone(state);
     const declarer = state.pendingShouminkan.seat;
     // Rinshan draw from the front of the dead wall.
-    const rinshan = drawRinshan(next);
+    const rinshan = drawRinshan(next, action.replacementTile);
     if (rinshan === undefined) {
       return noop(state);
     }
-    next.hands[declarer].push(rinshan);
-    next.lastDrawn[declarer] = rinshan;
+    next.hands[declarer].push(rinshan.tile);
+    next.lastDrawn[declarer] = rinshan.tile;
     next.lastDrawFromDeadWall = true;
     next.pendingShouminkan = null;
     next.phase = "awaiting_discard";
@@ -2100,12 +2121,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       {
         type: "draw",
         seat: declarer,
-        tile: rinshan,
+        tile: rinshan.tile,
         wallRemaining: next.liveWall.length,
         fromDeadWall: true,
       },
     ];
-    captureKanDora(next, "minkan", events);
+    captureKanDora(next, "minkan", events, rinshan.fixedDeadWall);
     return { state: next, events };
   }
 
@@ -2210,13 +2231,15 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     const baseSeed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0;
     const handSeed =
       (baseSeed ^ (roundNumber * 1000003) ^ (honba * 7919)) >>> 0;
-    const dealt = dealMatch(handSeed, {
-      redFives: {
-        m: state.ruleSet.nbRedFiveManzu,
-        p: state.ruleSet.nbRedFivePinzu,
-        s: state.ruleSet.nbRedFiveSouzu,
-      },
-    });
+    const dealt =
+      action.deal ??
+      dealMatch(handSeed, {
+        redFives: {
+          m: state.ruleSet.nbRedFiveManzu,
+          p: state.ruleSet.nbRedFivePinzu,
+          s: state.ruleSet.nbRedFiveSouzu,
+        },
+      });
     const next = clone(state);
     next.hands = dealt.hands.map((h) => [...h]);
     next.discards = [[], [], [], []];

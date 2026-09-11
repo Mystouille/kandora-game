@@ -4,6 +4,12 @@ import { PlayCircleOutlined } from "@ant-design/icons";
 import { openAppLink } from "~/game/client/appLinkNavigation";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
 import type { MatchDebug } from "~/game/protocol/messages";
+import {
+  DUPLICATE_GENERATION_VERSION,
+  MatchModeConfigSchema,
+  normalMatchMode,
+  type MatchModeConfig,
+} from "~/game/protocol/matchMode";
 
 /**
  * `/lobby` — entry point for the multi-human walking skeleton.
@@ -38,6 +44,7 @@ export interface LobbyLoaderData {
   gameLogs: Array<{
     gameId: string;
     ruleSet: string;
+    mode?: MatchModeConfig;
     startedAt: number;
     endedAt: number;
     seats: Array<{
@@ -71,6 +78,7 @@ interface LiveRoom {
   matchId: string;
   status: "waiting" | "playing" | "finished";
   presetId?: string;
+  mode?: MatchModeConfig;
   buuMode: boolean;
   seats: Array<LiveRoomSeat | null>;
 }
@@ -84,6 +92,8 @@ export default function LobbyRoute() {
   );
   const [starting, setStarting] = useState(false);
   const [presetId, setPresetId] = useState(DEFAULT_LOBBY_PRESET_ID);
+  const [duplicateEnabled, setDuplicateEnabled] = useState(false);
+  const [duplicateSeed, setDuplicateSeed] = useState("");
   const [showDebug, setShowDebug] = useState(false);
   const [humanHand, setHumanHand] = useState("");
   const [humanDraws, setHumanDraws] = useState("");
@@ -195,14 +205,34 @@ export default function LobbyRoute() {
    * `/game/:matchId` URL is purely a join target and a refresh
    * can never spin up a brand-new game with the same id.
    */
-  async function createRoomOnServer(debug: MatchDebug): Promise<string | null> {
+  function buildMode(): MatchModeConfig | null {
+    const parsed = MatchModeConfigSchema.safeParse(
+      duplicateEnabled
+        ? {
+            type: "duplicate",
+            seed: duplicateSeed,
+            generationVersion: DUPLICATE_GENERATION_VERSION,
+          }
+        : normalMatchMode
+    );
+    if (!parsed.success) {
+      setError("Enter a duplicate seed between 1 and 128 characters.");
+      return null;
+    }
+    return parsed.data;
+  }
+
+  async function createRoomOnServer(
+    debug: MatchDebug,
+    mode: MatchModeConfig
+  ): Promise<string | null> {
     try {
       const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
       const res = await fetch(`${basePath}/api/game/rooms`, {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ debug, preset: presetId }),
+        body: JSON.stringify({ debug, mode, preset: presetId }),
       });
       if (res.status === 401 || res.status === 403) {
         window.location.reload();
@@ -229,12 +259,16 @@ export default function LobbyRoute() {
 
   async function startSoloMatch() {
     setError(null);
+    const mode = buildMode();
+    if (mode === null) {
+      return;
+    }
     const { debug, ok } = buildDebug();
     if (!ok) {
       return;
     }
     setStarting(true);
-    const matchId = await createRoomOnServer(debug);
+    const matchId = await createRoomOnServer(debug, mode);
     if (!matchId) {
       setStarting(false);
       return;
@@ -245,12 +279,16 @@ export default function LobbyRoute() {
 
   async function createRoom() {
     setError(null);
+    const mode = buildMode();
+    if (mode === null) {
+      return;
+    }
     const { debug, ok } = buildDebug();
     if (!ok) {
       return;
     }
     setStarting(true);
-    const matchId = await createRoomOnServer(debug);
+    const matchId = await createRoomOnServer(debug, mode);
     if (!matchId) {
       setStarting(false);
       return;
@@ -298,6 +336,47 @@ export default function LobbyRoute() {
           {presets.find((preset) => preset.id === presetId)?.description}
         </span>
       </label>
+
+      <div className="mb-6 border-y border-gray-200 py-4 dark:border-gray-700">
+        <label className="flex items-center justify-between gap-4">
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
+            Duplicate mode
+          </span>
+          <input
+            type="checkbox"
+            role="switch"
+            checked={duplicateEnabled}
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              setDuplicateEnabled(enabled);
+              if (enabled) {
+                setShowDebug(false);
+              }
+            }}
+            disabled={starting}
+            className="h-5 w-5 accent-emerald-600"
+          />
+        </label>
+        {duplicateEnabled && (
+          <label className="mt-4 block">
+            <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
+              Duplicate seed
+            </span>
+            <input
+              type="text"
+              value={duplicateSeed}
+              onChange={(event) => {
+                setDuplicateSeed(event.target.value);
+              }}
+              maxLength={128}
+              autoComplete="off"
+              placeholder="Enter seed"
+              disabled={starting}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 placeholder-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500"
+            />
+          </label>
+        )}
+      </div>
 
       <div className="flex flex-wrap gap-3 mb-6">
         <button
@@ -455,6 +534,11 @@ export default function LobbyRoute() {
                           ?.displayName ??
                           (r.buuMode ? "Buu Mahjong — East" : "Tenhou")}
                       </span>
+                      {r.mode?.type === "duplicate" && (
+                        <span className="rounded bg-cyan-100 px-2 py-0.5 font-mono text-xs text-cyan-900 dark:bg-cyan-900 dark:text-cyan-100">
+                          Duplicate · {r.mode.seed}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">
                       {seatLabels.join(" · ")}
@@ -529,6 +613,11 @@ export default function LobbyRoute() {
                       <span className="text-xs text-gray-500 dark:text-gray-400">
                         {presetNameById.get(log.ruleSet) ?? log.ruleSet}
                       </span>
+                      {log.mode?.type === "duplicate" && (
+                        <span className="rounded bg-cyan-100 px-2 py-0.5 font-mono text-xs text-cyan-900 dark:bg-cyan-900 dark:text-cyan-100">
+                          Duplicate · {log.mode.seed}
+                        </span>
+                      )}
                     </div>
                     <ol className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-1">
                       {[...log.seats]
@@ -571,7 +660,8 @@ export default function LobbyRoute() {
         </p>
       )}
 
-      <div className="mt-4 border-t pt-4">
+      {!duplicateEnabled && (
+        <div className="mt-4 border-t pt-4">
         <button
           type="button"
           onClick={() => {
@@ -616,7 +706,8 @@ export default function LobbyRoute() {
             />
           </div>
         )}
-      </div>
+        </div>
+      )}
     </main>
   );
 }
