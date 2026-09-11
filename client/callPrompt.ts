@@ -1,4 +1,20 @@
 import type { LegalAction } from "~/game/protocol/messages";
+import type { MatchView } from "./store";
+
+export type NoCallAutoPassState = Pick<
+  MatchView,
+  "matchId" | "lastSeq" | "conn" | "legalActions"
+>;
+
+export interface NoCallAutoPassController {
+  evaluate(state: NoCallAutoPassState): boolean;
+}
+
+export interface NoCallAutoPassControllerOptions {
+  isEnabled: () => boolean;
+  send: (actionId: string) => boolean;
+  onSent?: (actionId: string, state: NoCallAutoPassState) => void;
+}
 
 const CALL_PROMPT_ACTION_TYPES: ReadonlySet<LegalAction["type"]> = new Set([
   "chi",
@@ -38,6 +54,39 @@ export function findNoCallAutoPass(
     return undefined;
   }
   return actions.find((action) => action.type === "pass");
+}
+
+export function createNoCallAutoPassController(
+  options: NoCallAutoPassControllerOptions
+): NoCallAutoPassController {
+  let sentWindowKey: string | null = null;
+
+  return {
+    evaluate(state): boolean {
+      if (state.conn !== "open") {
+        sentWindowKey = null;
+        return false;
+      }
+      if (state.legalActions.length === 0) {
+        sentWindowKey = null;
+        return false;
+      }
+      const pass = findNoCallAutoPass(
+        state.legalActions,
+        options.isEnabled()
+      );
+      if (!pass) {
+        return false;
+      }
+      const windowKey = `${state.matchId ?? ""}:${state.lastSeq}:${pass.id}`;
+      if (sentWindowKey === windowKey || !options.send(pass.id)) {
+        return false;
+      }
+      sentWindowKey = windowKey;
+      options.onSent?.(pass.id, state);
+      return true;
+    },
+  };
 }
 
 export function filterNoCallActionButtons(

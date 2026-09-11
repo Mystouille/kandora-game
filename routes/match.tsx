@@ -45,7 +45,10 @@ import {
   advanceReadyCheckTick,
   type ReadyCheckTickState,
 } from "~/game/client/readyCheckCountdown";
-import { findNoCallAutoPass } from "~/game/client/callPrompt";
+import {
+  createNoCallAutoPassController,
+  type NoCallAutoPassController,
+} from "~/game/client/callPrompt";
 import { writeWebTableLayoutMode } from "~/game/client/webTableLayoutPreference";
 import { rotateHandResult, rotateMatchView } from "~/game/replay/player";
 import type { Meld, RoomState } from "~/game/protocol/messages";
@@ -770,9 +773,13 @@ export default function GameMatchRoute({
     }
   }, []);
   const noCallRef = useRef(liveMenuFlags.noCall);
+  const noCallAutoPassRef = useRef<NoCallAutoPassController | null>(null);
   const handleLiveMenuChange = useCallback((next: LivePlayMenuFlags) => {
     liveMenuFlagsRef.current = next;
     noCallRef.current = next.noCall;
+    if (next.noCall) {
+      noCallAutoPassRef.current?.evaluate(useMatchStore.getState());
+    }
     if (!next.autoDiscard) {
       cancelAutoDiscardTimer();
     }
@@ -801,6 +808,14 @@ export default function GameMatchRoute({
       return next;
     });
   }, [cancelAutoDiscardTimer]);
+  const resetEphemeralLiveMenuFlags = useCallback((): void => {
+    noCallRef.current = false;
+    liveMenuFlagsRef.current = resetEphemeralFlags(
+      liveMenuFlagsRef.current
+    );
+    cancelAutoDiscardTimer();
+    setLiveMenuFlags((prev) => resetEphemeralFlags(prev));
+  }, [cancelAutoDiscardTimer]);
   useEffect(() => {
     liveMenuFlagsRef.current = liveMenuFlags;
   }, [liveMenuFlags]);
@@ -814,9 +829,8 @@ export default function GameMatchRoute({
   // `autoSort` preference is preserved.
   const handKey = `${view.roundWind}:${view.roundNumber}:${view.honba}:${view.dealer}`;
   useEffect(() => {
-    noCallRef.current = false;
-    setLiveMenuFlags((prev) => resetEphemeralFlags(prev));
-  }, [handKey]);
+    resetEphemeralLiveMenuFlags();
+  }, [handKey, resetEphemeralLiveMenuFlags]);
   // Keep the renderer's autoWin mirror in sync with the live
   // menu state — covers the per-hand ephemeral reset above as
   // well as any other path that mutates `liveMenuFlags.autoWin`
@@ -851,13 +865,16 @@ export default function GameMatchRoute({
       lastAutoActedIdRef.current = null;
       return;
     }
-    const fire = (id: string, origin: GameActionIntentOrigin): void => {
+    const fire = (id: string, origin: GameActionIntentOrigin): boolean => {
       if (lastAutoActedIdRef.current === id) {
-        return;
+        return false;
+      }
+      if (!ws.act(id)) {
+        return false;
       }
       lastAutoActedIdRef.current = id;
       trackGameActionIntent(origin, id, useMatchStore.getState());
-      ws.act(id);
+      return true;
     };
     const hasWin = actions.some((a) => a.type === "ron" || a.type === "tsumo");
     // 1) Auto-win — fires regardless of other flags so a player
@@ -869,15 +886,7 @@ export default function GameMatchRoute({
         return;
       }
     }
-    // 2) No-calls — pass on any chi / pon / daiminkan decision
-    //    window. Suppressed when a win is also available so the
-    //    player doesn't unintentionally skip a ron alongside.
-    const noCallPass = findNoCallAutoPass(actions, liveMenuFlags.noCall);
-    if (noCallPass) {
-      fire(noCallPass.id, "auto_pass");
-      return;
-    }
-    // 3) Auto-discard — tsumogiri the drawn tile. Triggered
+    // 2) Auto-discard — tsumogiri the drawn tile. Triggered
     //    either by the `autoDiscard` toggle or because the seat
     //    is locked into tsumogiri by an active riichi. Suppressed
     //    when a win is available (don't dump a winning tile).
@@ -931,12 +940,13 @@ export default function GameMatchRoute({
           ) {
             return;
           }
-          live.setPendingDiscard({
-            seat: mySeat,
-            tile: drawn,
-            displayIndex: hand.length - 1,
-          });
-          fire(discard.id, "auto_discard");
+          if (fire(discard.id, "auto_discard")) {
+            live.setPendingDiscard({
+              seat: mySeat,
+              tile: drawn,
+              displayIndex: hand.length - 1,
+            });
+          }
         }, DRAW_TO_DISCARD_DELAY_MS);
         return cancelAutoDiscardTimer;
       }
@@ -945,6 +955,7 @@ export default function GameMatchRoute({
   }, [
     cancelAutoDiscardTimer,
     view.legalActions,
+    view.conn,
     view.matchId,
     view.mySeat,
     view.hands,
@@ -953,7 +964,6 @@ export default function GameMatchRoute({
     view.actionDeadline,
     view.riichiDeclared,
     liveMenuFlags.autoWin,
-    liveMenuFlags.noCall,
     liveMenuFlags.autoDiscard,
     trackGameActionIntent,
   ]);
@@ -1001,6 +1011,7 @@ export default function GameMatchRoute({
     return subscribeToGameEvents(({ event, mySeat }) => {
       if (event.type === "hand_start") {
         postHandDiscardCountRef.current = 0;
+        resetEphemeralLiveMenuFlags();
         return;
       }
       postHandDiscardCountRef.current = advancePostHandPeekDiscardCount(
@@ -1013,7 +1024,7 @@ export default function GameMatchRoute({
         setEyeHeld(false);
       }
     });
-  }, []);
+  }, [resetEphemeralLiveMenuFlags]);
 
   useMatchPageEffects();
 
@@ -1116,14 +1127,13 @@ export default function GameMatchRoute({
               tile,
               discardSource
             );
-            if (legal && wsRef.current) {
+            if (legal && wsRef.current?.act(legal.id)) {
               trackGameActionIntent("tile_click", legal.id, state);
               state.setPendingDiscard({
                 seat: state.mySeat,
                 tile,
                 displayIndex: index,
               });
-              wsRef.current.act(legal.id);
             }
           });
           renderer.setOnActionClick(({ action }) => {
@@ -1131,21 +1141,20 @@ export default function GameMatchRoute({
             // Generic dispatch for call / pass / ron / etc. buttons. The
             // server validated these into `legalActions`, so we just echo
             // the id back.
-            if (wsRef.current) {
+            if (wsRef.current?.act(action.id)) {
               trackGameActionIntent(
                 "action_button",
                 action.id,
                 useMatchStore.getState()
               );
-              wsRef.current.act(action.id);
+              // Optimistically clear our legal actions so the call
+              // button strip disappears the instant the user clicks.
+              // The next server snapshot will repopulate them if the
+              // turn comes back around. Without this the strip lingers
+              // visibly until the server's response round-trips
+              // (especially noticeable on riichi / ron / tsumo).
+              useMatchStore.getState().setLegalActions([]);
             }
-            // Optimistically clear our legal actions so the call
-            // button strip disappears the instant the user clicks.
-            // The next server snapshot will repopulate them if the
-            // turn comes back around. Without this the strip lingers
-            // visibly until the server's response round-trips
-            // (especially noticeable on riichi / ron / tsumo).
-            useMatchStore.getState().setLegalActions([]);
           });
           renderer.setOnRenderRequest(() => {
             // Renderer internal-state changes (e.g. riichi mode toggle)
@@ -1253,6 +1262,28 @@ export default function GameMatchRoute({
         }
       },
     });
+    const noCallAutoPass = createNoCallAutoPassController({
+      isEnabled: () => noCallRef.current,
+      send: (actionId) => ws.act(actionId),
+      onSent: (actionId) => {
+        trackGameActionIntent(
+          "auto_pass",
+          actionId,
+          useMatchStore.getState()
+        );
+      },
+    });
+    noCallAutoPassRef.current = noCallAutoPass;
+    const unsubscribeNoCallAutoPass = useMatchStore.subscribe(
+      (state, previous) => {
+        if (
+          state.conn !== previous.conn ||
+          state.legalActions !== previous.legalActions
+        ) {
+          noCallAutoPass.evaluate(state);
+        }
+      }
+    );
     wsRef.current = ws;
     ws.connect();
 
@@ -1279,8 +1310,9 @@ export default function GameMatchRoute({
       const legals = state.legalActions;
       const pass = legals.find((a) => a.type === "pass");
       if (pass) {
-        trackGameActionIntent("context_menu", pass.id, state);
-        ws.act(pass.id);
+        if (ws.act(pass.id)) {
+          trackGameActionIntent("context_menu", pass.id, state);
+        }
         return;
       }
       // Tsumogiri shortcut: the freshly-drawn tile is the last
@@ -1296,14 +1328,13 @@ export default function GameMatchRoute({
         return;
       }
       const discard = findTileAction(legals, "discard", drawn, "draw");
-      if (discard) {
+      if (discard && ws.act(discard.id)) {
         trackGameActionIntent("context_menu", discard.id, state);
         state.setPendingDiscard({
           seat: mySeat,
           tile: drawn,
           displayIndex: hand.length - 1,
         });
-        ws.act(discard.id);
       }
     };
     container.addEventListener("contextmenu", onContextMenu);
@@ -1311,6 +1342,10 @@ export default function GameMatchRoute({
     return () => {
       cancelled = true;
       uninstallSound();
+      unsubscribeNoCallAutoPass();
+      if (noCallAutoPassRef.current === noCallAutoPass) {
+        noCallAutoPassRef.current = null;
+      }
       container.removeEventListener("pointerdown", onPrimaryPointerDown, true);
       container.removeEventListener("contextmenu", onContextMenu);
       if (wsRef.current) {

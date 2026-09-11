@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LegalAction } from "~/game/protocol/messages";
 import {
+  createNoCallAutoPassController,
   filterNoCallActionButtons,
   findNoCallAutoPass,
   shouldPlayCallPrompt,
@@ -97,5 +98,54 @@ describe("No-call action policy", () => {
     ];
 
     expect(filterNoCallActionButtons(actions, true)).toEqual(actions);
+  });
+
+  it("retries an auto-pass that the transport could not queue", () => {
+    const send = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const onSent = vi.fn();
+    const controller = createNoCallAutoPassController({
+      isEnabled: () => true,
+      send,
+      onSent,
+    });
+    const state = {
+      matchId: "match-1",
+      lastSeq: 42,
+      conn: "open" as const,
+      legalActions: [
+        { id: "pon", type: "pon" as const, tiles: ["5p", "5p"] },
+        { id: "pass", type: "pass" as const },
+      ],
+    };
+
+    expect(controller.evaluate(state)).toBe(false);
+    expect(controller.evaluate(state)).toBe(true);
+    expect(controller.evaluate(state)).toBe(false);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(onSent).toHaveBeenCalledOnce();
+  });
+
+  it("retries the current auto-pass after reconnecting", () => {
+    const send = vi.fn().mockReturnValue(true);
+    const controller = createNoCallAutoPassController({
+      isEnabled: () => true,
+      send,
+    });
+    const state = {
+      matchId: "match-1",
+      lastSeq: 42,
+      conn: "open" as const,
+      legalActions: [
+        { id: "pon", type: "pon" as const, tiles: ["5p", "5p"] },
+        { id: "pass", type: "pass" as const },
+      ],
+    };
+
+    expect(controller.evaluate(state)).toBe(true);
+    expect(
+      controller.evaluate({ ...state, conn: "reconnecting" as const })
+    ).toBe(false);
+    expect(controller.evaluate(state)).toBe(true);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

@@ -4,6 +4,7 @@ const store = vi.hoisted(() => ({
   lastSeq: -1,
   matchId: "match-1",
   setConn: vi.fn(),
+  setLegalActions: vi.fn(),
   setActionDeadline: vi.fn(),
   setActionBufferMs: vi.fn(),
   setReadyCheck: vi.fn(),
@@ -78,6 +79,7 @@ describe("GameWS reconnect ownership", () => {
     store.lastSeq = -1;
     store.matchId = "match-1";
     store.setConn.mockReset();
+    store.setLegalActions.mockReset();
     store.setActionDeadline.mockReset();
     store.setActionBufferMs.mockReset();
     store.setReadyCheck.mockReset();
@@ -157,6 +159,9 @@ describe("GameWS reconnect ownership", () => {
     store.lastSeq = 42;
     current.emitClose();
     expect(store.setConn).toHaveBeenCalledWith("reconnecting");
+    expect(store.setLegalActions).toHaveBeenCalledWith([]);
+    expect(store.setActionDeadline).toHaveBeenCalledWith(null);
+    expect(store.setActionBufferMs).toHaveBeenCalledWith(null);
     await vi.advanceTimersByTimeAsync(500);
     await flushConnectionAttempt();
     expect(FakeWebSocket.instances).toHaveLength(2);
@@ -172,6 +177,26 @@ describe("GameWS reconnect ownership", () => {
       lastSeq: 42,
     });
     expect(getConnectionDetails).toHaveBeenCalledTimes(2);
+    client.close();
+  });
+
+  it("reports whether an action was queued on an open socket", async () => {
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const socket = FakeWebSocket.instances[0];
+
+    expect(client.act("pass")).toBe(false);
+    socket.emitOpen();
+    expect(client.act("pass")).toBe(true);
+    expect(JSON.parse(socket.sent.at(-1) as string)).toEqual({
+      type: "act",
+      matchId: "match-1",
+      actionId: "pass",
+    });
     client.close();
   });
 

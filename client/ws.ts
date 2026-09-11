@@ -116,7 +116,9 @@ export class GameWS {
       this.ws.close();
       this.ws = null;
     }
-    useMatchStore.getState().setConn("closed");
+    const store = useMatchStore.getState();
+    store.setConn("closed");
+    this.clearStaleActionWindow();
   }
 
   /**
@@ -150,7 +152,7 @@ export class GameWS {
     void this.openSocket();
   }
 
-  send(message: ClientMessage): void {
+  send(message: ClientMessage): boolean {
     const parsed = ClientMessageSchema.safeParse(message);
     if (!parsed.success) {
       throw new Error(
@@ -158,18 +160,19 @@ export class GameWS {
       );
     }
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
     this.ws.send(JSON.stringify(parsed.data));
+    return true;
   }
 
   /** Convenience: send `act { actionId }`. */
-  act(actionId: string): void {
+  act(actionId: string): boolean {
     const { matchId } = useMatchStore.getState();
     if (!matchId) {
-      return;
+      return false;
     }
-    this.send({ type: "act", matchId, actionId });
+    return this.send({ type: "act", matchId, actionId });
   }
 
   /** Convenience: ack the pre-match ready check. */
@@ -264,6 +267,7 @@ export class GameWS {
     const attempt = ++this.connectionAttempt;
     const store = useMatchStore.getState();
     store.setConn(store.lastSeq >= 0 ? "reconnecting" : "connecting");
+    this.clearStaleActionWindow();
 
     let connection: GameWSConnectionDetails;
     try {
@@ -307,7 +311,6 @@ export class GameWS {
       this.backoff = INITIAL_BACKOFF_MS;
       this.lastInboundAt = Date.now();
       this.startStallWatchdog();
-      useMatchStore.getState().setConn("open");
       console.log(
         `[game-ws] open handshake=${wsOpenedAt - openedAt}ms url=${connection.wsUrl}`
       );
@@ -332,6 +335,7 @@ export class GameWS {
           lastSeq,
         });
       }
+      useMatchStore.getState().setConn("open");
     });
 
     ws.addEventListener("message", (msgEvent) => {
@@ -376,12 +380,20 @@ export class GameWS {
 
   private scheduleReconnect(): void {
     useMatchStore.getState().setConn("reconnecting");
+    this.clearStaleActionWindow();
     const delay = this.backoff;
     this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF_MS);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.openSocket();
     }, delay);
+  }
+
+  private clearStaleActionWindow(): void {
+    const store = useMatchStore.getState();
+    store.setLegalActions([]);
+    store.setActionDeadline(null);
+    store.setActionBufferMs(null);
   }
 
   private startStallWatchdog(): void {
