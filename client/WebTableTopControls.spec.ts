@@ -23,6 +23,13 @@ describe("WebTableTopControls", () => {
     expect(html).toContain("left-0.5");
     expect(html).toContain("translate-x-0");
     expect(html).toContain('aria-label="Quit replay"');
+    expect(html).toContain('aria-busy="false"');
+    expect(html).toContain('data-state="idle"');
+    expect(html).toContain("hover:bg-emerald-800");
+    expect(html).toContain("focus-visible:ring-2");
+    expect(html).toContain("active:scale-[0.96]");
+    expect(html).toContain("data-[state=requested]:shadow-inner");
+    expect(html).not.toContain('style="background-color:rgba(0,0,0,0.7)');
   });
 
   it("reflects the active compact layout", () => {

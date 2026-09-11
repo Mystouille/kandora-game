@@ -1,4 +1,8 @@
-import { SettingOutlined } from "@ant-design/icons";
+import {
+  CloseOutlined,
+  LoadingOutlined,
+  SettingOutlined,
+} from "@ant-design/icons";
 import {
   useEffect,
   useRef,
@@ -16,7 +20,7 @@ interface WebTableTopControlsProps {
 }
 
 export const WEB_TABLE_TOP_CONTROL_CLASS =
-  "h-11 inline-flex items-center justify-center rounded bg-black/70 hover:bg-emerald-800 text-emerald-100 hover:text-white text-base font-medium transition-colors";
+  "h-11 inline-flex items-center justify-center rounded border border-transparent bg-black/70 text-emerald-100 text-base font-medium shadow-sm transition-[background-color,color,border-color,box-shadow,transform] duration-150 ease-out hover:border-emerald-400/60 hover:bg-emerald-800 hover:text-white hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-black active:translate-y-px active:scale-[0.96] active:bg-emerald-950 active:text-white active:shadow-inner motion-reduce:transition-none motion-reduce:transform-none";
 
 export function WebTableTopControls({
   compactLayout,
@@ -27,6 +31,7 @@ export function WebTableTopControls({
 }: WebTableTopControlsProps): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [quitRequested, setQuitRequested] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -134,13 +139,30 @@ export function WebTableTopControls({
       </div>
       <button
         type="button"
-        onClick={onQuit}
+        onClick={() => {
+          if (quitRequested) {
+            return;
+          }
+          setQuitRequested(true);
+          try {
+            onQuit();
+          } catch (error) {
+            setQuitRequested(false);
+            throw error;
+          }
+        }}
+        disabled={quitRequested}
+        aria-busy={quitRequested}
         aria-label={quitLabel}
         title={quitLabel}
-        className={`${WEB_TABLE_TOP_CONTROL_CLASS} min-w-[5.5rem] px-4`}
-        style={{ backgroundColor: "rgba(0, 0, 0, 0.7)", color: "#d1fae5" }}
+        data-state={quitRequested ? "requested" : "idle"}
+        className={`${WEB_TABLE_TOP_CONTROL_CLASS} min-w-[5.5rem] px-4 data-[state=requested]:translate-y-px data-[state=requested]:scale-[0.96] data-[state=requested]:border-emerald-300/70 data-[state=requested]:bg-emerald-950 data-[state=requested]:text-white data-[state=requested]:shadow-inner disabled:cursor-wait disabled:opacity-100`}
       >
-        ✕
+        {quitRequested ? (
+          <LoadingOutlined spin aria-hidden="true" />
+        ) : (
+          <CloseOutlined aria-hidden="true" />
+        )}
       </button>
     </div>
   );
