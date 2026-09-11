@@ -3,6 +3,7 @@ import type {
   MatchModeConfig,
   NormalMatchModeConfig,
 } from "~/game/protocol/matchMode";
+import type { DuplicateDrawCounts } from "~/game/duplicate/duplicateExhaustion";
 import type { RuleSet } from "~/game/rules/ruleSet";
 import type { Seat, Tile, Wind } from "~/game/rules/types";
 import type { DealtMatch, WallOptions } from "~/game/rules/wall";
@@ -35,12 +36,18 @@ export type MatchDriverSnapshot =
   | NormalMatchDriverSnapshot
   | DuplicateMatchDriverSnapshot;
 
+export interface DuplicateQueueCounts {
+  initial: DuplicateDrawCounts;
+  remaining: DuplicateDrawCounts;
+}
+
 export interface MatchDriver {
   readonly mode: MatchModeConfig;
   prepareHand(context: MatchHandContext, ruleSet: RuleSet): DealtMatch | undefined;
   peekDraw(seat: Seat): MatchDrawDirective;
   canSupplyReplacement(seat: Seat): boolean;
   commitDraw(seat: Seat, tile: Tile): void;
+  duplicateQueueCounts(): DuplicateQueueCounts | null;
   snapshot(): MatchDriverSnapshot;
   drawQueuesForArchive(): [Tile[], Tile[], Tile[], Tile[]] | null;
 }
@@ -80,6 +87,10 @@ class StandardMatchDriver implements MatchDriver {
   }
 
   commitDraw(): void {}
+
+  duplicateQueueCounts(): null {
+    return null;
+  }
 
   snapshot(): NormalMatchDriverSnapshot {
     return { type: "normal" };
@@ -133,6 +144,16 @@ class DuplicateMatchDriver implements MatchDriver {
       );
     }
     this.cursors[seat] += 1;
+  }
+
+  duplicateQueueCounts(): DuplicateQueueCounts {
+    const plan = this.requireActivePlan();
+    return {
+      initial: plan.drawQueues.map((queue) => queue.length) as DuplicateDrawCounts,
+      remaining: plan.drawQueues.map(
+        (queue, seat) => queue.length - this.cursors[seat]
+      ) as DuplicateDrawCounts,
+    };
   }
 
   snapshot(): DuplicateMatchDriverSnapshot {

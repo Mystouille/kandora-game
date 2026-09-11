@@ -23,6 +23,7 @@
  * in Phase 1 step 5.
  */
 import type {
+  DuplicateWallState,
   GameEvent,
   LegalAction,
   MatchDebug,
@@ -31,6 +32,7 @@ import type {
   ServerMessage,
   ViewerPresence,
 } from "~/game/protocol/messages";
+import { estimateDuplicateExhaustion } from "~/game/duplicate/duplicateExhaustion";
 import {
   MatchModeConfigSchema,
   normalMatchMode,
@@ -2382,6 +2384,7 @@ export class MatchProcess {
       hand: undefined,
       doraIndicators: this.state.doraIndicators,
       dice: this.rollDice(),
+      ...this.duplicateWallEventFields(),
     });
 
     await this.advanceTurn();
@@ -2602,6 +2605,31 @@ export class MatchProcess {
       this.state.scores[2] <= t,
       this.state.scores[3] <= t,
     ];
+  }
+
+  private duplicateWallState(): DuplicateWallState | undefined {
+    const counts = this.matchDriver.duplicateQueueCounts();
+    if (counts === null) {
+      return undefined;
+    }
+    const forecast = estimateDuplicateExhaustion(counts.remaining, {
+      phase: this.state.phase,
+      turn: this.state.turn,
+      pendingReplacementSeat: this.state.pendingShouminkan?.seat ?? null,
+    });
+    return {
+      initial: [...counts.initial],
+      remaining: [...counts.remaining],
+      limitingSeat: forecast?.limitingSeat ?? null,
+      estimatedDrawsRemaining: forecast?.estimatedDrawsRemaining ?? null,
+    };
+  }
+
+  private duplicateWallEventFields():
+    | { duplicateWallState: DuplicateWallState }
+    | Record<string, never> {
+    const duplicateWallState = this.duplicateWallState();
+    return duplicateWallState ? { duplicateWallState } : {};
   }
 
   isHumanAttached(seat: Seat, send: Send): boolean {
@@ -3595,6 +3623,7 @@ export class MatchProcess {
           }))
         ),
         wallRemaining: this.state.liveWall.length,
+        ...this.duplicateWallEventFields(),
         // Number of post-deal draws this hand. A normal draw removes
         // one live-wall tile; a rinshan draw reserves the back tile
         // into the dead wall, so both shrink `liveWall` by one.
@@ -3698,6 +3727,7 @@ export class MatchProcess {
           }))
         ),
         wallRemaining: this.state.liveWall.length,
+        ...this.duplicateWallEventFields(),
         drawsTaken: 70 - this.state.liveWall.length,
         doraIndicators: [...this.state.doraIndicators],
         turn: this.state.turn,
@@ -6436,6 +6466,7 @@ export class MatchProcess {
         tile: e.tile,
         wallRemaining: e.wallRemaining,
         ...(e.fromDeadWall ? { fromDeadWall: true as const } : {}),
+        ...this.duplicateWallEventFields(),
       });
       return;
     }
@@ -6447,6 +6478,7 @@ export class MatchProcess {
         tsumogiri: e.tsumogiri,
         discardSource: e.discardSource,
         ...(e.riichi ? { riichi: true as const } : {}),
+        ...this.duplicateWallEventFields(),
       });
       if (e.riichi) {
         // Record the discard pile index where this seat's riichi
@@ -6605,7 +6637,17 @@ export class MatchProcess {
       return;
     }
     if (e.type === "call") {
-      await this.emitEvent({ type: "call", seat: e.seat, meld: e.meld });
+      const replacementDrawFollowsImmediately =
+        (e.meld.type === "ankan" || e.meld.type === "daiminkan") &&
+        this.state.lastDrawFromDeadWall;
+      await this.emitEvent({
+        type: "call",
+        seat: e.seat,
+        meld: e.meld,
+        ...(replacementDrawFollowsImmediately
+          ? {}
+          : this.duplicateWallEventFields()),
+      });
       return;
     }
     if (e.type === "new_dora") {
@@ -6653,6 +6695,7 @@ export class MatchProcess {
           : {}),
         doraIndicators: [...e.doraIndicators],
         dice: this.rollDice(),
+        ...this.duplicateWallEventFields(),
       });
       return;
     }

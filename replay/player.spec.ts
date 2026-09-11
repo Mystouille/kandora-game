@@ -279,6 +279,146 @@ describe("replayReducer", () => {
     expect(view.wallRemaining).toBe(69);
   });
 
+  it("retains duplicate walls and rotates the limiting player with focus", () => {
+    const queues = [
+      new Array(18).fill("1m"),
+      new Array(18).fill("2m"),
+      new Array(17).fill("3m"),
+      new Array(17).fill("4m"),
+    ] as [string[], string[], string[], string[]];
+    const log = makeLog([
+      { type: "match_start", seats: [], ruleSet: "tenhou-default" },
+      {
+        type: "hand_start",
+        round: 0,
+        dealer: 0,
+        startingHands: STARTING,
+        doraIndicators: ["3m"],
+        duplicateDrawQueues: queues,
+        duplicateWallState: {
+          initial: [18, 18, 17, 17],
+          remaining: [18, 18, 17, 17],
+          limitingSeat: 2,
+          estimatedDrawsRemaining: 70,
+        },
+      },
+      {
+        type: "draw",
+        seat: 0,
+        tile: "1m",
+        wallRemaining: 69,
+        duplicateWallState: {
+          initial: [18, 18, 17, 17],
+          remaining: [17, 18, 17, 17],
+          limitingSeat: 2,
+          estimatedDrawsRemaining: 69,
+        },
+      },
+    ]);
+
+    const replayView = replayReducer(log, 2);
+    expect(replayView.duplicateDrawQueues).toEqual(queues);
+    expect(replayView.duplicateWallState).toEqual({
+      initial: [18, 18, 17, 17],
+      remaining: [17, 18, 17, 17],
+      limitingSeat: 2,
+      estimatedDrawsRemaining: 69,
+    });
+
+    const matchView = replayViewToMatchView(replayView, {
+      index: 2,
+      mySeat: 2,
+    });
+    expect(matchView.duplicateDrawQueues?.map((queue) => queue[0])).toEqual([
+      "3m",
+      "4m",
+      "1m",
+      "2m",
+    ]);
+    expect(matchView.duplicateWallState).toEqual({
+      initial: [17, 17, 18, 18],
+      remaining: [17, 17, 17, 18],
+      limitingSeat: 0,
+      estimatedDrawsRemaining: 69,
+    });
+  });
+
+  it("reconstructs duplicate counts for archives recorded before wall-state events", () => {
+    const queues = [
+      new Array(18).fill("1m"),
+      new Array(18).fill("2m"),
+      new Array(17).fill("3m"),
+      new Array(17).fill("4m"),
+    ] as [string[], string[], string[], string[]];
+    const log = makeLog([
+      { type: "match_start", seats: [], ruleSet: "tenhou-default" },
+      {
+        type: "hand_start",
+        round: 0,
+        dealer: 0,
+        startingHands: STARTING,
+        doraIndicators: ["3m"],
+        duplicateDrawQueues: queues,
+      },
+      { type: "draw", seat: 0, tile: "1m", wallRemaining: 69 },
+      {
+        type: "discard",
+        seat: 0,
+        tile: "1m",
+        tsumogiri: true,
+        discardSource: "draw",
+      },
+      {
+        type: "call",
+        seat: 2,
+        meld: {
+          type: "pon",
+          tiles: ["1m", "1m", "1m"],
+          claimedTile: "1m",
+          from: 0,
+        },
+      },
+    ]);
+
+    expect(replayReducer(log, 4).duplicateWallState).toEqual({
+      initial: [18, 18, 17, 17],
+      remaining: [17, 18, 17, 17],
+      limitingSeat: 3,
+      estimatedDrawsRemaining: 68,
+    });
+  });
+
+  it("clears the duplicate forecast when a replay ends without hand_end", () => {
+    const log = makeLog([
+      { type: "match_start", seats: [], ruleSet: "tenhou-default" },
+      {
+        type: "hand_start",
+        round: 0,
+        dealer: 0,
+        startingHands: STARTING,
+        doraIndicators: ["3m"],
+        duplicateWallState: {
+          initial: [18, 18, 17, 17],
+          remaining: [18, 18, 17, 17],
+          limitingSeat: 2,
+          estimatedDrawsRemaining: 70,
+        },
+      },
+      {
+        type: "match_end",
+        reason: "round_limit",
+        finalScores: [],
+      },
+    ]);
+
+    expect(replayReducer(log, 2).duplicateWallState).toEqual({
+      initial: [18, 18, 17, 17],
+      remaining: [18, 18, 17, 17],
+      limitingSeat: null,
+      estimatedDrawsRemaining: null,
+    });
+  });
+
   it("discard removes a real tile from hand and lands it in the pile", () => {
     const events: GameEvent[] = [
       { type: "match_start", seats: [], ruleSet: "tenhou-default" },

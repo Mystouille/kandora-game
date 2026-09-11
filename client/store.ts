@@ -13,6 +13,7 @@
  */
 import { create } from "zustand";
 import type {
+  DuplicateWallState,
   GameEvent,
   LegalAction,
   Meld,
@@ -23,6 +24,12 @@ import type {
   ViewerPresence,
 } from "~/game/protocol/messages";
 import { discardIndexForSource } from "./discardActions";
+import {
+  cloneDuplicateDrawQueues,
+  cloneDuplicateWallState,
+  duplicateWallStateAfterEvent,
+  type DuplicateDrawQueues,
+} from "~/game/duplicate/duplicateWallState";
 
 /**
  * Lightweight event bus for applied `GameEvent`s.
@@ -158,6 +165,10 @@ export interface MatchView {
    * the focused seat will draw.
    */
   liveDrawSchedule: Seat[] | null;
+  /** Public count-only state for duplicate personal walls. */
+  duplicateWallState: DuplicateWallState | null;
+  /** Full personal queues, populated only by completed replay conversion. */
+  duplicateDrawQueues: DuplicateDrawQueues | null;
   /**
    * The two dice rolled at the start of the current hand. `null`
    * when unknown (older replays / synthetic logs).
@@ -463,6 +474,8 @@ const initialState: MatchView = {
   drawsTaken: 0,
   liveDrawsTaken: 0,
   liveDrawSchedule: null,
+  duplicateWallState: null,
+  duplicateDrawQueues: null,
   dice: null,
   doraIndicators: [],
   legalActions: [],
@@ -593,6 +606,10 @@ export const useMatchStore = create<MatchStore>((set) => ({
       // rendering.
       liveDrawsTaken: snap.drawsTaken ?? Math.max(0, 70 - snap.wallRemaining),
       liveDrawSchedule: null,
+      duplicateWallState: snap.duplicateWallState
+        ? cloneDuplicateWallState(snap.duplicateWallState)
+        : null,
+      duplicateDrawQueues: null,
       doraIndicators: [...snap.doraIndicators],
       dealer: snap.dealer,
       roundWind: snap.roundWind,
@@ -679,6 +696,10 @@ export const useMatchStore = create<MatchStore>((set) => ({
       const next: MatchView = {
         ...state,
         lastSeq: seq,
+        duplicateWallState: duplicateWallStateAfterEvent(
+          state.duplicateWallState,
+          event
+        ),
       };
       switch (event.type) {
         case "match_start": {
@@ -718,6 +739,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             lastHandResult: null,
             matchEnded: null,
             sessionVote: null,
+            duplicateDrawQueues: null,
           };
         }
         case "hand_start": {
@@ -755,6 +777,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
             liveDrawsTaken: 0,
             liveDrawSchedule: event.liveDrawSchedule
               ? [...event.liveDrawSchedule]
+              : null,
+            duplicateDrawQueues: event.duplicateDrawQueues
+              ? cloneDuplicateDrawQueues(event.duplicateDrawQueues)
               : null,
             dice: event.dice ? [event.dice[0], event.dice[1]] : null,
             dealer: event.dealer,

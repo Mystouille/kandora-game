@@ -41,6 +41,12 @@ function snapshotWithFreshGreenDragon(): SnapshotState {
     riichiDeclared: [false, false, false, false],
     lastDiscard: { seat: 3, tile: "1m" },
     phase: "awaiting_discard",
+    duplicateWallState: {
+      initial: [18, 18, 17, 17],
+      remaining: [10, 12, 11, 11],
+      limitingSeat: 0,
+      estimatedDrawsRemaining: 43,
+    },
   };
 }
 
@@ -49,6 +55,12 @@ describe("spectator snapshot baseline", () => {
     const baseline = snapshotToReplayView(snapshotWithFreshGreenDragon());
 
     expect(baseline.freshlyDrawnSeat).toBe(0);
+    expect(baseline.duplicateWallState).toEqual({
+      initial: [18, 18, 17, 17],
+      remaining: [10, 12, 11, 11],
+      limitingSeat: 0,
+      estimatedDrawsRemaining: 43,
+    });
 
     const afterDiscard = applyReplayEvent(baseline, {
       type: "discard",

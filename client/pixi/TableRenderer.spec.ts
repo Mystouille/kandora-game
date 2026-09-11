@@ -770,6 +770,20 @@ describe("web table layouts", () => {
       { kind: "riichi", value: 4 },
       { kind: "tiles", value: 0 },
     ]);
+    expect(
+      centerCounterSpecs({
+        buuMode: false,
+        honba: 0,
+        riichiSticks: 0,
+        drawsTaken: 3,
+        duplicateWallState: {
+          initial: [18, 18, 17, 17],
+          remaining: [16, 18, 17, 17],
+          limitingSeat: 0,
+          estimatedDrawsRemaining: 67,
+        },
+      }).find((counter) => counter.kind === "tiles")?.value
+    ).toBe(67);
   });
 
   it("fits inline counters in both standard and compact centers", () => {

@@ -36,6 +36,23 @@ const SeatSchema = z.union([
 ]);
 export type Seat = z.infer<typeof SeatSchema>;
 
+const NonnegativeCountTupleSchema = z.tuple([
+  z.number().int().nonnegative(),
+  z.number().int().nonnegative(),
+  z.number().int().nonnegative(),
+  z.number().int().nonnegative(),
+]);
+
+export const DuplicateWallStateSchema = z
+  .object({
+    initial: NonnegativeCountTupleSchema,
+    remaining: NonnegativeCountTupleSchema,
+    limitingSeat: SeatSchema.nullable(),
+    estimatedDrawsRemaining: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+export type DuplicateWallState = z.infer<typeof DuplicateWallStateSchema>;
+
 // ---------------------------------------------------------------------------
 // Events (server → client, embedded in `snapshot` and `event` messages)
 // ---------------------------------------------------------------------------
@@ -189,6 +206,7 @@ const HandStartEvent = z.object({
       z.array(TileSchema),
     ])
     .optional(),
+  duplicateWallState: DuplicateWallStateSchema.optional(),
 });
 
 const DrawEvent = z.object({
@@ -201,6 +219,7 @@ const DrawEvent = z.object({
    * from the dead wall after a kan), false / absent for live-wall
    * draws. Attached post-parse by `annotateWallSchedule`. */
   fromDeadWall: z.boolean().optional(),
+  duplicateWallState: DuplicateWallStateSchema.optional(),
 });
 
 const DiscardEvent = z.object({
@@ -218,6 +237,7 @@ const DiscardEvent = z.object({
    * (Tenhou, Riichi City) — callers fall back to a shanten compute.
    * Empty array means the platform reported "not tenpai". */
   waits: z.array(TileSchema).optional(),
+  duplicateWallState: DuplicateWallStateSchema.optional(),
 });
 
 const MeldSchema = z.object({
@@ -365,6 +385,7 @@ const CallEvent = z.object({
   type: z.literal("call"),
   seat: SeatSchema,
   meld: MeldSchema,
+  duplicateWallState: DuplicateWallStateSchema.optional(),
 });
 
 const NewDoraEvent = z.object({
@@ -551,6 +572,7 @@ export const SnapshotStateSchema = z.object({
   discards: z.array(z.array(TileSchema)).length(4),
   melds: z.array(z.array(MeldSchema)).length(4),
   wallRemaining: z.number().int().nonnegative(),
+  duplicateWallState: DuplicateWallStateSchema.optional(),
   /** Number of post-deal draws this hand, including rinshan draws.
    * Each kan transfers one live-wall tile into the dead wall, so this
    * equals `70 - wallRemaining`. Used by the renderer to shrink the

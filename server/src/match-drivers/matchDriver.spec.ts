@@ -32,6 +32,7 @@ describe("match drivers", () => {
     expect(driver.prepareHand(context, ruleSet)).toBeUndefined();
     expect(driver.peekDraw(0)).toEqual({ kind: "standard" });
     expect(driver.canSupplyReplacement(0)).toBe(true);
+    expect(driver.duplicateQueueCounts()).toBeNull();
     expect(driver.snapshot()).toEqual({ type: "normal" });
   });
 
@@ -48,6 +49,10 @@ describe("match drivers", () => {
 
     expect(driver.peekDraw(0)).not.toEqual(seatZero);
     expect(driver.peekDraw(1)).toEqual(seatOne);
+    expect(driver.duplicateQueueCounts()).toEqual({
+      initial: [18, 18, 17, 17],
+      remaining: [17, 18, 17, 17],
+    });
     expect(driver.snapshot()).toMatchObject({
       type: "duplicate",
       activeHand: { cursors: [1, 0, 0, 0] },

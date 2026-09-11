@@ -27,6 +27,7 @@
  * everything else through the `GameEvent` schema.
  */
 import type {
+  DuplicateWallState,
   GameEvent,
   Meld,
   RoomState,
@@ -36,6 +37,11 @@ import type {
 import type { MatchView } from "~/game/client/store";
 import type { ReplayLog } from "./types";
 import { discardIndexForSource } from "~/game/client/discardActions";
+import {
+  cloneDuplicateDrawQueues,
+  duplicateWallStateAfterEvent,
+  type DuplicateDrawQueues,
+} from "~/game/duplicate/duplicateWallState";
 
 export interface ReplayView {
   /** Hand-by-seat. `null` = unknown tile (opponent starting tiles
@@ -83,6 +89,10 @@ export interface ReplayView {
    * `null` when the hand_start event didn't carry one (live
    * matches, or archives that pre-date the annotation pass). */
   liveDrawSchedule: Seat[] | null;
+  /** Public count-only duplicate wall state. */
+  duplicateWallState: DuplicateWallState | null;
+  /** Full duplicate queues, present only in completed archives. */
+  duplicateDrawQueues: DuplicateDrawQueues | null;
   /** Two dice rolled at the start of the current hand; `null` when
    * the source log doesn't record dice (older synthetic logs). */
   dice: [number, number] | null;
@@ -250,6 +260,8 @@ export function initialView(): ReplayView {
     drawsTaken: 0,
     liveDrawsTaken: 0,
     liveDrawSchedule: null,
+    duplicateWallState: null,
+    duplicateDrawQueues: null,
     dice: null,
     doraIndicators: [],
     scores: [25000, 25000, 25000, 25000],
@@ -307,6 +319,8 @@ export function applyReplayEvent(
         ],
         lastHandResult: null,
         matchEnded: null,
+        duplicateWallState: null,
+        duplicateDrawQueues: null,
       };
     }
     case "hand_start": {
@@ -336,6 +350,13 @@ export function applyReplayEvent(
         liveDrawsTaken: 0,
         liveDrawSchedule: event.liveDrawSchedule
           ? [...event.liveDrawSchedule]
+          : null,
+        duplicateWallState: duplicateWallStateAfterEvent(
+          view.duplicateWallState,
+          event
+        ),
+        duplicateDrawQueues: event.duplicateDrawQueues
+          ? cloneDuplicateDrawQueues(event.duplicateDrawQueues)
           : null,
         dice: event.dice ? [event.dice[0], event.dice[1]] : null,
         dealer: event.dealer,
@@ -393,6 +414,10 @@ export function applyReplayEvent(
           : view.liveDrawsTaken + 1,
         freshlyDrawnSeat: event.seat,
         freshlyDiscardedSeat: null,
+        duplicateWallState: duplicateWallStateAfterEvent(
+          view.duplicateWallState,
+          event
+        ),
       };
     }
     case "discard": {
@@ -479,6 +504,10 @@ export function applyReplayEvent(
         scores,
         freshlyDrawnSeat: null,
         freshlyDiscardedSeat: event.seat,
+        duplicateWallState: duplicateWallStateAfterEvent(
+          view.duplicateWallState,
+          event
+        ),
       };
     }
     case "call": {
@@ -580,6 +609,10 @@ export function applyReplayEvent(
         discardOrdinals,
         freshlyDrawnSeat: null,
         freshlyDiscardedSeat: null,
+        duplicateWallState: duplicateWallStateAfterEvent(
+          view.duplicateWallState,
+          event
+        ),
       };
     }
     case "new_dora": {
@@ -726,11 +759,19 @@ export function applyReplayEvent(
           ...(existingWins ? { wins: existingWins } : {}),
           ...(existingBuuChombo ? { buuChombo: existingBuuChombo } : {}),
         },
+        duplicateWallState: duplicateWallStateAfterEvent(
+          view.duplicateWallState,
+          event
+        ),
       };
     }
     case "match_end": {
       return {
         ...view,
+        duplicateWallState: duplicateWallStateAfterEvent(
+          view.duplicateWallState,
+          event
+        ),
         // Roll the post-game session-level chip / dabuken totals
         // into the top-level view fields so the player-info
         // squares pick up the delta applied this game; mirrors
@@ -903,6 +944,8 @@ export function replayViewToMatchView(
     drawsTaken: view.drawsTaken,
     liveDrawsTaken: view.liveDrawsTaken,
     liveDrawSchedule: view.liveDrawSchedule,
+    duplicateWallState: view.duplicateWallState,
+    duplicateDrawQueues: view.duplicateDrawQueues,
     dice: view.dice,
     doraIndicators: view.doraIndicators,
     legalActions: [],
@@ -1051,6 +1094,20 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     liveDrawSchedule: mv.liveDrawSchedule
       ? mv.liveDrawSchedule.map((s) => rot(s))
       : mv.liveDrawSchedule,
+    duplicateWallState: mv.duplicateWallState
+      ? {
+          ...mv.duplicateWallState,
+          initial: perm4(mv.duplicateWallState.initial),
+          remaining: perm4(mv.duplicateWallState.remaining),
+          limitingSeat:
+            mv.duplicateWallState.limitingSeat !== null
+              ? rot(mv.duplicateWallState.limitingSeat)
+              : null,
+        }
+      : null,
+    duplicateDrawQueues: mv.duplicateDrawQueues
+      ? perm4(mv.duplicateDrawQueues).map((queue) => [...queue]) as DuplicateDrawQueues
+      : null,
     scores: perm4(mv.scores),
     seatNames: mv.seatNames ? perm4(mv.seatNames) : mv.seatNames,
     dealer: rot(mv.dealer),

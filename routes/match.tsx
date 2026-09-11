@@ -1337,6 +1337,7 @@ export default function GameMatchRoute({
         repeat: t.match.centerRepeat,
         riichi: t.match.centerRiichi,
         tiles: t.match.centerTiles,
+        remainingDraws: t.match.remainingDraws,
       });
       rendererRef.current.setResultLabels({
         exhaustiveDraw: t.match.exhaustiveDraw,

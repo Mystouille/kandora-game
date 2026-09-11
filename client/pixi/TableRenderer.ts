@@ -79,6 +79,13 @@ import chipIconUrl from "~/game/client/icons/chips.png";
 import dabukenIconUrl from "~/game/client/icons/dabuken.png";
 import tenhouBgUrl from "~/game/tenhouSprites/tenhouBg.png";
 import { splitWinningHandForDisplay } from "./winningHand";
+import { buildNormalWallPlan } from "./walls/normalWallPlan";
+import { buildDuplicateWallPlan } from "./walls/duplicateWallPlan";
+import type { WallRenderPlan } from "./walls/wallRenderPlan";
+import {
+  displayedTilesRemaining,
+  duplicatePlayerCounterSpecs,
+} from "./panels/duplicateCounterPlan";
 import {
   discardSourceForRawIndex,
   findTileAction,
@@ -282,7 +289,10 @@ export interface CenterCounterSpec {
 }
 
 export function centerCounterSpecs(
-  view: Pick<MatchView, "buuMode" | "honba" | "riichiSticks" | "drawsTaken">
+  view: Pick<
+    MatchView,
+    "buuMode" | "honba" | "riichiSticks" | "drawsTaken"
+  > & { duplicateWallState?: MatchView["duplicateWallState"] }
 ): CenterCounterSpec[] {
   return [
     ...(view.buuMode === true
@@ -291,7 +301,7 @@ export function centerCounterSpecs(
     { kind: "riichi", value: view.riichiSticks, color: 0xfca5a5 },
     {
       kind: "tiles",
-      value: Math.max(0, 70 - view.drawsTaken),
+      value: displayedTilesRemaining(view),
       color: 0xd1d5db,
     },
   ];
@@ -1617,10 +1627,16 @@ export class TableRenderer {
   /** Localized labels for the three center-square status lines.
    * Defaults to English; the React layer calls `setCenterLabels`
    * with translated strings after mount. */
-  private centerLabels: { repeat: string; riichi: string; tiles: string } = {
+  private centerLabels: {
+    repeat: string;
+    riichi: string;
+    tiles: string;
+    remainingDraws: string;
+  } = {
     repeat: "Repeat",
     riichi: "Riichi",
     tiles: "Tiles",
+    remainingDraws: "Remaining draws",
   };
   /** Localized labels for the result-panel titles shown at the end
    * of a hand (exhaustive draw / abortive draw). `abortTitle`
@@ -2846,6 +2862,7 @@ export class TableRenderer {
     repeat: string;
     riichi: string;
     tiles: string;
+    remainingDraws: string;
   }): void {
     this.centerLabels = labels;
   }
@@ -3542,7 +3559,7 @@ export class TableRenderer {
     // The drawable wall starts at 70 after the deal. Rinshan draws
     // count too: each replacement moves one live-wall tail tile into
     // the dead wall, reducing the number of future draws by one.
-    const wallRemaining = Math.max(0, 70 - view.drawsTaken);
+    const wallRemaining = displayedTilesRemaining(view);
     // Buu Mahjong has no repeat counter, so omit the honba line
     // entirely in that mode rather than rendering a stale "Repeat: 0".
     const lineSpecs: Array<{ label: string; value: string; color: number }> = [
@@ -3644,7 +3661,7 @@ export class TableRenderer {
     heading.position.set(cx, doraY + dora.tileH + heading.height * 0.55);
     this.root.addChild(heading);
 
-    const wallRemaining = Math.max(0, 70 - view.drawsTaken);
+    const wallRemaining = displayedTilesRemaining(view);
     const counters: Array<{
       kind: "honba" | "riichi" | "tiles";
       value: number;
@@ -3719,12 +3736,34 @@ export class TableRenderer {
     const fontSize = 14;
     const padY = 4;
     const buuMode = view.buuMode === true;
+    const duplicateCounters = new Map(
+      duplicatePlayerCounterSpecs(view.duplicateWallState).map((counter) => [
+        counter.seat,
+        counter,
+      ])
+    );
+    const addRemainingCounter = (
+      target: Container,
+      text: Text,
+      y: number
+    ): void => {
+      const width = Math.ceil(text.width) + 10;
+      const height = Math.ceil(text.height) + 4;
+      const background = new Graphics()
+        .roundRect(-width / 2, -height / 2, width, height, 4)
+        .fill({ color: 0x000000, alpha: 0.68 });
+      const badge = new Container();
+      badge.addChild(background, text);
+      badge.position.set(0, y);
+      target.addChild(badge);
+    };
     // Build all per-seat sub-objects first so we can pick a single
     // uniform box size for every seat (user requirement).
     type Built = {
       seat: 0 | 1 | 2 | 3;
       nameText: Text;
       chipText: Text | null;
+      remainingText: Text | null;
       teamLogoTex: Texture | null;
       isDisconnected: boolean;
       hasDabuken: boolean;
@@ -3732,6 +3771,7 @@ export class TableRenderer {
     const built: Built[] = [];
     let maxChipTextW = 0;
     let maxNameH = 0;
+    let maxRemainingTextH = 0;
     for (let seat = 0; seat < 4; seat++) {
       const name = view.seatNames[seat];
       if (!name) {
@@ -3773,6 +3813,28 @@ export class TableRenderer {
         chipText.anchor.set(0.5, 0.5);
         maxChipTextW = Math.max(maxChipTextW, Math.ceil(chipText.width));
       }
+      const duplicateCounter = duplicateCounters.get(seat as Seat);
+      let remainingText: Text | null = null;
+      if (duplicateCounter) {
+        remainingText = new Text({
+          text: `${this.centerLabels.remainingDraws}: ${duplicateCounter.remaining}`,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 10,
+            fontWeight: duplicateCounter.limiting ? "700" : "600",
+            fill: duplicateCounter.color,
+          }),
+        });
+        remainingText.anchor.set(0.5, 0.5);
+        const maxCounterWidth = PLAYER_PANEL_SIZE - 16;
+        if (remainingText.width > maxCounterWidth) {
+          remainingText.scale.set(maxCounterWidth / remainingText.width);
+        }
+        maxRemainingTextH = Math.max(
+          maxRemainingTextH,
+          Math.ceil(remainingText.height)
+        );
+      }
       let teamLogoTex: Texture | null = null;
       const enrich = this.seatEnrichment[seat];
       if (enrich?.teamLogoUrl) {
@@ -3782,6 +3844,7 @@ export class TableRenderer {
         seat: seat as 0 | 1 | 2 | 3,
         nameText,
         chipText,
+        remainingText,
         teamLogoTex,
         isDisconnected,
         hasDabuken: buuMode && view.dabuken[seat] === true,
@@ -3797,17 +3860,27 @@ export class TableRenderer {
     const chipRowH = buuMode ? Math.max(maxNameH, chipIconR * 2) + 4 : 0;
     const dabukenR = 26; // dabuken token radius (px) — 2× the chip icon
     const dabukenRowH = buuMode ? dabukenR * 2 + 4 : 0;
+    const remainingRowH = maxRemainingTextH > 0 ? maxRemainingTextH + 6 : 0;
     // Width: max of name, chip-line content, and dabuken token.
     const chipLineW = buuMode ? chipIconR * 2 + chipIconGap + maxChipTextW : 0;
-    const h = nameRowH + chipRowH + dabukenRowH;
+    const h = nameRowH + chipRowH + dabukenRowH + remainingRowH;
     // Row centre y positions inside the box (anchor at (0,0) =
     // box centre; +y down).
     const nameCY = -h / 2 + nameRowH / 2;
     const chipCY = -h / 2 + nameRowH + chipRowH / 2;
     const dabukenCY = -h / 2 + nameRowH + chipRowH + dabukenRowH / 2;
+    const remainingCY =
+      -h / 2 + nameRowH + chipRowH + dabukenRowH + remainingRowH / 2;
     const discardPanels = this.discardPanelRects(layout);
     for (const b of built) {
-      const { seat, nameText, chipText, isDisconnected, hasDabuken } = b;
+      const {
+        seat,
+        nameText,
+        chipText,
+        remainingText,
+        isDisconnected,
+        hasDabuken,
+      } = b;
       const identityCenter = playerIdentityCenter(discardPanels, seat);
       const container = new Container();
       // Enriched (team) nameplate: team logo as the box background with the
@@ -3858,6 +3931,9 @@ export class TableRenderer {
           tnBox.position.set(0, -S / 2 + tnh / 2 + 4);
           container.addChild(tnBox);
         }
+        if (remainingText) {
+          addRemainingCounter(container, remainingText, 0);
+        }
 
         container.rotation = SEAT_CONTAINER_ROT[seat];
         container.position.set(identityCenter.x, identityCenter.y);
@@ -3865,7 +3941,7 @@ export class TableRenderer {
         this.root.addChild(container);
         continue;
       }
-      nameText.position.set(0, buuMode ? nameCY : 0);
+      nameText.position.set(0, nameCY);
       container.addChild(nameText);
       if (buuMode && chipText) {
         // Chip icon: use the imported PNG when available; fall
@@ -3929,6 +4005,9 @@ export class TableRenderer {
         token.position.set(0, dabukenCY);
         container.addChild(token);
       }
+      if (remainingText) {
+        addRemainingCounter(container, remainingText, remainingCY);
+      }
       // Disconnect badge: only rendered for live game / spectator
       // views (`roomState` populated). Replay viewer leaves
       // `roomState === null`, so badges never paint in archived
@@ -3956,6 +4035,9 @@ export class TableRenderer {
         badge.position.set(0, h / 2 + bh / 2 + 2);
         container.addChild(badge);
       }
+      if (remainingRowH > 0 && h > PLAYER_PANEL_SIZE - 8) {
+        container.scale.set((PLAYER_PANEL_SIZE - 8) / h);
+      }
       container.rotation = SEAT_CONTAINER_ROT[seat];
       container.position.set(identityCenter.x, identityCenter.y);
       container.zIndex = PLAYER_PANEL_CONTENT_Z;
@@ -3977,162 +4059,56 @@ export class TableRenderer {
     if (!this.root) {
       return;
     }
+    if (view.duplicateWallState) {
+      this.renderWallPlan(
+        buildDuplicateWallPlan({
+          layout,
+          metrics: {
+            upright: this.tileDesign.metrics.wallUpright,
+            side: this.tileDesign.metrics.wallSide,
+            sideOverlap: this.tileDesign.spacing.wallSide,
+          },
+          showWalls: this.showWalls,
+          view,
+        })
+      );
+      return;
+    }
     // Live spectate: a relay feed carries no live/dead wall tiles, so
     // draw only the dead wall (dora + kan tiles) at a fixed position.
     if (this.liveSpectate) {
       this.renderDeadWallOnly(view, layout);
       return;
     }
-    // 16-px vertical (screen-y) offset of the upper stack tile
-    // relative to the lower stack tile. Applied uniformly to every
-    // wall (consequence: top/bottom walls show two visible rows of
-    // tiles separated by 16 px in screen-y; left/right walls show
-    // each upper-stack tile peeking out 16 px above its lower-stack
-    // partner).
-    const ROW_OFFSET_Y = 16;
-    // Long-axis overlap between consecutive side-wall tiles.
-    const SIDE_TILE_OVERLAP = this.tileDesign.spacing.wallSide;
-    // Cross-axis overlap between the two visible rows of a stack
-    // when the `showWalls` overlay flattens the wall.
-    const WALL_REVEAL_ROW_OVERLAP = 16;
-    // Wall tile footprints + per-seat sheets come from the design.
-    const wallUpright = this.tileDesign.metrics.wallUpright;
-    const SIDE_WALL_SCREEN_W = this.tileDesign.metrics.wallSide.screenW;
-    const SIDE_WALL_ASPECT = this.tileDesign.metrics.wallSide.aspect;
+    const plan = buildNormalWallPlan({
+      layout,
+      metrics: {
+        upright: this.tileDesign.metrics.wallUpright,
+        side: this.tileDesign.metrics.wallSide,
+        sideOverlap: this.tileDesign.spacing.wallSide,
+      },
+      showWalls: this.showWalls,
+      showUndealtWall: this.showUndealtWall,
+      view,
+    });
+    this.renderWallPlan(plan);
+  }
 
-    // ---------------------------------------------------------------
-    // Wall topology
-    // ---------------------------------------------------------------
-    //
-    // 4 walls × 17 stacks × 2 tiles = 136 tiles. Each seat's wall is
-    // indexed locally by `k = 0..16`. The local-axis orientation of
-    // the wall bands in this renderer (set by `renderWalls`'s per-
-    // seat positioning code) is:
-    //   seat 0 (bottom): k=0 at bottom-LEFT corner,  k=16 at bottom-RIGHT
-    //   seat 1 (right) : k=0 at bottom-RIGHT corner, k=16 at top-RIGHT
-    //   seat 2 (top)   : k=0 at top-RIGHT corner,    k=16 at top-LEFT
-    //   seat 3 (left)  : k=0 at top-LEFT corner,     k=16 at bottom-LEFT
-    // Within each seat, +k therefore points in the seat's player-
-    // RIGHT direction (and adjacent corners line up between seats).
-    //
-    // `gpos = 0..67` is a circular index advancing CW around the
-    // perimeter, with seat s occupying gpos s*17..s*17+16. The
-    // continuity matches: seat 0 k=16 (bottom-RIGHT) ↔ seat 1 k=0
-    // (bottom-RIGHT), seat 1 k=16 ↔ seat 2 k=0, etc.
-    const gposOf = (s: number, k: number): number => s * 17 + k;
-
-    // Break point: dice sum → count seats CCW from dealer
-    // (1=dealer) → land on `breakSeat`. Seats 0,1,2,3 are arranged
-    // CCW around the table, so CCW = increasing seat index.
-    const dice = view.dice ?? [3, 4];
-    const sumRaw = (dice[0] ?? 1) + (dice[1] ?? 1);
-    const sum = Math.max(2, Math.min(12, sumRaw));
-    const breakSeat = (view.dealer + sum - 1) % 4;
-    // Within breakSeat, count `sum` stacks from the player-RIGHT
-    // end. With +k = player-RIGHT in our local index, the player-
-    // right end is k=16; the Nth stack from that end is at
-    // k = 16 - (sum - 1) = 17 - sum. Break sits on the player-LEFT
-    // edge of that stack.
-    const stackIdxFromRight = 17 - sum;
-    const breakStackGpos = gposOf(breakSeat, stackIdxFromRight);
-
-    // Assign a role to every gpos.
-    //   - dead[i] (i=0..6): i=0 is the break-side stack (= the
-    //     stack the dice counted to), i=6 is the rinshan end
-    //     farthest from the break.
-    //   - live[j] (j=0..60): j=0 is the first stack to drain
-    //     (immediately CCW of the break, i.e. one step past the
-    //     break in player-LEFT direction); j=60 is the last
-    //     (adjacent to the rinshan end of the dead wall).
-    type GposRole =
-      | { kind: "dead"; idxFromBreak: number }
-      | { kind: "live"; drawStackIdx: number };
-    const roles = new Map<number, GposRole>();
-    for (let i = 0; i < 7; i++) {
-      // Dead wall extends in +gpos direction from the break stack
-      // (player-LEFT of the break point inside breakSeat, then
-      // wrapping into the next CW seat's wall).
-      const g = (((breakStackGpos + i) % 68) + 68) % 68;
-      roles.set(g, { kind: "dead", idxFromBreak: i });
+  private renderWallPlan(plan: WallRenderPlan): void {
+    if (!this.root) {
+      return;
     }
-    for (let j = 0; j < 61; j++) {
-      // Live wall extends from the break in the -gpos direction
-      // (the opposite end from the dead wall). j=0 is the first
-      // stack to drain — adjacent to the break point / dora end of
-      // the dead wall; j=60 is the last remaining stack — adjacent
-      // to the rinshan end of the dead wall.
-      const g = (((breakStackGpos - 1 - j) % 68) + 68) % 68;
-      roles.set(g, { kind: "live", drawStackIdx: j });
-    }
-
-    // At hand_start the 4×13 = 52 initial-deal tiles have already
-    // been taken off the live wall. The store's `liveDrawsTaken`
-    // counts post-deal live-wall draws only (excludes rinshan), so
-    // we pre-offset here. Falls back to `drawsTaken` for live
-    // snapshots that don't distinguish rinshan draws.
-    const INITIAL_DEAL_TILES = this.showUndealtWall ? 0 : 52;
-    const liveDrawsConsumed = view.liveDrawsTaken ?? view.drawsTaken;
-    const drawsTaken = liveDrawsConsumed + INITIAL_DEAL_TILES;
-    // Number of kans declared this hand = total draws minus
-    // live-wall draws (the difference is the rinshan replacement
-    // draws). Each kan removes one rinshan tile from the dead
-    // wall and shifts one tile from the rinshan end of the live
-    // wall into the dead wall to preserve its 14-tile count.
-    const kanCount = this.showUndealtWall
-      ? 0
-      : Math.max(0, Math.min(4, view.drawsTaken - liveDrawsConsumed));
-
-    for (let seat = 0; seat < 4; seat++) {
-      const band = layout.wall[seat];
-      const isHoriz = seat % 2 === 0;
-      const screenTileW = isHoriz ? wallUpright.w : SIDE_WALL_SCREEN_W;
-      const screenTileH = isHoriz
-        ? wallUpright.h
-        : SIDE_WALL_SCREEN_W * SIDE_WALL_ASPECT;
-      const tileLongDim = isHoriz ? screenTileW : screenTileH;
-      const baseStride = isHoriz
-        ? screenTileW
-        : screenTileH - SIDE_TILE_OVERLAP;
-      // Uniform gap at any dead↔live boundary within a single band.
-      const gapSize = 6;
-
-      // Compute the long-axis offset (from the player-right anchor,
-      // measured toward player-left) of each stack k=0..16. Insert
-      // `gapSize` before any stack whose role differs from the
-      // previous stack's.
-      const longOffsets: number[] = new Array(17);
-      let cursor = 0;
-      let prevKind: "live" | "dead" | null = null;
-      for (let k = 0; k < 17; k++) {
-        const g = gposOf(seat, k);
-        const role = roles.get(g);
-        if (!role) {
-          longOffsets[k] = cursor;
-          cursor += baseStride;
-          prevKind = null;
-          continue;
-        }
-        if (prevKind !== null && prevKind !== role.kind) {
-          cursor += gapSize;
-        }
-        longOffsets[k] = cursor;
-        cursor += baseStride;
-        prevKind = role.kind;
+    for (let seatIndex = 0; seatIndex < 4; seatIndex++) {
+      const seat = seatIndex as Seat;
+      const tiles = plan.tiles.filter((tile) => tile.seat === seat);
+      if (tiles.length === 0) {
+        continue;
       }
-
-      const tileCrossDim = isHoriz ? screenTileH : screenTileW;
-      const bandCross = isHoriz ? band.h : band.w;
-      const crossAtEnd = seat === 2 || seat === 3;
-      const crossInset = crossAtEnd ? bandCross - tileCrossDim : 0;
-
       const wallContainer = new Container();
+      wallContainer.label = `wall-seat-${seat}`;
       wallContainer.sortableChildren = true;
-      const backSheet = this.tileDesign.sheets.wallBack[
-        seat as Seat
-      ] as SheetKey;
-      const faceSheet = this.tileDesign.sheets.wallFace[
-        seat as Seat
-      ] as SheetKey;
+      const backSheet = this.tileDesign.sheets.wallBack[seat] as SheetKey;
+      const faceSheet = this.tileDesign.sheets.wallFace[seat] as SheetKey;
       const wallShadowBoxes: Array<{
         ax: number;
         ay: number;
@@ -4140,295 +4116,40 @@ export class TableRenderer {
         h: number;
       }> = [];
 
-      for (let k = 0; k < 17; k++) {
-        const g = gposOf(seat, k);
-        const role = roles.get(g);
-        if (!role) {
-          continue;
+      for (const tile of tiles) {
+        const sheet = tile.faceUpTile !== null ? faceSheet : backSheet;
+        const sprite = new Sprite(
+          this.getTileTexture(sheet, tile.faceUpTile)
+        );
+        sprite.anchor.set(0.5, 0.5);
+        sprite.width = tile.width;
+        sprite.height = tile.height;
+        sprite.position.set(tile.width / 2, tile.height / 2);
+        if (this.tintIfWait(sprite, tile.faceUpTile)) {
+          // Wait tint has priority over wall-state tones.
+        } else if (tile.tone === "future-draw") {
+          sprite.tint = 0x88ff88;
+        } else if (tile.tone === "deemphasized") {
+          sprite.tint = 0xb0b0b0;
         }
-        const longOffset = longOffsets[k];
-        for (let row = 0; row < 2; row++) {
-          // Skip already-drawn live tiles. Within a stack, the
-          // upper tile (row 1) drains first, then the lower
-          // (row 0).
-          if (role.kind === "live") {
-            const tileDrawIdx = role.drawStackIdx * 2 + (row === 1 ? 0 : 1);
-            if (tileDrawIdx < drawsTaken) {
-              continue;
-            }
-          }
-          // Skip dead-wall positions consumed by rinshan draws.
-          // Each kan removes one rinshan tile from the break-side
-          // end of the dead wall, top tile first:
-          //   kan 1 → idxFromBreak=0, row 1 (upper of break stack)
-          //   kan 2 → idxFromBreak=0, row 0
-          //   kan 3 → idxFromBreak=1, row 1
-          //   kan 4 → idxFromBreak=1, row 0
-          if (role.kind === "dead" && role.idxFromBreak <= 1 && kanCount > 0) {
-            const rinshanOrder = role.idxFromBreak * 2 + (row === 1 ? 0 : 1);
-            if (rinshanOrder < kanCount) {
-              continue;
-            }
-          }
-          // Mark the last `kanCount` live-wall tiles as "pulled
-          // into the dead wall" — drawn greyed-out but still in
-          // place so the dead wall visually keeps its 14 tiles.
-          // Live tiles drain in `tileDrawIdx` order; the haitei
-          // (last drawable) sits at tileDrawIdx 121, so the
-          // pulled tiles occupy indices 122 - kanCount .. 121.
-          let livePulledToDead = false;
-          if (role.kind === "live" && kanCount > 0) {
-            const tileDrawIdx = role.drawStackIdx * 2 + (row === 1 ? 0 : 1);
-            if (tileDrawIdx >= 122 - kanCount) {
-              livePulledToDead = true;
-            }
-          }
-          // Dora / kan-dora face-up reveals on the dead wall's
-          // upper tile. Indicator rank counts 1-based from break:
-          //   rank 3 → standard dora indicator
-          //   rank 4..7 → kan-dora indicators (revealed by kans)
-          // The renderer trusts `view.doraIndicators` ordering:
-          // index 0 is the standard dora, 1..4 are kan-doras.
-          let faceUpTile: string | null = null;
-          // Set when the dead-wall tile is revealed by the
-          // `showWalls` overlay (i.e. NOT a live dora-indicator
-          // reveal). Drives a subtle grey tint to visually
-          // de-emphasize cheat-reveal positions vs. the
-          // dora-indicators that would naturally be visible.
-          let greyOutDeadWall = false;
-          if (role.kind === "dead" && row === 1) {
-            const rank = role.idxFromBreak + 1;
-            if (rank === 3) {
-              faceUpTile = view.doraIndicators[0] ?? null;
-            } else if (rank >= 4 && rank <= 7) {
-              const di = rank - 3;
-              faceUpTile = view.doraIndicators[di] ?? null;
-            }
-          }
-          // `showWalls` overlay: when the source carries the
-          // omniscient dead-wall snapshot, reveal all 14 dead-wall
-          // tiles. Mapping `deadWall[idxFromBreak * 2 + row]`
-          // matches Tenhou's yama-index convention: row 1 (upper)
-          // tiles get odd indices (yama[5]=dora,
-          // yama[7]=kan-dora-1, ...); row 0 (lower) tiles get
-          // even indices (yama[4]=ura-dora, yama[0..3]=rinshan).
-          if (
-            this.showWalls &&
-            view.deadWall &&
-            role.kind === "dead" &&
-            faceUpTile === null
-          ) {
-            const deadIdx = role.idxFromBreak * 2 + row;
-            if (deadIdx >= 0 && deadIdx < view.deadWall.length) {
-              faceUpTile = view.deadWall[deadIdx];
-              greyOutDeadWall = true;
-            }
-          }
-          // `showWalls` overlay: when the source carries the
-          // omniscient live wall, reveal every still-on-the-wall
-          // live tile face. `tileDrawIdx` is overall-game-relative
-          // (includes the initial 52-tile deal), so the index into
-          // `view.liveWall` is `tileDrawIdx - 52` (the deal tiles
-          // were never in `liveWall` to begin with). Dead-wall
-          // tiles remain face-down except for the dora indicators
-          // already handled above — revealing rinshan / ura
-          // positions would need extra threading we haven't done.
-          let highlightFutureDraw = false;
-          if (
-            this.showWalls &&
-            view.liveWall &&
-            role.kind === "live" &&
-            faceUpTile === null
-          ) {
-            const tileDrawIdx = role.drawStackIdx * 2 + (row === 1 ? 0 : 1);
-            const liveIdx = tileDrawIdx - INITIAL_DEAL_TILES;
-            if (liveIdx >= 0 && liveIdx < view.liveWall.length) {
-              faceUpTile = view.liveWall[liveIdx];
-              // Highlight in green every wall tile the focused
-              // seat will draw later in this kyoku. Schedule is
-              // computed by `annotateWallSchedule` from the
-              // recorded event history — not a forecast.
-              if (
-                view.mySeat !== null &&
-                view.liveDrawSchedule &&
-                view.liveDrawSchedule[liveIdx] === view.mySeat
-              ) {
-                highlightFutureDraw = true;
-              }
-            }
-          }
-
-          // Position. The player-right anchor of seat S:
-          //   seat 0 (bottom): screen-right (band.x + band.w)
-          //   seat 1 (right) : screen-bottom (band.y + band.h)
-          //   seat 2 (top)   : screen-left (band.x)
-          //   seat 3 (left)  : screen-top (band.y)
-          // Long axis (toward player-left, increasing k) goes:
-          //   seat 0: -x   seat 1: -y   seat 2: +x   seat 3: +y
-          //
-          // Two layouts are supported here:
-          //
-          //   (1) Default Tenhou-style perspective (showWalls off):
-          //       row 1 (upper stack) and row 0 (lower stack) are
-          //       offset by ±ROW_OFFSET_Y/2 on the cross axis on
-          //       horizontal walls, and side walls additionally
-          //       shift row 1 along the long axis by ROW_OFFSET_Y
-          //       to create the "peek" effect.
-          //
-          //   (2) Flat reveal layout (showWalls on): both rows are
-          //       fully visible and stacked along the cross axis.
-          //       The "top row" (row 1 = upper stack tile) sits
-          //       flush at the band's inner edge — i.e. the side
-          //       facing the table center — and the "bottom row"
-          //       (row 0 = lower stack tile) sits just outward of
-          //       it, overlapping by WALL_REVEAL_ROW_OVERLAP. Side
-          //       walls drop the per-row long-axis offset so the
-          //       two rows sit at the same long-axis position.
-          //       Z-order is per-wall (see below).
-          let x = 0;
-          let y = 0;
-          if (this.showWalls) {
-            // outerOffset = 0 for the inner ("top") row, and
-            // (tileCrossDim - overlap) for the outer ("bottom")
-            // row — pushing it away from table center.
-            //
-            // Horizontal walls (seats 0, 2) overlap their two rows
-            // by `WALL_REVEAL_ROW_OVERLAP`; vertical (side) walls
-            // (seats 1, 3) butt the rows edge-to-edge with no
-            // overlap, per the layout spec.
-            const rowOverlap = isHoriz ? WALL_REVEAL_ROW_OVERLAP : 0;
-            const outerOffset = row === 0 ? tileCrossDim - rowOverlap : 0;
-            // Side walls (seats 1, 3) get nudged 8 px toward the
-            // top of the screen so their rendered rows line up
-            // visually with the bottom/top wall rows. Horizontal
-            // walls keep their long-axis anchor unchanged.
-            const sideLift = !isHoriz ? -8 : 0;
-            if (seat === 0) {
-              x = band.x + longOffset;
-              y = band.y + outerOffset;
-            } else if (seat === 1) {
-              x = band.x + outerOffset;
-              y = band.y + band.h - tileLongDim - longOffset + sideLift;
-            } else if (seat === 2) {
-              x = band.x + band.w - tileLongDim - longOffset;
-              y = band.y + bandCross - tileCrossDim - outerOffset;
-            } else {
-              // seat 3
-              x = band.x + bandCross - tileCrossDim - outerOffset;
-              y = band.y + longOffset + sideLift;
-            }
-          } else if (seat === 0) {
-            // +k goes player-RIGHT = +x (east) across the bottom
-            // wall. k=0 anchors at the band's left edge so the
-            // run flows from bottom-LEFT corner to bottom-RIGHT
-            // corner as k advances.
-            x = band.x + longOffset;
-            y =
-              band.y +
-              16 +
-              crossInset +
-              (row === 0 ? ROW_OFFSET_Y / 2 : -ROW_OFFSET_Y / 2);
-          } else if (seat === 1) {
-            x = band.x + crossInset + 8;
-            y =
-              band.y +
-              band.h -
-              tileLongDim -
-              longOffset -
-              (row === 1 ? ROW_OFFSET_Y : 0);
-          } else if (seat === 2) {
-            // +k goes player-RIGHT = -x (west) across the top
-            // wall. k=0 anchors at the band's right edge so the
-            // run flows from top-RIGHT corner to top-LEFT corner
-            // as k advances.
-            x = band.x + band.w - tileLongDim - longOffset;
-            y =
-              band.y +
-              crossInset +
-              (row === 0 ? ROW_OFFSET_Y / 2 : -ROW_OFFSET_Y / 2);
-          } else {
-            // seat 3
-            x = band.x + crossInset;
-            y = band.y + longOffset - (row === 1 ? ROW_OFFSET_Y : 0);
-          }
-
-          // Pick the seat-appropriate sheet: face-up tiles need
-          // pre-rotated artwork so the revealed tile reads from
-          // the seat's viewing direction; back tiles use the
-          // seat's back-tile sheet (which for seats 2 / 3 is the
-          // bottom / right sheet because their own per-seat sheet
-          // doesn't include a back-tile cell).
-          const sheetToUse = faceUpTile !== null ? faceSheet : backSheet;
-          const tex = this.getTileTexture(sheetToUse, faceUpTile);
-          const sprite = new Sprite(tex);
-          sprite.anchor.set(0.5, 0.5);
-          sprite.width = screenTileW;
-          sprite.height = screenTileH;
-          sprite.position.set(screenTileW / 2, screenTileH / 2);
-          // Green tint for live-wall tiles the focused seat will
-          // draw later this kyoku (see schedule lookup above).
-          // Multiplicative — keeps tile artwork legible while
-          // washing it in green.
-          // Wait-tile red tint takes priority over the future-draw
-          // green and dead-wall grey washes (this is the whole
-          // point of the `showWaits` overlay).
-          if (this.tintIfWait(sprite, faceUpTile)) {
-            // already tinted
-          } else if (highlightFutureDraw) {
-            sprite.tint = 0x88ff88;
-          } else if (greyOutDeadWall || livePulledToDead) {
-            // Slight grey wash on dead-wall reveals so the
-            // dora-indicators (revealed naturally during play)
-            // remain the visually prominent dead-wall tiles.
-            // Also applied to live-wall tiles that have been
-            // pulled into the dead wall by kans.
-            sprite.tint = 0xb0b0b0;
-          }
-          const child = new Container();
-          child.addChild(sprite);
-          child.position.set(x, y);
-          // Z-order:
-          //   - Within a stack, the upper-peeking tile (row 1) sits
-          //     on top of its partner (row 0).
-          //   - Across stacks in the same row, the tile lower on
-          //     screen sits on top of its neighbour (Tenhou-style
-          //     perspective). For side walls (seats 1/3) this means
-          //     we can't rely on insertion order alone, because the
-          //     loop walks k in player-right→player-left order
-          //     which is bottom→top on screen for seat 1.
-          //
-          // In showWalls mode the row-z is reversed for every wall
-          // except seat 2 (top): the user wants the "bottom row"
-          // (row 0) overlapping OVER the "top row" (row 1) for the
-          // bottom and side walls, and UNDER it for the top wall.
-          let crossZ = 0;
-          if (seat === 1) {
-            crossZ = 16 - k;
-          } else if (seat === 3) {
-            crossZ = k;
-          }
-          const rowZ = this.showWalls && seat !== 2 ? 1 - row : row;
-          child.zIndex = rowZ * 100 + crossZ;
-          wallContainer.addChild(child);
-          // Lower wall tiles (row 0) cast a shadow below every tile;
-          // the upper peeking tile (row 1) does not.
-          if (row === 0) {
-            wallShadowBoxes.push({
-              ax: x + screenTileW / 2,
-              ay: y + screenTileH / 2,
-              w: screenTileW,
-              h: screenTileH,
-            });
-          }
+        const child = new Container();
+        child.addChild(sprite);
+        child.position.set(tile.x, tile.y);
+        child.zIndex = tile.zIndex;
+        wallContainer.addChild(child);
+        if (tile.castsShadow) {
+          wallShadowBoxes.push({
+            ax: tile.x + tile.width / 2,
+            ay: tile.y + tile.height / 2,
+            w: tile.width,
+            h: tile.height,
+          });
         }
       }
-      // Screen-right column shadow per wall column, below the tiles
-      // (the wall container is unrotated → already screen-aligned).
       this.placeColumnShadows(
         this.screenShadowLayer(wallContainer, 0),
         wallShadowBoxes
       );
-
       wallContainer.zIndex = wallZIndex(seat);
       this.root.sortableChildren = true;
       this.root.addChild(wallContainer);

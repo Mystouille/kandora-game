@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EyeOutlined } from "@ant-design/icons";
 import { useNavigate, type LoaderFunctionArgs } from "react-router";
+import { useLocale } from "~/contexts/LocaleContext";
 import { requireGameEnabled, getClientGameFlag } from "~/game/feature-gate";
 import type {
   TableRenderer,
@@ -30,6 +31,7 @@ import {
   type ReplayView,
 } from "~/game/replay/player";
 import { waitsForReplayView } from "~/game/replay/waits";
+import { cloneDuplicateWallState } from "~/game/duplicate/duplicateWallState";
 import { playSoundForEvent, playGameSound } from "~/game/client/sound";
 import type {
   GameEvent,
@@ -137,6 +139,10 @@ export function snapshotToReplayView(s: SnapshotState): ReplayView {
     // without waiting for the next `hand_start`.
     liveWall: s.liveWall ? [...s.liveWall] : null,
     liveDrawsTaken: s.liveDrawsTaken ?? 0,
+    duplicateWallState: s.duplicateWallState
+      ? cloneDuplicateWallState(s.duplicateWallState)
+      : null,
+    duplicateDrawQueues: null,
     doraIndicators: [...s.doraIndicators],
     scores: [s.scores[0], s.scores[1], s.scores[2], s.scores[3]],
     dealer: s.dealer,
@@ -222,6 +228,7 @@ export default function GameSpectateRoute({
   loaderData,
 }: GameSpectateRouteProps) {
   const { matchId, tenhouRelay } = loaderData;
+  const { t } = useLocale();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<TableRenderer | null>(null);
@@ -732,6 +739,12 @@ export default function GameSpectateRoute({
     r.setShowTsumogiri(overlays.showTsumogiri);
     r.setShowWalls(overlays.showWalls);
     r.setShowNames(overlays.showNames);
+    r.setCenterLabels({
+      repeat: t.match.centerRepeat,
+      riichi: t.match.centerRiichi,
+      tiles: t.match.centerTiles,
+      remainingDraws: t.match.remainingDraws,
+    });
     r.setHandResultOverride(eyeHeld ? renderedPostHandPeekResult : null);
     // Staged per-yaku win reveal only while following the live head.
     // Paused on history, new relay events keep rebuilding the view
@@ -767,6 +780,7 @@ export default function GameSpectateRoute({
     eyeHeld,
     renderedPostHandPeekResult,
     currentWaits,
+    t,
   ]);
 
   // -----------------------------------------------------------------------

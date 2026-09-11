@@ -36,7 +36,7 @@ import type { MatchModeConfig } from "~/game/protocol/matchMode";
  * the produced documents. Hydration re-parses logs whose
  * `schemaVersion` is older.
  */
-export const REPLAY_LOG_SCHEMA_VERSION = 7;
+export const REPLAY_LOG_SCHEMA_VERSION = 8;
 
 export type ReplaySource = "ingame" | "majsoul" | "tenhou" | "riichicity";
 
