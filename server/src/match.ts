@@ -4332,6 +4332,10 @@ export class MatchProcess {
     ) {
       return;
     }
+    if (this.state.phase === "awaiting_discard") {
+      await this.continueDiscardTurn();
+      return;
+    }
 
     // Debug: if seat 0 has queued forced draws, prepend the next one
     // to the live wall so the engine's `draw` step picks it up.
@@ -4388,6 +4392,13 @@ export class MatchProcess {
       return;
     }
 
+    await this.continueDiscardTurn();
+  }
+
+  private async continueDiscardTurn(): Promise<void> {
+    if (this.state.phase !== "awaiting_discard") {
+      return;
+    }
     if (await this.openHumanDiscardWindow(this.state.turn)) {
       return;
     }
@@ -5118,9 +5129,8 @@ export class MatchProcess {
       this.flushLegalsToSeat(turnSeat);
       return;
     }
-    // Bot caller would be unusual at this point (bots pass), but if
-    // we ever extend bot AI to call, advanceTurn handles the bot
-    // discard path.
+    // Bot callers continue from the post-call awaiting-discard state
+    // without drawing another tile.
     await this.advanceTurn();
   }
 

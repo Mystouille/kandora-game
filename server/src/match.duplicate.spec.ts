@@ -46,11 +46,13 @@ function tiles(compact: string): Tile[] {
 function internals(match: MatchProcess): {
   state: MatchState;
   applyEngineAction(action: Action): Promise<void>;
+  afterDiscard(): Promise<void>;
   afterHandEnd(): Promise<void>;
 } {
   return match as unknown as {
     state: MatchState;
     applyEngineAction(action: Action): Promise<void>;
+    afterDiscard(): Promise<void>;
     afterHandEnd(): Promise<void>;
   };
 }
@@ -298,6 +300,60 @@ describe("MatchProcess duplicate mode", () => {
       remaining: [17, 18, 17, 17],
       limitingSeat: 3,
       estimatedDrawsRemaining: 68,
+    });
+  });
+
+  it("makes a bot discard immediately after pon in duplicate Buu", async () => {
+    const botPlayers = players();
+    botPlayers[2] = {
+      userId: "bot-2",
+      displayName: "Bot 2",
+      isBot: true,
+    };
+    const match = new MatchProcess(
+      "ykL0RvCyjAQ7n",
+      duplicateMatchSeed({ ...mode, seed: "abcde" }),
+      botPlayers,
+      { repository: ephemeralMatchRepository },
+      undefined,
+      presetToRuleSet(getPreset("buu-east")),
+      "buu-east",
+      { ...mode, seed: "abcde" }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    await match.start();
+
+    const matchInternals = internals(match);
+    matchInternals.state.hands[1] = tiles(
+      "1m1m2m4m5m7p8p1s3s6s1z2z3z"
+    );
+    matchInternals.state.hands[2] = tiles(
+      "5z5z1m2m3m4p5p6p7s8s9s1z2z"
+    );
+    matchInternals.state.hands[3] = tiles(
+      "1m1m2m4m5m7p8p1s3s6s1z2z3z"
+    );
+    matchInternals.state.discards = [["5z"], [], [], []];
+    matchInternals.state.lastDiscard = { seat: 0, tile: "5z" };
+    matchInternals.state.lastDrawn = [null, null, null, null];
+    matchInternals.state.turn = 1;
+    matchInternals.state.phase = "awaiting_draw";
+    const eventCountBeforeCall = match.replayFromBuffer(0).length;
+
+    await matchInternals.afterDiscard();
+
+    const eventsAfterCall = match
+      .replayFromBuffer(0)
+      .slice(eventCountBeforeCall)
+      .map(({ event }) => event);
+    const ponIndex = eventsAfterCall.findIndex(
+      (event) => event.type === "call" && event.meld.type === "pon"
+    );
+    expect(ponIndex).toBeGreaterThanOrEqual(0);
+    expect(eventsAfterCall[ponIndex + 1]).toMatchObject({
+      type: "discard",
+      seat: 2,
     });
   });
 
