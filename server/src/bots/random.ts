@@ -13,6 +13,7 @@ export interface RandomBotInput {
   /** The tile the bot just drew (must be in `hand`). */
   drawn: Tile | null;
   random: () => number;
+  isDiscardAllowed?: (discard: RandomBotDiscard) => boolean;
 }
 
 export interface RandomBotDiscard {
@@ -23,17 +24,27 @@ export interface RandomBotDiscard {
 }
 
 export function randomBotDiscard(input: RandomBotInput): RandomBotDiscard {
-  const { hand, drawn, random } = input;
+  const { hand, drawn, random, isDiscardAllowed } = input;
   if (hand.length === 0) {
     throw new Error("RandomBot: empty hand");
   }
-  const idx = Math.floor(random() * hand.length);
-  const tile = hand[idx];
-  const tsumogiri =
-    drawn !== null && idx === hand.length - 1 && tile === drawn;
-  return {
-    tile,
-    tsumogiri,
-    discardSource: tsumogiri ? "draw" : "hand",
-  };
+  const candidates: RandomBotDiscard[] = [];
+  for (let index = 0; index < hand.length; index++) {
+    const tile = hand[index];
+    const tsumogiri =
+      drawn !== null && index === hand.length - 1 && tile === drawn;
+    const candidate: RandomBotDiscard = {
+      tile,
+      tsumogiri,
+      discardSource: tsumogiri ? "draw" : "hand",
+    };
+    if (isDiscardAllowed?.(candidate) === false) {
+      continue;
+    }
+    candidates.push(candidate);
+  }
+  if (candidates.length === 0) {
+    throw new Error("RandomBot: no legal discard");
+  }
+  return candidates[Math.floor(random() * candidates.length)];
 }

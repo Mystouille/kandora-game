@@ -253,6 +253,34 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     ]);
   });
 
+  it("does not advertise an edge-swap kuikae discard after chi", () => {
+    const m = makeFourHumanMatch(42);
+    const internals = m as unknown as MatchInternals;
+    internals.state = createInitialState(42);
+    internals.state.phase = "awaiting_discard";
+    internals.state.turn = 1;
+    internals.state.hands[1] = tiles("4m5m1p2p3p4p5p6p7p8p9p");
+    internals.state.lastDrawn = [null, null, null, null];
+    internals.state.lastDiscard = null;
+    internals.state.melds[1] = [
+      {
+        type: "chi",
+        tiles: ["1m", "2m", "3m"],
+        claimedTile: "1m",
+        from: 0,
+      },
+    ];
+
+    const legals = internals.buildDiscardLegals(1);
+
+    expect(legals).not.toContainEqual(
+      expect.objectContaining({ id: "discard:hand:4m" })
+    );
+    expect(legals).toContainEqual(
+      expect.objectContaining({ id: "discard:hand:5m" })
+    );
+  });
+
   it("broadcasts tedashi when a hand copy matches the drawn tile", async () => {
     const m = makeFourHumanMatch(41);
     const sinks = [makeSink(), makeSink(), makeSink(), makeSink()];

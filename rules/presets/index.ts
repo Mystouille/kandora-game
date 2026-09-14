@@ -120,6 +120,15 @@ function validatePreset(raw: unknown): RuleSetPreset {
   expectFiniteInt(obj, "roundLimit", ctx, { min: 1 });
   expectFiniteInt(obj, "startingScore", ctx, { min: 0 });
   if (
+    obj.kuikae !== "allowed" &&
+    obj.kuikae !== "same-tile-only" &&
+    obj.kuikae !== "full"
+  ) {
+    throw new Error(
+      `${ctx}kuikae must be "allowed", "same-tile-only", or "full"`
+    );
+  }
+  if (
     obj.unclaimedRiichiDeposits !== "left_outside_table_score" &&
     obj.unclaimedRiichiDeposits !== "highest_score_player"
   ) {

@@ -18,6 +18,8 @@
 import { z } from "zod";
 import { DEFAULT_PRESET_ID, getPreset, presetToRuleSet } from "./presets";
 
+export type KuikaeRule = "allowed" | "same-tile-only" | "full";
+
 export interface RuleSet {
   /**
    * Number of round winds played (E only / E+S / E+S+W+N).
@@ -30,6 +32,12 @@ export interface RuleSet {
   roundLimit: number;
   /** Starting score per seat. */
   startingScore: number;
+  /**
+   * Restriction on the discard immediately following chi or pon.
+   * `same-tile-only` forbids discarding the called tile value;
+   * `full` also forbids the opposite edge of a chi sequence.
+   */
+  kuikae: KuikaeRule;
   /**
    * Settlement for riichi deposits still on the table when the match ends.
    * `highest_score_player` awards every stick to the current highest-scoring
@@ -264,6 +272,7 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
     roundWindCount: z.union([z.literal(1), z.literal(2), z.literal(4)]),
     roundLimit: z.number().int().positive(),
     startingScore: z.number().int(),
+    kuikae: z.enum(["allowed", "same-tile-only", "full"]).default("full"),
     unclaimedRiichiDeposits: z
       .enum(["left_outside_table_score", "highest_score_player"])
       .default("highest_score_player"),

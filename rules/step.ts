@@ -140,6 +140,60 @@ export interface StepResult {
 
 const WINDS: readonly Wind[] = ["E", "S", "W", "N"];
 
+function tileValue(tile: Tile): string {
+  return `${tile[0] === "0" ? "5" : tile[0]}${tile[1]}`;
+}
+
+/** Whether `tile` is forbidden for the immediate discard after chi or pon. */
+export function isDiscardForbiddenByKuikae(
+  state: MatchState,
+  seat: Seat,
+  tile: Tile
+): boolean {
+  if (
+    state.ruleSet.kuikae === "allowed" ||
+    state.phase !== "awaiting_discard" ||
+    state.turn !== seat ||
+    state.lastDrawn[seat] !== null
+  ) {
+    return false;
+  }
+
+  const seatMelds = state.melds[seat];
+  const meld = seatMelds[seatMelds.length - 1];
+  if (meld?.type !== "chi" && meld?.type !== "pon") {
+    return false;
+  }
+  const claimedTile = meld.claimedTile;
+  if (claimedTile === null) {
+    return false;
+  }
+
+  if (tileValue(tile) === tileValue(claimedTile)) {
+    return true;
+  }
+  if (state.ruleSet.kuikae !== "full" || meld.type === "pon") {
+    return false;
+  }
+
+  if (tile[1] !== claimedTile[1]) {
+    return false;
+  }
+
+  const contributed = [...meld.tiles];
+  const claimedIndex = contributed.lastIndexOf(claimedTile);
+  if (claimedIndex < 0) {
+    return false;
+  }
+  contributed.splice(claimedIndex, 1);
+  const contributedRanks = contributed.map((value) =>
+    Number(value[0] === "0" ? "5" : value[0])
+  );
+  const discardRank = Number(tile[0] === "0" ? "5" : tile[0]);
+  const sequence = [...contributedRanks, discardRank].sort((a, b) => a - b);
+  return sequence[1] - sequence[0] === 1 && sequence[2] - sequence[1] === 1;
+}
+
 /**
  * Draw a rinshan tile and replenish the dead wall from the back of
  * the live wall. The dead wall stays at 14 tiles while the number of
@@ -1319,6 +1373,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
   // ----- Discard ---------------------------------------------------------
   if (action.type === "discard") {
     if (state.phase !== "awaiting_discard" || action.seat !== state.turn) {
+      return noop(state);
+    }
+    if (isDiscardForbiddenByKuikae(state, action.seat, action.tile)) {
       return noop(state);
     }
     // Riichi-declared seats are locked into tsumogiri (no choice of

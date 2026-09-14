@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createInitialState, type MatchState } from "./state";
+import type { RuleSetOverride } from "./ruleSet";
 import { step } from "./step";
 import type { Tile } from "./types";
 
@@ -34,8 +35,9 @@ function craft(opts: {
   discards?: Tile[][];
   riichiDeclared?: [boolean, boolean, boolean, boolean];
   ippatsuEligible?: [boolean, boolean, boolean, boolean];
+  ruleSet?: RuleSetOverride;
 }): MatchState {
-  const base = createInitialState(0);
+  const base = createInitialState(0, { ruleSet: opts.ruleSet });
   const dealer = opts.dealer ?? 0;
   const discards =
     opts.discards ??
@@ -168,6 +170,85 @@ describe("step — chi", () => {
     });
     expect(r.events).toEqual([]);
   });
+
+  it("rejects an edge-swap kuikae discard immediately after chi", () => {
+    const seat1Hand = tiles("2m3m4m5m1p2p3p4p5p6p7p8p9p");
+    const state = craft({
+      hands: [FILLER, seat1Hand, FILLER, FILLER],
+      turn: 1,
+      phase: "awaiting_draw",
+      lastDiscard: { seat: 0, tile: "1m" },
+    });
+
+    const called = step(state, {
+      type: "chi",
+      seat: 1,
+      tiles: ["2m", "3m"],
+    });
+    const kuikae = step(called.state, {
+      type: "discard",
+      seat: 1,
+      tile: "4m",
+    });
+    const unrelated = step(called.state, {
+      type: "discard",
+      seat: 1,
+      tile: "5m",
+    });
+
+    expect(kuikae.events).toEqual([]);
+    expect(unrelated.events).toMatchObject([
+      { type: "discard", seat: 1, tile: "5m" },
+    ]);
+  });
+
+  it("allows the opposite edge under same-tile-only kuikae", () => {
+    const seat1Hand = tiles("1m2m3m4m5m1p2p3p4p5p6p7p8p");
+    const state = craft({
+      hands: [FILLER, seat1Hand, FILLER, FILLER],
+      turn: 1,
+      phase: "awaiting_draw",
+      lastDiscard: { seat: 0, tile: "1m" },
+      ruleSet: { kuikae: "same-tile-only" },
+    });
+
+    const called = step(state, {
+      type: "chi",
+      seat: 1,
+      tiles: ["2m", "3m"],
+    });
+
+    expect(
+      step(called.state, { type: "discard", seat: 1, tile: "1m" }).events
+    ).toEqual([]);
+    expect(
+      step(called.state, { type: "discard", seat: 1, tile: "4m" }).events
+    ).toMatchObject([{ type: "discard", seat: 1, tile: "4m" }]);
+  });
+
+  it("allows kuikae discards when configured as allowed", () => {
+    const seat1Hand = tiles("1m2m3m4m5m1p2p3p4p5p6p7p8p");
+    const state = craft({
+      hands: [FILLER, seat1Hand, FILLER, FILLER],
+      turn: 1,
+      phase: "awaiting_draw",
+      lastDiscard: { seat: 0, tile: "1m" },
+      ruleSet: { kuikae: "allowed" },
+    });
+
+    const called = step(state, {
+      type: "chi",
+      seat: 1,
+      tiles: ["2m", "3m"],
+    });
+
+    expect(
+      step(called.state, { type: "discard", seat: 1, tile: "1m" }).events
+    ).toMatchObject([{ type: "discard", seat: 1, tile: "1m" }]);
+    expect(
+      step(called.state, { type: "discard", seat: 1, tile: "4m" }).events
+    ).toMatchObject([{ type: "discard", seat: 1, tile: "4m" }]);
+  });
 });
 
 describe("step — pon", () => {
@@ -192,6 +273,37 @@ describe("step — pon", () => {
     });
     expect(r.state.turn).toBe(2);
     expect(r.state.phase).toBe("awaiting_discard");
+  });
+
+  it("rejects same-value kuikae after pon across red-five identity", () => {
+    const seat2Hand = tiles("5p5p0p1m2m3m4m5m6m7m8m9m1s");
+    const state = craft({
+      hands: [FILLER, FILLER, seat2Hand, FILLER],
+      turn: 1,
+      phase: "awaiting_draw",
+      lastDiscard: { seat: 0, tile: "5p" },
+    });
+
+    const called = step(state, {
+      type: "pon",
+      seat: 2,
+      tiles: ["5p", "5p"],
+    });
+    const kuikae = step(called.state, {
+      type: "discard",
+      seat: 2,
+      tile: "0p",
+    });
+    const unrelated = step(called.state, {
+      type: "discard",
+      seat: 2,
+      tile: "1m",
+    });
+
+    expect(kuikae.events).toEqual([]);
+    expect(unrelated.events).toMatchObject([
+      { type: "discard", seat: 2, tile: "1m" },
+    ]);
   });
 
   it("rejects self-pon (discarder calling their own tile)", () => {

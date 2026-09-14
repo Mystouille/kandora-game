@@ -18,4 +18,19 @@ describe("randomBotDiscard", () => {
       discardSource: "draw",
     });
   });
+
+  it("does not sample candidates rejected by the discard policy", () => {
+    expect(
+      randomBotDiscard({
+        hand: ["4m", "4m", "5m"],
+        drawn: null,
+        random: () => 0,
+        isDiscardAllowed: (discard) => discard.tile !== "4m",
+      })
+    ).toEqual({
+      tile: "5m",
+      tsumogiri: false,
+      discardSource: "hand",
+    });
+  });
 });

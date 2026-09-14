@@ -40,7 +40,12 @@ export type {
 } from "./actions";
 
 export type { EngineEvent, StepResult, FuritenChange } from "./step";
-export { step, seatWind, isFuritenForRon } from "./step";
+export {
+  step,
+  seatWind,
+  isFuritenForRon,
+  isDiscardForbiddenByKuikae,
+} from "./step";
 
 export type { MatchEndReason, MatchEndDecision } from "./matchEnd";
 export { isFinalHandOfMatch, shouldEndMatch } from "./matchEnd";
@@ -73,7 +78,7 @@ export { analyzeStandardUkeire } from "./ukeire";
 export type { ScoreInput, ScoreResult } from "./score";
 export { buildRiichiInput, indicatorToDora, scoreHand } from "./score";
 
-export type { RuleSet, RuleSetOverride } from "./ruleSet";
+export type { KuikaeRule, RuleSet, RuleSetOverride } from "./ruleSet";
 export {
   DEFAULT_RULE_SET,
   RuleSetSchema,

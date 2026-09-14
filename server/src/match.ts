@@ -42,6 +42,7 @@ import {
   createInitialState,
   enumerateCalls,
   isAkaDisabled,
+  isDiscardForbiddenByKuikae,
   isFuritenForRon,
   resolveRuleSet,
   scoreHand,
@@ -4481,6 +4482,8 @@ export class MatchProcess {
         hand: this.state.hands[seat],
         drawn,
         random: () => this.runtime.random(),
+        isDiscardAllowed: (discard) =>
+          !isDiscardForbiddenByKuikae(this.state, seat, discard.tile),
       });
       tile = picked.tile;
       discardSource = picked.discardSource;
@@ -5275,6 +5278,20 @@ export class MatchProcess {
 
   private buildDiscardLegals(seat: Seat): LegalAction[] {
     const out: LegalAction[] = [];
+    const pushDiscardIfLegal = (
+      tile: Tile,
+      discardSource: DiscardSource
+    ): void => {
+      if (isDiscardForbiddenByKuikae(this.state, seat, tile)) {
+        return;
+      }
+      out.push({
+        id: `discard:${discardSource}:${tile}`,
+        type: "discard",
+        tile,
+        discardSource,
+      });
+    };
     const inRiichi = this.state.riichiDeclared[seat];
     if (inRiichi) {
       // Riichi locks the discard: the drawn tile must be discarded
@@ -5285,23 +5302,13 @@ export class MatchProcess {
       // chosen.
       const drawn = this.state.lastDrawn[seat];
       if (drawn !== null) {
-        out.push({
-          id: `discard:draw:${drawn}`,
-          type: "discard",
-          tile: drawn,
-          discardSource: "draw",
-        });
+        pushDiscardIfLegal(drawn, "draw");
       }
     } else {
       const hand = this.state.hands[seat];
       const drawn = this.state.lastDrawn[seat];
       if (drawn !== null && hand[hand.length - 1] === drawn) {
-        out.push({
-          id: `discard:draw:${drawn}`,
-          type: "discard",
-          tile: drawn,
-          discardSource: "draw",
-        });
+        pushDiscardIfLegal(drawn, "draw");
       }
       // One hand-source action per unique tile, excluding the
       // appended drawn slot. A duplicate drawn value therefore
@@ -5314,12 +5321,7 @@ export class MatchProcess {
           continue;
         }
         seen.add(tile);
-        out.push({
-          id: `discard:hand:${tile}`,
-          type: "discard",
-          tile,
-          discardSource: "hand",
-        });
+        pushDiscardIfLegal(tile, "hand");
       }
     }
     // Tsumo: if `step` accepts a tsumo declaration for this seat,
