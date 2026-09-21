@@ -50,6 +50,7 @@ import {
   type NoCallAutoPassController,
 } from "~/game/client/callPrompt";
 import { writeWebTableLayoutMode } from "~/game/client/webTableLayoutPreference";
+import { useScreenWakeLock } from "~/game/client/screenWakeLock";
 import { rotateHandResult, rotateMatchView } from "~/game/replay/player";
 import type { Meld, RoomState } from "~/game/protocol/messages";
 import { useLocale } from "~/contexts/LocaleContext";
@@ -303,11 +304,8 @@ function prepareRenderedMatchView(view: MatchView): MatchView {
  *     and `user-scalable=no` so iOS doesn't double-tap-zoom or
  *     pinch-zoom the Pixi canvas. Restored on unmount; the rest of
  *     the portal keeps regular pinch-zoom.
- *   - Acquire a screen wake lock so the device doesn't dim mid-
- *     hand. Released on unmount. Feature-detected (older iOS
- *     Safari has no Wake Lock API — silent no-op).
- *
- * Both also benefit the web today (no need to wait for Phase M).
+ * The wake lock is handled separately by `useScreenWakeLock` so all web
+ * table viewers share the same visibility-aware behavior.
  */
 function useMatchPageEffects(): void {
   useEffect(() => {
@@ -320,40 +318,9 @@ function useMatchPageEffects(): void {
       );
     }
 
-    // Wake lock: the API can reject (permissions, focus loss, no
-    // support); none of those should bubble to the user.
-    interface WakeLockSentinel {
-      release(): Promise<void>;
-    }
-    interface WakeLockApi {
-      request(type: "screen"): Promise<WakeLockSentinel>;
-    }
-    let sentinel: WakeLockSentinel | null = null;
-    let cancelled = false;
-    const nav = navigator as Navigator & { wakeLock?: WakeLockApi };
-    if (nav.wakeLock && typeof nav.wakeLock.request === "function") {
-      nav.wakeLock
-        .request("screen")
-        .then((s) => {
-          if (cancelled) {
-            void s.release().catch(() => undefined);
-            return;
-          }
-          sentinel = s;
-        })
-        .catch(() => {
-          // Request denied / not visible / unsupported — fine.
-        });
-    }
-
     return () => {
-      cancelled = true;
       if (viewport && previousContent !== null) {
         viewport.setAttribute("content", previousContent);
-      }
-      if (sentinel) {
-        void sentinel.release().catch(() => undefined);
-        sentinel = null;
       }
     };
   }, []);
@@ -710,6 +677,7 @@ export default function GameMatchRoute({
   loaderData: GameMatchLoaderData;
 }) {
   const { matchId } = loaderData;
+  useScreenWakeLock();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<TableRenderer | null>(null);

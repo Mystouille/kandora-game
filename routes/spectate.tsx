@@ -15,6 +15,7 @@ import {
   writeWebTableLayoutMode,
 } from "~/game/client/webTableLayoutPreference";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
+import { useScreenWakeLock } from "~/game/client/screenWakeLock";
 import { ViewerList } from "~/game/components/ViewerList";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
@@ -30,15 +31,15 @@ import {
   rotateHandResult,
   type ReplayView,
 } from "~/game/replay/player";
+import { snapshotToReplayView } from "~/game/replay/liveSpectate";
+export { snapshotToReplayView } from "~/game/replay/liveSpectate";
 import { waitsForReplayView } from "~/game/replay/waits";
-import { cloneDuplicateWallState } from "~/game/duplicate/duplicateWallState";
 import { playSoundForEvent, playGameSound } from "~/game/client/sound";
 import type {
   GameEvent,
   RoomState,
   Seat,
   ServerMessage,
-  SnapshotState,
   ViewerPresence,
 } from "~/game/protocol/messages";
 import {
@@ -108,89 +109,6 @@ interface GameSpectateRouteProps {
 }
 
 /**
- * Synthesize a `ReplayView` from a snapshot. The snapshot is the
- * spectator's omniscient view at attach time; everything except the
- * archival-only fields (`liveWall`/`deadWall`/`liveDrawSchedule`/
- * `lastHandResult`/`matchEnded`) maps directly. Those four default
- * to "unknown" — overlays that depend on them (e.g. wall reveal)
- * just won't have data until the next `hand_start` event arrives
- * with a fresh omniscient wall.
- */
-export function snapshotToReplayView(s: SnapshotState): ReplayView {
-  const base = initialView();
-  return {
-    ...base,
-    hands: s.hands.map((h) => [...h]),
-    melds: s.melds.map((m) => [...m]),
-    discards: s.discards.map((d) => [...d]),
-    // Snapshots don't carry per-discard tsumogiri / ordinal info
-    // (the fresh-tsumogiri darken effect is a transient cue, not
-    // worth replicating on reconnect/attach). Initialize parallel
-    // arrays so the renderer's per-tile lookups stay in bounds.
-    discardTsumogiri: s.discards.map((d) => d.map(() => false)),
-    discardSources: s.discards.map((d) => d.map(() => null)),
-    discardOrdinals: s.discards.map((d) => d.map((_, i) => i)),
-    totalDiscards: s.discards.reduce((acc, d) => acc + d.length, 0),
-    wallRemaining: s.wallRemaining,
-    drawsTaken: s.drawsTaken ?? 70 - s.wallRemaining,
-    // Mid-hand wall reveal: the server attaches the starting live
-    // wall plus the number of live-wall draws taken to spectator
-    // snapshots, so the renderer's `showWalls` overlay can work
-    // without waiting for the next `hand_start`.
-    liveWall: s.liveWall ? [...s.liveWall] : null,
-    liveDrawsTaken: s.liveDrawsTaken ?? 0,
-    duplicateWallState: s.duplicateWallState
-      ? cloneDuplicateWallState(s.duplicateWallState)
-      : null,
-    duplicateDrawQueues: null,
-    doraIndicators: [...s.doraIndicators],
-    scores: [s.scores[0], s.scores[1], s.scores[2], s.scores[3]],
-    dealer: s.dealer,
-    roundWind: s.roundWind,
-    roundNumber: s.roundNumber,
-    honba: s.honba,
-    riichiSticks: s.riichiSticks,
-    riichiDeclared: [
-      s.riichiDeclared[0],
-      s.riichiDeclared[1],
-      s.riichiDeclared[2],
-      s.riichiDeclared[3],
-    ],
-    riichiTileIdx: s.riichiTileIdx
-      ? [
-          s.riichiTileIdx[0],
-          s.riichiTileIdx[1],
-          s.riichiTileIdx[2],
-          s.riichiTileIdx[3],
-        ]
-      : [null, null, null, null],
-    dice: s.dice ?? null,
-    furiten: s.furiten
-      ? [s.furiten[0], s.furiten[1], s.furiten[2], s.furiten[3]]
-      : [false, false, false, false],
-    // Buu Mahjong overlays. The server only emits `chips` /
-    // `dabuken` on Buu snapshots, so their presence is also our
-    // signal for `buuMode` — without this a mid-match spectator
-    // attach would render the table as if the rule set were
-    // tenhou-default (no chip row, no dabuken token, no sinking
-    // tint).
-    sinking: s.sinking
-      ? [s.sinking[0], s.sinking[1], s.sinking[2], s.sinking[3]]
-      : [false, false, false, false],
-    chips: s.chips
-      ? [s.chips[0], s.chips[1], s.chips[2], s.chips[3]]
-      : [0, 0, 0, 0],
-    dabuken: s.dabuken
-      ? [s.dabuken[0], s.dabuken[1], s.dabuken[2], s.dabuken[3]]
-      : [false, false, false, false],
-    buuMode: s.chips !== undefined,
-    scoreCap: s.scoreCap ?? null,
-    uraDoraEnabled: s.uraDoraEnabled ?? true,
-    freshlyDrawnSeat: s.freshlyDrawnSeat ?? null,
-  };
-}
-
-/**
  * Fire-and-forget spectator telemetry to the host app's `/api/telemetry`
  * convention endpoint (same pattern as the session / enrichment fetches). Kept
  * dependency-free so the shared viewer stays decoupled from any host app.
@@ -228,6 +146,7 @@ export default function GameSpectateRoute({
   loaderData,
 }: GameSpectateRouteProps) {
   const { matchId, tenhouRelay } = loaderData;
+  useScreenWakeLock();
   const { t } = useLocale();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
