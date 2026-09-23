@@ -3,6 +3,10 @@ import { useMatchStore } from "./store";
 
 export interface ServerMessageDispatchOptions {
   onError?: (code: string, message: string) => void;
+  onSequenceGap?: (gap: {
+    expectedSeq: number;
+    receivedSeq: number;
+  }) => void;
 }
 
 /** Apply one validated server frame to the shared live-match store. */
@@ -20,9 +24,40 @@ export function dispatchServerMessage(
       return;
     }
     case "event": {
+      const lastSeq = useMatchStore.getState().lastSeq;
+      if (message.events.length === 0) {
+        if (message.seq < lastSeq) {
+          return;
+        }
+        if (message.seq > lastSeq) {
+          options.onSequenceGap?.({
+            expectedSeq: lastSeq + 1,
+            receivedSeq: message.seq,
+          });
+          return;
+        }
+        store.setLegalActions(message.legalActions);
+        store.setActionDeadline(message.deadline ?? null);
+        store.setActionBufferMs(message.bufferMs ?? null);
+        return;
+      }
+
       const startSeq = message.seq - message.events.length + 1;
-      message.events.forEach((event, index) => {
-        store.applyEvent(event, startSeq + index);
+      const expectedSeq = lastSeq + 1;
+      if (message.seq < expectedSeq) {
+        return;
+      }
+      if (startSeq > expectedSeq) {
+        options.onSequenceGap?.({
+          expectedSeq,
+          receivedSeq: startSeq,
+        });
+        return;
+      }
+
+      const unseenOffset = Math.max(0, expectedSeq - startSeq);
+      message.events.slice(unseenOffset).forEach((event, index) => {
+        store.applyEvent(event, startSeq + unseenOffset + index);
       });
       store.setLegalActions(message.legalActions);
       store.setActionDeadline(message.deadline ?? null);

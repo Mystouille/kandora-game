@@ -47,18 +47,19 @@ export const DRAW_SLIDE_MS = 300;
 export const MIN_DRAW_TO_DISCARD_MS = 500;
 
 /**
- * Live-spectator "sequenced" timeline (relay feeds only, enabled via
- * {@link DiscardAnimator.setSequenced}). A Tenhou relay delivers the
- * next player's draw ~0 ms after the previous discard, so without
- * spacing the discard and draw animate on top of each other. In
- * sequenced mode each discard/draw is scheduled on a serial clock so
+ * Live "sequenced" presentation timeline, enabled via
+ * {@link DiscardAnimator.setSequenced}. A burst can deliver the next
+ * player's draw ~0 ms after the previous discard, so without spacing
+ * the discard and draw animate on top of each other. In sequenced mode
+ * each discard/draw is scheduled on a serial clock so
  * one turn reads:
  *
  *   0.0s  discard starts sliding out of the hand
  *   0.3s  discard reaches the hover (nudge) position   → discard SFX
- *   0.8s  next action begins; the discard settles flush
- *   1.1s  draw slide finishes                          → draw SFX
- *   1.3s  earliest following discard
+ *   0.8s  discard starts settling flush
+ *   0.95s next draw begins after the discard is settled
+ *   1.25s draw slide finishes                          → draw SFX
+ *   1.45s earliest following discard
  *
  * (Plus any real server delay K from call windows, absorbed by the
  * `max(now, …)` in {@link DiscardAnimator.schedule}.)
@@ -66,10 +67,10 @@ export const MIN_DRAW_TO_DISCARD_MS = 500;
 export const SEQ_SLIDE_MS = 300;
 export const SEQ_HOVER_MS = 500;
 /**
- * Catch-up bound. If the serial clock would schedule an animation
- * more than this far ahead of real time (rapid tsumogiri exchanges
- * arriving faster than the fixed cadence can play), snap it to
- * `now` so the viewer can't fall unboundedly behind the feed.
+ * Catch-up bound. If the serial clock would schedule an animation more
+ * than this far ahead of real time, clear the queued presentation and
+ * snap once to the authoritative state. Starting a new animation at
+ * `now` while older work remains queued would reintroduce overlap.
  */
 export const SEQ_CATCHUP_CAP_MS = 2000;
 
@@ -158,6 +159,9 @@ export interface DiscardAnimation {
    * already fired for this discard (fired once when phase A
    * elapses). Ignored outside sequenced mode. */
   landSoundPlayed: boolean;
+  /** Sequenced mode: when phase B may begin. Set only after a draw
+   * proves the discard was not called. */
+  settleStartMs: number | null;
 }
 
 /**
@@ -165,7 +169,8 @@ export interface DiscardAnimation {
  *
  * `startMs` may be in the *future* in sequenced mode: the draw is
  * held "pending" (the drawn tile stays hidden) until the preceding
- * discard has finished sliding + hovering, then the back slides in.
+ * discard has finished sliding, hovering, and settling, then the back
+ * slides in.
  */
 interface DrawAnim {
   /** Real tsumo tile is painted hidden from here through slide end
@@ -210,7 +215,7 @@ export class DiscardAnimator {
   );
   /** Whether this host requires the live draw-to-discard viewing beat. */
   private minimumDrawToDiscardDelayEnabled = false;
-  /** Live-spectator serial timeline (see {@link setSequenced}). */
+  /** Live presentation serial timeline (see {@link setSequenced}). */
   private sequenced = false;
   /** Earliest wall-clock ms the next sequenced animation may start.
    * Advanced by {@link schedule} as each discard/draw is queued. */
@@ -222,6 +227,7 @@ export class DiscardAnimator {
   private onDiscardLand:
     ((seat: number, isRiichiDeclaration: boolean) => void) | null = null;
   private onDrawLand: ((seat: number) => void) | null = null;
+  private onCatchUpSnap: (() => void) | null = null;
   private readonly now: () => number;
   /** Last `view` we processed in {@link beginFrame}. Used to diff. */
   private prevView: MatchView | null = null;
@@ -266,6 +272,7 @@ export class DiscardAnimator {
       this.anims.clear();
       this.drawAnims.clear();
       this.lastDrawStartMs.fill(null);
+      this.sequenceFreeMs = 0;
     }
   }
 
@@ -279,12 +286,9 @@ export class DiscardAnimator {
   }
 
   /**
-   * Enable / disable the live-spectator "sequenced" timeline. When
-   * on, discards hold at a hover and the following draw is delayed
-   * so the two never animate on top of each other (see the
-   * module-level {@link SEQ_SLIDE_MS} doc). Off (default) starts the
-   * following draw immediately; in both modes that draw triggers the
-   * discard's move from hover to its final position.
+   * Enable / disable the live "sequenced" timeline. When on, discards
+   * hold at a hover, settle, and only then allow the following draw to
+   * begin. Off (default) starts the following draw immediately.
    */
   setSequenced(flag: boolean): void {
     if (this.sequenced === flag) {
@@ -305,30 +309,61 @@ export class DiscardAnimator {
   setSoundHooks(hooks: {
     onDiscardLand?: (seat: number, isRiichiDeclaration: boolean) => void;
     onDrawLand?: (seat: number) => void;
+    onCatchUpSnap?: () => void;
   }): void {
     this.onDiscardLand = hooks.onDiscardLand ?? null;
     this.onDrawLand = hooks.onDrawLand ?? null;
+    this.onCatchUpSnap = hooks.onCatchUpSnap ?? null;
   }
 
   /**
-   * Reserve the next slot on the serial timeline. Returns the start
-   * time for an animation queued now, and advances the clock by
-   * `handoffMs`. Falls back to `now` (dropping accumulated backlog)
-   * when the clock has drifted more than {@link SEQ_CATCHUP_CAP_MS}
-   * ahead of real time, so fast exchanges can't lag without bound.
+   * Reserve the next slot on the serial timeline. Returns `null` after
+   * snapping a presentation backlog that exceeded the catch-up cap.
    */
   private schedule(
     now: number,
     handoffMs: number,
     earliestStartMs: number = now
-  ): number {
-    let start = Math.max(now, this.sequenceFreeMs);
+  ): number | null {
+    const start = Math.max(now, this.sequenceFreeMs, earliestStartMs);
     if (start - now > SEQ_CATCHUP_CAP_MS) {
-      start = now;
+      this.snapBacklog(now);
+      return null;
     }
-    start = Math.max(start, earliestStartMs);
     this.sequenceFreeMs = start + handoffMs;
     return start;
+  }
+
+  /**
+   * Reserve a draw after every unresolved discard has completed its
+   * final settle. The authoritative draw is already in `view`; this
+   * only delays its presentation overlay.
+   */
+  private scheduleDraw(now: number): number | null {
+    const unsettled = [...this.anims.values()].filter(
+      (anim) => anim.phase === "to-nudge" && anim.settleStartMs === null
+    );
+    const settleStartMs = Math.max(now, this.sequenceFreeMs);
+    const drawStartMs =
+      settleStartMs + (unsettled.length > 0 ? PHASE_B_DURATION_MS : 0);
+    if (drawStartMs - now > SEQ_CATCHUP_CAP_MS) {
+      this.snapBacklog(now);
+      return null;
+    }
+    for (const anim of unsettled) {
+      anim.settleStartMs = settleStartMs;
+    }
+    this.sequenceFreeMs = drawStartMs + DRAW_SLIDE_MS;
+    return drawStartMs;
+  }
+
+  private snapBacklog(now: number): void {
+    this.anims.clear();
+    this.drawAnims.clear();
+    this.lastDrawStartMs.fill(null);
+    this.nextDiscardSourceHints.clear();
+    this.sequenceFreeMs = now;
+    this.onCatchUpSnap?.();
   }
 
   /**
@@ -478,7 +513,15 @@ export class DiscardAnimator {
           // the 300ms draw-in slide finishes. The discard supersedes that
           // overlay; retaining it makes the revealed tile appear to wait
           // for the old draw clock before phase A reads as moving.
+          const supersededDraw = this.drawAnims.get(seat);
           this.drawAnims.delete(seat);
+          if (
+            this.sequenced &&
+            supersededDraw &&
+            !supersededDraw.soundPlayed
+          ) {
+            this.onDrawLand?.(seat);
+          }
           const lastIdx = currLen - 1;
           const tile = currDiscards[lastIdx];
           const discardSource = view.discardSources?.[seat]?.[lastIdx] ?? null;
@@ -518,6 +561,10 @@ export class DiscardAnimator {
               )
             : Math.max(now, earliestDiscardStartMs);
           this.lastDrawStartMs[seat] = null;
+          if (discardStartMs === null) {
+            this.onDiscardLand?.(seat, isRiichiDeclaration);
+            break;
+          }
 
           this.anims.set(seat, {
             seat,
@@ -539,6 +586,7 @@ export class DiscardAnimator {
             draggedSourceCenter: hint?.draggedSourceCenter ?? null,
             phaseASnapshot: makePhaseASnapshot(prevLayout, sourceSlot),
             landSoundPlayed: false,
+            settleStartMs: null,
           });
         }
 
@@ -550,9 +598,11 @@ export class DiscardAnimator {
           // Sequenced mode delays the slide until the preceding discard
           // has slid + hovered (serial clock), holding the drawn tile
           // hidden until then; otherwise it slides immediately.
-          const startMs = this.sequenced
-            ? this.schedule(now, DRAW_SLIDE_MS)
-            : now;
+          const startMs = this.sequenced ? this.scheduleDraw(now) : now;
+          if (startMs === null) {
+            this.onDrawLand?.(seat);
+            break;
+          }
           this.lastDrawStartMs[seat] = this.minimumDrawToDiscardDelayEnabled
             ? startMs
             : null;
@@ -565,31 +615,36 @@ export class DiscardAnimator {
       }
     }
 
-    // A hovering discard settles to its flush slot ONLY once the following
-    // draw begins, proving nobody called it. In sequenced mode that means
-    // the scheduled draw slide has actually started; otherwise the draw
-    // event itself is the trigger. A called tile is claimed straight from
-    // hover by the hard reset above. Runs after the loop so this frame's
-    // draw animation is available.
+    // A hovering discard settles only after a following draw proves nobody
+    // called it. Sequenced mode reserves phase B immediately before that
+    // draw; non-sequenced mode retains the legacy concurrent transition.
     if (!snap) {
       for (const [seat, anim] of this.anims) {
         if (anim.phase !== "to-nudge") {
           continue;
         }
-        let nextDrawBegun = nonSequencedDrawStarted;
-        if (this.sequenced) {
-          for (const d of this.drawAnims.values()) {
-            if (d.startMs > anim.startMs && now >= d.startMs) {
-              nextDrawBegun = true;
-              break;
-            }
+        const scheduledSettleStarted =
+          this.sequenced &&
+          anim.settleStartMs !== null &&
+          now >= anim.settleStartMs;
+        if (
+          scheduledSettleStarted ||
+          (!this.sequenced && nonSequencedDrawStarted)
+        ) {
+          if (
+            this.sequenced &&
+            !anim.landSoundPlayed &&
+            now - anim.startMs >= SEQ_SLIDE_MS
+          ) {
+            anim.landSoundPlayed = true;
+            this.onDiscardLand?.(seat, anim.isRiichiDeclaration);
           }
-        }
-        if (nextDrawBegun) {
           this.anims.set(seat, {
             ...anim,
             phase: "to-final",
-            startMs: now,
+            startMs: scheduledSettleStarted
+              ? (anim.settleStartMs ?? now)
+              : now,
             durationMs: PHASE_B_DURATION_MS,
           });
         }
@@ -618,7 +673,7 @@ export class DiscardAnimator {
         continue;
       }
       // Sequenced: fire the "tile lands at hover" cue exactly once, the
-      // moment phase A elapses (independent of the later +1s settle).
+      // moment phase A elapses (independent of the later settle).
       if (
         this.sequenced &&
         anim.phase === "to-nudge" &&
@@ -669,6 +724,13 @@ export class DiscardAnimator {
         return true;
       }
       if (anim.phase === "to-nudge" && anim.phaseASnapshot !== null) {
+        return true;
+      }
+      if (
+        anim.phase === "to-nudge" &&
+        anim.settleStartMs !== null &&
+        now < anim.settleStartMs + PHASE_B_DURATION_MS
+      ) {
         return true;
       }
     }

@@ -339,12 +339,19 @@ export function playSoundForEvent(
 let uninstallBinding: (() => void) | null = null;
 export function installGameSoundBindings(options?: {
   isNoCallEnabled?: () => boolean;
+  shouldDeferDrawDiscardSounds?: () => boolean;
 }): () => void {
   if (uninstallBinding) {
     uninstallBinding();
     uninstallBinding = null;
   }
   const unsubscribe = subscribeToGameEvents(({ event, mySeat }) => {
+    if (
+      options?.shouldDeferDrawDiscardSounds?.() &&
+      (event.type === "draw" || event.type === "discard")
+    ) {
+      return;
+    }
     playSoundForEvent(event, mySeat);
   });
   const unsubscribeCallPrompt = subscribeToCallPrompt(

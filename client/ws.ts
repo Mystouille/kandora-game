@@ -96,6 +96,7 @@ export class GameWS {
   private lastInboundAt = 0;
   private stallTimer: ReturnType<typeof setInterval> | null = null;
   private connectionAttempt = 0;
+  private resyncRequestedFromSeq: number | null = null;
 
   constructor(private readonly opts: GameWSOptions) {}
 
@@ -309,6 +310,7 @@ export class GameWS {
       }
       wsOpenedAt = Date.now();
       this.backoff = INITIAL_BACKOFF_MS;
+      this.resyncRequestedFromSeq = null;
       this.lastInboundAt = Date.now();
       this.startStallWatchdog();
       console.log(
@@ -458,9 +460,48 @@ export class GameWS {
     ) {
       this.intentionallyClosed = true;
     }
+    if (msg.type === "snapshot") {
+      this.resyncRequestedFromSeq = null;
+    }
     dispatchServerMessage(msg, {
       onError: (code, message) => this.reportError(code, message),
+      onSequenceGap: ({ expectedSeq, receivedSeq }) => {
+        this.requestSequenceResync(expectedSeq, receivedSeq);
+      },
     });
+    if (
+      msg.type === "event" &&
+      useMatchStore.getState().lastSeq === msg.seq
+    ) {
+      this.resyncRequestedFromSeq = null;
+    }
+  }
+
+  private requestSequenceResync(
+    expectedSeq: number,
+    receivedSeq: number
+  ): void {
+    const store = useMatchStore.getState();
+    if (this.resyncRequestedFromSeq === store.lastSeq) {
+      return;
+    }
+    this.clearStaleActionWindow();
+    console.warn(
+      `[game-ws] sequence gap expected=${expectedSeq} received=${receivedSeq}; requesting resync`
+    );
+    if (store.lastSeq < 0) {
+      this.forceReconnect();
+      return;
+    }
+    if (
+      this.send({
+        type: "resync",
+        matchId: this.opts.matchId,
+        lastSeq: store.lastSeq,
+      })
+    ) {
+      this.resyncRequestedFromSeq = store.lastSeq;
+    }
   }
 
   private reportError(code: string, message: string): void {

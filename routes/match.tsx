@@ -40,6 +40,7 @@ import {
 import {
   installGameSoundBindings,
   playGameCountdownSound,
+  playGameSound,
 } from "~/game/client/sound";
 import {
   advanceReadyCheckTick,
@@ -1052,6 +1053,7 @@ export default function GameMatchRoute({
     // is mounted.
     const uninstallSound = installGameSoundBindings({
       isNoCallEnabled: () => noCallRef.current,
+      shouldDeferDrawDiscardSounds: () => rendererRef.current !== null,
     });
 
     // Pixi.js touches `navigator` at module-eval time, so it must
@@ -1068,6 +1070,20 @@ export default function GameMatchRoute({
             : "standard",
         });
         renderer.setMinimumDrawToDiscardDelayEnabled(true);
+        renderer.setDrawSequencing(true, {
+          onDiscardLand: (_seat, isRiichiDeclaration) => {
+            playGameSound(isRiichiDeclaration ? "riichi" : "discard");
+          },
+          onDrawLand: () => {
+            playGameSound("draw");
+          },
+          onCatchUpSnap: () => {
+            track("game_animation_catchup_snap", {
+              matchId,
+              lastSeq: useMatchStore.getState().lastSeq,
+            });
+          },
+        });
         void renderer.mount(container).then(() => {
           if (cancelled) {
             renderer.destroy();

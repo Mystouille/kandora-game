@@ -2774,19 +2774,16 @@ export class TableRenderer {
   }
 
   /**
-   * Enable the live-spectator "sequenced" discard/draw timeline and
-   * (optionally) route the retimed discard/draw SFX. A Tenhou relay
-   * delivers the next draw ~0 ms after the previous discard, so the
-   * animator spaces them onto a serial clock: discard slides + hovers
-   * for ~1s, then the draw slides in as the discard settles. When
-   * `sounds` are supplied the cues fire at the slide landings, so the
-   * caller must suppress its own event-driven discard/draw SFX.
+   * Enable the live sequenced discard/draw timeline and optionally
+   * route retimed SFX. The animator serializes discard slide, hover,
+   * final settle, and draw so burst delivery cannot overlap them.
    */
   setDrawSequencing(
     enabled: boolean,
     sounds?: {
       onDiscardLand: (seat: number, isRiichiDeclaration: boolean) => void;
       onDrawLand: (seat: number) => void;
+      onCatchUpSnap?: () => void;
     }
   ): void {
     this.animator.setSequenced(enabled);
@@ -5860,7 +5857,7 @@ export class TableRenderer {
     // Draw-in slide: while the freshly drawn tile arrives, render the
     // real tsumo tile invisible and slide a face-down back into its
     // slot (below). `isFreshlyDrawn` guarantees the reserved last-slot
-    // gap the back slides into. In sequenced (live-relay) mode the
+    // gap the back slides into. In sequenced live mode the
     // draw is held pending behind the previous discard: the tile stays
     // hidden (`hideTsumoTile`) before the back actually slides
     // (`isDrawing`), so nothing pops in during the hold.

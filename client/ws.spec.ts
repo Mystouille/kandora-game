@@ -180,6 +180,51 @@ describe("GameWS reconnect ownership", () => {
     client.close();
   });
 
+  it("requests one resync when an event sequence gap is detected", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+    store.lastSeq = 0;
+
+    const gapFrame = JSON.stringify({
+      type: "event",
+      seq: 2,
+      events: [
+        {
+          type: "draw",
+          seat: 0,
+          tile: "1m",
+          wallRemaining: 69,
+        },
+      ],
+      legalActions: [],
+    });
+    socket.emitMessage(gapFrame);
+    socket.emitMessage(gapFrame);
+
+    const resyncFrames = socket.sent
+      .map((frame) => JSON.parse(frame))
+      .filter((frame) => frame.type === "resync");
+    expect(resyncFrames).toEqual([
+      {
+        type: "resync",
+        matchId: "match-1",
+        lastSeq: 0,
+      },
+    ]);
+    expect(store.setLegalActions).toHaveBeenCalledWith([]);
+    expect(warn).toHaveBeenCalledWith(
+      "[game-ws] sequence gap expected=1 received=2; requesting resync"
+    );
+    client.close();
+  });
+
   it("reports whether an action was queued on an open socket", async () => {
     const client = new GameWS({
       getConnectionDetails: connectionDetails(),

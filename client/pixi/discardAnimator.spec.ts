@@ -4,6 +4,7 @@ import {
   DiscardAnimator,
   SEQ_SLIDE_MS,
   SEQ_HOVER_MS,
+  SEQ_CATCHUP_CAP_MS,
   PHASE_A_DURATION_MS,
   PHASE_B_DURATION_MS,
   DRAW_SLIDE_MS,
@@ -489,7 +490,7 @@ describe("DiscardAnimator", () => {
     expect(animator.hasActive()).toBe(false);
   });
 
-  it("sequenced: holds a discard at hover, settling only when the next draw begins", () => {
+  it("sequenced: settles a discard completely before the next draw begins", () => {
     let now = 0;
     const discardSfx: Array<{
       seat: number;
@@ -533,8 +534,8 @@ describe("DiscardAnimator", () => {
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
     expect(discardSfx).toHaveLength(1);
 
-    // The next player draws → once that slide begins the discard
-    // settles to its flush slot.
+    // The next player draws → settle the discard first, then start
+    // the draw only after phase B has completed.
     const drew = makeView({
       hands: [[], [], [], []],
       discards: [["1m"], [], [], []],
@@ -544,11 +545,18 @@ describe("DiscardAnimator", () => {
     });
     animator.beginFrame(drew);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
+    expect(animator.isDrawing(1)).toBe(false);
 
-    // Phase B elapses → dropped.
-    now = now + PHASE_B_DURATION_MS + 1;
+    now += PHASE_B_DURATION_MS - 1;
+    animator.beginFrame(drew);
+    expect(animator.getAnim(0)?.phase).toBe("to-final");
+    expect(animator.isDrawing(1)).toBe(false);
+
+    // Phase B elapses before the draw becomes visible.
+    now += 2;
     animator.beginFrame(drew);
     expect(animator.getAnim(0)).toBeNull();
+    expect(animator.isDrawing(1)).toBe(true);
   });
 
   it("keeps a replacement discard tilted without replaying the riichi sound", () => {
@@ -629,7 +637,7 @@ describe("DiscardAnimator", () => {
     expect(declarations).toEqual([true]);
   });
 
-  it("sequenced: delays the next draw until the discard has hovered, hiding it until then", () => {
+  it("sequenced: delays the next draw until the discard has hovered and settled", () => {
     let now = 0;
     const drawSfx: number[] = [];
     const animator = new DiscardAnimator({ now: () => now });
@@ -674,17 +682,115 @@ describe("DiscardAnimator", () => {
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.isDrawTileHidden(1)).toBe(true);
 
-    // After slide + hover the back begins sliding.
+    // After slide + hover, phase B starts but the draw remains pending.
     now = SEQ_SLIDE_MS + SEQ_HOVER_MS + 1;
+    animator.beginFrame(drew);
+    expect(animator.getAnim(0)?.phase).toBe("to-final");
+    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.getDrawProgress(1)).toBe(0);
+
+    // Only after the discard settles does the draw start.
+    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + PHASE_B_DURATION_MS + 1;
+    animator.beginFrame(drew);
+    expect(animator.getAnim(0)).toBeNull();
     expect(animator.isDrawing(1)).toBe(true);
     expect(animator.getDrawProgress(1)).toBeGreaterThan(0);
 
-    // Slide completes → draw-land SFX fires once, entry dropped.
-    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + DRAW_SLIDE_MS;
+    // Draw slide completes → draw-land SFX fires once.
+    now =
+      SEQ_SLIDE_MS +
+      SEQ_HOVER_MS +
+      PHASE_B_DURATION_MS +
+      DRAW_SLIDE_MS;
     animator.beginFrame(drew);
     expect(drawSfx).toEqual([1]);
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.isDrawTileHidden(1)).toBe(false);
+  });
+
+  it("sequenced: snaps cleanly instead of overlapping when the backlog exceeds its cap", () => {
+    let now = 0;
+    const catchUpSnaps: number[] = [];
+    const drawLandings: number[] = [];
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setMinimumDrawToDiscardDelayEnabled(true);
+    animator.setSequenced(true);
+    animator.setSoundHooks({
+      onDrawLand: (seat) => drawLandings.push(seat),
+      onCatchUpSnap: () => catchUpSnaps.push(now),
+    });
+
+    const initial = makeView({
+      hands: [["1m"], ["2p"], ["3s"], []],
+    });
+    animator.beginFrame(initial);
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: ["2p"] },
+      { sorted: ["3s"] },
+      { sorted: [] },
+    ]);
+
+    const firstDiscard = makeView({
+      hands: [[], ["2p"], ["3s"], []],
+      discards: [["1m"], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+    });
+    animator.beginFrame(firstDiscard);
+    recordLayouts(animator, [
+      { sorted: [] },
+      { sorted: ["2p"] },
+      { sorted: ["3s"] },
+      { sorted: [] },
+    ]);
+
+    const firstDraw = makeView({
+      hands: [[], ["2p", "9p"], ["3s"], []],
+      discards: [["1m"], [], [], []],
+      totalDiscards: 1,
+      freshlyDrawnSeat: 1,
+    });
+    animator.beginFrame(firstDraw);
+    recordLayouts(animator, [
+      { sorted: [] },
+      { sorted: ["2p", "9p"], isFreshlyDrawn: true },
+      { sorted: ["3s"] },
+      { sorted: [] },
+    ]);
+
+    const secondDiscard = makeView({
+      hands: [[], ["2p"], ["3s"], []],
+      discards: [["1m"], ["9p"], [], []],
+      totalDiscards: 2,
+      freshlyDiscardedSeat: 1,
+    });
+    animator.beginFrame(secondDiscard);
+    recordLayouts(animator, [
+      { sorted: [] },
+      { sorted: ["2p"] },
+      { sorted: ["3s"] },
+      { sorted: [] },
+    ]);
+
+    expect(animator.getAnim(1)?.startMs).toBeLessThanOrEqual(
+      SEQ_CATCHUP_CAP_MS
+    );
+
+    const secondDraw = makeView({
+      hands: [[], ["2p"], ["3s", "9s"], []],
+      discards: [["1m"], ["9p"], [], []],
+      totalDiscards: 2,
+      freshlyDrawnSeat: 2,
+    });
+    animator.beginFrame(secondDraw);
+
+    expect(catchUpSnaps).toEqual([0]);
+    expect(drawLandings).toEqual([1, 2]);
+    expect(animator.hasActive()).toBe(false);
+    expect(animator.getAnim(0)).toBeNull();
+    expect(animator.getAnim(1)).toBeNull();
+    expect(animator.isDrawing(2)).toBe(false);
   });
 
   it("sources a tsumogiri from the tsumo slot even when the wire flag is missing", () => {
