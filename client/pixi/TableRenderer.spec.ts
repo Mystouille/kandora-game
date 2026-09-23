@@ -995,6 +995,97 @@ describe("resolveSeatHandPresentation", () => {
     expect(presentation.displayForceReveal).toBe(true);
     expect(presentation.historicalReveal).toBe(true);
   });
+
+  it("masks every non-winning hand while revealing the winner", () => {
+    const result: NonNullable<MatchView["lastHandResult"]> = {
+      reason: "ron",
+      wins: [
+        {
+          seat: 2,
+          winTile: "9s",
+          hand: ["1s", "2s", "3s", "9s"],
+        },
+      ],
+    };
+    const currentView = {
+      ...view,
+      hands: [
+        ["1m", "2m", "3m"],
+        ["4m", "5m", "6m"],
+        ["1s", "2s", "3s"],
+        ["7p", "8p", "9p"],
+      ],
+      lastHandResult: result,
+    };
+
+    const activePlayer = resolveSeatHandPresentation(currentView, null, 0);
+    const winner = resolveSeatHandPresentation(currentView, null, 2);
+
+    expect(activePlayer.animationHand).toEqual([null, null, null]);
+    expect(activePlayer.displayHand).toEqual([null, null, null]);
+    expect(activePlayer.displayForceReveal).toBe(false);
+    expect(winner.displayHand.every((tile) => tile !== null)).toBe(true);
+    expect(winner.displayForceReveal).toBe(true);
+  });
+
+  it("reveals tenpai hands and masks no-ten hands at exhaustive draw", () => {
+    const result: NonNullable<MatchView["lastHandResult"]> = {
+      reason: "exhaustive_draw",
+      tenpai: [false, true, false, true],
+      tenpaiHands: [
+        null,
+        ["4m", "5m", "6m"],
+        null,
+        ["7p", "8p", "9p"],
+      ],
+    };
+    const currentView = {
+      ...view,
+      hands: [
+        ["1m", "2m", "3m"],
+        ["4m", "5m", "6m"],
+        ["1s", "2s", "3s"],
+        ["7p", "8p", "9p"],
+      ],
+      lastHandResult: result,
+    };
+
+    const activeNoTenPlayer = resolveSeatHandPresentation(
+      currentView,
+      null,
+      0
+    );
+    const tenpaiPlayer = resolveSeatHandPresentation(currentView, null, 1);
+
+    expect(activeNoTenPlayer.animationHand).toEqual([null, null, null]);
+    expect(activeNoTenPlayer.displayHand).toEqual([null, null, null]);
+    expect(activeNoTenPlayer.displayForceReveal).toBe(false);
+    expect(tenpaiPlayer.displayHand).toEqual(["4m", "5m", "6m"]);
+    expect(tenpaiPlayer.displayForceReveal).toBe(true);
+
+    const activeTenpaiView = {
+      ...currentView,
+      lastHandResult: {
+        ...result,
+        tenpai: [true, false, false, false],
+        tenpaiHands: [["1m", "2m", "3m"], null, null, null],
+      },
+    };
+    const activeTenpaiPlayer = resolveSeatHandPresentation(
+      activeTenpaiView,
+      null,
+      0
+    );
+    const noTenOpponent = resolveSeatHandPresentation(
+      activeTenpaiView,
+      null,
+      1
+    );
+
+    expect(activeTenpaiPlayer.displayHand).toEqual(["1m", "2m", "3m"]);
+    expect(activeTenpaiPlayer.displayForceReveal).toBe(true);
+    expect(noTenOpponent.displayHand).toEqual([null, null, null]);
+  });
 });
 
 describe("canInteractWithFocusedHand", () => {

@@ -3,8 +3,10 @@ import type { GameEvent } from "~/game/protocol/messages";
 import {
   MatchProcess,
   setDelayAfterDiscardMs,
+  setExhaustiveDrawDelayMs,
   setReadyCheckMs,
 } from "./match";
+import type { EngineEvent } from "~/game/rules/step";
 import {
   ephemeralMatchRepository,
   type MatchEventJournalStore,
@@ -15,6 +17,7 @@ describe("MatchProcess runtime", () => {
   afterEach(() => {
     setReadyCheckMs(5_000);
     setDelayAfterDiscardMs(350);
+    setExhaustiveDrawDelayMs(1_000);
   });
 
   it("uses injected randomness for authoritative dice rolls", async () => {
@@ -52,6 +55,58 @@ describe("MatchProcess runtime", () => {
           event.type === "hand_start"
       );
     expect(handStart?.dice).toEqual([1, 6]);
+  });
+
+  it("waits until one second after the last discard before revealing an exhaustive draw", async () => {
+    let now = 1_000;
+    const sleeps: number[] = [];
+    const runtime: MatchRuntime = {
+      now: () => now,
+      random: () => 0,
+      captureRandomState: () => 0,
+      restoreRandomState: () => undefined,
+      schedule: () => ({ cancel: () => undefined }),
+      sleep: async (delayMs) => {
+        sleeps.push(delayMs);
+        now += delayMs;
+      },
+    };
+    const match = new MatchProcess(
+      "runtime-exhaustive-draw-delay",
+      42,
+      [0, 1, 2, 3].map((seat) => ({
+        userId: `human-${seat}`,
+        displayName: `Human ${seat}`,
+        isBot: false,
+      })),
+      { repository: ephemeralMatchRepository, runtime }
+    );
+    setReadyCheckMs(0);
+    setDelayAfterDiscardMs(0);
+    setExhaustiveDrawDelayMs(1_000);
+    await match.start();
+    sleeps.length = 0;
+
+    const emitEngineEvent = (
+      match as unknown as {
+        emitEngineEvent(event: EngineEvent): Promise<void>;
+      }
+    ).emitEngineEvent.bind(match);
+    await emitEngineEvent({
+      type: "discard",
+      seat: 0,
+      tile: "1m",
+      tsumogiri: false,
+      discardSource: "hand",
+    });
+    now += 400;
+    await emitEngineEvent({
+      type: "hand_end",
+      reason: "exhaustive_draw",
+      delta: [0, 0, 0, 0],
+    });
+
+    expect(sleeps).toEqual([600]);
   });
 
   it("does not await an in-flight event journal append", async () => {

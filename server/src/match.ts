@@ -297,6 +297,17 @@ export function remainingWinReactionDelayMs(
 let WIN_TO_PANEL_DELAY_MS = 500;
 
 /**
+ * Minimum time between the final discard and the exhaustive-draw
+ * `hand_end` event. This lets every client finish the discard
+ * animation before revealing tenpai hands and the draw panel.
+ */
+let EXHAUSTIVE_DRAW_DELAY_MS = 1_000;
+
+export function setExhaustiveDrawDelayMs(ms: number): void {
+  EXHAUSTIVE_DRAW_DELAY_MS = ms;
+}
+
+/**
  * Per-yaku reveal interval used by the client's staged win-info
  * panel. The server uses this to size the post-`hand_end` pause
  * before the OK-ready-check countdown starts, so the auto-advance
@@ -334,6 +345,7 @@ export function setDelayAfterDiscardMs(ms: number): void {
   DRAW_TO_DISCARD_DELAY_MS = ms;
   WIN_REACTION_DELAY_MS = ms;
   WIN_TO_PANEL_DELAY_MS = ms;
+  EXHAUSTIVE_DRAW_DELAY_MS = ms;
 }
 
 /**
@@ -703,6 +715,7 @@ export class MatchProcess {
   private resultTransitionResolve: (() => void) | null = null;
   private uncheckpointableTransition:
     | "win_reaction"
+    | "exhaustive_draw_reaction"
     | "turn_pacing"
     | "bot_discard_pacing"
     | "auto_riichi_pacing"
@@ -4302,7 +4315,19 @@ export class MatchProcess {
   private async waitForWinReaction(
     triggerType: "draw" | "discard" | "call"
   ): Promise<void> {
-    if (WIN_REACTION_DELAY_MS <= 0) {
+    await this.waitForEventAge(
+      triggerType,
+      WIN_REACTION_DELAY_MS,
+      "win_reaction"
+    );
+  }
+
+  private async waitForEventAge(
+    triggerType: "draw" | "discard" | "call",
+    minimumAgeMs: number,
+    transition: NonNullable<MatchProcess["uncheckpointableTransition"]>
+  ): Promise<void> {
+    if (minimumAgeMs <= 0) {
       return;
     }
     let triggerEmittedAt: number | null = null;
@@ -4315,14 +4340,14 @@ export class MatchProcess {
     }
     const remaining =
       triggerEmittedAt === null
-        ? WIN_REACTION_DELAY_MS
+        ? minimumAgeMs
         : remainingWinReactionDelayMs(
             triggerEmittedAt,
             this.runtime.now(),
-            WIN_REACTION_DELAY_MS
+            minimumAgeMs
           );
     if (remaining > 0) {
-      await this.runUncheckpointableTransition("win_reaction", remaining);
+      await this.runUncheckpointableTransition(transition, remaining);
     }
   }
 
@@ -6443,6 +6468,13 @@ export class MatchProcess {
    * mapping is mostly structural.
    */
   private async emitEngineEvent(e: EngineEvent): Promise<void> {
+    if (e.type === "hand_end" && e.reason === "exhaustive_draw") {
+      await this.waitForEventAge(
+        "discard",
+        EXHAUSTIVE_DRAW_DELAY_MS,
+        "exhaustive_draw_reaction"
+      );
+    }
     // Chombo-by-winning: the engine emits `win` then
     // `buu_chombo` in the same step batch (see `applyWin` in
     // `app/game/rules/step.ts`). Pause between them so the

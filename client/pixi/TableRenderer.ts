@@ -936,6 +936,22 @@ function resultSeatReveal(
   return null;
 }
 
+function resultSeatMask(
+  result: HandResult | null,
+  reveal: ResultSeatReveal | null,
+  liveHand: Array<string | null>
+): Array<null> | null {
+  if (
+    reveal !== null ||
+    (result?.reason !== "ron" &&
+      result?.reason !== "tsumo" &&
+      result?.reason !== "exhaustive_draw")
+  ) {
+    return null;
+  }
+  return liveHand.map(() => null);
+}
+
 export function resolveSeatHandPresentation(
   view: Pick<
     MatchView,
@@ -947,6 +963,11 @@ export function resolveSeatHandPresentation(
   const liveHand = view.hands[seat] ?? [];
   const liveMelds = view.melds[seat] ?? [];
   const currentReveal = resultSeatReveal(view.lastHandResult, seat);
+  const currentMask = resultSeatMask(
+    view.lastHandResult,
+    currentReveal,
+    liveHand
+  );
   const historicalReveal =
     view.lastHandResult === null && seat !== view.mySeat
       ? resultSeatReveal(historicalResult, seat)
@@ -954,17 +975,19 @@ export function resolveSeatHandPresentation(
   const displayReveal = historicalReveal ?? currentReveal;
 
   return {
-    animationHand: currentReveal?.hand ?? liveHand,
+    animationHand: currentReveal?.hand ?? currentMask ?? liveHand,
     animationForceReveal: currentReveal !== null,
     animationSeparatesLastTile:
-      currentReveal?.separatesLastTile ?? view.freshlyDrawnSeat === seat,
-    displayHand: displayReveal?.hand ?? liveHand,
+      currentReveal?.separatesLastTile ??
+      (currentMask !== null ? false : view.freshlyDrawnSeat === seat),
+    displayHand: displayReveal?.hand ?? currentMask ?? liveHand,
     displayMelds: historicalReveal
       ? (historicalReveal.melds ?? [])
       : (currentReveal?.melds ?? liveMelds),
     displayForceReveal: displayReveal !== null,
     displaySeparatesLastTile:
-      displayReveal?.separatesLastTile ?? view.freshlyDrawnSeat === seat,
+      displayReveal?.separatesLastTile ??
+      (currentMask !== null ? false : view.freshlyDrawnSeat === seat),
     historicalReveal: historicalReveal !== null,
   };
 }
