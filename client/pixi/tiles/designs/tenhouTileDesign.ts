@@ -66,6 +66,7 @@ export const tenhouTileDesign: TileDesign = {
   },
   sheets: {
     ownHand: "ownHand",
+    ownHandBack: "bottomSmall",
     topHand: "topSmall",
     sideHandBack: { 1: "sideHandR", 3: "sideHandL" },
     sideHandFace: { 1: "rightSmall", 3: "leftSmall" },

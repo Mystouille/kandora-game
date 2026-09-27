@@ -23,6 +23,7 @@ import {
   DISCARD_SHADOW_Z_INDEX,
   focusedHandLongAxisOffset,
   focusedHandTileMetrics,
+  focusedHandTileSpriteSpec,
   focusedHandOrderPolicy,
   formatTableScore,
   genericPassOrTsumogiriAction,
@@ -85,6 +86,31 @@ describe("route-facing renderer API", () => {
     expect(
       typeof TableRenderer.prototype.setMobileActionButtonRightBoundary
     ).toBe("function");
+  });
+});
+
+describe("focused hand tile sprites", () => {
+  const metrics = focusedHandTileMetrics(
+    tableLayoutFromConfig(currentTableLayout),
+    "standard"
+  );
+
+  it("scales the bottom-small back to the focused-hand footprint", () => {
+    expect(
+      focusedHandTileSpriteSpec(tenhouTileDesign, null, metrics)
+    ).toEqual({
+      atlasId: "bottomSmall",
+      tile: null,
+      width: metrics.spriteW,
+      height: metrics.spriteH,
+      anchor: 0,
+    });
+  });
+
+  it("keeps visible focused-hand tiles on the own-hand sheet", () => {
+    expect(
+      focusedHandTileSpriteSpec(tenhouTileDesign, "1m", metrics).atlasId
+    ).toBe("ownHand");
   });
 });
 

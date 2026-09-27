@@ -63,7 +63,10 @@ import {
 } from "./layouts/webTableLayout";
 import type { TileDesign } from "./tiles/tileDesign";
 import { TileTextureStore } from "./tiles/tileTextureStore";
-import { TileSpriteFactory } from "./tiles/tileSpriteFactory";
+import {
+  TileSpriteFactory,
+  type TileSpriteSpec,
+} from "./tiles/tileSpriteFactory";
 import {
   discardCellSize,
   layoutDiscards,
@@ -200,6 +203,23 @@ export function focusedHandTileMetrics(
     tile: { w: spriteW, h: spriteH, gap: 0 },
     spriteW,
     spriteH,
+  };
+}
+
+export function focusedHandTileSpriteSpec(
+  tileDesign: TileDesign,
+  tile: string | null,
+  metrics: FocusedHandTileMetrics
+): TileSpriteSpec {
+  return {
+    atlasId:
+      tile === null
+        ? tileDesign.sheets.ownHandBack
+        : tileDesign.sheets.ownHand,
+    tile,
+    width: metrics.spriteW,
+    height: metrics.spriteH,
+    anchor: 0,
   };
 }
 
@@ -6180,8 +6200,8 @@ export class TableRenderer {
       }
     } else {
       // Bottom hand (seat 0, focused): BIG face-up tiles from the
-      // `ownHand` sheet, positioned by the HandSorter and wired for
-      // drag / click / hover below.
+      // focused-hand sheet, or a small-sheet back scaled to the same
+      // footprint when result presentation conceals this hand.
       const t = focusedMetrics.tile;
       const spriteW = focusedMetrics.spriteW;
       const spriteH = focusedMetrics.spriteH;
@@ -6196,13 +6216,9 @@ export class TableRenderer {
           return;
         }
         // Anchor top-left so hover tint reads directly off the sprite.
-        const tileSprite = factory.create({
-          atlasId: "ownHand",
-          tile,
-          width: spriteW,
-          height: spriteH,
-          anchor: 0,
-        });
+        const tileSprite = factory.create(
+          focusedHandTileSpriteSpec(this.tileDesign, tile, focusedMetrics)
+        );
         this.tintIfWait(tileSprite, tile);
         const extraGap = handGap > 0 && i === hand.length - 1 ? handGap : 0;
         const slotX = i * (t.w + t.gap) + extraGap;
@@ -6404,15 +6420,13 @@ export class TableRenderer {
             ownShadowSpec.big
           );
         }
-        // Focused hand is always revealed: slide the real drawn tile
-        // in face-up (from the `ownHand` sheet) rather than a back.
-        const slideTile = factory.create({
-          atlasId: "ownHand",
-          tile: hand[hand.length - 1],
-          width: spriteW,
-          height: spriteH,
-          anchor: 0,
-        });
+        const slideTile = factory.create(
+          focusedHandTileSpriteSpec(
+            this.tileDesign,
+            hand[hand.length - 1],
+            focusedMetrics
+          )
+        );
         slideTile.position.set(slidePosX, 0);
         handContainer.addChild(slideTile);
       }

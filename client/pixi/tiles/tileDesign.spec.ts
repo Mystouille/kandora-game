@@ -48,6 +48,9 @@ describe("tileDesign contract", () => {
 
   describe("seat sheet maps match the legacy renderer", () => {
     const s = tenhouTileDesign.sheets;
+    it("uses the bottom-small back for a concealed focused hand", () => {
+      expect(s.ownHandBack).toBe("bottomSmall");
+    });
     it("uses each seat's pre-rotated discard sheet", () => {
       expect(s.discard).toEqual({
         0: "bottomSmall",
@@ -123,9 +126,9 @@ describe("tileDesign contract", () => {
   describe("validateTileDesign rejects malformed designs", () => {
     it("flags an unknown atlas reference", () => {
       const bad = clone(tenhouTileDesign);
-      bad.sheets.discard[0] = "does-not-exist";
+      bad.sheets.ownHandBack = "does-not-exist";
       expect(validateTileDesign(bad)).toContain(
-        'sheets.discard[0] references unknown atlas "does-not-exist"'
+        'sheets.ownHandBack references unknown atlas "does-not-exist"'
       );
     });
 
