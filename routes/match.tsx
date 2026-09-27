@@ -37,7 +37,8 @@ import {
 import {
   installGameSoundBindings,
   playGameCountdownSound,
-  playGameSound,
+  playGameDiscardLandingSound,
+  playGameDrawLandingSound,
 } from "~/game/client/sound";
 import {
   advanceReadyCheckTick,
@@ -1072,11 +1073,11 @@ export default function GameMatchRoute({
         });
         renderer.setMinimumDrawToDiscardDelayEnabled(true);
         renderer.setDrawSequencing(true, {
-          onDiscardLand: (_seat, isRiichiDeclaration) => {
-            playGameSound(isRiichiDeclaration ? "riichi" : "discard");
+          onDiscardLand: (_seat, isRiichiDeclaration, presentationSeq) => {
+            playGameDiscardLandingSound(isRiichiDeclaration, presentationSeq);
           },
-          onDrawLand: () => {
-            playGameSound("draw");
+          onDrawLand: (_seat, presentationSeq) => {
+            playGameDrawLandingSound(presentationSeq);
           },
           onCatchUpSnap: () => {
             track("game_animation_catchup_snap", {

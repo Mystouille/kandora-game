@@ -162,6 +162,8 @@ export interface DiscardAnimation {
   /** Sequenced mode: when phase B may begin. Set only after a draw
    * proves the discard was not called. */
   settleStartMs: number | null;
+  /** Authoritative event sequence represented by this presentation. */
+  presentationSeq: number;
 }
 
 /**
@@ -180,6 +182,8 @@ interface DrawAnim {
   startMs: number;
   /** Sequenced mode: whether the "draw lands" SFX has fired. */
   soundPlayed: boolean;
+  /** Authoritative event sequence represented by this presentation. */
+  presentationSeq: number;
 }
 
 interface AnimatorOptions {
@@ -225,8 +229,14 @@ export class DiscardAnimator {
    * the visual instead of the event arrival. Unset ⇒ silent (the
    * host plays event-driven SFX in non-sequenced modes). */
   private onDiscardLand:
-    ((seat: number, isRiichiDeclaration: boolean) => void) | null = null;
-  private onDrawLand: ((seat: number) => void) | null = null;
+    | ((
+        seat: number,
+        isRiichiDeclaration: boolean,
+        presentationSeq: number
+      ) => void)
+    | null = null;
+  private onDrawLand: ((seat: number, presentationSeq: number) => void) | null =
+    null;
   private onCatchUpSnap: (() => void) | null = null;
   private readonly now: () => number;
   /** Last `view` we processed in {@link beginFrame}. Used to diff. */
@@ -307,8 +317,12 @@ export class DiscardAnimator {
    * own event-driven discard/draw cues so they don't double up.
    */
   setSoundHooks(hooks: {
-    onDiscardLand?: (seat: number, isRiichiDeclaration: boolean) => void;
-    onDrawLand?: (seat: number) => void;
+    onDiscardLand?: (
+      seat: number,
+      isRiichiDeclaration: boolean,
+      presentationSeq: number
+    ) => void;
+    onDrawLand?: (seat: number, presentationSeq: number) => void;
     onCatchUpSnap?: () => void;
   }): void {
     this.onDiscardLand = hooks.onDiscardLand ?? null;
@@ -515,12 +529,8 @@ export class DiscardAnimator {
           // for the old draw clock before phase A reads as moving.
           const supersededDraw = this.drawAnims.get(seat);
           this.drawAnims.delete(seat);
-          if (
-            this.sequenced &&
-            supersededDraw &&
-            !supersededDraw.soundPlayed
-          ) {
-            this.onDrawLand?.(seat);
+          if (this.sequenced && supersededDraw && !supersededDraw.soundPlayed) {
+            this.onDrawLand?.(seat, supersededDraw.presentationSeq);
           }
           const lastIdx = currLen - 1;
           const tile = currDiscards[lastIdx];
@@ -562,7 +572,7 @@ export class DiscardAnimator {
             : Math.max(now, earliestDiscardStartMs);
           this.lastDrawStartMs[seat] = null;
           if (discardStartMs === null) {
-            this.onDiscardLand?.(seat, isRiichiDeclaration);
+            this.onDiscardLand?.(seat, isRiichiDeclaration, view.lastSeq);
             break;
           }
 
@@ -587,6 +597,7 @@ export class DiscardAnimator {
             phaseASnapshot: makePhaseASnapshot(prevLayout, sourceSlot),
             landSoundPlayed: false,
             settleStartMs: null,
+            presentationSeq: view.lastSeq,
           });
         }
 
@@ -600,7 +611,7 @@ export class DiscardAnimator {
           // hidden until then; otherwise it slides immediately.
           const startMs = this.sequenced ? this.scheduleDraw(now) : now;
           if (startMs === null) {
-            this.onDrawLand?.(seat);
+            this.onDrawLand?.(seat, view.lastSeq);
             break;
           }
           this.lastDrawStartMs[seat] = this.minimumDrawToDiscardDelayEnabled
@@ -610,6 +621,7 @@ export class DiscardAnimator {
             hideFrom: now,
             startMs,
             soundPlayed: false,
+            presentationSeq: view.lastSeq,
           });
         }
       }
@@ -637,14 +649,16 @@ export class DiscardAnimator {
             now - anim.startMs >= SEQ_SLIDE_MS
           ) {
             anim.landSoundPlayed = true;
-            this.onDiscardLand?.(seat, anim.isRiichiDeclaration);
+            this.onDiscardLand?.(
+              seat,
+              anim.isRiichiDeclaration,
+              anim.presentationSeq
+            );
           }
           this.anims.set(seat, {
             ...anim,
             phase: "to-final",
-            startMs: scheduledSettleStarted
-              ? (anim.settleStartMs ?? now)
-              : now,
+            startMs: scheduledSettleStarted ? (anim.settleStartMs ?? now) : now,
             durationMs: PHASE_B_DURATION_MS,
           });
         }
@@ -681,7 +695,11 @@ export class DiscardAnimator {
         now - anim.startMs >= SEQ_SLIDE_MS
       ) {
         anim.landSoundPlayed = true;
-        this.onDiscardLand?.(seat, anim.isRiichiDeclaration);
+        this.onDiscardLand?.(
+          seat,
+          anim.isRiichiDeclaration,
+          anim.presentationSeq
+        );
       }
       if (
         anim.phase === "to-nudge" &&
@@ -699,7 +717,7 @@ export class DiscardAnimator {
       if (now - d.startMs >= DRAW_SLIDE_MS) {
         if (this.sequenced && !d.soundPlayed) {
           d.soundPlayed = true;
-          this.onDrawLand?.(seat);
+          this.onDrawLand?.(seat, d.presentationSeq);
         }
         this.drawAnims.delete(seat);
       }

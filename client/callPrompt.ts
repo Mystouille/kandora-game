@@ -16,6 +16,29 @@ export interface NoCallAutoPassControllerOptions {
   onSent?: (actionId: string, state: NoCallAutoPassState) => void;
 }
 
+export type CallPromptPresentationKind = "draw" | "discard";
+export type CallPromptSoundDecision = "none" | "play" | "defer";
+
+export interface CallPromptPresentation {
+  kind: CallPromptPresentationKind;
+  seq: number;
+}
+
+export interface CallPromptSoundSequencer {
+  notePresentation(
+    kind: CallPromptPresentationKind,
+    seq: number,
+    shouldDefer: boolean
+  ): void;
+  updateActions(
+    previousActions: readonly LegalAction[],
+    nextActions: readonly LegalAction[],
+    noCallEnabled: boolean
+  ): CallPromptSoundDecision;
+  presentationLanded(kind: CallPromptPresentationKind, seq: number): boolean;
+  reset(): void;
+}
+
 const CALL_PROMPT_ACTION_TYPES: ReadonlySet<LegalAction["type"]> = new Set([
   "chi",
   "pon",
@@ -71,10 +94,7 @@ export function createNoCallAutoPassController(
         sentWindowKey = null;
         return false;
       }
-      const pass = findNoCallAutoPass(
-        state.legalActions,
-        options.isEnabled()
-      );
+      const pass = findNoCallAutoPass(state.legalActions, options.isEnabled());
       if (!pass) {
         return false;
       }
@@ -126,4 +146,54 @@ export function shouldTriggerCallPrompt(
     !shouldPlayCallPrompt(previousActions, noCallEnabled) &&
     shouldPlayCallPrompt(nextActions, noCallEnabled)
   );
+}
+
+export function createCallPromptSoundSequencer(): CallPromptSoundSequencer {
+  let pendingPresentation: CallPromptPresentation | null = null;
+  let deferredPrompt: CallPromptPresentation | null = null;
+
+  return {
+    notePresentation(kind, seq, shouldDefer): void {
+      pendingPresentation = shouldDefer ? { kind, seq } : null;
+    },
+
+    updateActions(
+      previousActions,
+      nextActions,
+      noCallEnabled
+    ): CallPromptSoundDecision {
+      const presentation = pendingPresentation;
+      pendingPresentation = null;
+
+      if (!shouldPlayCallPrompt(nextActions, noCallEnabled)) {
+        deferredPrompt = null;
+        return "none";
+      }
+      if (
+        !shouldTriggerCallPrompt(previousActions, nextActions, noCallEnabled)
+      ) {
+        return "none";
+      }
+      if (presentation !== null) {
+        deferredPrompt = presentation;
+        return "defer";
+      }
+
+      deferredPrompt = null;
+      return "play";
+    },
+
+    presentationLanded(kind, seq): boolean {
+      if (deferredPrompt?.kind !== kind || deferredPrompt.seq !== seq) {
+        return false;
+      }
+      deferredPrompt = null;
+      return true;
+    },
+
+    reset(): void {
+      pendingPresentation = null;
+      deferredPrompt = null;
+    },
+  };
 }

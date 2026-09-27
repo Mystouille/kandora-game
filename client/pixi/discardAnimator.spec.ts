@@ -17,6 +17,7 @@ function makeView(args: {
   discardTsumogiri?: boolean[][];
   discardSources?: Array<Array<"hand" | "draw" | null>>;
   totalDiscards?: number;
+  lastSeq?: number;
   freshlyDrawnSeat?: number | null;
   freshlyDiscardedSeat?: number | null;
   riichiTileIdx?: [number | null, number | null, number | null, number | null];
@@ -28,6 +29,7 @@ function makeView(args: {
     discardTsumogiri: args.discardTsumogiri ?? [[], [], [], []],
     discardSources: args.discardSources ?? [[], [], [], []],
     totalDiscards: args.totalDiscards ?? 0,
+    lastSeq: args.lastSeq ?? 0,
     freshlyDrawnSeat: args.freshlyDrawnSeat ?? null,
     freshlyDiscardedSeat: args.freshlyDiscardedSeat ?? null,
     riichiTileIdx: args.riichiTileIdx ?? [null, null, null, null],
@@ -495,12 +497,17 @@ describe("DiscardAnimator", () => {
     const discardSfx: Array<{
       seat: number;
       isRiichiDeclaration: boolean;
+      presentationSeq: number;
     }> = [];
     const animator = new DiscardAnimator({ now: () => now });
     animator.setSequenced(true);
     animator.setSoundHooks({
-      onDiscardLand: (seat, isRiichiDeclaration) =>
-        discardSfx.push({ seat, isRiichiDeclaration }),
+      onDiscardLand: (seat, isRiichiDeclaration, presentationSeq) =>
+        discardSfx.push({
+          seat,
+          isRiichiDeclaration,
+          presentationSeq,
+        }),
     });
 
     animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
@@ -516,6 +523,7 @@ describe("DiscardAnimator", () => {
       discards: [["1m"], [], [], []],
       discardTsumogiri: [[false], [], [], []],
       totalDiscards: 1,
+      lastSeq: 41,
       freshlyDiscardedSeat: 0,
     });
     animator.beginFrame(discarded);
@@ -524,7 +532,13 @@ describe("DiscardAnimator", () => {
     // Phase A elapsed: land SFX fires once; tile hovers.
     now = SEQ_SLIDE_MS;
     animator.beginFrame(discarded);
-    expect(discardSfx).toEqual([{ seat: 0, isRiichiDeclaration: false }]);
+    expect(discardSfx).toEqual([
+      {
+        seat: 0,
+        isRiichiDeclaration: false,
+        presentationSeq: 41,
+      },
+    ]);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
 
     // Past the slide + hover with NO draw yet (an open call window):
@@ -639,10 +653,13 @@ describe("DiscardAnimator", () => {
 
   it("sequenced: delays the next draw until the discard has hovered and settled", () => {
     let now = 0;
-    const drawSfx: number[] = [];
+    const drawSfx: Array<{ seat: number; presentationSeq: number }> = [];
     const animator = new DiscardAnimator({ now: () => now });
     animator.setSequenced(true);
-    animator.setSoundHooks({ onDrawLand: (seat) => drawSfx.push(seat) });
+    animator.setSoundHooks({
+      onDrawLand: (seat, presentationSeq) =>
+        drawSfx.push({ seat, presentationSeq }),
+    });
 
     animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
     recordLayouts(animator, [
@@ -668,6 +685,7 @@ describe("DiscardAnimator", () => {
       discards: [["1m"], [], [], []],
       discardTsumogiri: [[false], [], [], []],
       totalDiscards: 1,
+      lastSeq: 42,
       freshlyDrawnSeat: 1,
     });
     animator.beginFrame(drew);
@@ -697,13 +715,9 @@ describe("DiscardAnimator", () => {
     expect(animator.getDrawProgress(1)).toBeGreaterThan(0);
 
     // Draw slide completes → draw-land SFX fires once.
-    now =
-      SEQ_SLIDE_MS +
-      SEQ_HOVER_MS +
-      PHASE_B_DURATION_MS +
-      DRAW_SLIDE_MS;
+    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + PHASE_B_DURATION_MS + DRAW_SLIDE_MS;
     animator.beginFrame(drew);
-    expect(drawSfx).toEqual([1]);
+    expect(drawSfx).toEqual([{ seat: 1, presentationSeq: 42 }]);
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.isDrawTileHidden(1)).toBe(false);
   });

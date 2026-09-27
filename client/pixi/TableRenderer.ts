@@ -2860,8 +2860,12 @@ export class TableRenderer {
   setDrawSequencing(
     enabled: boolean,
     sounds?: {
-      onDiscardLand: (seat: number, isRiichiDeclaration: boolean) => void;
-      onDrawLand: (seat: number) => void;
+      onDiscardLand: (
+        seat: number,
+        isRiichiDeclaration: boolean,
+        presentationSeq: number
+      ) => void;
+      onDrawLand: (seat: number, presentationSeq: number) => void;
       onCatchUpSnap?: () => void;
     }
   ): void {

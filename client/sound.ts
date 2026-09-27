@@ -21,7 +21,12 @@
 import { Howl } from "howler";
 import type { GameEvent, Seat } from "~/game/protocol/messages";
 import { subscribeToGameEvents, useMatchStore } from "./store";
-import { shouldTriggerCallPrompt } from "./callPrompt";
+import {
+  createCallPromptSoundSequencer,
+  shouldPlayCallPrompt,
+  type CallPromptPresentationKind,
+  type CallPromptSoundSequencer,
+} from "./callPrompt";
 import {
   advanceCountdownSoundGate,
   resetCountdownSoundGate,
@@ -199,6 +204,23 @@ export function playGameSound(key: SoundKey): void {
   }
 }
 
+let releaseDeferredCallPrompt:
+  | ((kind: CallPromptPresentationKind, seq: number) => void)
+  | null = null;
+
+export function playGameDrawLandingSound(seq: number): void {
+  playGameSound("draw");
+  releaseDeferredCallPrompt?.("draw", seq);
+}
+
+export function playGameDiscardLandingSound(
+  isRiichiDeclaration: boolean,
+  seq: number
+): void {
+  playGameSound(isRiichiDeclaration ? "riichi" : "discard");
+  releaseDeferredCallPrompt?.("discard", seq);
+}
+
 export function playGameCountdownSound(
   key: "timer-tick" | "game-start-tick",
   countdownId: string,
@@ -345,21 +367,46 @@ export function installGameSoundBindings(options?: {
     uninstallBinding();
     uninstallBinding = null;
   }
-  const unsubscribe = subscribeToGameEvents(({ event, mySeat }) => {
-    if (
-      options?.shouldDeferDrawDiscardSounds?.() &&
-      (event.type === "draw" || event.type === "discard")
-    ) {
-      return;
+  const isNoCallEnabled = options?.isNoCallEnabled ?? (() => false);
+  const callPromptSequencer = createCallPromptSoundSequencer();
+  const unsubscribe = subscribeToGameEvents(({ event, seq, mySeat }) => {
+    if (event.type === "draw" || event.type === "discard") {
+      const shouldDefer = options?.shouldDeferDrawDiscardSounds?.() ?? false;
+      callPromptSequencer.notePresentation(event.type, seq, shouldDefer);
+      if (shouldDefer) {
+        return;
+      }
     }
     playSoundForEvent(event, mySeat);
   });
   const unsubscribeCallPrompt = subscribeToCallPrompt(
-    options?.isNoCallEnabled ?? (() => false)
+    isNoCallEnabled,
+    callPromptSequencer
   );
+  const releaseCallPrompt = (
+    kind: CallPromptPresentationKind,
+    seq: number
+  ): void => {
+    if (!callPromptSequencer.presentationLanded(kind, seq)) {
+      return;
+    }
+    if (
+      shouldPlayCallPrompt(
+        useMatchStore.getState().legalActions,
+        isNoCallEnabled()
+      )
+    ) {
+      playGameSound("call-prompt");
+    }
+  };
+  releaseDeferredCallPrompt = releaseCallPrompt;
   const teardown = (): void => {
     unsubscribe();
     unsubscribeCallPrompt();
+    callPromptSequencer.reset();
+    if (releaseDeferredCallPrompt === releaseCallPrompt) {
+      releaseDeferredCallPrompt = null;
+    }
     if (uninstallBinding === teardown) {
       uninstallBinding = null;
     }
@@ -384,18 +431,23 @@ export function installGameSoundBindings(options?: {
  * - We fire on the rising edge only — the prompt stays up for
  *   the whole window, but we don't want the cue to repeat on
  *   every re-render.
+ * - Draw/discard-driven prompts wait for the matching Pixi landing
+ *   hook so the cue cannot reveal a tile before it is presented.
  */
-function subscribeToCallPrompt(isNoCallEnabled: () => boolean): () => void {
+function subscribeToCallPrompt(
+  isNoCallEnabled: () => boolean,
+  sequencer: CallPromptSoundSequencer
+): () => void {
   return useMatchStore.subscribe((state, prev) => {
     if (state.legalActions === prev.legalActions) {
       return;
     }
-    const shouldPrompt = shouldTriggerCallPrompt(
+    const decision = sequencer.updateActions(
       prev.legalActions,
       state.legalActions,
       isNoCallEnabled()
     );
-    if (shouldPrompt) {
+    if (decision === "play") {
       playGameSound("call-prompt");
     }
   });
