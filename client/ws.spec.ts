@@ -8,6 +8,7 @@ const store = vi.hoisted(() => ({
   setActionDeadline: vi.fn(),
   setActionBufferMs: vi.fn(),
   setReadyCheck: vi.fn(),
+  setRoomState: vi.fn(),
   setViewers: vi.fn(),
 }));
 
@@ -30,6 +31,7 @@ class FakeWebSocket {
 
   readyState = FakeWebSocket.CONNECTING;
   readonly sent: string[] = [];
+  closedWith: { code?: number; reason?: string } | null = null;
   private readonly listeners = new Map<string, Set<SocketListener>>();
 
   constructor(readonly url: string) {
@@ -46,8 +48,9 @@ class FakeWebSocket {
     this.sent.push(data);
   }
 
-  close(): void {
+  close(code?: number, reason?: string): void {
     this.readyState = FakeWebSocket.CLOSING;
+    this.closedWith = { code, reason };
   }
 
   emitOpen(): void {
@@ -59,9 +62,9 @@ class FakeWebSocket {
     this.emit("message", { data });
   }
 
-  emitClose(): void {
+  emitClose(code = 1000, reason = ""): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.emit("close", { code: 1000, reason: "", wasClean: true });
+    this.emit("close", { code, reason, wasClean: true });
   }
 
   private emit(type: string, event: Record<string, unknown>): void {
@@ -83,6 +86,7 @@ describe("GameWS reconnect ownership", () => {
     store.setActionDeadline.mockReset();
     store.setActionBufferMs.mockReset();
     store.setReadyCheck.mockReset();
+    store.setRoomState.mockReset();
     store.setViewers.mockReset();
   });
 
@@ -146,6 +150,7 @@ describe("GameWS reconnect ownership", () => {
     const client = new GameWS({
       getConnectionDetails,
       matchId: "match-1",
+      clientSessionId: "client-session-123456",
     });
     client.connect();
     await flushConnectionAttempt();
@@ -154,6 +159,7 @@ describe("GameWS reconnect ownership", () => {
     expect(JSON.parse(current.sent[0])).toMatchObject({
       type: "hello",
       token: "token-1",
+      clientSessionId: "client-session-123456",
     });
 
     store.lastSeq = 42;
@@ -170,6 +176,7 @@ describe("GameWS reconnect ownership", () => {
     expect(JSON.parse(replacement.sent[0])).toMatchObject({
       type: "hello",
       token: "token-2",
+      clientSessionId: "client-session-123456",
     });
     expect(JSON.parse(replacement.sent[1])).toEqual({
       type: "resync",
@@ -275,9 +282,11 @@ describe("GameWS reconnect ownership", () => {
   });
 
   it("does not retry a terminal connection-details failure", async () => {
-    const getConnectionDetails = vi.fn().mockRejectedValue(
-      new GameWSConnectionDetailsError("Access denied", false)
-    );
+    const getConnectionDetails = vi
+      .fn()
+      .mockRejectedValue(
+        new GameWSConnectionDetailsError("Access denied", false)
+      );
     const client = new GameWS({
       getConnectionDetails,
       matchId: "match-1",
@@ -396,5 +405,123 @@ describe("GameWS reconnect ownership", () => {
       matchId: "match-1",
     });
     client.close();
+  });
+
+  it("sends takeover only on the first transport attempt", async () => {
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+      clientSessionId: "destination-session-123",
+      takeover: true,
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const first = FakeWebSocket.instances[0];
+    first.emitOpen();
+    expect(JSON.parse(first.sent[0])).toMatchObject({
+      type: "hello",
+      clientSessionId: "destination-session-123",
+      takeover: true,
+    });
+
+    // Even if the authoritative baseline is lost, a retry must not retain
+    // stale permission to replace whichever device owns the seat by then.
+    first.emitClose();
+    await vi.advanceTimersByTimeAsync(500);
+    await flushConnectionAttempt();
+    const replacement = FakeWebSocket.instances[1];
+    replacement.emitOpen();
+
+    expect(JSON.parse(replacement.sent[0])).toMatchObject({
+      type: "hello",
+      clientSessionId: "destination-session-123",
+    });
+    expect(JSON.parse(replacement.sent[0])).not.toHaveProperty("takeover");
+    client.close();
+  });
+
+  it("stops reconnecting after another device replaces the session", async () => {
+    const onMessage = vi.fn();
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+      clientSessionId: "source-session-123456",
+      onMessage,
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+
+    socket.emitMessage(
+      JSON.stringify({
+        type: "session_replaced",
+        matchId: "match-1",
+        message: "Game resumed on another device.",
+      })
+    );
+    socket.emitClose(4009, "Session replaced");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(onMessage).toHaveBeenCalledWith({
+      type: "session_replaced",
+      matchId: "match-1",
+      message: "Game resumed on another device.",
+    });
+    expect(store.setConn).toHaveBeenCalledWith("closed");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("reports replacement from the terminal close code when the message is lost", async () => {
+    const onMessage = vi.fn();
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+      clientSessionId: "source-session-123456",
+      onMessage,
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+
+    socket.emitClose(4009, "Session replaced");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(onMessage).toHaveBeenCalledWith({
+      type: "session_replaced",
+      matchId: "match-1",
+      message: "Game resumed on another device.",
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("does not retry when a stale client session needs explicit takeover", async () => {
+    const onError = vi.fn();
+    const client = new GameWS({
+      getConnectionDetails: connectionDetails(),
+      matchId: "match-1",
+      clientSessionId: "stale-session-123456",
+      onError,
+    });
+    client.connect();
+    await flushConnectionAttempt();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+    socket.emitMessage(
+      JSON.stringify({
+        type: "error",
+        code: "takeover_required",
+        message: "This game is active on another device.",
+      })
+    );
+    socket.emitClose();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(onError).toHaveBeenCalledWith(
+      "takeover_required",
+      "This game is active on another device."
+    );
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

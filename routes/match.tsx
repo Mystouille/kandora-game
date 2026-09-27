@@ -15,10 +15,7 @@ import {
   useMatchStore,
   type MatchView,
 } from "~/game/client/store";
-import {
-  GameWS,
-  GameWSConnectionDetailsError,
-} from "~/game/client/ws";
+import { GameWS, GameWSConnectionDetailsError } from "~/game/client/ws";
 import {
   findTileAction,
   isCurrentAutoDiscardWindow,
@@ -683,6 +680,9 @@ export default function GameMatchRoute({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<TableRenderer | null>(null);
   const wsRef = useRef<GameWS | null>(null);
+  const [sessionReplacedMessage, setSessionReplacedMessage] = useState<
+    string | null
+  >(null);
 
   const view = useMatchStore();
   const { t } = useLocale();
@@ -743,45 +743,46 @@ export default function GameMatchRoute({
   }, []);
   const noCallRef = useRef(liveMenuFlags.noCall);
   const noCallAutoPassRef = useRef<NoCallAutoPassController | null>(null);
-  const handleLiveMenuChange = useCallback((next: LivePlayMenuFlags) => {
-    liveMenuFlagsRef.current = next;
-    noCallRef.current = next.noCall;
-    if (next.noCall) {
-      noCallAutoPassRef.current?.evaluate(useMatchStore.getState());
-    }
-    if (!next.autoDiscard) {
-      cancelAutoDiscardTimer();
-    }
-    setLiveMenuFlags((prev) => {
-      if (next.autoSort !== prev.autoSort) {
-        // Persist the autoSort preference so it survives both
-        // hand boundaries and page reloads.
-        writePersistedAutoSort(next.autoSort);
-        if (rendererRef.current !== null) {
-          rendererRef.current.setAutoSort(next.autoSort);
+  const handleLiveMenuChange = useCallback(
+    (next: LivePlayMenuFlags) => {
+      liveMenuFlagsRef.current = next;
+      noCallRef.current = next.noCall;
+      if (next.noCall) {
+        noCallAutoPassRef.current?.evaluate(useMatchStore.getState());
+      }
+      if (!next.autoDiscard) {
+        cancelAutoDiscardTimer();
+      }
+      setLiveMenuFlags((prev) => {
+        if (next.autoSort !== prev.autoSort) {
+          // Persist the autoSort preference so it survives both
+          // hand boundaries and page reloads.
+          writePersistedAutoSort(next.autoSort);
+          if (rendererRef.current !== null) {
+            rendererRef.current.setAutoSort(next.autoSort);
+          }
         }
-      }
-      if (next.autoWin !== prev.autoWin && rendererRef.current !== null) {
-        // Mirror to the renderer so the on-canvas ron/tsumo
-        // buttons disappear immediately when the toggle flips on.
-        rendererRef.current.setAutoWinEnabled(next.autoWin);
-      }
-      if (next.noCall !== prev.noCall && rendererRef.current !== null) {
-        rendererRef.current.setNoCallEnabled(next.noCall);
-      }
-      if (next.compactLayout !== prev.compactLayout) {
-        const mode = next.compactLayout ? "compact" : "standard";
-        writeWebTableLayoutMode(mode);
-        rendererRef.current?.setWebTableLayoutMode(mode);
-      }
-      return next;
-    });
-  }, [cancelAutoDiscardTimer]);
+        if (next.autoWin !== prev.autoWin && rendererRef.current !== null) {
+          // Mirror to the renderer so the on-canvas ron/tsumo
+          // buttons disappear immediately when the toggle flips on.
+          rendererRef.current.setAutoWinEnabled(next.autoWin);
+        }
+        if (next.noCall !== prev.noCall && rendererRef.current !== null) {
+          rendererRef.current.setNoCallEnabled(next.noCall);
+        }
+        if (next.compactLayout !== prev.compactLayout) {
+          const mode = next.compactLayout ? "compact" : "standard";
+          writeWebTableLayoutMode(mode);
+          rendererRef.current?.setWebTableLayoutMode(mode);
+        }
+        return next;
+      });
+    },
+    [cancelAutoDiscardTimer]
+  );
   const resetEphemeralLiveMenuFlags = useCallback((): void => {
     noCallRef.current = false;
-    liveMenuFlagsRef.current = resetEphemeralFlags(
-      liveMenuFlagsRef.current
-    );
+    liveMenuFlagsRef.current = resetEphemeralFlags(liveMenuFlagsRef.current);
     cancelAutoDiscardTimer();
     setLiveMenuFlags((prev) => resetEphemeralFlags(prev));
   }, [cancelAutoDiscardTimer]);
@@ -1189,6 +1190,18 @@ export default function GameMatchRoute({
       }
     );
 
+    const search = new URLSearchParams(window.location.search);
+    const takeover = search.get("takeover") === "1";
+    if (takeover) {
+      search.delete("takeover");
+      const query = search.toString();
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
+      );
+    }
+
     const ws = new GameWS({
       getConnectionDetails: async () => {
         // Mirror `~/utils/basePath` (the boundary rule blocks `~/utils/*`):
@@ -1229,32 +1242,39 @@ export default function GameMatchRoute({
         return { wsUrl: fullUrl, token: session.token };
       },
       matchId,
+      takeover,
       // Lobby may have stowed a debug seed under this matchId; sent
       // once in the `hello` frame and consumed by the game-server
       // on first attach.
       debug: takeMatchDebug(matchId),
       onMessage: (message) => {
+        if (message.type === "session_replaced") {
+          setSessionReplacedMessage(message.message);
+          return;
+        }
         if (message.type === "spectate_redirect") {
-          void navigate(
-            `/spectate/${encodeURIComponent(message.matchId)}`,
-            { replace: true }
-          );
+          void navigate(`/spectate/${encodeURIComponent(message.matchId)}`, {
+            replace: true,
+          });
           return;
         }
         if (message.type === "room_kicked") {
           void navigate("/lobby", { replace: true });
         }
       },
+      onError: (code, message) => {
+        if (code === "takeover_required") {
+          setSessionReplacedMessage(message);
+          return;
+        }
+        console.error(`[game-ws] ${code}: ${message}`);
+      },
     });
     const noCallAutoPass = createNoCallAutoPassController({
       isEnabled: () => noCallRef.current,
       send: (actionId) => ws.act(actionId),
       onSent: (actionId) => {
-        trackGameActionIntent(
-          "auto_pass",
-          actionId,
-          useMatchStore.getState()
-        );
+        trackGameActionIntent("auto_pass", actionId, useMatchStore.getState());
       },
     });
     noCallAutoPassRef.current = noCallAutoPass;
@@ -1415,6 +1435,27 @@ export default function GameMatchRoute({
             }}
           />
         </div>
+        {sessionReplacedMessage !== null && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 pointer-events-auto">
+            <div className="flex max-w-sm flex-col items-center gap-4 rounded-xl border border-emerald-400/50 bg-emerald-950 px-8 py-6 text-center shadow-2xl">
+              <div className="text-emerald-200 text-lg font-semibold">
+                Game resumed on another device
+              </div>
+              <div className="text-emerald-100/80 text-sm">
+                {sessionReplacedMessage}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigate("/lobby", { replace: true });
+                }}
+                className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold shadow"
+              >
+                Return to lobby
+              </button>
+            </div>
+          </div>
+        )}
         {/* Reconnect overlay: shown whenever the server has
             flagged this seat as disconnected (network loss or a
             previous AFK self-report). The button sends
@@ -1772,21 +1813,19 @@ function WaitingRoomOverlay({
                       {slot.ready ? "Ready" : "Not ready"}
                     </span>
                   )}
-                  {isHost &&
-                    !isMine &&
-                    slot.occupant.kind !== "empty" && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onKick(slot.seat);
-                        }}
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-red-500/50 text-red-200 hover:bg-red-950/60"
-                        aria-label={`Kick ${label}`}
-                        title={`Kick ${label}`}
-                      >
-                        <DeleteOutlined />
-                      </button>
-                    )}
+                  {isHost && !isMine && slot.occupant.kind !== "empty" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onKick(slot.seat);
+                      }}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-red-500/50 text-red-200 hover:bg-red-950/60"
+                      aria-label={`Kick ${label}`}
+                      title={`Kick ${label}`}
+                    >
+                      <DeleteOutlined />
+                    </button>
+                  )}
                 </div>
               </li>
             );

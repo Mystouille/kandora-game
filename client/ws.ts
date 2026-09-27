@@ -19,6 +19,7 @@ import {
   type ServerMessage,
 } from "~/game/protocol/messages";
 import { dispatchServerMessage } from "./dispatchServerMessage";
+import { getOrCreateGameClientSessionId } from "./connectionIdentity";
 import { useMatchStore } from "./store";
 
 export interface GameWSOptions {
@@ -35,6 +36,10 @@ export interface GameWSOptions {
    * delayed watcher can't relay live info to a player. Ignored
    * unless `spectate` is true. */
   delayMs?: number;
+  /** Stable for this browser tab / native WebView session. */
+  clientSessionId?: string;
+  /** Explicitly replace another client session currently owning the seat. */
+  takeover?: boolean;
   /** Optional callback fired for every successfully-parsed
    * incoming `ServerMessage`. Runs *before* the default store
    * dispatch so the caller can choose to mirror messages into a
@@ -79,6 +84,7 @@ const MAX_BACKOFF_MS = 3_000;
  */
 const STALL_THRESHOLD_MS = 60_000;
 const STALL_CHECK_INTERVAL_MS = 5_000;
+export const SESSION_REPLACED_CLOSE_CODE = 4009;
 const TERMINAL_SPECTATOR_ERRORS = new Set([
   "hello_timeout",
   "matchid_mismatch",
@@ -86,6 +92,21 @@ const TERMINAL_SPECTATOR_ERRORS = new Set([
   "spectate_delay_too_large",
   "auth_failed",
   "user_not_found",
+]);
+const TERMINAL_PLAYER_ERRORS = new Set([
+  "hello_timeout",
+  "matchid_mismatch",
+  "auth_failed",
+  "user_not_found",
+  "client_session_required",
+  "active_match_exists",
+  "multiple_active_matches",
+  "takeover_required",
+  "match_lost",
+  "match_finished",
+  "match_not_found",
+  "room_full",
+  "room_locked",
 ]);
 
 export class GameWS {
@@ -97,8 +118,15 @@ export class GameWS {
   private stallTimer: ReturnType<typeof setInterval> | null = null;
   private connectionAttempt = 0;
   private resyncRequestedFromSeq: number | null = null;
+  private readonly clientSessionId: string;
+  private takeoverPending: boolean;
+  private sessionReplacementReported = false;
 
-  constructor(private readonly opts: GameWSOptions) {}
+  constructor(private readonly opts: GameWSOptions) {
+    this.clientSessionId =
+      opts.clientSessionId ?? getOrCreateGameClientSessionId();
+    this.takeoverPending = opts.takeover === true;
+  }
 
   connect(): void {
     this.intentionallyClosed = false;
@@ -280,10 +308,7 @@ export class GameWS {
       const message =
         error instanceof Error ? error.message : "Connection refresh failed";
       this.reportError("session_refresh_failed", message);
-      if (
-        error instanceof GameWSConnectionDetailsError &&
-        !error.retryable
-      ) {
+      if (error instanceof GameWSConnectionDetailsError && !error.retryable) {
         useMatchStore.getState().setConn("closed");
         return;
       }
@@ -319,16 +344,25 @@ export class GameWS {
 
       // Send `hello`; if we have a positive `lastSeq` we're reconnecting
       // and should immediately request a gap-fill afterward.
-      this.send({
+      const takeoverRequested = this.takeoverPending;
+      const helloSent = this.send({
         type: "hello",
         token: connection.token,
         matchId: this.opts.matchId,
+        clientSessionId: this.clientSessionId,
+        ...(takeoverRequested ? { takeover: true } : {}),
         debug: this.opts.debug,
         ...(this.opts.spectate ? { spectate: true } : {}),
         ...(this.opts.spectate && this.opts.delayMs !== undefined
           ? { delayMs: this.opts.delayMs }
           : {}),
       });
+      if (helloSent && takeoverRequested) {
+        // Takeover is a user-confirmed one-shot capability. Never carry it
+        // into a later transport retry: if this attempt did not establish
+        // ownership, the user must confirm another takeover.
+        this.takeoverPending = false;
+      }
       const { lastSeq } = useMatchStore.getState();
       if (lastSeq >= 0) {
         this.send({
@@ -362,8 +396,24 @@ export class GameWS {
       );
       this.ws = null;
       this.stopStallWatchdog();
-      if (this.intentionallyClosed) {
+      if (
+        this.intentionallyClosed ||
+        event.code === SESSION_REPLACED_CLOSE_CODE
+      ) {
+        if (
+          event.code === SESSION_REPLACED_CLOSE_CODE &&
+          !this.sessionReplacementReported
+        ) {
+          this.sessionReplacementReported = true;
+          this.opts.onMessage?.({
+            type: "session_replaced",
+            matchId: this.opts.matchId,
+            message: "Game resumed on another device.",
+          });
+        }
+        this.intentionallyClosed = true;
         useMatchStore.getState().setConn("closed");
+        this.clearStaleActionWindow();
         return;
       }
       this.scheduleReconnect();
@@ -442,6 +492,9 @@ export class GameWS {
       return;
     }
     if (this.opts.onMessage) {
+      if (parsed.data.type === "session_replaced") {
+        this.sessionReplacementReported = true;
+      }
       try {
         this.opts.onMessage(parsed.data);
       } catch (err) {
@@ -453,12 +506,31 @@ export class GameWS {
   }
 
   private dispatch(msg: ServerMessage): void {
+    if (msg.type === "session_replaced") {
+      this.intentionallyClosed = true;
+      this.connectionAttempt += 1;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.stopStallWatchdog();
+      this.clearStaleActionWindow();
+      useMatchStore.getState().setConn("closed");
+    }
     if (
       msg.type === "error" &&
       this.opts.spectate &&
       TERMINAL_SPECTATOR_ERRORS.has(msg.code)
     ) {
       this.intentionallyClosed = true;
+    }
+    if (
+      msg.type === "error" &&
+      !this.opts.spectate &&
+      TERMINAL_PLAYER_ERRORS.has(msg.code)
+    ) {
+      this.intentionallyClosed = true;
+      this.clearStaleActionWindow();
     }
     if (msg.type === "snapshot") {
       this.resyncRequestedFromSeq = null;
@@ -469,10 +541,14 @@ export class GameWS {
         this.requestSequenceResync(expectedSeq, receivedSeq);
       },
     });
-    if (
-      msg.type === "event" &&
-      useMatchStore.getState().lastSeq === msg.seq
-    ) {
+    if (msg.type === "session_replaced" && this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // The server also closes the socket; this is best-effort cleanup.
+      }
+    }
+    if (msg.type === "event" && useMatchStore.getState().lastSeq === msg.seq) {
       this.resyncRequestedFromSeq = null;
     }
   }

@@ -123,6 +123,15 @@ compilation is verified with Java 21/API 36. The iOS project is generated and
 synchronized, but compilation/signing requires macOS and Xcode. Cloud and
 multi-phone Nearby host/join remain pending transport adapters.
 
+Hosted player sockets use a session-scoped opaque client ID in addition to the
+authenticated user ID. A normal reconnect may reclaim only the same client
+session. A different web/mobile session must send an explicit one-shot takeover;
+the server installs it first, retires the previous socket with
+`session_replaced`, and sends the destination an authoritative private
+snapshot. Client IDs are transport-fencing metadata, not credentials. Only
+playing matches participate in this handoff: disconnecting from a waiting room
+releases the seat immediately.
+
 ## Checkpoints
 
 `MatchProcess.createCheckpoint()` and `MatchProcess.restoreCheckpoint()`

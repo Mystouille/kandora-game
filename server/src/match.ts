@@ -91,10 +91,7 @@ import {
   MatchEventJournal,
   type EventJournalErrorContext,
 } from "./eventJournal";
-import {
-  type MatchRuntime,
-  type MatchTimer,
-} from "./runtime";
+import { type MatchRuntime, type MatchTimer } from "./runtime";
 import { createSystemMatchRuntime } from "./runtime";
 import {
   createMatchDriver,
@@ -135,6 +132,24 @@ export interface AutomaticActionContext {
 }
 
 type Send = (msg: ServerMessage) => void;
+
+export interface HumanConnectionOptions {
+  clientSessionId: string;
+  takeover?: boolean;
+}
+
+export interface HumanAttachResult {
+  previousSend: Send | null;
+  previousClientSessionId: string | null;
+  tookOver: boolean;
+}
+
+export class HumanSessionTakeoverRequiredError extends Error {
+  constructor(readonly seat: Seat) {
+    super("This seat is active on another device.");
+    this.name = "HumanSessionTakeoverRequiredError";
+  }
+}
 
 /**
  * Per-connection state for a delayed-spectator session. Tracks
@@ -336,8 +351,8 @@ export function winResultRevealDurationMs(args: {
   const lastRegularYakuRevealAtMs =
     regularYakuCount * WIN_YAKU_REVEAL_INTERVAL_MS;
   return (args.uraDoraEnabled ?? true)
-      ? lastRegularYakuRevealAtMs + WIN_URA_REVEAL_AFTER_LAST_YAKU_MS
-      : lastRegularYakuRevealAtMs + WIN_SCORE_REVEAL_WITHOUT_URA_MS;
+    ? lastRegularYakuRevealAtMs + WIN_URA_REVEAL_AFTER_LAST_YAKU_MS
+    : lastRegularYakuRevealAtMs + WIN_SCORE_REVEAL_WITHOUT_URA_MS;
 }
 
 export function setDelayAfterDiscardMs(ms: number): void {
@@ -682,8 +697,7 @@ export class MatchProcess {
   private readyTimer: MatchTimer | null = null;
   private readyResolve: (() => void) | null = null;
   private readyContinuationKind:
-    | PlayingReadyCheckpoint["readyContinuation"]
-    | null = null;
+    PlayingReadyCheckpoint["readyContinuation"] | null = null;
 
   /**
    * Type of the most recently emitted engine event. Used to
@@ -707,8 +721,7 @@ export class MatchProcess {
    */
   private pendingWinRevealMs = 0;
   private resultTransitionKind:
-    | PlayingResultTransitionCheckpoint["transitionKind"]
-    | null = null;
+    PlayingResultTransitionCheckpoint["transitionKind"] | null = null;
   private resultTransitionDeadline: number | null = null;
   private resultTransitionNextReadyMs = 0;
   private resultTransitionTimer: MatchTimer | null = null;
@@ -800,10 +813,10 @@ export class MatchProcess {
 
   /**
    * In-memory event log retained for the lifetime of the match.
-  * Doubles as (a) the source for in-process resync replay, (b) the payload
-  * source for best-effort journal batches, and (c) the complete final archive.
-  * The journal queue stores only cursors, so this array remains the sole
-  * in-memory owner of events that have not reached storage yet.
+   * Doubles as (a) the source for in-process resync replay, (b) the payload
+   * source for best-effort journal batches, and (c) the complete final archive.
+   * The journal queue stores only cursors, so this array remains the sole
+   * in-memory owner of events that have not reached storage yet.
    */
   private readonly eventLog: Array<{
     seq: number;
@@ -830,6 +843,12 @@ export class MatchProcess {
     null,
     null,
   ];
+  private humanClientSessionIds: [
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+  ] = [null, null, null, null];
   private humanConnectionGeneration: [number, number, number, number] = [
     0, 0, 0, 0,
   ];
@@ -1018,11 +1037,7 @@ export class MatchProcess {
    */
   private sessionFinalized = false;
   private pendingSessionEndReason:
-    | "vote_no"
-    | "vote_timeout"
-    | "single_game"
-    | "server_abort"
-    | null = null;
+    "vote_no" | "vote_timeout" | "single_game" | "server_abort" | null = null;
   private sessionFinalizePromise: Promise<void> | null = null;
 
   get hasPendingFinalization(): boolean {
@@ -1054,11 +1069,9 @@ export class MatchProcess {
   private readonly repository: MatchRepository;
   private readonly eventJournalStore: MatchEventJournalStore | null;
   private readonly onEventJournalError:
-    | ((context: EventJournalErrorContext) => void)
-    | undefined;
+    ((context: EventJournalErrorContext) => void) | undefined;
   private readonly onAutomaticAction:
-    | ((context: AutomaticActionContext) => void)
-    | undefined;
+    ((context: AutomaticActionContext) => void) | undefined;
   private eventJournal: MatchEventJournal | null = null;
   private pausedCheckpoint: MatchCheckpoint | null = null;
   private checkpointSavePromise: Promise<MatchCheckpoint> | null = null;
@@ -1462,9 +1475,8 @@ export class MatchProcess {
       return;
     }
     const matchId = this.currentGameMongoId();
-    const stored = await this.eventJournalStore.loadMatchEventJournalState(
-      matchId
-    );
+    const stored =
+      await this.eventJournalStore.loadMatchEventJournalState(matchId);
     if (stored === null || stored.status !== "playing") {
       return;
     }
@@ -1523,14 +1535,10 @@ export class MatchProcess {
   private checkpointPlayers(
     requireFull: true
   ): PlayingActionCheckpoint["seats"];
-  private checkpointPlayers(
-    requireFull: false
-  ): WaitingRoomCheckpoint["seats"];
+  private checkpointPlayers(requireFull: false): WaitingRoomCheckpoint["seats"];
   private checkpointPlayers(
     requireFull: boolean
-  ):
-    | PlayingActionCheckpoint["seats"]
-    | WaitingRoomCheckpoint["seats"] {
+  ): PlayingActionCheckpoint["seats"] | WaitingRoomCheckpoint["seats"] {
     const seats = [0, 1, 2, 3].map((seat) => {
       const player = this.players.get(seat as Seat) ?? null;
       return player === null ? null : { ...player };
@@ -1541,8 +1549,7 @@ export class MatchProcess {
       );
     }
     return seats as
-      | PlayingActionCheckpoint["seats"]
-      | WaitingRoomCheckpoint["seats"];
+      PlayingActionCheckpoint["seats"] | WaitingRoomCheckpoint["seats"];
   }
 
   private createWaitingRoomCheckpoint(): WaitingRoomCheckpoint {
@@ -1721,10 +1728,7 @@ export class MatchProcess {
     const expiryDurationMs = this.disconnected[seat]
       ? DRAW_TO_DISCARD_DELAY_MS
       : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
-    const expiryRemainingMs = Math.max(
-      0,
-      expiryDurationMs - elapsedMs
-    );
+    const expiryRemainingMs = Math.max(0, expiryDurationMs - elapsedMs);
     return PlayingActionCheckpointSchema.parse({
       ...this.playingCheckpointBase(savedAt),
       checkpointKind: "action_window",
@@ -1755,9 +1759,7 @@ export class MatchProcess {
           this.currentDeadline[seatIndex] !== null ||
           this.legalActions[seatIndex].length > 0
         ) {
-          this.checkpointUnsupported(
-            "closed call window retains action state"
-          );
+          this.checkpointUnsupported("closed call window retains action state");
         }
         return null;
       }
@@ -1780,10 +1782,7 @@ export class MatchProcess {
         legalActions: this.legalActions[seat],
         elapsedMs,
         visibleRemainingMs: Math.max(0, deadline - savedAt),
-        expiryRemainingMs: Math.max(
-          0,
-          expiryDurationMs - elapsedMs
-        ),
+        expiryRemainingMs: Math.max(0, expiryDurationMs - elapsedMs),
       };
     });
     return PlayingCallCheckpointSchema.parse({
@@ -1858,9 +1857,7 @@ export class MatchProcess {
       checkpointKind: "continue_vote",
       votes: [...this.continueVote],
       voteRemainingMs: Math.max(0, this.continueVoteDeadline - savedAt),
-      timeoutArmed:
-        !resolutionPending &&
-        this.continueVoteTimer !== null,
+      timeoutArmed: !resolutionPending && this.continueVoteTimer !== null,
       finalScores: this.continueVoteFinalScores,
     });
   }
@@ -2007,8 +2004,7 @@ export class MatchProcess {
     this.currentDeadline = [null, null, null, null];
     this.currentDeadlineTimer = [null, null, null, null];
     this.currentActionStartMs[seat] = restoredAt - actionWindow.elapsedMs;
-    this.currentDeadline[seat] =
-      restoredAt + actionWindow.visibleRemainingMs;
+    this.currentDeadline[seat] = restoredAt + actionWindow.visibleRemainingMs;
     this.deadlineEpoch[seat] += 1;
     const epoch = this.deadlineEpoch[seat];
     this.currentDeadlineTimer[seat] = this.runtime.schedule(
@@ -2033,7 +2029,7 @@ export class MatchProcess {
         : options.map((option) =>
             option.kind === "ron"
               ? { kind: "ron" as const }
-              : { kind: option.kind, tiles: [...option.tiles] } as CallOption
+              : ({ kind: option.kind, tiles: [...option.tiles] } as CallOption)
           )
     );
     this.pendingHumanCallActions = checkpoint.pendingHumanCallActions.map(
@@ -2046,13 +2042,15 @@ export class MatchProcess {
             }
     );
     this.pendingBotRons = [...checkpoint.pendingBotRons];
-    this.pendingBotCalls = checkpoint.pendingBotCalls.map(({ seat, option }) => ({
-      seat,
-      option:
-        option.kind === "ron"
-          ? { kind: "ron" }
-          : { kind: option.kind, tiles: [...option.tiles] } as CallOption,
-    }));
+    this.pendingBotCalls = checkpoint.pendingBotCalls.map(
+      ({ seat, option }) => ({
+        seat,
+        option:
+          option.kind === "ron"
+            ? { kind: "ron" }
+            : ({ kind: option.kind, tiles: [...option.tiles] } as CallOption),
+      })
+    );
     this.pendingChankanBotRons = [...checkpoint.pendingChankanBotRons];
     this.bufferMs = [...checkpoint.bufferMs];
     this.legalActions = [[], [], [], []];
@@ -2136,8 +2134,7 @@ export class MatchProcess {
   ): void {
     const finalScores = checkpoint.finalScores.map((score) => ({ ...score }));
     this.continueVote = [...checkpoint.votes];
-    this.continueVoteDeadline =
-      this.runtime.now() + checkpoint.voteRemainingMs;
+    this.continueVoteDeadline = this.runtime.now() + checkpoint.voteRemainingMs;
     this.continueVoteFinalScores = finalScores;
     this.lastVoteReason = null;
     this.finalized = true;
@@ -2455,9 +2452,7 @@ export class MatchProcess {
       if (!this.isAcceptedReady(seat)) {
         return;
       }
-      await (
-        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
-      );
+      await (this.automaticDefaultHandoffPromise ?? activeAutomaticDefault);
       if (!this.isPaused && this.nextSeq === receivedAtSeq) {
         await this.handleReady(seat);
       }
@@ -2544,9 +2539,9 @@ export class MatchProcess {
 
   /**
    * Hook `send` as the WS sender for a specific seat. Any prior
-    * attachment at that seat is superseded. Late frames and closes
-    * from that attachment are rejected by sender identity. Throws if
-    * the seat is a bot — the orchestrator drives bots directly.
+   * attachment at that seat is superseded. Late frames and closes
+   * from that attachment are rejected by sender identity. Throws if
+   * the seat is a bot — the orchestrator drives bots directly.
    *
    * Optional `livenessProbe`: invoked by the orchestrator the
    * first time a seat exhausts its think buffer to ask the WS
@@ -2557,8 +2552,9 @@ export class MatchProcess {
   attachHuman(
     seat: Seat,
     send: Send,
-    livenessProbe?: () => Promise<boolean>
-  ): void {
+    livenessProbe?: () => Promise<boolean>,
+    connection?: HumanConnectionOptions
+  ): HumanAttachResult {
     const player = this.players.get(seat);
     if (player === null || player === undefined) {
       throw new Error(
@@ -2570,18 +2566,31 @@ export class MatchProcess {
         `attachHuman: seat ${seat} is a bot; cannot attach a human socket`
       );
     }
+    const previousSend = this.humanSockets[seat];
+    const previousClientSessionId = this.humanClientSessionIds[seat];
+    const nextClientSessionId =
+      connection?.clientSessionId ?? previousClientSessionId;
+    const tookOver =
+      previousClientSessionId !== null &&
+      nextClientSessionId !== null &&
+      previousClientSessionId !== nextClientSessionId;
+    if (tookOver && connection?.takeover !== true) {
+      throw new HumanSessionTakeoverRequiredError(seat);
+    }
     this.humanConnectionGeneration[seat] += 1;
     this.humanSockets[seat] = send;
+    this.humanClientSessionIds[seat] = nextClientSessionId;
     this.livenessProbes[seat] = livenessProbe ?? null;
     this.livenessProbeMisses[seat] = 0;
     this.livenessProbeInflight[seat] = false;
-    // A network-only reconnect auto-clears the disconnect flag
-    // so the orchestrator stops auto-defaulting the player's
-    // turns the instant their socket is back. Self-reported AFK
-    // (handleAfk(true) from the client) still requires an
-    // explicit `afk: false` from the user — the player chose to
-    // step away, they should choose to step back.
-    if (this.disconnected[seat] && !this.afkSelfReported[seat]) {
+    // An explicit takeover/reconnect is itself an affirmative resume
+    // action, so it clears both network and self-reported absence. An
+    // automatic same-session reconnect still preserves a self-reported
+    // AFK flag until that client sends `afk: false`.
+    if (connection?.takeover === true) {
+      this.disconnected[seat] = false;
+      this.afkSelfReported[seat] = false;
+    } else if (this.disconnected[seat] && !this.afkSelfReported[seat]) {
       this.disconnected[seat] = false;
     }
     // If a ready check is currently in flight (e.g. the human
@@ -2597,6 +2606,11 @@ export class MatchProcess {
     // spectators — so badges update in lockstep.
     this.broadcastRoomState();
     this.broadcastViewerState();
+    return {
+      previousSend,
+      previousClientSessionId,
+      tookOver,
+    };
   }
 
   /**
@@ -2640,14 +2654,30 @@ export class MatchProcess {
   }
 
   private duplicateWallEventFields():
-    | { duplicateWallState: DuplicateWallState }
-    | Record<string, never> {
+    { duplicateWallState: DuplicateWallState } | Record<string, never> {
     const duplicateWallState = this.duplicateWallState();
     return duplicateWallState ? { duplicateWallState } : {};
   }
 
   isHumanAttached(seat: Seat, send: Send): boolean {
     return this.humanSockets[seat] === send;
+  }
+
+  humanSeatForUser(userId: string): Seat | null {
+    for (const [seat, player] of this.players) {
+      if (player !== null && !player.isBot && player.userId === userId) {
+        return seat;
+      }
+    }
+    return null;
+  }
+
+  isHumanConnected(seat: Seat): boolean {
+    return (
+      this.humanSockets[seat] !== null &&
+      !this.disconnected[seat] &&
+      !this.afkSelfReported[seat]
+    );
   }
 
   humanSeatFor(send: Send): Seat | null {
@@ -2783,10 +2813,7 @@ export class MatchProcess {
    * was already scheduled against).
    */
   async handleAfk(seat: Seat, afk: boolean): Promise<void> {
-    if (
-      this.statusValue !== "playing" ||
-      this.checkpointSavePromise !== null
-    ) {
+    if (this.statusValue !== "playing" || this.checkpointSavePromise !== null) {
       return;
     }
     const activeAutomaticDefault = this.automaticDefaultPromise;
@@ -2795,9 +2822,7 @@ export class MatchProcess {
       if (!this.isAcceptedAfk(seat, afk, defaultActionId)) {
         return;
       }
-      await (
-        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
-      );
+      await (this.automaticDefaultHandoffPromise ?? activeAutomaticDefault);
       if (!this.isPaused) {
         await this.handleAfk(seat, afk);
       }
@@ -3064,14 +3089,14 @@ export class MatchProcess {
   // -------------------------------------------------------------------------
 
   /**
-    * Reclaim an existing human seat (matches by `userId`), replace
-    * the first bot, or claim the first empty waiting-room placeholder.
-    * Returns the assigned `Seat`, or `null` when no replaceable seat
-    * exists.
+   * Reclaim an existing human seat (matches by `userId`), replace
+   * the first bot, or claim the first empty waiting-room placeholder.
+   * Returns the assigned `Seat`, or `null` when no replaceable seat
+   * exists.
    *
-    * Bot replacement is valid in `waiting` and `playing`; final winds
-    * stay fixed during play. Reconnect-by-userId works in any status
-    * so a human can rejoin after a transient disconnect.
+   * Bot replacement is valid in `waiting` and `playing`; final winds
+   * stay fixed during play. Reconnect-by-userId works in any status
+   * so a human can rejoin after a transient disconnect.
    */
   claimSeat(userId: string, displayName: string): Seat | null {
     this.assertNotPaused("claimSeat");
@@ -3127,7 +3152,9 @@ export class MatchProcess {
       ([, player]) => player?.userId === userId
     )?.[0];
     if (assigned === undefined) {
-      throw new Error("claimSeat: assigned player disappeared during compaction");
+      throw new Error(
+        "claimSeat: assigned player disappeared during compaction"
+      );
     }
     this.broadcastRoomState();
     return assigned;
@@ -3205,10 +3232,7 @@ export class MatchProcess {
         continue;
       }
       humanCount++;
-      if (
-        !this.waitingRoomReady[seat] ||
-        this.humanSockets[seat] === null
-      ) {
+      if (!this.waitingRoomReady[seat] || this.humanSockets[seat] === null) {
         return false;
       }
     }
@@ -3287,6 +3311,7 @@ export class MatchProcess {
   private clearWaitingRoomSeat(seat: Seat): void {
     this.humanConnectionGeneration[seat] += 1;
     this.humanSockets[seat] = null;
+    this.humanClientSessionIds[seat] = null;
     this.livenessProbes[seat] = null;
     this.livenessProbeMisses[seat] = 0;
     this.livenessProbeInflight[seat] = false;
@@ -3311,9 +3336,12 @@ export class MatchProcess {
         humans.push(current);
       }
     }
-    this.permuteSeatOccupants(
-      [...humans, ...bots, ...empty] as [Seat, Seat, Seat, Seat]
-    );
+    this.permuteSeatOccupants([...humans, ...bots, ...empty] as [
+      Seat,
+      Seat,
+      Seat,
+      Seat,
+    ]);
   }
 
   /**
@@ -3344,6 +3372,7 @@ export class MatchProcess {
   ): void {
     const oldPlayers = new Map(this.players);
     const oldSockets = [...this.humanSockets];
+    const oldClientSessionIds = [...this.humanClientSessionIds];
     const oldDisconnected = [...this.disconnected];
     const oldAfkSelfReported = [...this.afkSelfReported];
     const oldProbes = [...this.livenessProbes];
@@ -3355,6 +3384,7 @@ export class MatchProcess {
       const fromSeat = permutation[newSeat];
       this.players.set(newSeat as Seat, oldPlayers.get(fromSeat) ?? null);
       this.humanSockets[newSeat] = oldSockets[fromSeat];
+      this.humanClientSessionIds[newSeat] = oldClientSessionIds[fromSeat];
       this.disconnected[newSeat] = oldDisconnected[fromSeat];
       this.afkSelfReported[newSeat] = oldAfkSelfReported[fromSeat];
       this.livenessProbes[newSeat] = oldProbes[fromSeat];
@@ -3448,8 +3478,7 @@ export class MatchProcess {
       status: this.statusValue,
       mySeat: forSeat,
       hostSeat,
-      canStart:
-        hostSeat !== null && this.canStartWaitingRoom(hostSeat),
+      canStart: hostSeat !== null && this.canStartWaitingRoom(hostSeat),
       seats,
     };
   }
@@ -3536,6 +3565,16 @@ export class MatchProcess {
       }
     }
     return out;
+  }
+
+  humanUserIds(): string[] {
+    const userIds: string[] = [];
+    for (const player of this.players.values()) {
+      if (player !== null && !player.isBot) {
+        userIds.push(player.userId);
+      }
+    }
+    return userIds;
   }
 
   /** True iff `seat` is a human-controlled seat in this match.
@@ -3856,9 +3895,7 @@ export class MatchProcess {
       if (!this.isAcceptedAction(seat, actionId)) {
         return;
       }
-      await (
-        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
-      );
+      await (this.automaticDefaultHandoffPromise ?? activeAutomaticDefault);
       if (!this.isPaused && this.nextSeq === receivedAtSeq) {
         await this.handleAct(seat, actionId);
       }
@@ -3914,9 +3951,7 @@ export class MatchProcess {
     );
   }
 
-  private async runCommand(
-    command: PendingMatchCommand
-  ): Promise<void> {
+  private async runCommand(command: PendingMatchCommand): Promise<void> {
     const transactionId = this.nextCommandTransactionId++;
     this.activeCommandTransactionId = transactionId;
     try {
@@ -3963,9 +3998,7 @@ export class MatchProcess {
     }
   }
 
-  private async executeCommand(
-    command: PendingMatchCommand
-  ): Promise<void> {
+  private async executeCommand(command: PendingMatchCommand): Promise<void> {
     try {
       if (command.type === "act") {
         if (!this.isAcceptedAction(command.seat, command.actionId)) {
@@ -4015,7 +4048,7 @@ export class MatchProcess {
       const recoveryError = new Error(
         `MatchProcess: ${(error as Error).message}`,
         {
-        cause: error,
+          cause: error,
         }
       );
       this.commandRecoveryError = recoveryError;
@@ -4024,7 +4057,10 @@ export class MatchProcess {
   }
 
   private async persistLegacyCommandRecovery(): Promise<void> {
-    if (!this.legacyCommandRecoveryInProgress || this.statusValue === "finished") {
+    if (
+      !this.legacyCommandRecoveryInProgress ||
+      this.statusValue === "finished"
+    ) {
       return;
     }
     const checkpoint = this.createCheckpoint();
@@ -4064,9 +4100,7 @@ export class MatchProcess {
     return handingOff;
   }
 
-  private async persistOpenInputBoundary(
-    transactionId: number
-  ): Promise<void> {
+  private async persistOpenInputBoundary(transactionId: number): Promise<void> {
     try {
       await this.persistLegacyCommandRecovery();
     } finally {
@@ -4163,10 +4197,7 @@ export class MatchProcess {
     });
   }
 
-  private isAcceptedContinueVote(
-    seat: Seat,
-    vote: "yes" | "no"
-  ): boolean {
+  private isAcceptedContinueVote(seat: Seat, vote: "yes" | "no"): boolean {
     const player = this.players.get(seat);
     return (
       this.continueVoteResolve !== null &&
@@ -4400,7 +4431,9 @@ export class MatchProcess {
         emittedDraw?.type !== "draw" ||
         emittedDraw.tile !== drawDirective.tile
       ) {
-        throw new Error("MatchProcess.advanceTurn: duplicate draw was rejected");
+        throw new Error(
+          "MatchProcess.advanceTurn: duplicate draw was rejected"
+        );
       }
       this.matchDriver.commitDraw(drawingSeat, emittedDraw.tile);
     }
@@ -4536,7 +4569,7 @@ export class MatchProcess {
    *   - **Bots**: scanned synchronously here. Bots auto-take ron when
    *     legal (atamahane resolves ties); they always pass on
    *     chi/pon/kan.
-  *   - **Humans**: each eligible seat opens its own UI window;
+   *   - **Humans**: each eligible seat opens its own UI window;
    *     resolution waits for the `act`. Bot rons are remembered in
    *     `pendingBotRons` and combined with the human's response when
    *     the window resolves.
@@ -5131,8 +5164,8 @@ export class MatchProcess {
   /**
    * After a successful chi/pon/daiminkan, the engine puts the calling
    * seat into `awaiting_discard` (and for daiminkan also draws a
-    * rinshan tile). If the caller is human, surface their discard
-    * legals and wait.
+   * rinshan tile). If the caller is human, surface their discard
+   * legals and wait.
    */
   private async afterCall(): Promise<void> {
     if (
@@ -5409,8 +5442,8 @@ export class MatchProcess {
    * shouminkan (matching pon already declared + 4th tile in hand).
    * Ankan during riichi is restricted to kans that don't change the
    * winning interpretation of the tenpai hand — enforced by the
-  * engine; this builder probes `step.ts` and only surfaces accepted
-  * declarations.
+   * engine; this builder probes `step.ts` and only surfaces accepted
+   * declarations.
    *
    * Riichi-rules gate: a self-kan may only be declared immediately
    * after a draw (live wall or rinshan from a previous kan), never
@@ -6117,10 +6150,7 @@ export class MatchProcess {
    * change their mind freely (yes ↔ no) until the window
    * resolves.
    */
-  async handleVoteContinue(
-    seat: Seat,
-    vote: "yes" | "no"
-  ): Promise<void> {
+  async handleVoteContinue(seat: Seat, vote: "yes" | "no"): Promise<void> {
     if (this.checkpointSavePromise !== null) {
       return;
     }
@@ -6129,9 +6159,7 @@ export class MatchProcess {
       if (!this.isAcceptedContinueVote(seat, vote)) {
         return;
       }
-      await (
-        this.automaticDefaultHandoffPromise ?? activeAutomaticDefault
-      );
+      await (this.automaticDefaultHandoffPromise ?? activeAutomaticDefault);
       if (!this.isPaused) {
         await this.handleVoteContinue(seat, vote);
       }
@@ -6229,9 +6257,7 @@ export class MatchProcess {
    * permuted by the same seating; scores reset to the rule-set
    * starting value.
    */
-  private async startNextGame(
-    finalScores: FinalScore[]
-  ): Promise<void> {
+  private async startNextGame(finalScores: FinalScore[]): Promise<void> {
     const winnerEntry = finalScores.find((f) => f.place === 1);
     if (!winnerEntry) {
       // Defensive: should never happen — `finalScores` always has a place-1.
@@ -6622,8 +6648,7 @@ export class MatchProcess {
       const tenpaiHands =
         e.reason === "exhaustive_draw" && r?.tenpai
           ? (r.tenpai.map((t, s) => (t ? [...this.state.hands[s]] : null)) as (
-              | Tile[]
-              | null
+              Tile[] | null
             )[])
           : e.reason === "abort" && e.abortKind === "kyuushuu"
             ? ([0, 1, 2, 3].map((s) =>
@@ -6960,10 +6985,10 @@ export class MatchProcess {
 
   /**
    * Attach server-side state needed by replay archival to a
-  * wire-clean event. At `hand_start` this snapshots per-seat
-  * starting hands plus the complete live and dead walls; the wire
-  * event itself never carries these fields, eliminating the risk
-  * of leaking private state through a future player send path. The result is what gets
+   * wire-clean event. At `hand_start` this snapshots per-seat
+   * starting hands plus the complete live and dead walls; the wire
+   * event itself never carries these fields, eliminating the risk
+   * of leaking private state through a future player send path. The result is what gets
    * pushed to `eventLog`; consumers that forward it to live
    * recipients (`sendToSeat`, future spectator / resync paths)
    * MUST project it through the redaction layer at their boundary.

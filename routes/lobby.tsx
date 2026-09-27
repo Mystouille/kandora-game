@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PlayCircleOutlined } from "@ant-design/icons";
 import { openAppLink } from "~/game/client/appLinkNavigation";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
+import { ActiveMatchResponseSchema } from "~/game/protocol/activeMatch";
 import type { MatchDebug } from "~/game/protocol/messages";
 import {
   DUPLICATE_GENERATION_VERSION,
@@ -83,6 +84,24 @@ interface LiveRoom {
   seats: Array<LiveRoomSeat | null>;
 }
 
+export function liveRoomAction(
+  status: LiveRoom["status"],
+  matchId: string,
+  activeMatchId: string | null
+): "join" | "watch" | "reconnect" | null {
+  if (status === "waiting") {
+    return activeMatchId === null ? "join" : null;
+  }
+  if (status === "playing") {
+    return matchId === activeMatchId ? "reconnect" : "watch";
+  }
+  return null;
+}
+
+export function reconnectMatchPath(matchId: string): string {
+  return `/game/${encodeURIComponent(matchId)}?takeover=1`;
+}
+
 export default function LobbyRoute() {
   const { presets, tenhouLiveGames, gameLogs } =
     useLoaderData<LobbyLoaderData>();
@@ -101,6 +120,7 @@ export default function LobbyRoute() {
   const [joinId, setJoinId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [rooms, setRooms] = useState<LiveRoom[] | null>(null);
+  const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
@@ -109,20 +129,42 @@ export default function LobbyRoute() {
     setRoomsError(null);
     try {
       const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
-      const res = await fetch(`${basePath}/api/game/rooms`, {
-        method: "GET",
-        credentials: "include",
-      });
-      if (res.status === 401 || res.status === 403) {
+      const [roomsResponse, activeMatchResponse] = await Promise.all([
+        fetch(`${basePath}/api/game/rooms`, {
+          method: "GET",
+          credentials: "include",
+        }),
+        fetch(`${basePath}/api/game/active-match`, {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        }),
+      ]);
+      if (
+        roomsResponse.status === 401 ||
+        roomsResponse.status === 403 ||
+        activeMatchResponse.status === 401 ||
+        activeMatchResponse.status === 403
+      ) {
         window.location.reload();
         return;
       }
-      if (!res.ok) {
-        setRoomsError(`Failed to load rooms (${res.status}).`);
+      if (!roomsResponse.ok) {
+        setRoomsError(`Failed to load rooms (${roomsResponse.status}).`);
         return;
       }
-      const data = (await res.json()) as { rooms?: LiveRoom[] };
+      if (!activeMatchResponse.ok) {
+        setRoomsError(
+          `Failed to load active game (${activeMatchResponse.status}).`
+        );
+        return;
+      }
+      const data = (await roomsResponse.json()) as { rooms?: LiveRoom[] };
+      const active = ActiveMatchResponseSchema.parse(
+        await activeMatchResponse.json()
+      );
       setRooms(data.rooms ?? []);
+      setActiveMatchId(active.activeMatch?.matchId ?? null);
     } catch (err) {
       setRoomsError(
         `Failed to reach server: ${(err as Error).message ?? "unknown"}`
@@ -259,6 +301,10 @@ export default function LobbyRoute() {
 
   async function startSoloMatch() {
     setError(null);
+    if (activeMatchId !== null) {
+      setError("Reconnect to your active game before starting another one.");
+      return;
+    }
     const mode = buildMode();
     if (mode === null) {
       return;
@@ -279,6 +325,10 @@ export default function LobbyRoute() {
 
   async function createRoom() {
     setError(null);
+    if (activeMatchId !== null) {
+      setError("Reconnect to your active game before creating another room.");
+      return;
+    }
     const mode = buildMode();
     if (mode === null) {
       return;
@@ -298,6 +348,10 @@ export default function LobbyRoute() {
 
   function joinRoom() {
     setError(null);
+    if (activeMatchId !== null) {
+      setError("Reconnect to your active game before joining another room.");
+      return;
+    }
     const id = joinId.trim();
     if (!id) {
       setError("Enter a room ID to join.");
@@ -323,7 +377,7 @@ export default function LobbyRoute() {
           onChange={(event) => {
             setPresetId(event.target.value);
           }}
-          disabled={starting}
+          disabled={starting || activeMatchId !== null}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 rounded-md focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
         >
           {presets.map((preset) => (
@@ -353,7 +407,7 @@ export default function LobbyRoute() {
                 setShowDebug(false);
               }
             }}
-            disabled={starting}
+            disabled={starting || activeMatchId !== null}
             className="h-5 w-5 accent-emerald-600"
           />
         </label>
@@ -371,7 +425,7 @@ export default function LobbyRoute() {
               maxLength={128}
               autoComplete="off"
               placeholder="Enter seed"
-              disabled={starting}
+              disabled={starting || activeMatchId !== null}
               className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 placeholder-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500"
             />
           </label>
@@ -384,7 +438,7 @@ export default function LobbyRoute() {
           onClick={() => {
             void startSoloMatch();
           }}
-          disabled={starting}
+          disabled={starting || activeMatchId !== null}
           className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
         >
           {starting ? "Starting…" : "Start solo match"}
@@ -394,7 +448,7 @@ export default function LobbyRoute() {
           onClick={() => {
             void createRoom();
           }}
-          disabled={starting}
+          disabled={starting || activeMatchId !== null}
           className="px-5 py-3 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
         >
           Create room
@@ -413,13 +467,14 @@ export default function LobbyRoute() {
               setJoinId(e.target.value);
             }}
             placeholder="room ID (e.g. AbCdEf123456)"
+            disabled={activeMatchId !== null}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 rounded-md font-mono text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
         </label>
         <button
           type="button"
           onClick={joinRoom}
-          disabled={starting}
+          disabled={starting || activeMatchId !== null}
           className="px-5 py-3 bg-slate-700 hover:bg-slate-800 disabled:opacity-60 text-white font-semibold rounded-lg shadow"
         >
           Join
@@ -503,6 +558,7 @@ export default function LobbyRoute() {
               </li>
             ))}
             {rooms?.map((r) => {
+              const action = liveRoomAction(r.status, r.matchId, activeMatchId);
               const seatLabels = r.seats.map((s, i) => {
                 if (s === null) {
                   return `[${i + 1}] empty`;
@@ -513,7 +569,11 @@ export default function LobbyRoute() {
               return (
                 <li
                   key={r.matchId}
-                  className="py-3 flex flex-wrap items-center gap-3"
+                  className={`py-3 flex flex-wrap items-center gap-3 ${
+                    action === "reconnect"
+                      ? "rounded-lg border border-emerald-400/60 bg-emerald-100/60 px-3 dark:bg-emerald-950/50"
+                      : ""
+                  }`}
                 >
                   <div className="flex-1 min-w-[240px]">
                     <div className="flex items-center gap-2">
@@ -545,7 +605,23 @@ export default function LobbyRoute() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    {r.status === "playing" ? (
+                    {action === "reconnect" ? (
+                      <a
+                        href={reconnectMatchPath(r.matchId)}
+                        aria-disabled={starting}
+                        onClick={(event) => {
+                          if (starting) {
+                            event.preventDefault();
+                            return;
+                          }
+                          setError(null);
+                          setStarting(true);
+                        }}
+                        className="px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 aria-disabled:pointer-events-none aria-disabled:opacity-60 text-white font-semibold rounded-md"
+                      >
+                        Reconnect
+                      </a>
+                    ) : action === "watch" ? (
                       <a
                         href={`/spectate/${encodeURIComponent(r.matchId)}`}
                         aria-disabled={starting}
@@ -561,7 +637,7 @@ export default function LobbyRoute() {
                       >
                         Watch live
                       </a>
-                    ) : (
+                    ) : action === "join" ? (
                       <a
                         href={`/game/${encodeURIComponent(r.matchId)}`}
                         aria-disabled={starting}
@@ -577,7 +653,11 @@ export default function LobbyRoute() {
                       >
                         Join game
                       </a>
-                    )}
+                    ) : activeMatchId !== null && r.status === "waiting" ? (
+                      <span className="px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400">
+                        Active game in progress
+                      </span>
+                    ) : null}
                   </div>
                 </li>
               );
@@ -662,50 +742,50 @@ export default function LobbyRoute() {
 
       {!duplicateEnabled && (
         <div className="mt-4 border-t pt-4">
-        <button
-          type="button"
-          onClick={() => {
-            setShowDebug((v) => !v);
-          }}
-          className="text-sm text-emerald-700 dark:text-emerald-400 hover:underline"
-        >
-          {showDebug ? "▾ Hide debug seed" : "▸ Debug seed (engine testing)"}
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowDebug((v) => !v);
+            }}
+            className="text-sm text-emerald-700 dark:text-emerald-400 hover:underline"
+          >
+            {showDebug ? "▾ Hide debug seed" : "▸ Debug seed (engine testing)"}
+          </button>
 
-        {showDebug && (
-          <div className="mt-4 space-y-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-md text-sm">
-            <p className="text-gray-600 dark:text-gray-300">
-              Compact mahjong notation: digits inherit the next suit letter,
-              e.g. <code>123456789m1234p</code> or <code>1234s45p7z</code>.
-              Suits are <code>m</code> (man), <code>p</code> (pin),{" "}
-              <code>s</code> (sou); honors use <code>z</code> (1z=East,
-              2z=South, 3z=West, 4z=North, 5z=White, 6z=Green, 7z=Red);{" "}
-              <code>0m</code>/<code>0p</code>/<code>0s</code> are red fives.
-              Whitespace- or comma-separated groups are also fine. Leave any
-              field blank to keep the random default. Debug fields are only
-              meaningful for solo matches (seat 0 = you, seat 3 = left bot).
-            </p>
+          {showDebug && (
+            <div className="mt-4 space-y-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-md text-sm">
+              <p className="text-gray-600 dark:text-gray-300">
+                Compact mahjong notation: digits inherit the next suit letter,
+                e.g. <code>123456789m1234p</code> or <code>1234s45p7z</code>.
+                Suits are <code>m</code> (man), <code>p</code> (pin),{" "}
+                <code>s</code> (sou); honors use <code>z</code> (1z=East,
+                2z=South, 3z=West, 4z=North, 5z=White, 6z=Green, 7z=Red);{" "}
+                <code>0m</code>/<code>0p</code>/<code>0s</code> are red fives.
+                Whitespace- or comma-separated groups are also fine. Leave any
+                field blank to keep the random default. Debug fields are only
+                meaningful for solo matches (seat 0 = you, seat 3 = left bot).
+              </p>
 
-            <DebugField
-              label="Your starting hand (13 tiles)"
-              value={humanHand}
-              setValue={setHumanHand}
-              placeholder={PLACEHOLDER_HAND}
-            />
-            <DebugField
-              label="Your next draws (in order)"
-              value={humanDraws}
-              setValue={setHumanDraws}
-              placeholder={PLACEHOLDER_DRAWS}
-            />
-            <DebugField
-              label="Left bot's next discards (seat 3, in order)"
-              value={leftDiscards}
-              setValue={setLeftDiscards}
-              placeholder={PLACEHOLDER_LEFT}
-            />
-          </div>
-        )}
+              <DebugField
+                label="Your starting hand (13 tiles)"
+                value={humanHand}
+                setValue={setHumanHand}
+                placeholder={PLACEHOLDER_HAND}
+              />
+              <DebugField
+                label="Your next draws (in order)"
+                value={humanDraws}
+                setValue={setHumanDraws}
+                placeholder={PLACEHOLDER_DRAWS}
+              />
+              <DebugField
+                label="Left bot's next discards (seat 3, in order)"
+                value={leftDiscards}
+                setValue={setLeftDiscards}
+                placeholder={PLACEHOLDER_LEFT}
+              />
+            </div>
+          )}
         </div>
       )}
     </main>

@@ -19,9 +19,9 @@
  *      `snapshot` while playing).
  *   6. Forward `act` / `ready` / `resync` / `start_match` /
  *      `leave_seat` frames.
- *   7. On close, detach the socket (the seat is held for
- *      reconnection until the room is finished or the seat is
- *      explicitly released).
+ *   7. On close, release a waiting-room seat immediately or
+ *      detach a playing socket while preserving its seat for
+ *      same-session reconnect / explicit device takeover.
  */
 import "dotenv/config";
 import http from "node:http";
@@ -48,7 +48,16 @@ import {
   type MatchDebug,
   type ViewerPresence,
 } from "~/game/protocol/messages";
-import { MatchProcess, setReadyCheckMs } from "./match";
+import {
+  HumanSessionTakeoverRequiredError,
+  MatchProcess,
+  setReadyCheckMs,
+} from "./match";
+import {
+  findActiveMatchForUser,
+  MultipleActiveMatchesError,
+} from "./activeMatches";
+import type { ActiveMatchResponse } from "~/game/protocol/activeMatch";
 import { connectGameDb } from "./db";
 import {
   getMatchStatus,
@@ -59,6 +68,7 @@ import { RelayController, RelayCapacityError } from "./relay/relayController";
 import { createWsTenhouClient } from "./relay/tenhouClient";
 import { listLobbyRoomSummaries } from "./lobbyRooms";
 import { duplicateMatchSeed } from "./match-drivers/duplicatePlan";
+import { closePlayerConnection } from "./playerConnectionLifecycle";
 
 // The host bootstrap (portal or standalone) injects the PortalAdapter via
 // `setAdapter(...)` before importing this module.
@@ -103,6 +113,7 @@ const ABORT_ABANDONED_GRACE_MS = 30_000;
  */
 const MAX_SPECTATOR_DELAY_MS = 30 * 60_000;
 const SHUTDOWN_JOURNAL_FLUSH_MS = 3_000;
+const SESSION_REPLACED_CLOSE_CODE = 4009;
 
 // Production default for the pre-match ready check. The match
 // module ships with 0 (test-safe) so each spec doesn't have to
@@ -119,6 +130,10 @@ if (!GAME_ENABLED) {
 
 // Match registry — keyed by matchId. Slice has no eviction.
 const matches = new Map<string, MatchProcess>();
+const playerSocketsBySender = new WeakMap<
+  (msg: ServerMessage) => void,
+  WebSocket
+>();
 
 const nativeMatchDependencies = {
   repository: mongoMatchRepository,
@@ -133,9 +148,7 @@ const nativeMatchDependencies = {
     bufferMs: number;
     actionWindowElapsedMs: number | null;
   }): void => {
-    console.log(
-      `[game-server] automatic action ${JSON.stringify(context)}`
-    );
+    console.log(`[game-server] automatic action ${JSON.stringify(context)}`);
   },
   onEventJournalError: (context: {
     matchId: string;
@@ -282,6 +295,10 @@ const server = http.createServer((req, res) => {
     void handleCreateRoom(req, res);
     return;
   }
+  if (req.method === "POST" && req.url === "/active-match") {
+    void handleActiveMatch(req, res);
+    return;
+  }
   if (req.method === "GET" && req.url === "/rooms") {
     handleListRooms(res);
     return;
@@ -408,6 +425,23 @@ async function handleCreateRoom(
     reply(401, { error: "auth_failed" });
     return;
   }
+  try {
+    const activeMatch = findActiveMatchForUser(
+      matches.values(),
+      verified.userId
+    );
+    if (activeMatch !== null) {
+      reply(409, { error: "active_match_exists", activeMatch });
+      return;
+    }
+  } catch (error) {
+    if (error instanceof MultipleActiveMatchesError) {
+      console.error("[game-server] active-match invariant violated", error);
+      reply(409, { error: "multiple_active_matches" });
+      return;
+    }
+    throw error;
+  }
   let parsedDebug: MatchDebug | undefined;
   if (debug !== undefined && debug !== null) {
     const r = MatchDebugSchema.safeParse(debug);
@@ -460,6 +494,49 @@ async function handleCreateRoom(
   }, WAITING_ROOM_GRACE_MS);
   waitingRoomGraceTimers.set(matchId, graceTimer);
   reply(200, { matchId, mode: parsedMode.data });
+}
+
+async function handleActiveMatch(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  const reply = (status: number, body: unknown): void => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.setHeader("cache-control", "no-store");
+    res.end(JSON.stringify(body));
+  };
+  if (!GAME_ENABLED) {
+    reply(404, { error: "game_disabled" });
+    return;
+  }
+  const body = await readJsonBody(req);
+  const token =
+    body !== null && typeof body === "object"
+      ? (body as { token?: unknown }).token
+      : undefined;
+  if (typeof token !== "string" || token.length === 0) {
+    reply(401, { error: "missing_token" });
+    return;
+  }
+  const verified = await adapter.verifyToken(token);
+  if (!verified) {
+    reply(401, { error: "auth_failed" });
+    return;
+  }
+  try {
+    const response: ActiveMatchResponse = {
+      activeMatch: findActiveMatchForUser(matches.values(), verified.userId),
+    };
+    reply(200, response);
+  } catch (error) {
+    if (error instanceof MultipleActiveMatchesError) {
+      console.error("[game-server] active-match invariant violated", error);
+      reply(409, { error: "multiple_active_matches" });
+      return;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -774,6 +851,10 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
+  let connectionClosed = ws.readyState !== WebSocket.OPEN;
+  ws.once("close", () => {
+    connectionClosed = true;
+  });
   const send = (msg: ServerMessage): void => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
@@ -782,6 +863,7 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   const sendError = (code: string, message: string): void => {
     send({ type: "error", code, message });
   };
+  playerSocketsBySender.set(send, ws);
 
   // Wait for `hello` first.
   const hello = await waitForHello(ws, HELLO_TIMEOUT_MS);
@@ -809,6 +891,9 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   if (!profile) {
     sendError("user_not_found", "User profile not found.");
     ws.close();
+    return;
+  }
+  if (connectionClosed || ws.readyState !== WebSocket.OPEN) {
     return;
   }
 
@@ -853,6 +938,41 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
       handleSpectatorConnection(ws, match, send, sendError, viewer);
     }
     return;
+  }
+
+  if (hello.clientSessionId === undefined) {
+    sendError(
+      "client_session_required",
+      "A client session identifier is required."
+    );
+    ws.close();
+    return;
+  }
+
+  try {
+    const activeMatch = findActiveMatchForUser(
+      matches.values(),
+      verified.userId
+    );
+    if (activeMatch !== null && activeMatch.matchId !== matchId) {
+      sendError(
+        "active_match_exists",
+        `You already have an in-progress match (${activeMatch.matchId}).`
+      );
+      ws.close();
+      return;
+    }
+  } catch (error) {
+    if (error instanceof MultipleActiveMatchesError) {
+      console.error("[game-server] active-match invariant violated", error);
+      sendError(
+        "multiple_active_matches",
+        "This account is assigned to multiple in-progress matches."
+      );
+      ws.close();
+      return;
+    }
+    throw error;
   }
 
   // Find the room. We DO NOT auto-create on URL visit — rooms
@@ -907,6 +1027,34 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     rejectBusyConnection();
     return;
   }
+  if (connectionClosed || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  try {
+    const activeMatch = findActiveMatchForUser(
+      matches.values(),
+      verified.userId
+    );
+    if (activeMatch !== null && activeMatch.matchId !== matchId) {
+      sendError(
+        "active_match_exists",
+        `You already have an in-progress match (${activeMatch.matchId}).`
+      );
+      ws.close();
+      return;
+    }
+  } catch (error) {
+    if (error instanceof MultipleActiveMatchesError) {
+      console.error("[game-server] active-match invariant violated", error);
+      sendError(
+        "multiple_active_matches",
+        "This account is assigned to multiple in-progress matches."
+      );
+      ws.close();
+      return;
+    }
+    throw error;
+  }
   let assignedSeat: Seat | null;
   try {
     assignedSeat = match.claimSeat(verified.userId, profile.displayName);
@@ -926,21 +1074,52 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
         matchId: match.matchId,
       });
     } else {
-      sendError(
-        "room_locked",
-        "This match is no longer accepting players."
-      );
+      sendError("room_locked", "This match is no longer accepting players.");
     }
     ws.close();
     return;
   }
 
+  let attachResult;
   try {
-    match.attachHuman(assignedSeat, send, () => livenessProbe(ws));
+    attachResult = match.attachHuman(
+      assignedSeat,
+      send,
+      () => livenessProbe(ws),
+      {
+        clientSessionId: hello.clientSessionId,
+        takeover: hello.takeover,
+      }
+    );
   } catch (err) {
+    if (err instanceof HumanSessionTakeoverRequiredError) {
+      sendError(
+        "takeover_required",
+        "This game is active on another device. Reconnect from the lobby to transfer control."
+      );
+      ws.close();
+      return;
+    }
     sendError("attach_failed", (err as Error).message);
     ws.close();
     return;
+  }
+  if (
+    attachResult.previousSend !== null &&
+    attachResult.previousSend !== send
+  ) {
+    attachResult.previousSend({
+      type: "session_replaced",
+      matchId,
+      message: "Game resumed on another device.",
+    });
+    const previousSocket = playerSocketsBySender.get(attachResult.previousSend);
+    if (
+      previousSocket !== undefined &&
+      previousSocket.readyState === WebSocket.OPEN
+    ) {
+      previousSocket.close(SESSION_REPLACED_CLOSE_CODE, "Session replaced");
+    }
   }
 
   // A human just (re)attached to this room — cancel any pending
@@ -977,8 +1156,12 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     );
   });
   ws.on("close", () => {
-    const currentSeat = match.humanSeatFor(send);
-    if (currentSeat === null || !match.detachHuman(currentSeat, send)) {
+    const result = closePlayerConnection(match, send);
+    if (result.kind === "stale") {
+      return;
+    }
+    if (result.kind === "waiting_released") {
+      evictWaitingRoomIfEmpty(match.matchId);
       return;
     }
     // End an in-progress match shortly after the last connected
@@ -999,13 +1182,6 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
         timer.unref?.();
         abortAbandonedTimers.set(match.matchId, timer);
       }
-    }
-    // Drop a waiting room as soon as its last human disconnects.
-    // Nothing to abort (no engine state) — just free the slot in
-    // the registry so the lobby stops listing an unreachable
-    // room and the user can't accidentally rejoin a zombie.
-    if (match.status === "waiting") {
-      evictWaitingRoomIfEmpty(match.matchId);
     }
   });
 
@@ -1042,11 +1218,17 @@ async function waitForHello(
       cleanup();
       resolve(null);
     };
+    const onClose = (): void => {
+      cleanup();
+      resolve(null);
+    };
     const cleanup = (): void => {
       clearTimeout(timer);
       ws.off("message", onMessage);
+      ws.off("close", onClose);
     };
     ws.on("message", onMessage);
+    ws.on("close", onClose);
   });
 }
 
@@ -1114,6 +1296,32 @@ async function handleClientFrame(
           `Cannot start match in status "${match.status}".`
         );
         return;
+      }
+      try {
+        for (const userId of match.humanUserIds()) {
+          const activeMatch = findActiveMatchForUser(
+            matches.values(),
+            userId,
+            match.matchId
+          );
+          if (activeMatch !== null) {
+            sendError(
+              "start_rejected",
+              `A seated player already has an in-progress match (${activeMatch.matchId}).`
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        if (error instanceof MultipleActiveMatchesError) {
+          console.error("[game-server] active-match invariant violated", error);
+          sendError(
+            "start_rejected",
+            "A seated player is assigned to multiple in-progress matches."
+          );
+          return;
+        }
+        throw error;
       }
       // Fire-and-forget: the guarded start runs the full pre-match
       // ready check + first hand asynchronously.

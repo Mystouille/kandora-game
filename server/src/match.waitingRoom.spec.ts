@@ -102,6 +102,35 @@ describe("MatchProcess waiting-room state machine", () => {
     }
   });
 
+  it("moves client-session ownership with a compacted waiting-room user", () => {
+    const room = MatchProcess.createWaitingRoom(
+      "compact-owner",
+      42,
+      dependencies
+    );
+    const firstSeat = room.claimSeat("first", "First") as Seat;
+    const secondSeat = room.claimSeat("second", "Second") as Seat;
+    room.attachHuman(firstSeat, makeSink().send, undefined, {
+      clientSessionId: "first-session-12345",
+    });
+    const secondSink = makeSink();
+    room.attachHuman(secondSeat, secondSink.send, undefined, {
+      clientSessionId: "second-session-1234",
+    });
+
+    room.releaseSeat(firstSeat);
+    const compactedSeat = room.humanSeatForUser("second");
+    expect(compactedSeat).toBe(0);
+    if (compactedSeat === null) {
+      throw new Error("expected the second player to remain seated");
+    }
+    expect(() =>
+      room.attachHuman(compactedSeat, makeSink().send, undefined, {
+        clientSessionId: "different-session-123",
+      })
+    ).toThrow("This seat is active on another device.");
+  });
+
   it("creates an empty waiting room", () => {
     const m = MatchProcess.createWaitingRoom("room-1", 42, dependencies);
     expect(m.status).toBe("waiting");
@@ -164,14 +193,14 @@ describe("MatchProcess waiting-room state machine", () => {
       displayName: "Guest",
     });
     expect(
-      m.buildRoomState(joinedSeat).seats.filter(
-        ({ occupant }) => occupant.kind === "empty"
-      )
+      m
+        .buildRoomState(joinedSeat)
+        .seats.filter(({ occupant }) => occupant.kind === "empty")
     ).toHaveLength(2);
     expect(
-      m.buildRoomState(joinedSeat).seats.some(
-        ({ occupant }) => occupant.kind === "bot"
-      )
+      m
+        .buildRoomState(joinedSeat)
+        .seats.some(({ occupant }) => occupant.kind === "bot")
     ).toBe(false);
   });
 
@@ -211,9 +240,9 @@ describe("MatchProcess waiting-room state machine", () => {
     }
     expect(snapshot.state.mySeat).toBe(firstBotSeat);
     expect(snapshot.state.seatNames?.[firstBotSeat]).toBe("Late Player");
-    expect(snapshot.state.hands[firstBotSeat].some((tile) => tile !== null)).toBe(
-      true
-    );
+    expect(
+      snapshot.state.hands[firstBotSeat].some((tile) => tile !== null)
+    ).toBe(true);
   });
 
   it("does not replace a human in a full match already in progress", async () => {
@@ -262,9 +291,9 @@ describe("MatchProcess waiting-room state machine", () => {
     expect(() => m.kickWaitingRoomSeat(guestSeat, botSeat)).toThrow(/host/i);
     m.kickWaitingRoomSeat(hostSeat, botSeat);
     expect(
-      m.buildRoomState(hostSeat).seats.some(
-        ({ occupant }) => occupant.kind === "bot"
-      )
+      m
+        .buildRoomState(hostSeat)
+        .seats.some(({ occupant }) => occupant.kind === "bot")
     ).toBe(false);
   });
 
@@ -286,10 +315,12 @@ describe("MatchProcess waiting-room state machine", () => {
     });
     expect(m.humanSeatFor(guestSink.send)).toBeNull();
     expect(
-      m.buildRoomState(hostSeat).seats.some(
-        ({ occupant }) =>
-          occupant.kind === "human" && occupant.userId === "guest"
-      )
+      m
+        .buildRoomState(hostSeat)
+        .seats.some(
+          ({ occupant }) =>
+            occupant.kind === "human" && occupant.userId === "guest"
+        )
     ).toBe(false);
   });
 

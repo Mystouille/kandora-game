@@ -178,11 +178,11 @@ const HandStartEvent = z.object({
    * standard dora indicator, index 4 the standard ura-dora.
    * Physical mapping in the renderer is
    * `deadWall[idxFromBreak * 2 + row]` (row 1 = upper / public,
-  * row 0 = lower / hidden). Optional on the player wire so
-  * opponents stay blind during live play. Native archives snapshot
-  * it directly; platform adapters populate it when their source can
-  * reconstruct the wall deterministically. Older logs may omit it.
-  * Drives the `showWalls` overlay's dead-wall reveal.
+   * row 0 = lower / hidden). Optional on the player wire so
+   * opponents stay blind during live play. Native archives snapshot
+   * it directly; platform adapters populate it when their source can
+   * reconstruct the wall deterministically. Older logs may omit it.
+   * Drives the `showWalls` overlay's dead-wall reveal.
    */
   deadWall: z.array(TileSchema).length(14).optional(),
   /**
@@ -709,6 +709,12 @@ const ErrorMsg = z.object({
   message: z.string(),
 });
 
+const SessionReplacedMsg = z.object({
+  type: z.literal("session_replaced"),
+  matchId: z.string(),
+  message: z.string(),
+});
+
 /**
  * Pre-match ready check. Sent once after `match_start` and re-
  * sent every time a seat acks. The match's first hand only
@@ -754,9 +760,9 @@ export const RoomSeatOccupantSchema = z.discriminatedUnion("kind", [
     kind: z.literal("human"),
     userId: z.string(),
     displayName: z.string(),
-    /** True when the human's socket is currently connected. False
-     * after a disconnect; the seat is still reserved for them by
-     * userId so they can reclaim it on reconnect. */
+    /** True when the human's socket is currently connected. A
+     * playing seat remains reserved after disconnect; waiting-room
+     * disconnects remove the occupant instead. */
     connected: z.boolean(),
   }),
   z.object({
@@ -849,6 +855,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   RoomStateMsg,
   RoomKickedMsg,
   SpectateRedirectMsg,
+  SessionReplacedMsg,
   ViewerStateMsg,
   KeepaliveMsg,
 ]);
@@ -880,10 +887,22 @@ export const MatchDebugSchema = z
   .optional();
 export type MatchDebug = z.infer<typeof MatchDebugSchema>;
 
+export const ClientSessionIdSchema = z
+  .string()
+  .min(16)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
 const HelloMsg = z.object({
   type: z.literal("hello"),
   token: z.string(),
   matchId: z.string(),
+  /** Opaque transport-owner identifier. Required by the server for
+   * player connections and ignored for spectators. */
+  clientSessionId: ClientSessionIdSchema.optional(),
+  /** One-shot permission to replace a different client session
+   * currently owning this user's seat. */
+  takeover: z.boolean().optional(),
   debug: MatchDebugSchema,
   /** When true, the client wants to spectate (read-only public
    * view) instead of claiming a seat. The server refuses spectate

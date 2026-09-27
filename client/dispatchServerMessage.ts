@@ -3,10 +3,7 @@ import { useMatchStore } from "./store";
 
 export interface ServerMessageDispatchOptions {
   onError?: (code: string, message: string) => void;
-  onSequenceGap?: (gap: {
-    expectedSeq: number;
-    receivedSeq: number;
-  }) => void;
+  onSequenceGap?: (gap: { expectedSeq: number; receivedSeq: number }) => void;
 }
 
 /** Apply one validated server frame to the shared live-match store. */
@@ -89,6 +86,9 @@ export function dispatchServerMessage(
       return;
     }
     case "spectate_redirect": {
+      return;
+    }
+    case "session_replaced": {
       return;
     }
     case "viewer_state": {

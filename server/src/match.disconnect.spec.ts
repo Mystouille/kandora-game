@@ -21,6 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  HumanSessionTakeoverRequiredError,
   MatchProcess,
   setNextHandDelayMs,
   setDelayAfterDiscardMs,
@@ -185,6 +186,73 @@ describe("MatchProcess — disconnect / AFK", () => {
 
     const room = m.buildRoomState(0);
     const occupant = room.seats[0].occupant;
+    expect(occupant.kind).toBe("human");
+    if (occupant.kind === "human") {
+      expect(occupant.connected).toBe(true);
+    }
+  });
+
+  it("requires explicit takeover for a different client session", async () => {
+    const m = makeMatch(226);
+    const first = sink();
+    const replacement = sink();
+    m.attachHuman(0, first.send, undefined, {
+      clientSessionId: "source-session-123456",
+    });
+    await m.start();
+
+    expect(() =>
+      m.attachHuman(0, replacement.send, undefined, {
+        clientSessionId: "destination-session-123",
+      })
+    ).toThrow(HumanSessionTakeoverRequiredError);
+    expect(m.isHumanAttached(0, first.send)).toBe(true);
+
+    const result = m.attachHuman(0, replacement.send, undefined, {
+      clientSessionId: "destination-session-123",
+      takeover: true,
+    });
+    expect(result).toEqual({
+      previousSend: first.send,
+      previousClientSessionId: "source-session-123456",
+      tookOver: true,
+    });
+    expect(m.isHumanAttached(0, replacement.send)).toBe(true);
+    expect(m.detachHuman(0, first.send)).toBe(false);
+  });
+
+  it("preserves client-session ownership across a playing disconnect", async () => {
+    const m = makeMatch(227);
+    const first = sink();
+    m.attachHuman(0, first.send, undefined, {
+      clientSessionId: "source-session-123456",
+    });
+    await m.start();
+    m.detachHuman(0, first.send);
+
+    expect(() =>
+      m.attachHuman(0, sink().send, undefined, {
+        clientSessionId: "destination-session-123",
+      })
+    ).toThrow(HumanSessionTakeoverRequiredError);
+  });
+
+  it("treats an explicit device takeover as opting back in from AFK", async () => {
+    const m = makeMatch(228);
+    const first = sink();
+    m.attachHuman(0, first.send, undefined, {
+      clientSessionId: "source-session-123456",
+    });
+    await m.start();
+    await m.handleAfk(0, true);
+
+    const replacement = sink();
+    m.attachHuman(0, replacement.send, undefined, {
+      clientSessionId: "destination-session-123",
+      takeover: true,
+    });
+
+    const occupant = m.buildRoomState(0).seats[0].occupant;
     expect(occupant.kind).toBe("human");
     if (occupant.kind === "human") {
       expect(occupant.connected).toBe(true);
