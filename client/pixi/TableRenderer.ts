@@ -1271,29 +1271,36 @@ const hudStyle = new TextStyle({
   fill: 0xffffff,
 });
 
-const timerStyleNormal = new TextStyle({
-  fontFamily: "Inter, system-ui, sans-serif",
-  fontSize: 18,
-  fontWeight: "700",
-  fill: 0xffffff,
-  stroke: { color: 0x000000, width: 4, join: "round" },
-});
+function actionTimerStyle(
+  presentation: TableRendererPresentation,
+  fill: number,
+  fontWeight: "700" | "800"
+): TextStyle {
+  const mobile = presentation === "mobile";
+  return new TextStyle({
+    fontFamily: "Inter, system-ui, sans-serif",
+    fontSize: mobile ? 24 : 18,
+    fontWeight,
+    fill,
+    stroke: { color: 0x000000, width: mobile ? 5 : 4, join: "round" },
+  });
+}
 
-const timerStyleWarn = new TextStyle({
-  fontFamily: "Inter, system-ui, sans-serif",
-  fontSize: 18,
-  fontWeight: "700",
-  fill: 0xfacc15,
-  stroke: { color: 0x000000, width: 4, join: "round" },
-});
-
-const timerStyleDanger = new TextStyle({
-  fontFamily: "Inter, system-ui, sans-serif",
-  fontSize: 18,
-  fontWeight: "800",
-  fill: 0xef4444,
-  stroke: { color: 0x000000, width: 4, join: "round" },
-});
+const actionTimerStyles: Record<
+  TableRendererPresentation,
+  { normal: TextStyle; warn: TextStyle; danger: TextStyle }
+> = {
+  standard: {
+    normal: actionTimerStyle("standard", 0xffffff, "700"),
+    warn: actionTimerStyle("standard", 0xfacc15, "700"),
+    danger: actionTimerStyle("standard", 0xef4444, "800"),
+  },
+  mobile: {
+    normal: actionTimerStyle("mobile", 0xffffff, "700"),
+    warn: actionTimerStyle("mobile", 0xfacc15, "700"),
+    danger: actionTimerStyle("mobile", 0xef4444, "800"),
+  },
+};
 
 /**
  * Sheet keys for the per-zone tile spritesheets in
@@ -1375,6 +1382,32 @@ export function resolveActionTimerState(
   };
 }
 
+export function resolveTableHudState(
+  view: Pick<
+    MatchView,
+    | "conn"
+    | "drawsTaken"
+    | "lastSeq"
+    | "readyCheck"
+    | "actionDeadline"
+    | "actionBufferMs"
+  >,
+  showConnectionDiagnostics: boolean
+): { diagnostics: string; deadline: number | null; bufferMs: number | null } {
+  if (view.conn === "replay") {
+    return { diagnostics: "", deadline: null, bufferMs: null };
+  }
+  const actionTimer = resolveActionTimerState(view);
+  return {
+    diagnostics: showConnectionDiagnostics
+      ? `conn: ${view.conn}   wall: ${Math.max(0, 70 - view.drawsTaken)}   seq: ${
+          view.lastSeq
+        }`
+      : "",
+    ...actionTimer,
+  };
+}
+
 export function actionTimerTickDecision(
   previousTotalSeconds: number | null,
   allocationSeconds: number,
@@ -1394,7 +1427,7 @@ export class TableRenderer {
   private app: Application | null = null;
   private root: Container | null = null;
   private hudText: Text | null = null;
-  /** Top-right HUD timer node. Driven by `actionDeadline` +
+  /** Bottom-right HUD timer node. Driven by `actionDeadline` +
    * the Pixi ticker so the countdown updates every frame
    * without forcing a full table re-render. Hidden whenever
    * `actionDeadline` is `null` (no pending action). */
@@ -2031,7 +2064,10 @@ export class TableRenderer {
     // component is the server-supplied per-hand think buffer
     // (see `bufferMs` in the WS protocol); the leading component
     // is the per-action base budget that ticks down to 0 first.
-    const timer = new Text({ text: "", style: timerStyleNormal });
+    const timer = new Text({
+      text: "",
+      style: actionTimerStyles[this.presentation].normal,
+    });
     timer.anchor.set(1, 1);
     // Position is refreshed every tick against `app.screen` so the
     // HUD hugs the real bottom-right of the canvas regardless of
@@ -3241,19 +3277,10 @@ export class TableRenderer {
     // (no WS, no seq, no meaningful conn status). Count every draw,
     // including rinshan replacements, because each one reduces the
     // number of drawable wall tiles.
-    const conn = view.conn;
-    const wall = Math.max(0, 70 - view.drawsTaken);
-    const seq = view.lastSeq;
-    if (conn === "replay" || !this.showConnectionDiagnostics) {
-      this.hudText.text = "";
-      this.actionDeadline = null;
-      this.actionBufferMs = null;
-    } else {
-      this.hudText.text = `conn: ${conn}   wall: ${wall}   seq: ${seq}`;
-      const actionTimer = resolveActionTimerState(view);
-      this.actionDeadline = actionTimer.deadline;
-      this.actionBufferMs = actionTimer.bufferMs;
-    }
+    const hud = resolveTableHudState(view, this.showConnectionDiagnostics);
+    this.hudText.text = hud.diagnostics;
+    this.actionDeadline = hud.deadline;
+    this.actionBufferMs = hud.bufferMs;
     // Render one timer frame immediately so the value reflects the
     // latest `view` even if the Pixi ticker hasn't fired since the
     // last `render()`.
@@ -7642,10 +7669,18 @@ export class TableRenderer {
     // Keep the HUD glued to the bottom-right corner of the green
     // felt. `timerAnchor` is refreshed every `render` from the
     // current root transform.
+    const inset =
+      this.presentation === "mobile" ? { x: 10, y: 10 } : { x: 6, y: 4 };
     if (this.timerAnchor) {
-      timer.position.set(this.timerAnchor.x - 6, this.timerAnchor.y - 4);
+      timer.position.set(
+        this.timerAnchor.x - inset.x,
+        this.timerAnchor.y - inset.y
+      );
     } else if (this.app) {
-      timer.position.set(this.app.screen.width - 6, this.app.screen.height - 4);
+      timer.position.set(
+        this.app.screen.width - inset.x,
+        this.app.screen.height - inset.y
+      );
     }
     const deadline = this.actionDeadline;
     if (deadline === null) {
@@ -7682,12 +7717,13 @@ export class TableRenderer {
     const totalSec = tickDecision.displayedTotalSeconds;
     // Tint thresholds: yellow when in the buffer pool, red when
     // the displayed allocation + buffer total is at most 5s.
+    const styles = actionTimerStyles[this.presentation];
     const nextStyle =
       totalSec <= 5
-        ? timerStyleDanger
+        ? styles.danger
         : baseSec === 0
-          ? timerStyleWarn
-          : timerStyleNormal;
+          ? styles.warn
+          : styles.normal;
     if (timer.style !== nextStyle) {
       timer.style = nextStyle;
     }

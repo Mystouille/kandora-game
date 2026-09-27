@@ -41,6 +41,7 @@ import {
   pointInsideRect,
   RIICHI_STICK_Z_INDEX,
   resolveActionTimerState,
+  resolveTableHudState,
   resolveSeatHandPresentation,
   riichiStickMetrics,
   riichiSelectionTileTint,
@@ -109,6 +110,46 @@ describe("action timer ownership", () => {
         actionBufferMs: 30_000,
       })
     ).toEqual({ deadline: 15_000, bufferMs: 30_000 });
+  });
+
+  it("keeps the action clock when connection diagnostics are hidden", () => {
+    expect(
+      resolveTableHudState(
+        {
+          conn: "open",
+          drawsTaken: 7,
+          lastSeq: 42,
+          readyCheck: null,
+          actionDeadline: 15_000,
+          actionBufferMs: 30_000,
+        },
+        false
+      )
+    ).toEqual({
+      diagnostics: "",
+      deadline: 15_000,
+      bufferMs: 30_000,
+    });
+  });
+
+  it("suppresses the action clock for replay views", () => {
+    expect(
+      resolveTableHudState(
+        {
+          conn: "replay",
+          drawsTaken: 7,
+          lastSeq: 42,
+          readyCheck: null,
+          actionDeadline: 15_000,
+          actionBufferMs: 30_000,
+        },
+        false
+      )
+    ).toEqual({
+      diagnostics: "",
+      deadline: null,
+      bufferMs: null,
+    });
   });
 
   it("ticks only on new displayed totals below five seconds", () => {
