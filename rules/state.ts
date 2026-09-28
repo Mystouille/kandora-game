@@ -40,6 +40,8 @@ export type MatchPhase =
   | "awaiting_draw" // start-of-turn for `turn`; engine pulls from wall
   | "awaiting_discard" // active seat has drawn, must choose a discard
   | "awaiting_chankan" // shouminkan declared; opponents may rob the kan
+  | "awaiting_ryuukyoku_declarations" // exhaustive draw; seats declare in dealer order
+  | "awaiting_ryuukyoku_settlement" // all declarations collected; awaiting settlement
   | "hand_ended" // hand finished (win or exhaustive draw)
   | "match_ended"; // match finished (round limit reached)
 
@@ -56,6 +58,20 @@ export interface Meld {
   claimedTile: Tile | null;
   /** The seat the called tile came from (chi/pon/daiminkan). */
   from: Seat | null;
+}
+
+export interface PendingRyuukyoku {
+  /** Tenpai status computed from each seat's hand at exhaustive draw. */
+  actualTenpai: [boolean, boolean, boolean, boolean];
+  /** Public declarations collected in dealer order. */
+  declarations: [
+    boolean | null,
+    boolean | null,
+    boolean | null,
+    boolean | null,
+  ];
+  /** Nagashi mangan qualification fixed at exhaustive draw. */
+  nagashi: [boolean, boolean, boolean, boolean];
 }
 
 export interface HandResult {
@@ -214,6 +230,11 @@ export interface MatchState {
    */
   pendingShouminkan: { seat: Seat; tile: Tile; ponIdx: number } | null;
   /**
+   * Exhaustive-draw status fixed before declarations begin. Cleared
+   * when `complete_ryuukyoku` settles the hand.
+   */
+  pendingRyuukyoku: PendingRyuukyoku | null;
+  /**
    * Ura-dora indicators (derived from the dead wall at deal time).
    * Revealed to scoring only when a riichi seat wins.
    */
@@ -275,6 +296,12 @@ const BooleanTuple4Schema = z.tuple([
   z.boolean(),
   z.boolean(),
 ]);
+const NullableBooleanTuple4Schema = z.tuple([
+  z.boolean().nullable(),
+  z.boolean().nullable(),
+  z.boolean().nullable(),
+  z.boolean().nullable(),
+]);
 
 const StateMeldSchema: z.ZodType<Meld> = z
   .object({
@@ -282,6 +309,14 @@ const StateMeldSchema: z.ZodType<Meld> = z
     tiles: z.array(StateTileSchema),
     claimedTile: StateTileSchema.nullable(),
     from: StateSeatSchema.nullable(),
+  })
+  .strict();
+
+const PendingRyuukyokuSchema: z.ZodType<PendingRyuukyoku> = z
+  .object({
+    actualTenpai: BooleanTuple4Schema,
+    declarations: NullableBooleanTuple4Schema,
+    nagashi: BooleanTuple4Schema,
   })
   .strict();
 
@@ -321,6 +356,8 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
       "awaiting_draw",
       "awaiting_discard",
       "awaiting_chankan",
+      "awaiting_ryuukyoku_declarations",
+      "awaiting_ryuukyoku_settlement",
       "hand_ended",
       "match_ended",
     ]),
@@ -347,6 +384,7 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
       })
       .strict()
       .nullable(),
+    pendingRyuukyoku: PendingRyuukyokuSchema.nullable().default(null),
     uraDoraIndicators: z.array(StateTileSchema),
     pendingKanDora: z.array(StateTileSchema),
     pendingKanUraDora: z.array(StateTileSchema),
@@ -402,6 +440,7 @@ export function createInitialState(
     ippatsuEligible: [false, false, false, false],
     melds: [[], [], [], []],
     pendingShouminkan: null,
+    pendingRyuukyoku: null,
     uraDoraIndicators: [dealt.deadWall[5]],
     pendingKanDora: [],
     pendingKanUraDora: [],

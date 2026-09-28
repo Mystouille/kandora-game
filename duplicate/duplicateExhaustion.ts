@@ -38,6 +38,8 @@ export function estimateDuplicateExhaustion(
   context: DuplicateExhaustionContext
 ): DuplicateExhaustionForecast | null {
   if (
+    context.phase === "awaiting_ryuukyoku_declarations" ||
+    context.phase === "awaiting_ryuukyoku_settlement" ||
     context.phase === "hand_ended" ||
     context.phase === "match_ended"
   ) {

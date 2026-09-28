@@ -69,6 +69,26 @@ function craft(opts: {
 
 const FILLER = tiles("9p9p9p9p9p9p9p9p9p9p9p9p9p");
 
+function settleExhaustiveDraw(state: MatchState): ReturnType<typeof step> {
+  let result = step(state, { type: "draw", seat: state.turn });
+  while (result.state.phase === "awaiting_ryuukyoku_declarations") {
+    const pending = result.state.pendingRyuukyoku;
+    if (pending === null) {
+      throw new Error("setup: declaration phase requires pending status");
+    }
+    const seat = result.state.turn;
+    result = step(result.state, {
+      type: "declare_ryuukyoku_status",
+      seat,
+      tenpai: pending.actualTenpai[seat],
+    });
+  }
+  if (result.state.phase === "awaiting_ryuukyoku_settlement") {
+    result = step(result.state, { type: "complete_ryuukyoku" });
+  }
+  return result;
+}
+
 describe("step — riichi declaration", () => {
   it("accepts riichi when tenpai with sufficient points and wall", () => {
     // Tenpai chiitoitsu: 6 pairs + 7z single, waits on 7z.
@@ -418,7 +438,7 @@ describe("step — exhaustive-draw tenpai payments", () => {
     const state = exhaustState({
       hands: [TENPAI, NOTEN, NOTEN, NOTEN],
     });
-    const r = step(state, { type: "draw", seat: 0 });
+    const r = settleExhaustiveDraw(state);
     expect(r.state.phase).toBe("hand_ended");
     expect(r.state.lastHandResult?.delta).toEqual([3000, -1000, -1000, -1000]);
     expect(r.state.lastHandResult?.tenpai).toEqual([true, false, false, false]);
@@ -428,7 +448,7 @@ describe("step — exhaustive-draw tenpai payments", () => {
     const state = exhaustState({
       hands: [TENPAI, TENPAI, NOTEN, NOTEN],
     });
-    const r = step(state, { type: "draw", seat: 0 });
+    const r = settleExhaustiveDraw(state);
     expect(r.state.lastHandResult?.delta).toEqual([1500, 1500, -1500, -1500]);
   });
 
@@ -436,7 +456,7 @@ describe("step — exhaustive-draw tenpai payments", () => {
     const state = exhaustState({
       hands: [TENPAI, TENPAI, TENPAI, NOTEN],
     });
-    const r = step(state, { type: "draw", seat: 0 });
+    const r = settleExhaustiveDraw(state);
     expect(r.state.lastHandResult?.delta).toEqual([1000, 1000, 1000, -3000]);
   });
 
@@ -444,7 +464,7 @@ describe("step — exhaustive-draw tenpai payments", () => {
     const state = exhaustState({
       hands: [TENPAI, TENPAI, TENPAI, TENPAI],
     });
-    const r = step(state, { type: "draw", seat: 0 });
+    const r = settleExhaustiveDraw(state);
     expect(r.state.lastHandResult?.delta).toEqual([0, 0, 0, 0]);
   });
 
@@ -454,7 +474,7 @@ describe("step — exhaustive-draw tenpai payments", () => {
       hands: [NOTEN, NOTEN, NOTEN, NOTEN],
       riichiDeclared: [true, false, false, false],
     });
-    const r = step(state, { type: "draw", seat: 0 });
+    const r = settleExhaustiveDraw(state);
     expect(r.state.lastHandResult?.tenpai).toEqual([true, false, false, false]);
     expect(r.state.lastHandResult?.delta).toEqual([3000, -1000, -1000, -1000]);
   });
@@ -472,7 +492,7 @@ describe("step — dealer-keep-on-tenpai at exhaustive draw", () => {
       dealer: 0,
       liveWall: [],
     });
-    state = step(state, { type: "draw", seat: 0 }).state;
+    state = settleExhaustiveDraw(state).state;
     const after = step(state, { type: "start_next_hand" });
     expect(after.state.dealer).toBe(0);
     expect(after.state.roundNumber).toBe(1);
@@ -487,7 +507,7 @@ describe("step — dealer-keep-on-tenpai at exhaustive draw", () => {
       dealer: 0,
       liveWall: [],
     });
-    state = step(state, { type: "draw", seat: 0 }).state;
+    state = settleExhaustiveDraw(state).state;
     const after = step(state, { type: "start_next_hand" });
     expect(after.state.dealer).toBe(1);
     expect(after.state.roundNumber).toBe(2);
@@ -507,7 +527,7 @@ describe("step — riichi sticks carry over on exhaustive draw", () => {
       liveWall: [],
     });
     const state: MatchState = { ...base, riichiSticks: 2 };
-    const r = step(state, { type: "draw", seat: 0 });
+    const r = settleExhaustiveDraw(state);
     expect(r.state.riichiSticks).toBe(2);
   });
 });

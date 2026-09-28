@@ -22,14 +22,28 @@ function play(
     i < 200 && state.phase !== "hand_ended" && state.phase !== "match_ended";
     i++
   ) {
-    const action: Action =
-      state.phase === "awaiting_draw"
-        ? { type: "draw", seat: state.turn }
-        : {
-            type: "discard",
-            seat: state.turn,
-            tile: pickDiscard(state, state.turn),
-          };
+    let action: Action;
+    if (state.phase === "awaiting_draw") {
+      action = { type: "draw", seat: state.turn };
+    } else if (state.phase === "awaiting_ryuukyoku_declarations") {
+      const pending = state.pendingRyuukyoku;
+      if (pending === null) {
+        throw new Error("setup: declaration phase requires pending status");
+      }
+      action = {
+        type: "declare_ryuukyoku_status",
+        seat: state.turn,
+        tenpai: pending.actualTenpai[state.turn],
+      };
+    } else if (state.phase === "awaiting_ryuukyoku_settlement") {
+      action = { type: "complete_ryuukyoku" };
+    } else {
+      action = {
+        type: "discard",
+        seat: state.turn,
+        tile: pickDiscard(state, state.turn),
+      };
+    }
     const result = step(state, action);
     state = result.state;
     events.push(...result.events);

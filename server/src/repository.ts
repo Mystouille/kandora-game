@@ -58,6 +58,9 @@ function checkpointDefaultActionId(
     checkpoint.actionWindow.seat === seat
   ) {
     const legals = checkpoint.actionWindow.legalActions;
+    if (checkpoint.actionWindow.kind === "ryuukyoku_declaration") {
+      return null;
+    }
     const drawn = checkpoint.state.lastDrawn[seat];
     const tsumogiri = legals.find(
       (action) =>

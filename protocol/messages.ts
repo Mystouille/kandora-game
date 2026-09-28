@@ -42,6 +42,18 @@ const NonnegativeCountTupleSchema = z.tuple([
   z.number().int().nonnegative(),
   z.number().int().nonnegative(),
 ]);
+const NullableBooleanTupleSchema = z.tuple([
+  z.boolean().nullable(),
+  z.boolean().nullable(),
+  z.boolean().nullable(),
+  z.boolean().nullable(),
+]);
+const NullableHandTupleSchema = z.tuple([
+  z.array(TileSchema).nullable(),
+  z.array(TileSchema).nullable(),
+  z.array(TileSchema).nullable(),
+  z.array(TileSchema).nullable(),
+]);
 
 export const DuplicateWallStateSchema = z
   .object({
@@ -240,6 +252,24 @@ const DiscardEvent = z.object({
   duplicateWallState: DuplicateWallStateSchema.optional(),
 });
 
+const RyuukyokuDeclarationEvent = z
+  .object({
+    type: z.literal("ryuukyoku_declaration"),
+    seat: SeatSchema,
+    tenpai: z.boolean(),
+    /** Public only when the seat declared tenpai. */
+    hand: z.array(TileSchema).optional(),
+  })
+  .superRefine((event, context) => {
+    if (!event.tenpai && event.hand !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["hand"],
+        message: "A Noten declaration cannot reveal a hand",
+      });
+    }
+  });
+
 const MeldSchema = z.object({
   type: z.enum(["chi", "pon", "daiminkan", "ankan", "shouminkan"]),
   tiles: z.array(TileSchema),
@@ -299,16 +329,31 @@ const WinEvent = z.object({
   points: z.number().int().optional(),
 });
 
-const HandEndEvent = z.object({
-  type: z.literal("hand_end"),
-  reason: z.enum(["exhaustive_draw", "ron", "tsumo", "abort"]),
-  abortKind: z
-    .enum(["kyuushuu", "suufon_renda", "suucha_riichi", "sanchahou"])
-    .optional(),
+const HandEndEvent = z
+  .object({
+    type: z.literal("hand_end"),
+    reason: z.enum(["exhaustive_draw", "ron", "tsumo", "abort"]),
+    abortKind: z
+      .enum(["kyuushuu", "suufon_renda", "suucha_riichi", "sanchahou"])
+      .optional(),
   /** Combined per-seat point delta for this hand. */
   delta: z.array(z.number().int()).length(4).optional(),
   /** Per-seat tenpai status at exhaustive draw. */
   tenpai: z.array(z.boolean()).length(4).optional(),
+  /**
+   * Native in-app declaration sequence, ordered East through North.
+   * Archived replay logs merge the four transient live declaration
+   * events into this field. Legacy and platform replays omit it.
+   */
+  declarations: z
+    .array(
+      z.object({
+        seat: SeatSchema,
+        tenpai: z.boolean(),
+      })
+    )
+    .length(4)
+    .optional(),
   /** Per-seat nagashi mangan flag at exhaustive draw. */
   nagashi: z.array(z.boolean()).length(4).optional(),
   /** Scores after this hand is settled. */
@@ -362,8 +407,41 @@ const HandEndEvent = z.object({
    * the dabuken token overlay immediately on hand_end. Omitted
    * for non-Buu.
    */
-  dabuken: z.array(z.boolean()).length(4).optional(),
-});
+    dabuken: z.array(z.boolean()).length(4).optional(),
+  })
+  .superRefine((event, context) => {
+    if (event.declarations === undefined) {
+      return;
+    }
+    if (event.reason !== "exhaustive_draw") {
+      context.addIssue({
+        code: "custom",
+        path: ["declarations"],
+        message: "Declarations are valid only on an exhaustive draw",
+      });
+      return;
+    }
+    const seats = new Set(event.declarations.map(({ seat }) => seat));
+    if (seats.size !== 4) {
+      context.addIssue({
+        code: "custom",
+        path: ["declarations"],
+        message: "Declarations must contain every seat exactly once",
+      });
+    }
+    if (
+      event.tenpai !== undefined &&
+      event.declarations.some(
+        ({ seat, tenpai }) => event.tenpai?.[seat] !== tenpai
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["declarations"],
+        message: "Declarations must match the settled tenpai tuple",
+      });
+    }
+  });
 
 const BuuChomboEvent = z.object({
   type: z.literal("buu_chombo"),
@@ -501,6 +579,7 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   HandStartEvent,
   DrawEvent,
   DiscardEvent,
+  RyuukyokuDeclarationEvent,
   CallEvent,
   WinEvent,
   HandEndEvent,
@@ -542,6 +621,8 @@ export const LegalActionSchema = z.object({
     "ron",
     "tsumo",
     "riichi",
+    "declare_tenpai",
+    "declare_noten",
   ]),
   tile: TileSchema.optional(),
   /** Physical copy selected for discard when tile values are identical. */
@@ -638,6 +719,22 @@ export const SnapshotStateSchema = z.object({
     .optional(),
   lastDiscard: z.object({ seat: SeatSchema, tile: TileSchema }).nullable(),
   phase: z.string(),
+  /**
+   * Public declarations already completed in the current exhaustive-draw
+   * sequence. Optional outside that sequence and for older snapshots.
+   */
+  ryuukyokuDeclarations: NullableBooleanTupleSchema.optional(),
+  /**
+   * Per-seat concealed hands made public by a Tenpai declaration. A Noten or
+   * not-yet-declared seat remains null. Optional for older snapshots.
+   */
+  ryuukyokuTenpaiHands: NullableHandTupleSchema.optional(),
+  /**
+   * Settled exhaustive-draw result for a player reconnecting during the
+   * post-hand ready window. Native declaration matches populate this so the
+   * draw panel and public hand reveals survive snapshot hydration.
+   */
+  lastHandResult: HandEndEvent.optional(),
   /** Dice rolled at the start of the current hand; `null` when
    * unknown (synthetic snapshots / older replays). */
   dice: z

@@ -136,14 +136,27 @@ releases the seat immediately.
 
 `MatchProcess.createCheckpoint()` and `MatchProcess.restoreCheckpoint()`
 support `waiting` rooms and five quiescent in-progress boundaries: a human
-discard/action window; one or more call decisions after a discard/shouminkan;
-an initial/post-hand ready check; a staged post-hand result reveal; or a Buu
+discard/action window (including the fixed five-second Tenpai/Noten declaration
+window); one or more call decisions after a discard/shouminkan; an
+initial/post-hand ready check; a staged post-hand result reveal; or a Buu
 continue vote after a completed game. The versioned schema stores exact rules,
 occupants, private engine state, event/sequence state, PRNG state, session
 ledgers, captured human/bot call intents, result/ready/vote continuations, final
 standings needed for Buu reseating, per-seat disconnect/explicit-AFK/liveness-
 strike policy, and every remaining deadline duration. Wall-clock timestamps are
 restored relative to the new runtime so suspended time consumes no clock.
+
+## Exhaustive-draw declarations
+
+When tenpai status can affect the active rules, native matches collect public
+Tenpai/Noten declarations in current East-to-North order before settling an
+exhaustive draw. Actual-noten seats, riichi seats, and bots are resolved
+automatically; eligible humans receive a short legal-action window. Live and
+delayed-spectator streams retain one event per declaration for sequencing and
+resync. Native `ReplayLog` persistence compacts those transient events into the
+following exhaustive-draw `hand_end`, so stored replay playback opens the final
+result immediately. Platform-imported and older replay logs remain valid
+without declaration metadata.
 
 Sockets, liveness probe callbacks, and in-flight probes are process-local and
 are never serialized; restored players reconnect through the normal

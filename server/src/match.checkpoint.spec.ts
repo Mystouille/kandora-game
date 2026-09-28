@@ -943,12 +943,17 @@ describe("MatchProcess checkpoints", () => {
     expect(
       parseMatchCheckpoint({ ...legacyCheckpoint, schemaVersion: 1 })
     ).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: { type: "normal" },
       driver: { type: "normal" },
     });
+    expect(
+      parseMatchCheckpoint({ ...checkpoint, schemaVersion: 2 })
+    ).toMatchObject({
+      schemaVersion: 3,
+    });
     expect(() =>
-      parseMatchCheckpoint({ ...checkpoint, schemaVersion: 3 })
+      parseMatchCheckpoint({ ...checkpoint, schemaVersion: 4 })
     ).toThrow();
     expect(() =>
       parseMatchCheckpoint({

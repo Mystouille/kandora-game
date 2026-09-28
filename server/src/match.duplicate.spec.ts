@@ -144,7 +144,7 @@ describe("MatchProcess duplicate mode", () => {
     expect(firstDraw?.tile).toBe(handStart?.duplicateDrawQueues?.[0][0]);
 
     expect(checkpoint).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode,
       driver: {
         type: "duplicate",

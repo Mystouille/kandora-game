@@ -271,6 +271,22 @@ export interface MatchView {
   riichiSticks: number;
   /** Per-seat: has this seat declared riichi this hand. */
   riichiDeclared: [boolean, boolean, boolean, boolean];
+  /** Public exhaustive-draw declaration state. `null` means the seat
+   * has not declared yet; `true` / `false` mean Tenpai / Noten. */
+  ryuukyokuDeclarations: [
+    boolean | null,
+    boolean | null,
+    boolean | null,
+    boolean | null,
+  ];
+  /** Concealed hands made public by Tenpai declarations. Noten and
+   * not-yet-declared seats remain `null`. */
+  ryuukyokuTenpaiHands: [
+    Tile[] | null,
+    Tile[] | null,
+    Tile[] | null,
+    Tile[] | null,
+  ];
   /** Per-seat: is this seat currently in furiten (any flavor —
    * self-discard, riichi-permanent, or temporary missed ron).
    * Mirrors the engine's `isFuritenForRon` predicate and is
@@ -299,6 +315,7 @@ export interface MatchView {
     scores?: number[];
     honba?: number;
     riichiSticks?: number;
+    declarations?: Array<{ seat: Seat; tenpai: boolean }>;
     /** Per-seat wait tiles at hand end (length 4). `null` for
      * seats not in tenpai; absent when the source doesn't record
      * waits. Drives the renderer's `showWaits` overlay. */
@@ -499,6 +516,8 @@ const initialState: MatchView = {
   riichiSticks: 0,
   seatNames: null,
   riichiDeclared: [false, false, false, false],
+  ryuukyokuDeclarations: [null, null, null, null],
+  ryuukyokuTenpaiHands: [null, null, null, null],
   riichiTileIdx: [null, null, null, null],
   lastHandResult: null,
   matchEnded: null,
@@ -622,6 +641,24 @@ export const useMatchStore = create<MatchStore>((set) => ({
         boolean,
         boolean,
       ],
+      ryuukyokuDeclarations: (snap.ryuukyokuDeclarations
+        ? [...snap.ryuukyokuDeclarations]
+        : [null, null, null, null]) as [
+        boolean | null,
+        boolean | null,
+        boolean | null,
+        boolean | null,
+      ],
+      ryuukyokuTenpaiHands: (snap.ryuukyokuTenpaiHands
+        ? snap.ryuukyokuTenpaiHands.map((hand) =>
+            hand ? [...hand] : null
+          )
+        : [null, null, null, null]) as [
+        Tile[] | null,
+        Tile[] | null,
+        Tile[] | null,
+        Tile[] | null,
+      ],
       riichiTileIdx: (snap.riichiTileIdx
         ? [...snap.riichiTileIdx]
         : [null, null, null, null]) as [
@@ -662,9 +699,58 @@ export const useMatchStore = create<MatchStore>((set) => ({
       uraDoraEnabled: snap.uraDoraEnabled ?? state.uraDoraEnabled,
       lastSeq: seq,
       // A snapshot is the authoritative current view; clear any
-      // optimistic / panel state that may not survive the resync.
+      // optimistic state that may not survive the resync. A settled
+      // exhaustive draw is included explicitly so reconnecting during
+      // the ready window keeps the result panel and public reveals.
       pendingDiscard: null,
-      lastHandResult: null,
+      lastHandResult: snap.lastHandResult
+        ? {
+            reason: snap.lastHandResult.reason,
+            dealer: snap.dealer,
+            ...(snap.lastHandResult.abortKind
+              ? { abortKind: snap.lastHandResult.abortKind }
+              : {}),
+            ...(snap.lastHandResult.delta
+              ? { delta: [...snap.lastHandResult.delta] }
+              : {}),
+            ...(snap.lastHandResult.tenpai
+              ? { tenpai: [...snap.lastHandResult.tenpai] }
+              : {}),
+            ...(snap.lastHandResult.nagashi
+              ? { nagashi: [...snap.lastHandResult.nagashi] }
+              : {}),
+            ...(snap.lastHandResult.scores
+              ? { scores: [...snap.lastHandResult.scores] }
+              : {}),
+            ...(snap.lastHandResult.honba !== undefined
+              ? { honba: snap.lastHandResult.honba }
+              : {}),
+            ...(snap.lastHandResult.riichiSticks !== undefined
+              ? { riichiSticks: snap.lastHandResult.riichiSticks }
+              : {}),
+            ...(snap.lastHandResult.declarations
+              ? {
+                  declarations: snap.lastHandResult.declarations.map(
+                    (declaration) => ({ ...declaration })
+                  ),
+                }
+              : {}),
+            ...(snap.lastHandResult.waits
+              ? {
+                  waits: snap.lastHandResult.waits.map((seatWaits) =>
+                    seatWaits ? [...seatWaits] : null
+                  ),
+                }
+              : {}),
+            ...(snap.lastHandResult.tenpaiHands
+              ? {
+                  tenpaiHands: snap.lastHandResult.tenpaiHands.map((hand) =>
+                    hand ? [...hand] : null
+                  ),
+                }
+              : {}),
+          }
+        : null,
       matchEnded: null,
       freshlyDrawnSeat: snap.freshlyDrawnSeat ?? null,
       freshlyDiscardedSeat: null,
@@ -740,6 +826,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
             matchEnded: null,
             sessionVote: null,
             duplicateDrawQueues: null,
+            ryuukyokuDeclarations: [null, null, null, null],
+            ryuukyokuTenpaiHands: [null, null, null, null],
           };
         }
         case "hand_start": {
@@ -814,6 +902,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
               boolean,
             ],
             riichiDeclared: [false, false, false, false],
+            ryuukyokuDeclarations: [null, null, null, null],
+            ryuukyokuTenpaiHands: [null, null, null, null],
             riichiTileIdx: [null, null, null, null],
             lastHandResult: null,
             matchEnded: null,
@@ -957,6 +1047,22 @@ export const useMatchStore = create<MatchStore>((set) => ({
             freshlyDiscardedSeat: event.seat,
           };
         }
+        case "ryuukyoku_declaration": {
+          const ryuukyokuDeclarations = [
+            ...state.ryuukyokuDeclarations,
+          ] as MatchView["ryuukyokuDeclarations"];
+          ryuukyokuDeclarations[event.seat] = event.tenpai;
+          const ryuukyokuTenpaiHands = state.ryuukyokuTenpaiHands.map(
+            (hand) => (hand ? [...hand] : null)
+          ) as MatchView["ryuukyokuTenpaiHands"];
+          ryuukyokuTenpaiHands[event.seat] =
+            event.tenpai && event.hand ? [...event.hand] : null;
+          return {
+            ...next,
+            ryuukyokuDeclarations,
+            ryuukyokuTenpaiHands,
+          };
+        }
         case "win": {
           // Stash the win payload so the eventual `hand_end` can
           // attach it to `lastHandResult`. For multi-ron the
@@ -1010,8 +1116,25 @@ export const useMatchStore = create<MatchStore>((set) => ({
         case "hand_end": {
           const existingWins = state.lastHandResult?.wins;
           const existingBuuChombo = state.lastHandResult?.buuChombo;
+          const ryuukyokuDeclarations = event.declarations
+            ? event.declarations.reduce<MatchView["ryuukyokuDeclarations"]>(
+                (declarations, declaration) => {
+                  declarations[declaration.seat] = declaration.tenpai;
+                  return declarations;
+                },
+                [...state.ryuukyokuDeclarations]
+              )
+            : state.ryuukyokuDeclarations;
+          const ryuukyokuTenpaiHands =
+            event.declarations && event.tenpaiHands
+              ? (event.tenpaiHands.map((hand) =>
+                  hand ? [...hand] : null
+                ) as MatchView["ryuukyokuTenpaiHands"])
+              : state.ryuukyokuTenpaiHands;
           return {
             ...next,
+            ryuukyokuDeclarations,
+            ryuukyokuTenpaiHands,
             scores: (event.scores ?? state.scores) as [
               number,
               number,
@@ -1049,6 +1172,13 @@ export const useMatchStore = create<MatchStore>((set) => ({
               ...(event.honba !== undefined ? { honba: event.honba } : {}),
               ...(event.riichiSticks !== undefined
                 ? { riichiSticks: event.riichiSticks }
+                : {}),
+              ...(event.declarations
+                ? {
+                    declarations: event.declarations.map((declaration) => ({
+                      ...declaration,
+                    })),
+                  }
                 : {}),
               ...(event.tenpaiHands
                 ? {

@@ -21,6 +21,7 @@ export type {
   MatchOptions,
   HandResult,
   Meld,
+  PendingRyuukyoku,
 } from "./state";
 export { createInitialState, MatchStateSchema } from "./state";
 
@@ -36,6 +37,8 @@ export type {
   PonAction,
   KanAction,
   AbortAction,
+  DeclareRyuukyokuStatusAction,
+  CompleteRyuukyokuAction,
   StartNextHandAction,
 } from "./actions";
 

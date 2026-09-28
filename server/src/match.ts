@@ -254,6 +254,65 @@ export function waitingRoomSeatPermutation(
 }
 
 /**
+ * Native live play emits one public declaration event per seat. Replay logs
+ * store those four declarations on the exhaustive-draw hand_end instead, so
+ * replay playback can present the already-settled result in one step.
+ */
+export function compactRyuukyokuDeclarationsForReplay(
+  events: readonly GameEvent[]
+): GameEvent[] {
+  const compacted: GameEvent[] = [];
+  let dealer: Seat | null = null;
+  let pending: Array<{ seat: Seat; tenpai: boolean }> = [];
+
+  for (const event of events) {
+    if (event.type === "ryuukyoku_declaration") {
+      pending.push({ seat: event.seat, tenpai: event.tenpai });
+      continue;
+    }
+    if (event.type === "hand_end" && event.reason === "exhaustive_draw") {
+      if (pending.length > 0) {
+        if (dealer === null || pending.length !== 4 || !event.tenpai) {
+          throw new Error(
+            "Cannot compact an incomplete ryuukyoku declaration sequence"
+          );
+        }
+        for (let index = 0; index < 4; index++) {
+          const expectedSeat = ((dealer + index) % 4) as Seat;
+          const declaration = pending[index];
+          if (
+            declaration.seat !== expectedSeat ||
+            event.tenpai[declaration.seat] !== declaration.tenpai
+          ) {
+            throw new Error(
+              "Cannot compact a misordered ryuukyoku declaration sequence"
+            );
+          }
+        }
+        compacted.push({ ...event, declarations: pending.map((d) => ({ ...d })) });
+        pending = [];
+        continue;
+      }
+      compacted.push(event);
+      continue;
+    }
+    if (pending.length > 0) {
+      throw new Error(
+        `Ryuukyoku declaration sequence was interrupted by ${event.type}`
+      );
+    }
+    compacted.push(event);
+    if (event.type === "hand_start") {
+      dealer = event.dealer;
+    }
+  }
+  if (pending.length > 0) {
+    throw new Error("Ryuukyoku declaration sequence has no hand_end");
+  }
+  return compacted;
+}
+
+/**
  * Pause inserted before each draw step so the client can render
  * the previous action (and play its SFX) before the next draw
  * arrives. Applies to every seat — bot and human alike — so the
@@ -322,6 +381,31 @@ export function setExhaustiveDrawDelayMs(ms: number): void {
   EXHAUSTIVE_DRAW_DELAY_MS = ms;
 }
 
+/** Delay before a server-generated Tenpai/Noten declaration. */
+let RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS = 700;
+
+/** Fixed human Tenpai/Noten decision window. No think buffer is added. */
+let RYUUKYOKU_DECLARATION_ACTION_MS = 5_000;
+
+/** Beat between the fourth declaration and the exhaustive-draw panel. */
+let RYUUKYOKU_RESULT_DELAY_MS = 1_000;
+
+export function setRyuukyokuDeclarationTimingMs(opts: {
+  automatic?: number;
+  action?: number;
+  result?: number;
+}): void {
+  if (opts.automatic !== undefined) {
+    RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS = opts.automatic;
+  }
+  if (opts.action !== undefined) {
+    RYUUKYOKU_DECLARATION_ACTION_MS = opts.action;
+  }
+  if (opts.result !== undefined) {
+    RYUUKYOKU_RESULT_DELAY_MS = opts.result;
+  }
+}
+
 /**
  * Per-yaku reveal interval used by the client's staged win-info
  * panel. The server uses this to size the post-`hand_end` pause
@@ -361,6 +445,8 @@ export function setDelayAfterDiscardMs(ms: number): void {
   WIN_REACTION_DELAY_MS = ms;
   WIN_TO_PANEL_DELAY_MS = ms;
   EXHAUSTIVE_DRAW_DELAY_MS = ms;
+  RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS = ms;
+  RYUUKYOKU_RESULT_DELAY_MS = ms;
 }
 
 /**
@@ -487,6 +573,8 @@ function callOptionsMaxPriority(options: CallOption[]): number {
   }
   return best;
 }
+
+type ActionWindowKind = "turn" | "ryuukyoku_declaration";
 
 export class MatchProcess {
   readonly matchId: string;
@@ -642,6 +730,13 @@ export class MatchProcess {
    * window is open for that seat.
    */
   private currentActionStartMs: (number | null)[] = [null, null, null, null];
+  /** Distinguishes buffered turn windows from fixed ryuukyoku prompts. */
+  private currentActionWindowKind: (ActionWindowKind | null)[] = [
+    null,
+    null,
+    null,
+    null,
+  ];
   /**
    * Per-seat "think buffer". Refilled to `INITIAL_BUFFER_MS` at
    * every `hand_start`; decremented in `handleAct` whenever the
@@ -734,6 +829,8 @@ export class MatchProcess {
     | "auto_riichi_pacing"
     | "match_end_display"
     | "win_to_panel"
+    | "ryuukyoku_declaration_pacing"
+    | "ryuukyoku_result_pacing"
     | null = null;
 
   /**
@@ -1686,7 +1783,13 @@ export class MatchProcess {
 
   private createPlayingActionCheckpoint(): PlayingActionCheckpoint {
     this.assertCommonPlayingCheckpointState();
-    if (this.state.phase !== "awaiting_discard") {
+    const seat = this.state.turn;
+    const windowKind = this.currentActionWindowKind[seat];
+    const expectedPhase =
+      windowKind === "ryuukyoku_declaration"
+        ? "awaiting_ryuukyoku_declarations"
+        : "awaiting_discard";
+    if (windowKind === null || this.state.phase !== expectedPhase) {
       this.checkpointUnsupported(`engine phase ${this.state.phase}`);
     }
     if (
@@ -1699,7 +1802,6 @@ export class MatchProcess {
       this.checkpointUnsupported("call resolution");
     }
 
-    const seat = this.state.turn;
     const player = this.players.get(seat);
     if (!player || player.isBot) {
       this.checkpointUnsupported("active seat is not human");
@@ -1725,14 +1827,18 @@ export class MatchProcess {
 
     const savedAt = this.runtime.now();
     const elapsedMs = Math.max(0, savedAt - actionStartedAt);
-    const expiryDurationMs = this.disconnected[seat]
-      ? DRAW_TO_DISCARD_DELAY_MS
-      : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
+    const expiryDurationMs =
+      windowKind === "ryuukyoku_declaration"
+        ? RYUUKYOKU_DECLARATION_ACTION_MS
+        : this.disconnected[seat]
+          ? DRAW_TO_DISCARD_DELAY_MS
+          : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
     const expiryRemainingMs = Math.max(0, expiryDurationMs - elapsedMs);
     return PlayingActionCheckpointSchema.parse({
       ...this.playingCheckpointBase(savedAt),
       checkpointKind: "action_window",
       actionWindow: {
+        kind: windowKind,
         seat,
         legalActions,
         elapsedMs,
@@ -2001,9 +2107,11 @@ export class MatchProcess {
     }));
     this.bufferMs = [...checkpoint.bufferMs];
     this.currentActionStartMs = [null, null, null, null];
+    this.currentActionWindowKind = [null, null, null, null];
     this.currentDeadline = [null, null, null, null];
     this.currentDeadlineTimer = [null, null, null, null];
     this.currentActionStartMs[seat] = restoredAt - actionWindow.elapsedMs;
+    this.currentActionWindowKind[seat] = actionWindow.kind;
     this.currentDeadline[seat] = restoredAt + actionWindow.visibleRemainingMs;
     this.deadlineEpoch[seat] += 1;
     const epoch = this.deadlineEpoch[seat];
@@ -2055,6 +2163,7 @@ export class MatchProcess {
     this.bufferMs = [...checkpoint.bufferMs];
     this.legalActions = [[], [], [], []];
     this.currentActionStartMs = [null, null, null, null];
+    this.currentActionWindowKind = [null, null, null, null];
     this.currentDeadline = [null, null, null, null];
     this.currentDeadlineTimer = [null, null, null, null];
     for (let seatIndex = 0; seatIndex < 4; seatIndex++) {
@@ -2063,6 +2172,7 @@ export class MatchProcess {
         continue;
       }
       const seat = seatIndex as Seat;
+      this.currentActionWindowKind[seat] = "turn";
       this.legalActions[seat] = timer.legalActions.map((action) => ({
         ...action,
         ...(action.tiles ? { tiles: [...action.tiles] } : {}),
@@ -2659,6 +2769,90 @@ export class MatchProcess {
     return duplicateWallState ? { duplicateWallState } : {};
   }
 
+  private ryuukyokuPublicState(): {
+    declarations: [boolean | null, boolean | null, boolean | null, boolean | null];
+    tenpaiHands: [Tile[] | null, Tile[] | null, Tile[] | null, Tile[] | null];
+  } | null {
+    const pending = this.state.pendingRyuukyoku;
+    if (pending !== null) {
+      const declarations = [...pending.declarations] as [
+        boolean | null,
+        boolean | null,
+        boolean | null,
+        boolean | null,
+      ];
+      const tenpaiHands = declarations.map((declaration, seat) =>
+        declaration === true ? [...this.state.hands[seat]] : null
+      ) as [Tile[] | null, Tile[] | null, Tile[] | null, Tile[] | null];
+      return { declarations, tenpaiHands };
+    }
+    const settled = this.settledRyuukyokuResult();
+    if (
+      settled?.declarations === undefined ||
+      settled.tenpaiHands === undefined
+    ) {
+      return null;
+    }
+    const declarations = settled.declarations.reduce<
+      [boolean | null, boolean | null, boolean | null, boolean | null]
+    >(
+      (bySeat, declaration) => {
+        bySeat[declaration.seat] = declaration.tenpai;
+        return bySeat;
+      },
+      [null, null, null, null]
+    );
+    const tenpaiHands = settled.tenpaiHands.map((hand) =>
+      hand ? [...hand] : null
+    ) as [Tile[] | null, Tile[] | null, Tile[] | null, Tile[] | null];
+    return { declarations, tenpaiHands };
+  }
+
+  private settledRyuukyokuResult(): Extract<
+    GameEvent,
+    { type: "hand_end" }
+  > | null {
+    let handEndIndex = -1;
+    for (let index = this.eventLog.length - 1; index >= 0; index--) {
+      const event = this.eventLog[index].event;
+      if (event.type === "hand_start" || event.type === "match_start") {
+        break;
+      }
+      if (event.type === "hand_end" && event.reason === "exhaustive_draw") {
+        handEndIndex = index;
+        break;
+      }
+    }
+    if (handEndIndex < 0) {
+      return null;
+    }
+    const handEnd = this.eventLog[handEndIndex].event;
+    if (handEnd.type !== "hand_end" || handEnd.reason !== "exhaustive_draw") {
+      return null;
+    }
+    const declarations: Array<{ seat: Seat; tenpai: boolean }> = [];
+    for (let index = handEndIndex - 1; index >= 0; index--) {
+      const event = this.eventLog[index].event;
+      if (event.type === "hand_start" || event.type === "match_start") {
+        break;
+      }
+      if (event.type === "ryuukyoku_declaration") {
+        declarations.unshift({ seat: event.seat, tenpai: event.tenpai });
+      }
+    }
+    if (
+      declarations.length !== 4 ||
+      handEnd.tenpai === undefined ||
+      handEnd.tenpaiHands === undefined
+    ) {
+      return null;
+    }
+    return {
+      ...handEnd,
+      declarations,
+    };
+  }
+
   isHumanAttached(seat: Seat, send: Send): boolean {
     return this.humanSockets[seat] === send;
   }
@@ -2715,7 +2909,10 @@ export class MatchProcess {
       // Trigger an immediate auto-default if the seat had an
       // open window — bots and other humans shouldn't have to
       // wait the full deadline for someone who just unplugged.
-      if (this.legalActions[seat].length > 0) {
+      if (
+        this.legalActions[seat].length > 0 &&
+        this.currentActionWindowKind[seat] !== "ryuukyoku_declaration"
+      ) {
         void this.handleDeadlineExpiry(seat);
       }
     }
@@ -2818,7 +3015,9 @@ export class MatchProcess {
     }
     const activeAutomaticDefault = this.automaticDefaultPromise;
     if (activeAutomaticDefault !== null) {
-      const defaultActionId = afk ? this.pickDefaultActionId(seat) : null;
+      const defaultActionId = afk
+        ? this.pickImmediateAfkDefaultActionId(seat)
+        : null;
       if (!this.isAcceptedAfk(seat, afk, defaultActionId)) {
         return;
       }
@@ -2830,7 +3029,9 @@ export class MatchProcess {
     }
     const activeTransaction = this.commandTransactionPromise;
     if (activeTransaction !== null) {
-      const defaultActionId = afk ? this.pickDefaultActionId(seat) : null;
+      const defaultActionId = afk
+        ? this.pickImmediateAfkDefaultActionId(seat)
+        : null;
       if (!this.isAcceptedAfk(seat, afk, defaultActionId)) {
         return;
       }
@@ -2850,7 +3051,9 @@ export class MatchProcess {
     if (this.isPaused || this.checkpointSavePromise !== null) {
       return;
     }
-    const defaultActionId = afk ? this.pickDefaultActionId(seat) : null;
+    const defaultActionId = afk
+      ? this.pickImmediateAfkDefaultActionId(seat)
+      : null;
     if (!this.isAcceptedAfk(seat, afk, defaultActionId)) {
       return;
     }
@@ -3658,13 +3861,17 @@ export class MatchProcess {
    * recipient-correct.
    */
   buildSnapshotForSeat(seat: Seat): ServerMessage {
+    const ryuukyoku = this.ryuukyokuPublicState();
+    const lastHandResult = this.settledRyuukyokuResult();
     return {
       type: "snapshot",
       seq: this.seatSeq[seat] - 1,
       state: {
         mySeat: seat,
         hands: this.state.hands.map((h, s) =>
-          s === seat ? [...h] : new Array<Tile | null>(h.length).fill(null)
+          s === seat || (ryuukyoku?.tenpaiHands[s] ?? null) !== null
+            ? [...h]
+            : new Array<Tile | null>(h.length).fill(null)
         ),
         discards: this.state.discards.map((d) => [...d]),
         melds: this.state.melds.map((mlds) =>
@@ -3720,6 +3927,13 @@ export class MatchProcess {
         ],
         lastDiscard: this.state.lastDiscard,
         phase: this.state.phase,
+        ...(ryuukyoku
+          ? {
+              ryuukyokuDeclarations: ryuukyoku.declarations,
+              ryuukyokuTenpaiHands: ryuukyoku.tenpaiHands,
+            }
+          : {}),
+        ...(lastHandResult ? { lastHandResult } : {}),
         dice: [this.dice[0], this.dice[1]],
         // Furiten is private; the snapshot only carries the
         // recipient's own status. Opponent slots are always
@@ -3743,7 +3957,9 @@ export class MatchProcess {
       ...(this.currentDeadline[seat] !== null
         ? { deadline: this.currentDeadline[seat] as number }
         : {}),
-      bufferMs: this.bufferMs[seat],
+      ...(this.currentActionWindowKind[seat] === "ryuukyoku_declaration"
+        ? {}
+        : { bufferMs: this.bufferMs[seat] }),
     };
   }
 
@@ -3759,6 +3975,8 @@ export class MatchProcess {
    * for testability.
    */
   buildSpectatorSnapshot(): ServerMessage {
+    const ryuukyoku = this.ryuukyokuPublicState();
+    const lastHandResult = this.settledRyuukyokuResult();
     return {
       type: "snapshot",
       // `spectatorSeq` is the next seq to assign; `seq - 1` is the
@@ -3821,6 +4039,13 @@ export class MatchProcess {
         ],
         lastDiscard: this.state.lastDiscard,
         phase: this.state.phase,
+        ...(ryuukyoku
+          ? {
+              ryuukyokuDeclarations: ryuukyoku.declarations,
+              ryuukyokuTenpaiHands: ryuukyoku.tenpaiHands,
+            }
+          : {}),
+        ...(lastHandResult ? { lastHandResult } : {}),
         dice: [this.dice[0], this.dice[1]],
         // Spectators see the live per-seat furiten state (union
         // of permanent / locked + temporary flags).
@@ -4155,7 +4380,9 @@ export class MatchProcess {
     if (!changesState) {
       return false;
     }
-    const expectedDefault = afk ? this.pickDefaultActionId(seat) : null;
+    const expectedDefault = afk
+      ? this.pickImmediateAfkDefaultActionId(seat)
+      : null;
     return defaultActionId === expectedDefault;
   }
 
@@ -4267,6 +4494,19 @@ export class MatchProcess {
     }
     const action = this.legalActions[seat].find((a) => a.id === actionId);
     if (!action) {
+      return;
+    }
+    if (
+      action.type === "declare_tenpai" ||
+      action.type === "declare_noten"
+    ) {
+      this.setSeatLegals(seat, []);
+      await this.applyEngineAction({
+        type: "declare_ryuukyoku_status",
+        seat,
+        tenpai: action.type === "declare_tenpai",
+      });
+      await this.continueRyuukyokuDeclarations();
       return;
     }
     if (action.type === "discard" && action.tile) {
@@ -4393,6 +4633,13 @@ export class MatchProcess {
       await this.continueDiscardTurn();
       return;
     }
+    if (
+      this.state.phase === "awaiting_ryuukyoku_declarations" ||
+      this.state.phase === "awaiting_ryuukyoku_settlement"
+    ) {
+      await this.continueRyuukyokuDeclarations();
+      return;
+    }
 
     // Debug: if seat 0 has queued forced draws, prepend the next one
     // to the live wall so the engine's `draw` step picks it up.
@@ -4451,7 +4698,76 @@ export class MatchProcess {
       return;
     }
 
+    if (
+      this.state.phase === "awaiting_ryuukyoku_declarations" ||
+      this.state.phase === "awaiting_ryuukyoku_settlement"
+    ) {
+      await this.continueRyuukyokuDeclarations();
+      return;
+    }
+
     await this.continueDiscardTurn();
+  }
+
+  private async continueRyuukyokuDeclarations(): Promise<void> {
+    if (this.state.phase === "awaiting_ryuukyoku_settlement") {
+      if (RYUUKYOKU_RESULT_DELAY_MS > 0) {
+        await this.runUncheckpointableTransition(
+          "ryuukyoku_result_pacing",
+          RYUUKYOKU_RESULT_DELAY_MS
+        );
+      }
+      const completed = await this.applyEngineAction({
+        type: "complete_ryuukyoku",
+      });
+      if (completed.phase !== "hand_ended") {
+        throw new Error(
+          "MatchProcess: ryuukyoku completion did not end the hand"
+        );
+      }
+      await this.afterHandEnd();
+      return;
+    }
+    if (this.state.phase !== "awaiting_ryuukyoku_declarations") {
+      return;
+    }
+    const pending = this.state.pendingRyuukyoku;
+    if (pending === null) {
+      throw new Error(
+        "MatchProcess: declaration phase has no pending ryuukyoku"
+      );
+    }
+    const seat = this.state.turn;
+    const actualTenpai = pending.actualTenpai[seat];
+    const requiresHumanChoice =
+      actualTenpai &&
+      !this.state.riichiDeclared[seat] &&
+      this.isHumanSeat(seat);
+    if (requiresHumanChoice && RYUUKYOKU_DECLARATION_ACTION_MS > 0) {
+      this.setSeatLegals(
+        seat,
+        [
+          { id: "ryuukyoku:noten", type: "declare_noten" },
+          { id: "ryuukyoku:tenpai", type: "declare_tenpai" },
+        ],
+        "ryuukyoku_declaration"
+      );
+      this.flushLegalsToSeat(seat);
+      return;
+    }
+
+    if (RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS > 0) {
+      await this.runUncheckpointableTransition(
+        "ryuukyoku_declaration_pacing",
+        RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS
+      );
+    }
+    await this.applyEngineAction({
+      type: "declare_ryuukyoku_status",
+      seat,
+      tenpai: actualTenpai,
+    });
+    await this.continueRyuukyokuDeclarations();
   }
 
   private async continueDiscardTurn(): Promise<void> {
@@ -5235,7 +5551,7 @@ export class MatchProcess {
 
   private async applyEngineAction(
     action: Parameters<typeof step>[1]
-  ): Promise<void> {
+  ): Promise<MatchState> {
     let drivenAction = action;
     let suppliedDraw: { seat: Seat; tile: Tile } | null = null;
     if (action.type === "kan" && action.kind !== "shouminkan") {
@@ -5298,6 +5614,7 @@ export class MatchProcess {
       await this.emitEngineEvent(e);
     }
     await this.emitFuritenChanges(res.furitenChanges);
+    return this.state;
   }
 
   private async applyDiscard(
@@ -5538,7 +5855,11 @@ export class MatchProcess {
    * fresh budget. Cheap and avoids subtle "did the action set
    * really change?" comparisons.
    */
-  private setSeatLegals(seat: Seat, actions: LegalAction[]): void {
+  private setSeatLegals(
+    seat: Seat,
+    actions: LegalAction[],
+    kind: ActionWindowKind = "turn"
+  ): void {
     this.legalActions[seat] = actions;
     const existing = this.currentDeadlineTimer[seat];
     if (existing !== null) {
@@ -5546,19 +5867,27 @@ export class MatchProcess {
       this.currentDeadlineTimer[seat] = null;
     }
     this.deadlineEpoch[seat] += 1;
-    if (actions.length > 0 && BASE_ACTION_MS > 0) {
+    this.currentActionWindowKind[seat] = actions.length > 0 ? kind : null;
+    const visibleDurationMs =
+      kind === "ryuukyoku_declaration"
+        ? RYUUKYOKU_DECLARATION_ACTION_MS
+        : BASE_ACTION_MS;
+    if (actions.length > 0 && visibleDurationMs > 0) {
       const now = this.runtime.now();
       this.currentActionStartMs[seat] = now;
-      this.currentDeadline[seat] = now + BASE_ACTION_MS;
+      this.currentDeadline[seat] = now + visibleDurationMs;
       // Disconnected / AFK seats skip the human think pool: they
       // auto-default with the same draw→discard pause that other
       // auto-played seats use, so the cadence stays consistent
       // across seats (and tests that zero the delay via
       // `setDelayAfterDiscardMs(0)` retain their original
       // synchronous "no wait" semantics).
-      const totalMs = this.disconnected[seat]
-        ? DRAW_TO_DISCARD_DELAY_MS
-        : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
+      const totalMs =
+        kind === "ryuukyoku_declaration"
+          ? visibleDurationMs
+          : this.disconnected[seat]
+            ? DRAW_TO_DISCARD_DELAY_MS
+            : BASE_ACTION_MS + this.bufferMs[seat] + ACTION_GRACE_MS;
       const epoch = this.deadlineEpoch[seat];
       const timer = this.runtime.schedule(
         () => {
@@ -5588,6 +5917,10 @@ export class MatchProcess {
   private consumeActionBuffer(seat: Seat): void {
     const startMs = this.currentActionStartMs[seat];
     if (startMs === null) {
+      return;
+    }
+    if (this.currentActionWindowKind[seat] === "ryuukyoku_declaration") {
+      this.currentActionStartMs[seat] = null;
       return;
     }
     const elapsed = this.runtime.now() - startMs;
@@ -5659,10 +5992,13 @@ export class MatchProcess {
     // skip the wait entirely. Already-disconnected seats skip the
     // probe (we already know they're out) and bot seats never
     // had a probe in the first place.
+    const isRyuukyokuDeclaration =
+      this.currentActionWindowKind[seat] === "ryuukyoku_declaration";
     const isHuman = this.isHumanSeat(seat);
     const probe = this.livenessProbes[seat];
     const connectionGeneration = this.humanConnectionGeneration[seat];
     if (
+      !isRyuukyokuDeclaration &&
       isHuman &&
       probe !== null &&
       this.bufferMs[seat] === 0 &&
@@ -5724,7 +6060,18 @@ export class MatchProcess {
     });
     this.automaticDefaultHandoffPromise = handoff;
     this.automaticDefaultInFlight = true;
-    const applying = this.handleActDirect(seat, actionId);
+    const applying = (async (): Promise<void> => {
+      if (
+        isRyuukyokuDeclaration &&
+        RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS > 0
+      ) {
+        await this.runUncheckpointableTransition(
+          "ryuukyoku_declaration_pacing",
+          RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS
+        );
+      }
+      await this.handleActDirect(seat, actionId);
+    })();
     this.automaticDefaultPromise = applying;
     try {
       await applying;
@@ -5751,6 +6098,11 @@ export class MatchProcess {
       const pass = legals.find((a) => a.type === "pass");
       return pass ? pass.id : null;
     }
+    if (this.currentActionWindowKind[seat] === "ryuukyoku_declaration") {
+      return (
+        legals.find((action) => action.type === "declare_tenpai")?.id ?? null
+      );
+    }
     const drawn = this.state.lastDrawn[seat];
     if (drawn !== null) {
       const tsumogiri = legals.find(
@@ -5767,6 +6119,13 @@ export class MatchProcess {
     return anyDiscard ? anyDiscard.id : null;
   }
 
+  private pickImmediateAfkDefaultActionId(seat: Seat): string | null {
+    if (this.currentActionWindowKind[seat] === "ryuukyoku_declaration") {
+      return null;
+    }
+    return this.pickDefaultActionId(seat);
+  }
+
   private flushLegalsToSeat(seat: Seat): void {
     const send = this.humanSockets[seat];
     if (!send) {
@@ -5781,7 +6140,9 @@ export class MatchProcess {
       events: [],
       legalActions: this.legalActions[seat],
       ...(deadline !== null ? { deadline } : {}),
-      bufferMs: this.bufferMs[seat],
+      ...(this.currentActionWindowKind[seat] === "ryuukyoku_declaration"
+        ? {}
+        : { bufferMs: this.bufferMs[seat] }),
     });
   }
 
@@ -6032,6 +6393,9 @@ export class MatchProcess {
     finalScores: Array<{ seat: Seat; score: number; place: 1 | 2 | 3 | 4 }>
   ): Promise<void> {
     const gameEvents = this.eventLog.slice(this.gameStartLogIdx);
+    const replayEvents = compactRyuukyokuDeclarationsForReplay(
+      gameEvents.map((entry) => entry.event)
+    );
     const docId = this.currentGameMongoId();
     await this.supersedeEventJournal();
     await this.repository.archiveMatch({
@@ -6051,7 +6415,7 @@ export class MatchProcess {
         endedAt: new Date(this.runtime.now()),
         ruleSet: this.presetId,
         mode: this.matchDriver.mode,
-        events: gameEvents.map((e) => e.event),
+        events: replayEvents,
         seats: finalScores.map((f) => {
           const player = this.players.get(f.seat);
           return {
@@ -6568,6 +6932,15 @@ export class MatchProcess {
       }
       return;
     }
+    if (e.type === "ryuukyoku_declaration") {
+      await this.emitEvent({
+        type: "ryuukyoku_declaration",
+        seat: e.seat,
+        tenpai: e.tenpai,
+        ...(e.tenpai ? { hand: [...this.state.hands[e.seat]] } : {}),
+      });
+      return;
+    }
     if (e.type === "win") {
       const score = e.score;
       const yakuRomaji = riichiLibYakuToRomaji(score.yaku);
@@ -6945,7 +7318,9 @@ export class MatchProcess {
       events: [projected],
       legalActions: legals,
       ...(deadline !== null ? { deadline } : {}),
-      bufferMs: this.bufferMs[seat],
+      ...(this.currentActionWindowKind[seat] === "ryuukyoku_declaration"
+        ? {}
+        : { bufferMs: this.bufferMs[seat] }),
     });
   }
 
@@ -7034,8 +7409,15 @@ export class MatchProcess {
       // `showWaits` overlay so the renderer doesn't have to
       // recompute (and can stay consistent with whatever waits
       // the platform recorded).
-      const seatWaits: (Tile[] | null)[] = this.state.hands.map((h) => {
-        const w = waits(h);
+      const declaredTenpai =
+        event.reason === "exhaustive_draw"
+          ? this.state.lastHandResult?.tenpai
+          : null;
+      const seatWaits: (Tile[] | null)[] = this.state.hands.map((h, seat) => {
+        if (declaredTenpai !== null && declaredTenpai?.[seat] !== true) {
+          return null;
+        }
+        const w = waits(h, this.state.melds[seat].length);
         return w.length > 0 ? w : null;
       });
       return {

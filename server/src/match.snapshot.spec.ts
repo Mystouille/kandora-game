@@ -214,4 +214,51 @@ describe("snapshot hydration", () => {
     // furiten, so the whole tuple is false.
     expect(parsed.data.state.furiten).toEqual([false, false, false, false]);
   });
+
+  it("rehydrates completed declarations without exposing concealed seats", async () => {
+    const m = makeMatch(7);
+    m.attachHuman(0, () => undefined);
+    await m.start();
+    const state = (
+      m as unknown as {
+        state: {
+          phase: string;
+          turn: 0 | 1 | 2 | 3;
+          pendingRyuukyoku: {
+            actualTenpai: [boolean, boolean, boolean, boolean];
+            declarations: [
+              boolean | null,
+              boolean | null,
+              boolean | null,
+              boolean | null,
+            ];
+            nagashi: [boolean, boolean, boolean, boolean];
+          } | null;
+        };
+      }
+    ).state;
+    state.phase = "awaiting_ryuukyoku_declarations";
+    state.turn = 3;
+    state.pendingRyuukyoku = {
+      actualTenpai: [true, false, true, false],
+      declarations: [null, false, true, null],
+      nagashi: [false, false, false, false],
+    };
+
+    const snapshot = ServerMessageSchema.parse(m.buildSnapshotForSeat(0));
+    expect(snapshot.type).toBe("snapshot");
+    if (snapshot.type !== "snapshot") {
+      throw new Error("expected player snapshot");
+    }
+    expect(snapshot.state.ryuukyokuDeclarations).toEqual([
+      null,
+      false,
+      true,
+      null,
+    ]);
+    expect(snapshot.state.ryuukyokuTenpaiHands?.[2]).not.toBeNull();
+    expect(snapshot.state.hands[2].every((tile) => tile !== null)).toBe(true);
+    expect(snapshot.state.ryuukyokuTenpaiHands?.[1]).toBeNull();
+    expect(snapshot.state.hands[3].every((tile) => tile === null)).toBe(true);
+  });
 });

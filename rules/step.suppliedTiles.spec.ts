@@ -85,11 +85,26 @@ describe("step supplied tile directives", () => {
     const state = createInitialState(1);
     const remaining = [...state.liveWall];
 
-    const result = step(state, {
+    let result = step(state, {
       type: "draw",
       seat: 0,
       forceExhaustive: true,
     });
+    while (result.state.phase === "awaiting_ryuukyoku_declarations") {
+      const pending = result.state.pendingRyuukyoku;
+      if (pending === null) {
+        throw new Error("setup: declaration phase requires pending status");
+      }
+      const seat = result.state.turn;
+      result = step(result.state, {
+        type: "declare_ryuukyoku_status",
+        seat,
+        tenpai: pending.actualTenpai[seat],
+      });
+    }
+    if (result.state.phase === "awaiting_ryuukyoku_settlement") {
+      result = step(result.state, { type: "complete_ryuukyoku" });
+    }
 
     expect(result.state.phase).toBe("hand_ended");
     expect(result.state.lastHandResult?.reason).toBe("exhaustive_draw");

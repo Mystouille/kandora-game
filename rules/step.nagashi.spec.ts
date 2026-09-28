@@ -59,6 +59,26 @@ function craft(opts: {
   };
 }
 
+function settleExhaustiveDraw(state: MatchState): MatchState {
+  let result = step(state, { type: "draw", seat: state.turn });
+  while (result.state.phase === "awaiting_ryuukyoku_declarations") {
+    const pending = result.state.pendingRyuukyoku;
+    if (pending === null) {
+      throw new Error("setup: declaration phase requires pending status");
+    }
+    const seat = result.state.turn;
+    result = step(result.state, {
+      type: "declare_ryuukyoku_status",
+      seat,
+      tenpai: pending.actualTenpai[seat],
+    });
+  }
+  if (result.state.phase === "awaiting_ryuukyoku_settlement") {
+    result = step(result.state, { type: "complete_ryuukyoku" });
+  }
+  return result.state;
+}
+
 describe("nagashi mangan", () => {
   it("non-dealer with all-yaochuhai uncalled discards collects 8000", () => {
     const noten = tiles("1m2m3m4m5m6m7m"); // mixed
@@ -72,7 +92,7 @@ describe("nagashi mangan", () => {
     });
     // Fix: seat 1 discards must be ALL terminal/honor. 1m is
     // terminal. 1z-5z are honors. ✓
-    const { state: next } = step(state, { type: "draw", seat: 0 });
+    const next = settleExhaustiveDraw(state);
     expect(next.lastHandResult?.reason).toBe("exhaustive_draw");
     expect(next.lastHandResult?.nagashi).toEqual([false, true, false, false]);
     // Non-dealer nagashi: dealer pays 4000, two other non-dealers pay 2000 each.
@@ -90,7 +110,7 @@ describe("nagashi mangan", () => {
       discards: [ok, noten, noten, noten],
       dealer: 0,
     });
-    const { state: next } = step(state, { type: "draw", seat: 0 });
+    const next = settleExhaustiveDraw(state);
     expect(next.lastHandResult?.nagashi).toEqual([true, false, false, false]);
     const delta = next.lastHandResult?.delta;
     expect(delta?.[0]).toBe(12000);
@@ -111,7 +131,7 @@ describe("nagashi mangan", () => {
       discards: [tiles("5m"), ok, tiles("5m"), tiles("5m")],
       melds: [[], [], [calledMeld], []],
     });
-    const { state: next } = step(state, { type: "draw", seat: 0 });
+    const next = settleExhaustiveDraw(state);
     expect(next.lastHandResult?.nagashi).toBeNull();
   });
 
@@ -120,7 +140,7 @@ describe("nagashi mangan", () => {
     const state = craft({
       discards: [tiles("5m"), bad, tiles("5m"), tiles("5m")],
     });
-    const { state: next } = step(state, { type: "draw", seat: 0 });
+    const next = settleExhaustiveDraw(state);
     expect(next.lastHandResult?.nagashi).toBeNull();
   });
 
@@ -130,7 +150,7 @@ describe("nagashi mangan", () => {
       discards: [ok, ok, ok, ok], // all four qualify
       dealer: 0,
     });
-    const { state: next } = step(state, { type: "draw", seat: 0 });
+    const next = settleExhaustiveDraw(state);
     expect(next.lastHandResult?.nagashi).toEqual([true, true, true, true]);
     // Sum is zero (everyone "wins" the same amount → nets out).
     const delta = next.lastHandResult?.delta;
@@ -148,7 +168,7 @@ describe("nagashi mangan", () => {
         nagashiMangan: false,
       },
     };
-    const { state: next } = step(state, { type: "draw", seat: 0 });
+    const next = settleExhaustiveDraw(state);
     expect(next.lastHandResult?.nagashi).toBeNull();
   });
 });

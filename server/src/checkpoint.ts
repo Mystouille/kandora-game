@@ -9,7 +9,7 @@ import {
 import { MatchStateSchema } from "~/game/rules/state";
 import { RuleSetSchema } from "~/game/rules/ruleSet";
 
-export const MATCH_CHECKPOINT_SCHEMA_VERSION = 2 as const;
+export const MATCH_CHECKPOINT_SCHEMA_VERSION = 3 as const;
 
 const CheckpointPlayerSchema = z
   .object({
@@ -177,6 +177,7 @@ const PlayingCheckpointBaseShape = {
     .enum([
       "draw",
       "discard",
+      "ryuukyoku_declaration",
       "win",
       "hand_end",
       "buu_chombo",
@@ -227,6 +228,9 @@ export const PlayingActionCheckpointSchema = z
     checkpointKind: z.literal("action_window"),
     actionWindow: z
       .object({
+        kind: z
+          .enum(["turn", "ryuukyoku_declaration"])
+          .default("turn"),
         seat: SeatSchema,
         legalActions: z.array(LegalActionSchema).min(1),
         elapsedMs: z.number().int().nonnegative(),
@@ -237,12 +241,16 @@ export const PlayingActionCheckpointSchema = z
   })
   .strict()
   .superRefine((checkpoint, context) => {
-    const { seat, legalActions } = checkpoint.actionWindow;
-    if (checkpoint.state.phase !== "awaiting_discard") {
+    const { kind, seat, legalActions } = checkpoint.actionWindow;
+    const expectedPhase =
+      kind === "ryuukyoku_declaration"
+        ? "awaiting_ryuukyoku_declarations"
+        : "awaiting_discard";
+    if (checkpoint.state.phase !== expectedPhase) {
       context.addIssue({
         code: "custom",
         path: ["state", "phase"],
-        message: "Action-window checkpoints require awaiting_discard",
+        message: `${kind} action-window checkpoints require ${expectedPhase}`,
       });
     }
     if (checkpoint.state.turn !== seat) {
@@ -259,12 +267,28 @@ export const PlayingActionCheckpointSchema = z
         message: "Action-window seat must be human",
       });
     }
-    if (!legalActions.some((action) => action.type === "discard")) {
-      context.addIssue({
-        code: "custom",
-        path: ["actionWindow", "legalActions"],
-        message: "Own-turn action window must include a discard",
-      });
+    if (kind === "turn") {
+      if (!legalActions.some((action) => action.type === "discard")) {
+        context.addIssue({
+          code: "custom",
+          path: ["actionWindow", "legalActions"],
+          message: "Own-turn action window must include a discard",
+        });
+      }
+    } else {
+      const types = new Set(legalActions.map((action) => action.type));
+      if (
+        legalActions.length !== 2 ||
+        !types.has("declare_tenpai") ||
+        !types.has("declare_noten")
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["actionWindow", "legalActions"],
+          message:
+            "Ryuukyoku declaration window must contain Tenpai and Noten",
+        });
+      }
     }
     if (checkpoint.gameStartLogIdx > checkpoint.eventLog.length) {
       context.addIssue({
@@ -654,9 +678,17 @@ function migrateLegacyCheckpoint(input: unknown): unknown {
     typeof input !== "object" ||
     input === null ||
     Array.isArray(input) ||
-    !("schemaVersion" in input) ||
-    input.schemaVersion !== 1
+    !("schemaVersion" in input)
   ) {
+    return input;
+  }
+  if (input.schemaVersion === 2) {
+    return {
+      ...input,
+      schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
+    };
+  }
+  if (input.schemaVersion !== 1) {
     return input;
   }
   return {

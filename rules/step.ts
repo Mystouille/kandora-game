@@ -81,6 +81,11 @@ export type EngineEvent =
       dabukenAwarded?: boolean;
     }
   | {
+      type: "ryuukyoku_declaration";
+      seat: Seat;
+      tenpai: boolean;
+    }
+  | {
       type: "buu_chombo";
       /** Seat penalized for an illegal victory under Buu rules. */
       seat: Seat;
@@ -347,6 +352,28 @@ function clone(state: MatchState): MatchState {
     ),
     pendingShouminkan: state.pendingShouminkan
       ? { ...state.pendingShouminkan }
+      : null,
+    pendingRyuukyoku: state.pendingRyuukyoku
+      ? {
+          actualTenpai: [...state.pendingRyuukyoku.actualTenpai] as [
+            boolean,
+            boolean,
+            boolean,
+            boolean,
+          ],
+          declarations: [...state.pendingRyuukyoku.declarations] as [
+            boolean | null,
+            boolean | null,
+            boolean | null,
+            boolean | null,
+          ],
+          nagashi: [...state.pendingRyuukyoku.nagashi] as [
+            boolean,
+            boolean,
+            boolean,
+            boolean,
+          ],
+        }
       : null,
     uraDoraIndicators: [...state.uraDoraIndicators],
     pendingKanDora: [...state.pendingKanDora],
@@ -1174,6 +1201,88 @@ function nagashiPaymentDelta(
   return delta;
 }
 
+type BooleanTuple4 = [boolean, boolean, boolean, boolean];
+
+function computeRyuukyokuStatus(state: MatchState): {
+  actualTenpai: BooleanTuple4;
+  nagashi: BooleanTuple4;
+} {
+  const isTenpai = (seat: Seat): boolean =>
+    state.riichiDeclared[seat] ||
+    waits(state.hands[seat], state.melds[seat].length).length > 0;
+  const actualTenpai: BooleanTuple4 = [
+    isTenpai(0),
+    isTenpai(1),
+    isTenpai(2),
+    isTenpai(3),
+  ];
+  const nagashi: BooleanTuple4 = [false, false, false, false];
+  if (state.ruleSet.nagashiMangan) {
+    for (let seat = 0; seat < 4; seat++) {
+      const discards = state.discards[seat];
+      if (discards.length === 0 || !discards.every(isTerminalOrHonor)) {
+        continue;
+      }
+      let wasCalled = false;
+      for (let other = 0; other < 4; other++) {
+        if (other === seat) {
+          continue;
+        }
+        for (const meld of state.melds[other]) {
+          if (meld.from === seat) {
+            wasCalled = true;
+            break;
+          }
+        }
+        if (wasCalled) {
+          break;
+        }
+      }
+      if (!wasCalled) {
+        nagashi[seat] = true;
+      }
+    }
+  }
+  return { actualTenpai, nagashi };
+}
+
+function settleRyuukyoku(
+  next: MatchState,
+  tenpai: BooleanTuple4,
+  nagashi: BooleanTuple4
+): StepResult {
+  const tenpaiDelta: [number, number, number, number] = next.ruleSet
+    .tenpaiPayments
+    ? tenpaiPaymentDelta(tenpai)
+    : [0, 0, 0, 0];
+  const nagashiDelta = nagashiPaymentDelta(nagashi, next.dealer);
+  const delta: [number, number, number, number] = [
+    tenpaiDelta[0] + nagashiDelta[0],
+    tenpaiDelta[1] + nagashiDelta[1],
+    tenpaiDelta[2] + nagashiDelta[2],
+    tenpaiDelta[3] + nagashiDelta[3],
+  ];
+  applyDelta(next.scores, delta);
+  next.pendingRyuukyoku = null;
+  next.phase = "hand_ended";
+  const anyNagashi = nagashi.some((qualifies) => qualifies);
+  next.lastHandResult = {
+    reason: "exhaustive_draw",
+    winner: null,
+    loser: null,
+    delta,
+    tenpai,
+    abortKind: null,
+    nagashi: anyNagashi ? nagashi : null,
+    winHan: null,
+    winYakuman: null,
+  };
+  return {
+    state: next,
+    events: [{ type: "hand_end", reason: "exhaustive_draw", delta }],
+  };
+}
+
 /**
  * Snapshot per-seat furiten status using the same predicate the
  * engine uses to gate ron — so the indicator the client renders is
@@ -1243,6 +1352,61 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     return noop(state);
   }
 
+  // ----- Exhaustive-draw declarations -----------------------------------
+  if (action.type === "declare_ryuukyoku_status") {
+    const pending = state.pendingRyuukyoku;
+    if (
+      state.phase !== "awaiting_ryuukyoku_declarations" ||
+      pending === null ||
+      action.seat !== state.turn ||
+      pending.declarations[action.seat] !== null ||
+      (action.tenpai && !pending.actualTenpai[action.seat]) ||
+      (!action.tenpai && state.riichiDeclared[action.seat])
+    ) {
+      return noop(state);
+    }
+    const next = clone(state);
+    const nextPending = next.pendingRyuukyoku;
+    if (nextPending === null) {
+      return noop(state);
+    }
+    nextPending.declarations[action.seat] = action.tenpai;
+    if (nextPending.declarations.every((value) => value !== null)) {
+      next.phase = "awaiting_ryuukyoku_settlement";
+    } else {
+      next.turn = ((action.seat + 1) % 4) as Seat;
+    }
+    return {
+      state: next,
+      events: [
+        {
+          type: "ryuukyoku_declaration",
+          seat: action.seat,
+          tenpai: action.tenpai,
+        },
+      ],
+    };
+  }
+
+  if (action.type === "complete_ryuukyoku") {
+    const pending = state.pendingRyuukyoku;
+    if (
+      state.phase !== "awaiting_ryuukyoku_settlement" ||
+      pending === null ||
+      pending.declarations.some((value) => value === null)
+    ) {
+      return noop(state);
+    }
+    const tenpai: BooleanTuple4 = [
+      pending.declarations[0] as boolean,
+      pending.declarations[1] as boolean,
+      pending.declarations[2] as boolean,
+      pending.declarations[3] as boolean,
+    ];
+    const nagashi = [...pending.nagashi] as BooleanTuple4;
+    return settleRyuukyoku(clone(state), tenpai, nagashi);
+  }
+
   // ----- Draw ------------------------------------------------------------
   if (action.type === "draw") {
     if (state.phase !== "awaiting_draw" || action.seat !== state.turn) {
@@ -1250,87 +1414,22 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     if (state.liveWall.length === 0 || action.forceExhaustive === true) {
       const next = clone(state);
-      // A seat is tenpai for payment purposes when at least one
-      // wait tile exists. Riichi-declared seats are always
-      // counted tenpai (they had to clear the same `waits()`
-      // check at declaration time).
-      const isTenpai = (s: Seat): boolean =>
-        state.riichiDeclared[s] ||
-        waits(state.hands[s], state.melds[s].length).length > 0;
-      const tenpai: [boolean, boolean, boolean, boolean] = [
-        isTenpai(0),
-        isTenpai(1),
-        isTenpai(2),
-        isTenpai(3),
-      ];
-      // Nagashi mangan: every discard is terminal/honor AND no
-      // discard was ever called. We detect "called" by scanning
-      // all melds for `from === seat` (called tiles are removed
-      // from `discards[seat]` at call time, so the array itself
-      // is not enough — but the meld provenance is).
-      const nagashi: [boolean, boolean, boolean, boolean] = [
-        false,
-        false,
-        false,
-        false,
-      ];
-      if (next.ruleSet.nagashiMangan) {
-        for (let s = 0; s < 4; s++) {
-          const ds = state.discards[s];
-          if (ds.length === 0) {
-            continue;
-          }
-          if (!ds.every(isTerminalOrHonor)) {
-            continue;
-          }
-          let wasCalled = false;
-          for (let other = 0; other < 4; other++) {
-            if (other === s) {
-              continue;
-            }
-            for (const m of state.melds[other]) {
-              if (m.from === s) {
-                wasCalled = true;
-                break;
-              }
-            }
-            if (wasCalled) {
-              break;
-            }
-          }
-          if (!wasCalled) {
-            nagashi[s] = true;
-          }
-        }
+      const { actualTenpai, nagashi } = computeRyuukyokuStatus(state);
+      const statusAffectsOutcome =
+        next.ruleSet.tenpaiPayments ||
+        next.ruleSet.tenpaiRenchan ||
+        (next.ruleSet.tenpaiYame && isFinalHandOfMatch(next));
+      if (statusAffectsOutcome) {
+        next.pendingRyuukyoku = {
+          actualTenpai,
+          declarations: [null, null, null, null],
+          nagashi,
+        };
+        next.turn = next.dealer;
+        next.phase = "awaiting_ryuukyoku_declarations";
+        return { state: next, events: [] };
       }
-      const tenpaiDelta = next.ruleSet.tenpaiPayments
-        ? tenpaiPaymentDelta(tenpai)
-        : ([0, 0, 0, 0] as [number, number, number, number]);
-      const nagashiDelta = nagashiPaymentDelta(nagashi, next.dealer);
-      const delta: [number, number, number, number] = [
-        tenpaiDelta[0] + nagashiDelta[0],
-        tenpaiDelta[1] + nagashiDelta[1],
-        tenpaiDelta[2] + nagashiDelta[2],
-        tenpaiDelta[3] + nagashiDelta[3],
-      ];
-      applyDelta(next.scores, delta);
-      next.phase = "hand_ended";
-      const anyNagashi = nagashi.some((n) => n);
-      next.lastHandResult = {
-        reason: "exhaustive_draw",
-        winner: null,
-        loser: null,
-        delta,
-        tenpai,
-        abortKind: null,
-        nagashi: anyNagashi ? nagashi : null,
-        winHan: null,
-        winYakuman: null,
-      };
-      return {
-        state: next,
-        events: [{ type: "hand_end", reason: "exhaustive_draw", delta }],
-      };
+      return settleRyuukyoku(next, actualTenpai, nagashi);
     }
     const next = clone(state);
     if (state.lastDiscard !== null) {
@@ -2317,6 +2416,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.doubleRiichi = [false, false, false, false];
     next.ippatsuEligible = [false, false, false, false];
     next.melds = [[], [], [], []];
+    next.pendingRyuukyoku = null;
     next.turn = dealer;
     next.phase = "awaiting_draw";
     next.lastHandResult = null;

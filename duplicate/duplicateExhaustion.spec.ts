@@ -55,4 +55,17 @@ describe("duplicate exhaustion forecast", () => {
       })
     ).toBeNull();
   });
+
+  it.each([
+    "awaiting_ryuukyoku_declarations",
+    "awaiting_ryuukyoku_settlement",
+  ] as const)("has no active forecast during %s", (phase) => {
+    expect(
+      estimateDuplicateExhaustion([0, 0, 0, 0], {
+        phase,
+        turn: 2,
+        pendingReplacementSeat: null,
+      })
+    ).toBeNull();
+  });
 });

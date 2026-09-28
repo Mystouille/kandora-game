@@ -48,6 +48,7 @@ import {
   MeldAnimator,
   rotateMeldLocalPoint,
 } from "./meldAnimator";
+import { RyuukyokuDeclarationAnimator } from "./ryuukyokuDeclarationAnimator";
 import { HandSorter, naturalOrderRawIndices } from "./handSorter";
 import { ACTIVE_TILE_DESIGN } from "./tiles/activeTileDesign";
 import { ACTIVE_TABLE_LAYOUT } from "./layouts/activeTableLayout";
@@ -976,14 +977,32 @@ function resultSeatMask(
 export function resolveSeatHandPresentation(
   view: Pick<
     MatchView,
-    "hands" | "melds" | "lastHandResult" | "mySeat" | "freshlyDrawnSeat"
+    | "hands"
+    | "melds"
+    | "lastHandResult"
+    | "mySeat"
+    | "freshlyDrawnSeat"
+    | "ryuukyokuDeclarations"
+    | "ryuukyokuTenpaiHands"
   >,
   historicalResult: HandResult | null,
   seat: Seat
 ): SeatHandPresentation {
   const liveHand = view.hands[seat] ?? [];
   const liveMelds = view.melds[seat] ?? [];
-  const currentReveal = resultSeatReveal(view.lastHandResult, seat);
+  const declaredTenpaiHand =
+    view.ryuukyokuDeclarations[seat] === true
+      ? view.ryuukyokuTenpaiHands[seat]
+      : null;
+  const declarationReveal: ResultSeatReveal | null = declaredTenpaiHand?.length
+    ? {
+        hand: [...declaredTenpaiHand],
+        melds: null,
+        separatesLastTile: false,
+      }
+    : null;
+  const currentReveal =
+    resultSeatReveal(view.lastHandResult, seat) ?? declarationReveal;
   const currentMask = resultSeatMask(
     view.lastHandResult,
     currentReveal,
@@ -1656,6 +1675,9 @@ export class TableRenderer {
   private animator = new DiscardAnimator();
   /** Slides appended melds from player-left and shouminkan tiles from above. */
   private meldAnimator = new MeldAnimator();
+  /** Shows live Tenpai / Noten exhaustive-draw declaration callouts. */
+  private ryuukyokuDeclarationAnimator =
+    new RyuukyokuDeclarationAnimator();
   /** Bound animator-ticker callback retained so {@link destroy}
    * can detach it cleanly. */
   private animatorTickHandler: (() => void) | null = null;
@@ -2111,6 +2133,7 @@ export class TableRenderer {
       if (
         this.animator.hasActive() ||
         this.meldAnimator.hasActive() ||
+        this.ryuukyokuDeclarationAnimator.hasActive() ||
         this.handSorter.hasActiveAnimation()
       ) {
         this.requestRender();
@@ -2416,6 +2439,7 @@ export class TableRenderer {
   setAnimationsEnabled(flag: boolean): void {
     this.animator.setEnabled(flag);
     this.meldAnimator.setEnabled(flag);
+    this.ryuukyokuDeclarationAnimator.setEnabled(flag);
   }
 
   /**
@@ -2429,6 +2453,7 @@ export class TableRenderer {
   snapNextAnimation(): void {
     this.animator.snapNext();
     this.meldAnimator.snapNext();
+    this.ryuukyokuDeclarationAnimator.snapNext();
   }
 
   /**
@@ -3081,6 +3106,7 @@ export class TableRenderer {
       }
       this.animator.reset();
       this.meldAnimator.reset();
+      this.ryuukyokuDeclarationAnimator.reset();
       this.handSorter.reset();
       if (this.handDragCleanup) {
         this.handDragCleanup();
@@ -3119,6 +3145,7 @@ export class TableRenderer {
     // a pending phase-A into phase B.
     this.animator.beginFrame(view);
     this.meldAnimator.beginFrame(view);
+    this.ryuukyokuDeclarationAnimator.beginFrame(view);
     // Focused-hand sort state: wipe on every hand boundary, then
     // reconcile customOrder + prune slide-tracks against the
     // current raw hand so any draw / discard / call since the last
@@ -4393,28 +4420,30 @@ export class TableRenderer {
     if (!this.root) {
       return;
     }
-    const effect = this.meldAnimator.getCallEffect();
-    if (!effect) {
-      return;
+    const effects = [
+      this.meldAnimator.getCallEffect(),
+      this.ryuukyokuDeclarationAnimator.getCallEffect(),
+    ].filter((effect) => effect !== null);
+    for (const effect of effects) {
+      const anchor = callEffectAnchor(layout, effect.seat as Seat);
+      const text = new Text({
+        text: effect.label,
+        style: new TextStyle({
+          fontFamily: KANJI_FONT_FAMILY,
+          fontSize: 54,
+          fontWeight: "700",
+          fill: 0xffffff,
+          stroke: { color: 0x000000, width: 8 },
+        }),
+      });
+      text.anchor.set(0.5);
+      text.position.set(anchor.x, anchor.y);
+      text.alpha = effect.alpha;
+      text.scale.set(effect.scale);
+      text.zIndex = CALL_EFFECT_Z_INDEX;
+      this.root.sortableChildren = true;
+      this.root.addChild(text);
     }
-    const anchor = callEffectAnchor(layout, effect.seat as Seat);
-    const text = new Text({
-      text: effect.label,
-      style: new TextStyle({
-        fontFamily: KANJI_FONT_FAMILY,
-        fontSize: 54,
-        fontWeight: "700",
-        fill: 0xffffff,
-        stroke: { color: 0x000000, width: 8 },
-      }),
-    });
-    text.anchor.set(0.5);
-    text.position.set(anchor.x, anchor.y);
-    text.alpha = effect.alpha;
-    text.scale.set(effect.scale);
-    text.zIndex = CALL_EFFECT_Z_INDEX;
-    this.root.sortableChildren = true;
-    this.root.addChild(text);
   }
 
   /**
@@ -7817,12 +7846,16 @@ export class TableRenderer {
     const chi = raw.filter((a) => a.type === "chi");
     const pon = raw.filter((a) => a.type === "pon");
     const kan = raw.filter((a) => a.type === "kan");
+    const ryuukyokuDeclarations =
+      orderedRyuukyokuDeclarationActions(raw);
     const others = raw.filter(
       (a) =>
         a.type !== "chi" &&
         a.type !== "pon" &&
         a.type !== "kan" &&
-        a.type !== "riichi"
+        a.type !== "riichi" &&
+        a.type !== "declare_tenpai" &&
+        a.type !== "declare_noten"
     );
     const riichiAvailable = raw.some((a) => a.type === "riichi");
 
@@ -7865,6 +7898,9 @@ export class TableRenderer {
       entries.push({ kind: "action", action: kan[0] });
     } else if (kan.length > 1) {
       entries.push({ kind: "group", group: "kan", actions: kan });
+    }
+    for (const action of ryuukyokuDeclarations) {
+      entries.push({ kind: "action", action });
     }
     for (const a of others_main) {
       entries.push({ kind: "action", action: a });
@@ -8194,16 +8230,6 @@ export class TableRenderer {
       fontWeight: "700",
       fill: 0xffffff,
     });
-    const palette: Record<string, ColorSource> = {
-      chi: 0x4a7fb4,
-      pon: 0xb47f3a,
-      kan: 0x7a4ab4,
-      ron: 0xc04040,
-      tsumo: 0x40a060,
-      pass: 0x444444,
-      win: 0x40a060,
-      riichi: 0xc0a040,
-    };
     // Single-option chi/pon/kan: shorten the label to just the
     // group name (the discarded tile is already obvious on the
     // table). Other action types keep their full label.
@@ -8225,7 +8251,7 @@ export class TableRenderer {
     const bg = new Graphics()
       .roundRect(0, 0, width, height, style.radius)
       .fill({
-        color: palette[action.type] ?? 0x666666,
+        color: actionButtonColor(action),
         alpha: style.fillAlpha,
       });
     if (style.borderAlpha > 0) {
@@ -8467,11 +8493,45 @@ function labelForAction(action: LegalAction): string {
   if (action.type === "win") {
     return "Win";
   }
+  if (action.type === "declare_tenpai") {
+    return "Tenpai";
+  }
+  if (action.type === "declare_noten") {
+    return "Noten";
+  }
   return action.type;
 }
 
 export function actionButtonLabel(action: LegalAction): string {
   return action.type === "pass" ? "Skip" : labelForAction(action);
+}
+
+export function actionButtonColor(action: LegalAction): ColorSource {
+  const palette: Record<string, ColorSource> = {
+    chi: 0x4a7fb4,
+    pon: 0xb47f3a,
+    kan: 0x7a4ab4,
+    ron: 0xc04040,
+    tsumo: 0x40a060,
+    pass: 0x444444,
+    win: 0x40a060,
+    riichi: 0xc0a040,
+    declare_tenpai: 0x40a060,
+    declare_noten: 0x5c6470,
+  };
+  return palette[action.type] ?? 0x666666;
+}
+
+/**
+ * Left-to-right declaration order. The button-row layout consumes entries
+ * from the end, so Tenpai lands nearest the right edge as the primary choice.
+ */
+export function orderedRyuukyokuDeclarationActions(
+  actions: readonly LegalAction[]
+): LegalAction[] {
+  const noten = actions.filter((action) => action.type === "declare_noten");
+  const tenpai = actions.filter((action) => action.type === "declare_tenpai");
+  return [...noten, ...tenpai];
 }
 
 function tileNum(tile: string): string {

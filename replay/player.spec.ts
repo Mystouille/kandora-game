@@ -18,6 +18,7 @@ import {
   rotateHandResult,
   rotateSeatValues,
   roundBoundaries,
+  type ReplayView,
 } from "./player";
 import type { MatchView } from "~/game/client/store";
 import type { ReplayLog } from "./types";
@@ -146,6 +147,10 @@ describe("rotateHandResult", () => {
       dealer: 2,
       delta: [8000, -8000, 0, 0],
       scores: [33000, 17000, 25000, 25000],
+      declarations: [
+        { seat: 0, tenpai: true },
+        { seat: 1, tenpai: false },
+      ],
       wins: [
         {
           seat: 0,
@@ -170,6 +175,10 @@ describe("rotateHandResult", () => {
     expect(rotated.delta).toEqual([-8000, 0, 0, 8000]);
     expect(rotated.scores).toEqual([17000, 25000, 25000, 33000]);
     expect(rotated.dealer).toBe(1);
+    expect(rotated.declarations).toEqual([
+      { seat: 3, tenpai: true },
+      { seat: 0, tenpai: false },
+    ]);
     expect(rotated.wins).toEqual([
       {
         seat: 3,
@@ -257,6 +266,160 @@ describe("replayReducer", () => {
     ]);
     expect(view.dealer).toBe(0);
     expect(view.roundWind).toBe("E");
+  });
+
+  it("applies live declarations immutably and reveals only Tenpai hands", () => {
+    const initial = {
+      ...initialView(),
+      hands: STARTING.map((hand) => [...hand]),
+    };
+    const tenpai = applyReplayEvent(initial, {
+      type: "ryuukyoku_declaration",
+      seat: 1,
+      tenpai: true,
+      hand: STARTING[1],
+    });
+    const noten = applyReplayEvent(tenpai, {
+      type: "ryuukyoku_declaration",
+      seat: 2,
+      tenpai: false,
+    });
+
+    expect(initial.ryuukyokuDeclarations).toEqual([null, null, null, null]);
+    expect(initial.ryuukyokuTenpaiHands).toEqual([null, null, null, null]);
+    expect(noten.ryuukyokuDeclarations).toEqual([null, true, false, null]);
+    expect(noten.ryuukyokuTenpaiHands[1]).toEqual(STARTING[1]);
+    expect(noten.ryuukyokuTenpaiHands[1]).not.toBe(STARTING[1]);
+    expect(noten.ryuukyokuTenpaiHands[2]).toBeNull();
+  });
+
+  it("resets declaration state on hand_start", () => {
+    const declared = applyReplayEvent(initialView(), {
+      type: "ryuukyoku_declaration",
+      seat: 0,
+      tenpai: true,
+      hand: STARTING[0],
+    });
+
+    const nextHand = applyReplayEvent(declared, {
+      type: "hand_start",
+      round: 1,
+      dealer: 1,
+      startingHands: STARTING,
+      doraIndicators: ["6p"],
+    });
+
+    expect(nextHand.ryuukyokuDeclarations).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(nextHand.ryuukyokuTenpaiHands).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it("resets declaration state on a new Buu match_start", () => {
+    const declared = applyReplayEvent(initialView(), {
+      type: "ryuukyoku_declaration",
+      seat: 0,
+      tenpai: true,
+      hand: STARTING[0],
+    });
+
+    const reset = applyReplayEvent(declared, {
+      type: "match_start",
+      seats: [],
+      ruleSet: "buu-east",
+    });
+
+    expect(reset.ryuukyokuDeclarations).toEqual([null, null, null, null]);
+    expect(reset.ryuukyokuTenpaiHands).toEqual([null, null, null, null]);
+  });
+
+  it("applies merged archived declarations immediately at hand_end", () => {
+    const before = {
+      ...initialView(),
+      hands: STARTING.map((hand) => [...hand]),
+    };
+    const after = applyReplayEvent(before, {
+      type: "hand_end",
+      reason: "exhaustive_draw",
+      declarations: [
+        { seat: 0, tenpai: true },
+        { seat: 1, tenpai: false },
+        { seat: 2, tenpai: true },
+        { seat: 3, tenpai: false },
+      ],
+      tenpai: [true, false, true, false],
+      tenpaiHands: [STARTING[0], null, STARTING[2], null],
+    });
+
+    expect(after.ryuukyokuDeclarations).toEqual([true, false, true, false]);
+    expect(after.ryuukyokuTenpaiHands).toEqual([
+      STARTING[0],
+      null,
+      STARTING[2],
+      null,
+    ]);
+    expect(after.lastHandResult?.declarations).toEqual([
+      { seat: 0, tenpai: true },
+      { seat: 1, tenpai: false },
+      { seat: 2, tenpai: true },
+      { seat: 3, tenpai: false },
+    ]);
+  });
+
+  it("leaves declaration state unchanged for legacy hand_end events", () => {
+    const declared = applyReplayEvent(initialView(), {
+      type: "ryuukyoku_declaration",
+      seat: 3,
+      tenpai: false,
+    });
+    const after = applyReplayEvent(declared, {
+      type: "hand_end",
+      reason: "exhaustive_draw",
+      tenpai: [true, false, true, false],
+      tenpaiHands: [STARTING[0], null, STARTING[2], null],
+    });
+
+    expect(after.ryuukyokuDeclarations).toBe(
+      declared.ryuukyokuDeclarations
+    );
+    expect(after.ryuukyokuTenpaiHands).toBe(
+      declared.ryuukyokuTenpaiHands
+    );
+    expect(after.lastHandResult?.declarations).toBeUndefined();
+  });
+
+  it("rotates declaration state with replay focus", () => {
+    const replayView = {
+      ...initialView(),
+      ryuukyokuDeclarations: [true, false, null, true],
+      ryuukyokuTenpaiHands: [
+        STARTING[0],
+        null,
+        null,
+        STARTING[3],
+      ],
+    } as ReplayView;
+
+    const focused = replayViewToMatchView(replayView, {
+      index: 4,
+      mySeat: 2,
+    });
+
+    expect(focused.ryuukyokuDeclarations).toEqual([null, true, true, false]);
+    expect(focused.ryuukyokuTenpaiHands).toEqual([
+      null,
+      STARTING[3],
+      STARTING[0],
+      null,
+    ]);
   });
 
   it("draw appends the drawn tile to the drawing seat's hand", () => {

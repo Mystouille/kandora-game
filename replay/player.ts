@@ -104,6 +104,20 @@ export interface ReplayView {
   honba: number;
   riichiSticks: number;
   riichiDeclared: [boolean, boolean, boolean, boolean];
+  /** Public exhaustive-draw declaration state. */
+  ryuukyokuDeclarations: [
+    boolean | null,
+    boolean | null,
+    boolean | null,
+    boolean | null,
+  ];
+  /** Concealed hands revealed by Tenpai declarations. */
+  ryuukyokuTenpaiHands: [
+    Tile[] | null,
+    Tile[] | null,
+    Tile[] | null,
+    Tile[] | null,
+  ];
   /** Per-seat: is this seat currently "sinking" in Buu Mahjong
    * (score at or below `ruleSet.sinkThreshold`). Set from
    * `hand_start.sinking` and refreshed by `sinking_update`. Always
@@ -157,6 +171,7 @@ export interface ReplayView {
     scores?: number[];
     honba?: number;
     riichiSticks?: number;
+    declarations?: Array<{ seat: Seat; tenpai: boolean }>;
     /** Per-seat wait tiles at hand end (length 4). `null` for
      * seats not in tenpai; absent when the source log doesn't
      * record waits. Drives the `showWaits` overlay in the
@@ -271,6 +286,8 @@ export function initialView(): ReplayView {
     honba: 0,
     riichiSticks: 0,
     riichiDeclared: [false, false, false, false],
+    ryuukyokuDeclarations: [null, null, null, null],
+    ryuukyokuTenpaiHands: [null, null, null, null],
     sinking: [false, false, false, false],
     chips: [0, 0, 0, 0],
     dabuken: [false, false, false, false],
@@ -321,6 +338,8 @@ export function applyReplayEvent(
         matchEnded: null,
         duplicateWallState: null,
         duplicateDrawQueues: null,
+        ryuukyokuDeclarations: [null, null, null, null],
+        ryuukyokuTenpaiHands: [null, null, null, null],
       };
     }
     case "hand_start": {
@@ -371,6 +390,8 @@ export function applyReplayEvent(
           number,
         ],
         riichiDeclared: [false, false, false, false],
+        ryuukyokuDeclarations: [null, null, null, null],
+        ryuukyokuTenpaiHands: [null, null, null, null],
         sinking: (event.sinking
           ? [...event.sinking]
           : [false, false, false, false]) as [
@@ -508,6 +529,31 @@ export function applyReplayEvent(
           view.duplicateWallState,
           event
         ),
+      };
+    }
+    case "ryuukyoku_declaration": {
+      const ryuukyokuDeclarations = [
+        ...view.ryuukyokuDeclarations,
+      ] as ReplayView["ryuukyokuDeclarations"];
+      ryuukyokuDeclarations[event.seat] = event.tenpai;
+      const ryuukyokuTenpaiHands = view.ryuukyokuTenpaiHands.map((hand) =>
+        hand ? [...hand] : null
+      ) as ReplayView["ryuukyokuTenpaiHands"];
+      if (!event.tenpai) {
+        ryuukyokuTenpaiHands[event.seat] = null;
+      } else if (event.hand) {
+        ryuukyokuTenpaiHands[event.seat] = [...event.hand];
+      } else {
+        const hand = view.hands[event.seat].filter(
+          (tile): tile is Tile => tile !== null
+        );
+        ryuukyokuTenpaiHands[event.seat] =
+          hand.length > 0 ? hand : null;
+      }
+      return {
+        ...view,
+        ryuukyokuDeclarations,
+        ryuukyokuTenpaiHands,
       };
     }
     case "call": {
@@ -694,6 +740,15 @@ export function applyReplayEvent(
       const existingWins = view.lastHandResult?.wins;
       const existingBuuChombo = view.lastHandResult?.buuChombo;
       const eventWaits = event.waits;
+      const declarationTenpai = event.declarations
+        ? event.declarations.reduce<[boolean, boolean, boolean, boolean]>(
+            (tenpai, declaration) => {
+              tenpai[declaration.seat] = declaration.tenpai;
+              return tenpai;
+            },
+            [false, false, false, false]
+          )
+        : undefined;
       // Replay adapters (Majsoul / Tenhou / Riichi City) don't
       // populate `tenpaiHands` on `hand_end` the way the live
       // server does, but replays always have full hand
@@ -703,8 +758,9 @@ export function applyReplayEvent(
       const derivedTenpaiHands: (Tile[] | null)[] | undefined =
         event.tenpaiHands
           ? event.tenpaiHands.map((h) => (h ? [...h] : null))
-          : event.reason === "exhaustive_draw" && event.tenpai
-            ? event.tenpai.map((isTenpai, s) => {
+          : event.reason === "exhaustive_draw" &&
+              (event.tenpai || declarationTenpai)
+            ? (event.tenpai ?? declarationTenpai)?.map((isTenpai, s) => {
                 if (!isTenpai) {
                   return null;
                 }
@@ -731,8 +787,25 @@ export function applyReplayEvent(
                   return revealed.length > 0 ? revealed : null;
                 })
               : undefined;
+      const ryuukyokuDeclarations = event.declarations
+        ? event.declarations.reduce<ReplayView["ryuukyokuDeclarations"]>(
+            (declarations, declaration) => {
+              declarations[declaration.seat] = declaration.tenpai;
+              return declarations;
+            },
+            [...view.ryuukyokuDeclarations] as ReplayView["ryuukyokuDeclarations"]
+          )
+        : view.ryuukyokuDeclarations;
+      const ryuukyokuTenpaiHands =
+        event.declarations && derivedTenpaiHands
+          ? (derivedTenpaiHands.map((hand) =>
+              hand ? [...hand] : null
+            ) as ReplayView["ryuukyokuTenpaiHands"])
+          : view.ryuukyokuTenpaiHands;
       return {
         ...view,
+        ryuukyokuDeclarations,
+        ryuukyokuTenpaiHands,
         scores: (event.scores ?? view.scores) as [
           number,
           number,
@@ -751,6 +824,13 @@ export function applyReplayEvent(
           ...(event.honba !== undefined ? { honba: event.honba } : {}),
           ...(event.riichiSticks !== undefined
             ? { riichiSticks: event.riichiSticks }
+            : {}),
+          ...(event.declarations
+            ? {
+                declarations: event.declarations.map((declaration) => ({
+                  ...declaration,
+                })),
+              }
             : {}),
           ...(eventWaits
             ? { waits: eventWaits.map((w) => (w ? [...w] : null)) }
@@ -963,6 +1043,8 @@ export function replayViewToMatchView(
     honba: view.honba,
     riichiSticks: view.riichiSticks,
     riichiDeclared: view.riichiDeclared,
+    ryuukyokuDeclarations: view.ryuukyokuDeclarations,
+    ryuukyokuTenpaiHands: view.ryuukyokuTenpaiHands,
     riichiTileIdx: view.riichiTileIdx,
     sinking: view.sinking,
     chips: view.chips,
@@ -1027,6 +1109,12 @@ export function rotateHandResult(
     tenpaiHands: result.tenpaiHands
       ? perm4(result.tenpaiHands)
       : result.tenpaiHands,
+    declarations: result.declarations
+      ? result.declarations.map((declaration) => ({
+          ...declaration,
+          seat: rot(declaration.seat),
+        }))
+      : result.declarations,
     wins: result.wins
       ? result.wins.map((win) => ({
           ...win,
@@ -1112,6 +1200,8 @@ export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
     seatNames: mv.seatNames ? perm4(mv.seatNames) : mv.seatNames,
     dealer: rot(mv.dealer),
     riichiDeclared: perm4(mv.riichiDeclared),
+    ryuukyokuDeclarations: perm4(mv.ryuukyokuDeclarations),
+    ryuukyokuTenpaiHands: perm4(mv.ryuukyokuTenpaiHands),
     riichiTileIdx: perm4(mv.riichiTileIdx),
     sinking: perm4(mv.sinking),
     chips: perm4(mv.chips),

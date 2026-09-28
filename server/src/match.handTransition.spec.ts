@@ -138,7 +138,8 @@ describe("MatchProcess — hand transition", () => {
       const ls = legals();
       const next =
         ls.find((a) => a.type === "discard") ??
-        ls.find((a) => a.type === "pass");
+        ls.find((a) => a.type === "pass") ??
+        ls.find((a) => a.type === "declare_tenpai");
       if (!next) {
         break;
       }
@@ -167,7 +168,8 @@ describe("MatchProcess — hand transition", () => {
       const ls = legals();
       const next =
         ls.find((a) => a.type === "discard") ??
-        ls.find((a) => a.type === "pass");
+        ls.find((a) => a.type === "pass") ??
+        ls.find((a) => a.type === "declare_tenpai");
       if (!next) {
         break;
       }
@@ -205,7 +207,8 @@ describe("MatchProcess — hand transition", () => {
       const ls = legals();
       const next =
         ls.find((a) => a.type === "discard") ??
-        ls.find((a) => a.type === "pass");
+        ls.find((a) => a.type === "pass") ??
+        ls.find((a) => a.type === "declare_tenpai");
       if (!next) {
         break;
       }

@@ -4,6 +4,7 @@ import {
   TableRenderer,
   activePlayerIndicatorSeat,
   advanceMatchEndRevealSound,
+  actionButtonColor,
   actionButtonLabel,
   actionButtonStyle,
   actionTimerTickDecision,
@@ -40,6 +41,7 @@ import {
   mobileRiichiStickPlacement,
   playerIdentityCenter,
   pointInsideRect,
+  orderedRyuukyokuDeclarationActions,
   RIICHI_STICK_Z_INDEX,
   resolveActionTimerState,
   resolveTableHudState,
@@ -388,6 +390,28 @@ describe("mobile action buttons", () => {
 
   it("labels the pass transport action as Skip", () => {
     expect(actionButtonLabel({ id: "pass", type: "pass" })).toBe("Skip");
+  });
+
+  it("labels and colors exhaustive-draw declaration actions", () => {
+    const tenpai = { id: "tenpai", type: "declare_tenpai" } as const;
+    const noten = { id: "noten", type: "declare_noten" } as const;
+
+    expect(actionButtonLabel(tenpai)).toBe("Tenpai");
+    expect(actionButtonLabel(noten)).toBe("Noten");
+    expect(actionButtonColor(tenpai)).toBe(0x40a060);
+    expect(actionButtonColor(noten)).toBe(0x5c6470);
+  });
+
+  it("orders Noten left of the primary Tenpai declaration", () => {
+    const actions = [
+      { id: "tenpai", type: "declare_tenpai" },
+      { id: "pass", type: "pass" },
+      { id: "noten", type: "declare_noten" },
+    ] as const;
+
+    expect(
+      orderedRyuukyokuDeclarationActions(actions).map((action) => action.id)
+    ).toEqual(["noten", "tenpai"]);
   });
 
   it("bottom-aligns calls to the hand and wraps overflow upward", () => {
@@ -1031,9 +1055,17 @@ describe("resolveSeatHandPresentation", () => {
     lastHandResult: null,
     mySeat: 0 as const,
     freshlyDrawnSeat: null,
+    ryuukyokuDeclarations: [null, null, null, null],
+    ryuukyokuTenpaiHands: [null, null, null, null],
   } as Pick<
     MatchView,
-    "hands" | "melds" | "lastHandResult" | "mySeat" | "freshlyDrawnSeat"
+    | "hands"
+    | "melds"
+    | "lastHandResult"
+    | "mySeat"
+    | "freshlyDrawnSeat"
+    | "ryuukyokuDeclarations"
+    | "ryuukyokuTenpaiHands"
   >;
 
   it("keeps the focused player's current hand during a history peek", () => {
@@ -1158,6 +1190,37 @@ describe("resolveSeatHandPresentation", () => {
     expect(activeTenpaiPlayer.maskedForResult).toBe(false);
     expect(noTenOpponent.displayHand).toEqual([null, null, null]);
     expect(noTenOpponent.maskedForResult).toBe(true);
+  });
+
+  it("progressively reveals declared Tenpai while Noten stays concealed", () => {
+    const declarationView = {
+      ...view,
+      ryuukyokuDeclarations: [null, true, false, null],
+      ryuukyokuTenpaiHands: [
+        null,
+        ["4m", "5m", "6m"],
+        null,
+        null,
+      ],
+    } as typeof view;
+
+    const tenpaiPlayer = resolveSeatHandPresentation(
+      declarationView,
+      null,
+      1
+    );
+    const notenPlayer = resolveSeatHandPresentation(
+      declarationView,
+      null,
+      2
+    );
+
+    expect(tenpaiPlayer.animationHand).toEqual(["4m", "5m", "6m"]);
+    expect(tenpaiPlayer.displayHand).toEqual(["4m", "5m", "6m"]);
+    expect(tenpaiPlayer.animationForceReveal).toBe(true);
+    expect(tenpaiPlayer.displayForceReveal).toBe(true);
+    expect(notenPlayer.displayHand).toBe(liveHands[2]);
+    expect(notenPlayer.displayForceReveal).toBe(false);
   });
 });
 

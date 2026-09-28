@@ -147,6 +147,24 @@ export interface AbortAction {
 }
 
 /**
+ * Declare Tenpai or Noten after an exhaustive draw. Declarations are
+ * accepted in dealer order and are validated against the concealed hand.
+ */
+export interface DeclareRyuukyokuStatusAction {
+  type: "declare_ryuukyoku_status";
+  seat: Seat;
+  tenpai: boolean;
+}
+
+/**
+ * Settle an exhaustive draw after all four status declarations.
+ * Engine-internal — orchestrator-driven, never issued by clients.
+ */
+export interface CompleteRyuukyokuAction {
+  type: "complete_ryuukyoku";
+}
+
+/**
  * Transition out of `hand_ended` into the next hand (or into
  * `match_ended` when the round limit is reached). The orchestrator
  * issues this once it has surfaced the hand result to clients.
@@ -181,5 +199,7 @@ export type Action =
   | PonAction
   | KanAction
   | AbortAction
+  | DeclareRyuukyokuStatusAction
+  | CompleteRyuukyokuAction
   | StartNextHandAction
   | CompleteShouminkanAction;
