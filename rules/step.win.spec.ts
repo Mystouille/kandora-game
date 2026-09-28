@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createInitialState, type MatchState } from "./state";
+import { createInitialState, type MatchState, type Meld } from "./state";
 import { distributePayments } from "./payments";
 import { step } from "./step";
 import type { Tile } from "./types";
@@ -223,6 +223,55 @@ describe("step — ron", () => {
     expect(winEv.score).toMatchObject({ han: 4, fu: 30, ten: 8000 });
     expect(winEv.delta).toEqual([-8000, 8000, 0, 0]);
     expect(next.scores).toEqual([17000, 33000, 25000, 25000]);
+  });
+
+  it("applies two-fu double-wind pairs to engine win scoring", () => {
+    const winnerMelds: Meld[] = [
+      {
+        type: "pon",
+        tiles: tiles("111m"),
+        claimedTile: "1m",
+        from: 1,
+      },
+      {
+        type: "pon",
+        tiles: tiles("999p"),
+        claimedTile: "9p",
+        from: 2,
+      },
+    ];
+    const base = craftState({
+      hands: [
+        tiles("23s789s11z"),
+        tiles("9s9s9s9s9s9s9s9s9s9s9s9s9s"),
+        tiles("9s9s9s9s9s9s9s9s9s9s9s9s9s"),
+        tiles("9s9s9s9s9s9s9s9s9s9s9s9s9s"),
+      ],
+      turn: 2,
+      phase: "awaiting_draw",
+      dealer: 0,
+      lastDiscard: { seat: 1, tile: "1s" },
+    });
+    const state: MatchState = {
+      ...base,
+      melds: [winnerMelds, [], [], []],
+      doraIndicators: [],
+      uraDoraIndicators: [],
+      ruleSet: {
+        ...base.ruleSet,
+        doubleWindPairFu: 2,
+      },
+    };
+
+    const { state: next, events } = step(state, { type: "ron", seat: 0 });
+    const winEv = events.find((event) => event.type === "win");
+    if (winEv?.type !== "win") {
+      throw new Error("expected win event");
+    }
+
+    expect(winEv.score).toMatchObject({ han: 1, fu: 30, ten: 1500 });
+    expect(winEv.delta).toEqual([1500, -1500, 0, 0]);
+    expect(next.scores).toEqual([26500, 23500, 25000, 25000]);
   });
 
   it("rejects ron from the discarder themself", () => {

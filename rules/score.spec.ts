@@ -253,6 +253,43 @@ describe("scoreHand — closed-hand wins", () => {
     });
   });
 
+  it("supports EMA two-fu double-wind pairs", () => {
+    const input = {
+      hand: tiles("23s789s11z"),
+      winTile: "1s" as Tile,
+      tsumo: false,
+      roundWind: "E" as const,
+      seatWind: "E" as const,
+      melds: [
+        {
+          type: "pon" as const,
+          tiles: tiles("111m"),
+          claimedTile: "1m" as Tile,
+          from: 1 as const,
+        },
+        {
+          type: "pon" as const,
+          tiles: tiles("999p"),
+          claimedTile: "9p" as Tile,
+          from: 2 as const,
+        },
+      ],
+    };
+
+    expect(scoreHand(input)).toMatchObject({
+      isAgari: true,
+      han: 1,
+      fu: 40,
+      ten: 2000,
+    });
+    expect(scoreHand({ ...input, doubleWindPairFu: 2 })).toMatchObject({
+      isAgari: true,
+      han: 1,
+      fu: 30,
+      ten: 1500,
+    });
+  });
+
   it("returns isAgari=false for non-winning shapes", () => {
     const r = scoreHand({
       hand: tiles("123m456p789s11s2z3z"), // 13 tiles, no path to a win

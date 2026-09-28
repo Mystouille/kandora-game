@@ -186,6 +186,12 @@ export interface RuleSet {
    */
   kiriageMangan: boolean;
   /**
+   * Fu awarded when the winning hand's pair is both the round wind
+   * and the seat wind. Standard Japanese rules commonly award 4;
+   * EMA awards 2.
+   */
+  doubleWindPairFu: 2 | 4;
+  /**
    * Hard score-tier ceiling. When set, any hand whose computed
    * payment exceeds the named tier is clamped to that tier’s
    * fixed payout (mangan = 8000 non-dealer / 12000 dealer,
@@ -307,6 +313,9 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
     tenpaiPayments: z.boolean(),
     tenpaiRenchan: z.boolean(),
     kiriageMangan: z.boolean(),
+    doubleWindPairFu: z
+      .union([z.literal(2), z.literal(4)])
+      .default(4),
     scoreCap: z
       .enum(["mangan", "haneman", "baiman", "sanbaiman"])
       .nullable(),

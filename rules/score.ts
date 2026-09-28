@@ -32,14 +32,20 @@ import type { Meld } from "./state";
 import Riichi from "riichi";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 
+// The library exposes no per-instance switch for double-wind pair fu.
+// Track only scorers using EMA's two-fu rule; all others retain four fu.
+const twoFuDoubleWindPairScorers = new WeakSet<object>();
+
 // ---------------------------------------------------------------------------
-// Monkey-patch: fix penchan fu bug in `riichi` npm package (v1.2.0).
+// Monkey-patch: correct and parameterize `riichi` npm package fu.
 //
 // The library's `calcFu` mistakenly compares chii edge tiles to a
 // boolean (`hasAgariFu`) instead of the win tile (`this.agari`),
 // so penchan completions on the lower edge (789 won on 7) and
 // upper edge (123 won on 3) miss the +2 wait fu. Kanchan/tanki
 // remain correct because they're matched on `v[1] === this.agari`.
+// It also hardcodes four fu for a pair that is both round and seat
+// wind; the per-instance set above enables EMA's two-fu variant.
 //
 // We replace `calcFu` once at module load with the corrected
 // version. Pinfu / chiitoitsu / yakuman branches are untouched.
@@ -66,9 +72,24 @@ import { sortYakuRecord } from "~/game/protocol/yakuOrder";
       for (const v of this.currentPattern) {
         if (typeof v === "string") {
           if (v.includes("z")) {
-            for (const vv of [this.bakaze, this.jikaze, 5, 6, 7]) {
-              if (parseInt(v) === vv) {
-                fu += 2;
+            const honor = parseInt(v);
+            if (
+              twoFuDoubleWindPairScorers.has(this) &&
+              honor === this.bakaze &&
+              honor === this.jikaze
+            ) {
+              fu += 2;
+            } else {
+              for (const valueHonor of [
+                this.bakaze,
+                this.jikaze,
+                5,
+                6,
+                7,
+              ]) {
+                if (honor === valueHonor) {
+                  fu += 2;
+                }
               }
             }
           }
@@ -154,6 +175,8 @@ export interface ScoreInput {
   noAka?: boolean;
   /** Promote 4-han 30-fu and 3-han 60-fu wins to mangan. */
   kiriageMangan?: boolean;
+  /** Fu for a pair that is both the round wind and seat wind. Default: 4. */
+  doubleWindPairFu?: 2 | 4;
   /**
    * Clamp the result’s payment to the named tier when the
    * lib-computed `ten` exceeds it. `null` / omitted leaves the
@@ -436,6 +459,9 @@ interface RiichiRaw {
 export function scoreHand(input: ScoreInput): ScoreResult {
   const str = buildRiichiInput(input);
   const r = new Riichi(str);
+  if (input.doubleWindPairFu === 2) {
+    twoFuDoubleWindPairScorers.add(r);
+  }
   if (input.noKuitan) {
     r.disableKuitan();
   }

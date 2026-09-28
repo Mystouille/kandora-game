@@ -82,4 +82,22 @@ describe("game lobby", () => {
     expect(markup).not.toContain("Duplicate seed");
     expect(markup).not.toContain('placeholder="Enter seed"');
   });
+
+  it("offers EMA Hanchan in the rules dropdown", () => {
+    loaderData.presets = [
+      {
+        id: "m-league",
+        displayName: "M-League",
+      },
+      {
+        id: "ema",
+        displayName: "EMA — Hanchan",
+        description: "EMA hanchan rules",
+      },
+    ];
+
+    const markup = renderToStaticMarkup(createElement(LobbyRoute));
+
+    expect(markup).toContain('<option value="ema">EMA — Hanchan</option>');
+  });
 });

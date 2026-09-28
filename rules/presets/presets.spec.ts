@@ -38,6 +38,26 @@ describe("rule-set presets", () => {
     ]);
   });
 
+  it("offers the requested EMA rules", () => {
+    const selectableIds = listSelectablePresets().map((preset) => preset.id);
+    expect(selectableIds).toContain("ema");
+
+    const preset = getPreset("ema");
+    expect(preset).toMatchObject({
+      displayName: "EMA — Hanchan",
+      roundWindCount: 2,
+      kuikae: "full",
+      unclaimedRiichiDeposits: "highest_score_player",
+      nbRedFiveManzu: 0,
+      nbRedFivePinzu: 0,
+      nbRedFiveSouzu: 0,
+      kuitan: true,
+      kiriageMangan: true,
+      doubleWindPairFu: 2,
+      agariYame: false,
+    });
+  });
+
   it("offers JPML hanchan without the legacy Tenhou options", () => {
     const selectableIds = listSelectablePresets().map((preset) => preset.id);
     expect(selectableIds).toContain("jpml-hanchan");
@@ -82,6 +102,7 @@ describe("rule-set presets", () => {
       expect(Number.isInteger(p.startingScore)).toBe(true);
       expect(p.kuikae).toBe("full");
       expect(p.unclaimedRiichiDeposits).toBe("highest_score_player");
+      expect([2, 4]).toContain(p.doubleWindPairFu);
       for (const key of [
         "nbRedFiveManzu",
         "nbRedFivePinzu",

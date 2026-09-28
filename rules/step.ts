@@ -559,6 +559,7 @@ export function isFuritenForRon(state: MatchState, seat: Seat): boolean {
       melds: state.melds[seat],
       noKuitan: !state.ruleSet.kuitan,
       noAka: isAkaDisabled(state.ruleSet),
+      doubleWindPairFu: state.ruleSet.doubleWindPairFu,
       haiteiOrHoutei:
         state.phase === "awaiting_draw" && state.liveWall.length === 0,
     });
@@ -642,6 +643,7 @@ function lockMissedRonFuriten(
       melds: next.melds[seat],
       noKuitan: !next.ruleSet.kuitan,
       noAka: isAkaDisabled(next.ruleSet),
+      doubleWindPairFu: next.ruleSet.doubleWindPairFu,
     });
     if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {
       if (isRiichi) {
@@ -1699,6 +1701,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       noKuitan: !state.ruleSet.kuitan,
       noAka: isAkaDisabled(state.ruleSet),
       kiriageMangan: state.ruleSet.kiriageMangan,
+      doubleWindPairFu: state.ruleSet.doubleWindPairFu,
       scoreCap: state.ruleSet.scoreCap,
       // Haitei raoyue: tsumo on the very last live-wall tile.
       // Exclude rinshan draws (those score rinshan kaihou via
@@ -1808,6 +1811,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         noKuitan: !state.ruleSet.kuitan,
         noAka: isAkaDisabled(state.ruleSet),
         kiriageMangan: state.ruleSet.kiriageMangan,
+        doubleWindPairFu: state.ruleSet.doubleWindPairFu,
         scoreCap: state.ruleSet.scoreCap,
         rinshanOrChankan: isChankan,
         // Houtei raoyui: ron on the final discard of the hand —

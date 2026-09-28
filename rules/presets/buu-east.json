@@ -36,6 +36,7 @@
   "tenpaiPayments": false,
   "tenpaiRenchan": false,
   "kiriageMangan": true,
+  "doubleWindPairFu": 4,
   "scoreCap": "mangan",
   "chipPayouts": { "sankoro": 5, "nikoro": 3, "chinmai": 1 },
   "sinkThreshold": 5999,

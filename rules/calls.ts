@@ -251,6 +251,7 @@ function pushRon(
         melds: state.melds[seat],
         noKuitan: !state.ruleSet.kuitan,
         noAka: isAkaDisabled(state.ruleSet),
+        doubleWindPairFu: state.ruleSet.doubleWindPairFu,
         haiteiOrHoutei: state.liveWall.length === 0,
       });
       if (
@@ -278,6 +279,7 @@ function pushRon(
     melds: state.melds[seat],
     noKuitan: !state.ruleSet.kuitan,
     noAka: isAkaDisabled(state.ruleSet),
+    doubleWindPairFu: state.ruleSet.doubleWindPairFu,
     haiteiOrHoutei: state.liveWall.length === 0,
   });
   if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {

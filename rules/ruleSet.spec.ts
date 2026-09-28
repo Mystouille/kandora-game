@@ -87,10 +87,12 @@ describe("ruleSet — defaults", () => {
     const legacy = { ...current } as Partial<typeof current>;
     delete legacy.unclaimedRiichiDeposits;
     delete legacy.kuikae;
+    delete legacy.doubleWindPairFu;
 
     const parsed = RuleSetSchema.parse(legacy);
     expect(parsed.unclaimedRiichiDeposits).toBe("highest_score_player");
     expect(parsed.kuikae).toBe("full");
+    expect(parsed.doubleWindPairFu).toBe(4);
   });
 
   it("createInitialState defaults to hanchan (roundWindCount=2)", () => {

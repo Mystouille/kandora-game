@@ -17,6 +17,7 @@
 import tenhouHanchan from "./tenhou-hanchan.json";
 import tenhouTonpuusen from "./tenhou-tonpuusen.json";
 import buuEast from "./buu-east.json";
+import ema from "./ema.json";
 import jpmlHanchan from "./jpml-hanchan.json";
 import mLeague from "./m-league.json";
 
@@ -33,6 +34,7 @@ const PRESET_SOURCES: ReadonlyArray<unknown> = [
   tenhouHanchan,
   tenhouTonpuusen,
   buuEast,
+  ema,
   jpmlHanchan,
   mLeague,
 ];
@@ -192,6 +194,9 @@ function validatePreset(raw: unknown): RuleSetPreset {
     "illegalVictoryAllLastOff",
   ] as const) {
     expectBoolean(obj, key, ctx);
+  }
+  if (obj.doubleWindPairFu !== 2 && obj.doubleWindPairFu !== 4) {
+    throw new Error(`${ctx}doubleWindPairFu must be 2 or 4`);
   }
   expectFiniteInt(obj, "riichiBetValue", ctx, { min: 0 });
   expectFiniteInt(obj, "sinkThreshold", ctx);
