@@ -523,15 +523,7 @@ export class DiscardAnimator {
 
         // --- (a) New discard? Schedule phase A. ----------------
         if (currLen > prevLen && currLen > 0) {
-          // A rapid replay step can advance from draw to discard before
-          // the 300ms draw-in slide finishes. The discard supersedes that
-          // overlay; retaining it makes the revealed tile appear to wait
-          // for the old draw clock before phase A reads as moving.
-          const supersededDraw = this.drawAnims.get(seat);
-          this.drawAnims.delete(seat);
-          if (this.sequenced && supersededDraw && !supersededDraw.soundPlayed) {
-            this.onDrawLand?.(seat, supersededDraw.presentationSeq);
-          }
+          const activeDraw = this.drawAnims.get(seat);
           const lastIdx = currLen - 1;
           const tile = currDiscards[lastIdx];
           const discardSource = view.discardSources?.[seat]?.[lastIdx] ?? null;
@@ -574,6 +566,15 @@ export class DiscardAnimator {
           if (discardStartMs === null) {
             this.onDiscardLand?.(seat, isRiichiDeclaration, view.lastSeq);
             break;
+          }
+          if (
+            activeDraw &&
+            discardStartMs < activeDraw.startMs + DRAW_SLIDE_MS
+          ) {
+            // Manual replay steps can replace a draw before its slide can
+            // finish. Live pacing schedules the discard after the draw,
+            // allowing its visual and landing cue to complete normally.
+            this.drawAnims.delete(seat);
           }
 
           this.anims.set(seat, {
@@ -771,6 +772,16 @@ export class DiscardAnimator {
   isDiscardWaitingToStart(seat: number): boolean {
     const anim = this.anims.get(seat);
     return anim !== undefined && this.now() < anim.startMs;
+  }
+
+  /** True until every sequenced discard has reached its pond hover. */
+  isDiscardPresentationPending(): boolean {
+    if (!this.sequenced) {
+      return false;
+    }
+    return [...this.anims.values()].some(
+      (anim) => anim.phase === "to-nudge" && !anim.landSoundPlayed
+    );
   }
 
   /** Normalized progress 0..1 of the seat's animation, post-easing. */

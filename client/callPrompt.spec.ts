@@ -6,6 +6,7 @@ import {
   filterNoCallActionButtons,
   findNoCallAutoPass,
   shouldPlayCallPrompt,
+  shouldDeferCallPromptControls,
   shouldTriggerCallPrompt,
 } from "./callPrompt";
 
@@ -136,6 +137,24 @@ describe("call-prompt sound sequencing", () => {
     expect(sequencer.presentationLanded("draw", 42)).toBe(false);
 
     expect(sequencer.updateActions([], ronActions, false)).toBe("play");
+  });
+});
+
+describe("call-prompt control sequencing", () => {
+  it("defers reactive controls while the triggering discard is moving", () => {
+    const actions: LegalAction[] = [
+      { id: "ron", type: "ron" },
+      { id: "pass", type: "pass" },
+    ];
+
+    expect(shouldDeferCallPromptControls(actions, true)).toBe(true);
+    expect(shouldDeferCallPromptControls(actions, false)).toBe(false);
+  });
+
+  it("does not defer a pass without a callable action", () => {
+    expect(
+      shouldDeferCallPromptControls([{ id: "pass", type: "pass" }], true)
+    ).toBe(false);
   });
 });
 

@@ -32,6 +32,10 @@ import type {
   ServerMessage,
   ViewerPresence,
 } from "~/game/protocol/messages";
+import {
+  LIVE_AUTOMATED_DRAW_TO_DISCARD_DELAY_MS,
+  LIVE_DISCARD_TO_DRAW_DELAY_MS,
+} from "~/game/presentationTiming";
 import { estimateDuplicateExhaustion } from "~/game/duplicate/duplicateExhaustion";
 import {
   MatchModeConfigSchema,
@@ -317,12 +321,14 @@ export function compactRyuukyokuDeclarationsForReplay(
  * the previous action (and play its SFX) before the next draw
  * arrives. Applies to every seat — bot and human alike — so the
  * cadence after any discard (when no call window opens) feels
- * consistent.
+ * consistent. Together with the automated draw-to-discard pause
+ * below, the default matches the client's sequenced turn presentation
+ * and prevents periodic catch-up snaps.
  *
  * Tests override via `setDelayAfterDiscardMs(0)`.
  */
 // eslint-disable-next-line prefer-const
-let DELAY_AFTER_DISCARD_MS = 500;
+let DELAY_AFTER_DISCARD_MS = LIVE_DISCARD_TO_DRAW_DELAY_MS;
 
 /**
  * Additional pause inserted between a seat's `draw` event and
@@ -333,7 +339,7 @@ let DELAY_AFTER_DISCARD_MS = 500;
  * Tests override via `setDelayAfterDiscardMs(0)` (zeros this too).
  */
 // eslint-disable-next-line prefer-const
-let DRAW_TO_DISCARD_DELAY_MS = 700;
+let DRAW_TO_DISCARD_DELAY_MS = LIVE_AUTOMATED_DRAW_TO_DISCARD_DELAY_MS;
 
 /**
  * Maximum client animation time before a win-triggering tile has

@@ -31,7 +31,10 @@ import type { MatchView } from "../store";
 import type { LegalAction, Meld } from "~/game/protocol/messages";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 import { playGameCountdownSound, playGameSound } from "../sound";
-import { filterNoCallActionButtons } from "../callPrompt";
+import {
+  filterNoCallActionButtons,
+  shouldDeferCallPromptControls,
+} from "../callPrompt";
 import {
   resolveFelt,
   tableLayoutFromConfig,
@@ -5969,14 +5972,9 @@ export class TableRenderer {
     // draw is held pending behind the previous discard: the tile stays
     // hidden (`hideTsumoTile`) before the back actually slides
     // (`isDrawing`), so nothing pops in during the hold.
-    const isDrawing =
-      view.freshlyDrawnSeat === seat &&
-      isFreshlyDrawn &&
-      this.animator.isDrawing(seat);
+    const isDrawing = isFreshlyDrawn && this.animator.isDrawing(seat);
     const hideTsumoTile =
-      view.freshlyDrawnSeat === seat &&
-      isFreshlyDrawn &&
-      this.animator.isDrawTileHidden(seat);
+      isFreshlyDrawn && this.animator.isDrawTileHidden(seat);
     const drawProgress = isDrawing ? this.animator.getDrawProgress(seat) : 1;
     // Wall-side offset (design px) the back travels along the hand's
     // reading axis into the tsumo slot.
@@ -7825,6 +7823,15 @@ export class TableRenderer {
     // `hand_end` echo clears it, and we don't want the tsumo /
     // ron button lingering on top of the win-info panel.
     if (view.lastHandResult !== null || view.matchEnded) {
+      return;
+    }
+    if (
+      shouldDeferCallPromptControls(
+        view.legalActions,
+        this.animator.isDiscardPresentationPending()
+      )
+    ) {
+      this.expandedCallGroup = null;
       return;
     }
     // Pull every non-discard legal action — these are the call /

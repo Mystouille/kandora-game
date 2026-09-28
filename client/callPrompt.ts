@@ -148,6 +148,13 @@ export function shouldTriggerCallPrompt(
   );
 }
 
+export function shouldDeferCallPromptControls(
+  actions: readonly LegalAction[],
+  discardPresentationPending: boolean
+): boolean {
+  return discardPresentationPending && hasCallPrompt(actions);
+}
+
 export function createCallPromptSoundSequencer(): CallPromptSoundSequencer {
   let pendingPresentation: CallPromptPresentation | null = null;
   let deferredPrompt: CallPromptPresentation | null = null;

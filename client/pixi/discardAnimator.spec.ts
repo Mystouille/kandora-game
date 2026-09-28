@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { MatchView } from "../store";
 import {
+  LIVE_AUTOMATED_DRAW_TO_DISCARD_DELAY_MS,
+  LIVE_DISCARD_TO_DRAW_DELAY_MS,
+} from "../../presentationTiming";
+import {
   DiscardAnimator,
   SEQ_SLIDE_MS,
   SEQ_HOVER_MS,
@@ -10,6 +14,21 @@ import {
   DRAW_SLIDE_MS,
   MIN_DRAW_TO_DISCARD_MS,
 } from "./discardAnimator";
+
+describe("live presentation cadence", () => {
+  it("matches automated event throughput to the sequenced timeline", () => {
+    const serverTurnMs =
+      LIVE_AUTOMATED_DRAW_TO_DISCARD_DELAY_MS +
+      LIVE_DISCARD_TO_DRAW_DELAY_MS;
+    const presentedTurnMs =
+      Math.max(MIN_DRAW_TO_DISCARD_MS, DRAW_SLIDE_MS) +
+      SEQ_SLIDE_MS +
+      SEQ_HOVER_MS +
+      PHASE_B_DURATION_MS;
+
+    expect(serverTurnMs).toBe(presentedTurnMs);
+  });
+});
 
 function makeView(args: {
   hands?: Array<Array<string | null>>;
@@ -137,6 +156,61 @@ describe("DiscardAnimator", () => {
 
     expect(animator.getAnim(0)?.startMs).toBe(now);
     expect(animator.isDrawing(0)).toBe(false);
+  });
+
+  it("lets a live draw land before a quick confirmed discard starts", () => {
+    let now = 0;
+    const drawLandings: Array<{ seat: number; presentationSeq: number }> = [];
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setMinimumDrawToDiscardDelayEnabled(true);
+    animator.setSequenced(true);
+    animator.setSoundHooks({
+      onDrawLand: (seat, presentationSeq) => {
+        drawLandings.push({ seat, presentationSeq });
+      },
+    });
+    animator.beginFrame(makeView({ hands: [["1m"], [], [], []] }));
+    recordLayouts(animator, [
+      { sorted: ["1m"] },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    const drew = makeView({
+      hands: [["1m", "9m"], [], [], []],
+      freshlyDrawnSeat: 0,
+      lastSeq: 41,
+    });
+    animator.beginFrame(drew);
+    recordLayouts(animator, [
+      { sorted: ["1m", "9m"], isFreshlyDrawn: true },
+      { sorted: [] },
+      { sorted: [] },
+      { sorted: [] },
+    ]);
+
+    now = 100;
+    const discarded = makeView({
+      hands: [["1m"], [], [], []],
+      discards: [["9m"], [], [], []],
+      discardSources: [["draw"], [], [], []],
+      totalDiscards: 1,
+      freshlyDiscardedSeat: 0,
+      lastSeq: 42,
+    });
+    animator.beginFrame(discarded);
+
+    expect(drawLandings).toEqual([]);
+    expect(animator.isDrawing(0)).toBe(true);
+    expect(animator.isDiscardWaitingToStart(0)).toBe(true);
+
+    now = DRAW_SLIDE_MS;
+    animator.beginFrame(discarded);
+
+    expect(drawLandings).toEqual([{ seat: 0, presentationSeq: 41 }]);
+    expect(animator.isDrawing(0)).toBe(false);
+    expect(animator.isDiscardWaitingToStart(0)).toBe(true);
   });
 
   it("starts immediately after live pacing is disabled for manual history", () => {
@@ -528,6 +602,7 @@ describe("DiscardAnimator", () => {
     });
     animator.beginFrame(discarded);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+    expect(animator.isDiscardPresentationPending()).toBe(true);
 
     // Phase A elapsed: land SFX fires once; tile hovers.
     now = SEQ_SLIDE_MS;
@@ -540,6 +615,7 @@ describe("DiscardAnimator", () => {
       },
     ]);
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
+    expect(animator.isDiscardPresentationPending()).toBe(false);
 
     // Past the slide + hover with NO draw yet (an open call window):
     // the tile must NOT nudge home — it could still be called away.
@@ -800,7 +876,9 @@ describe("DiscardAnimator", () => {
     animator.beginFrame(secondDraw);
 
     expect(catchUpSnaps).toEqual([0]);
-    expect(drawLandings).toEqual([1, 2]);
+    // Seat 1's queued draw was never presented before the catch-up snap,
+    // so only the current snapped draw releases a landing cue.
+    expect(drawLandings).toEqual([2]);
     expect(animator.hasActive()).toBe(false);
     expect(animator.getAnim(0)).toBeNull();
     expect(animator.getAnim(1)).toBeNull();
