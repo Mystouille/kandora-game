@@ -311,7 +311,7 @@ describe("layoutTopHand", () => {
     expect(p[0].wrap).toEqual({ x: 0, y: 0, rotation: 0 });
   });
 
-  it("rotates masked top-player backs 180deg in screen space", () => {
+  it("rotates masked top-player backs another 180deg for the focused player", () => {
     const p = layoutTopHand(D, [null], {
       ...opts,
       maskedForResult: true,
@@ -319,8 +319,10 @@ describe("layoutTopHand", () => {
 
     expect(p[0].atlasId).toBe("bottomSmall");
     expect(p[0].tile).toBeNull();
-    expect(p[0].sprite.rotation).toBe(0);
-    expect(p[0].sprite.rotation + seatTransform(2).rotation).toBe(Math.PI);
+    expect(p[0].sprite.rotation).toBe(Math.PI);
+    expect(
+      (p[0].sprite.rotation + seatTransform(2).rotation) % (2 * Math.PI)
+    ).toBe(0);
   });
 
   it("strides by the tile width and keeps zIndex flat", () => {

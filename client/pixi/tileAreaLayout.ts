@@ -364,7 +364,8 @@ export function layoutSideHand(
  * Container-local placements for the top seat's hand (seat 2):
  * face-down `topSmall` backs by default, revealed face cells, or the
  * design's result back when laid flat after a hand. Result backs are
- * left unrotated so the seat container turns them 180° in screen space.
+ * rotated another 180° locally so the top-seat container's rotation
+ * leaves them upright from the focused player's perspective.
  */
 export function layoutTopHand(
   design: TileDesign,
@@ -394,7 +395,7 @@ export function layoutTopHand(
       sprite: {
         width: t.w,
         height: t.h,
-        rotation: opts.maskedForResult ? 0 : Math.PI,
+        rotation: Math.PI,
         x: t.w / 2,
         y: t.h / 2,
       },
