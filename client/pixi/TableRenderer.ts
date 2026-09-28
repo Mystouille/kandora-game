@@ -5915,19 +5915,20 @@ export class TableRenderer {
       isConcealed: naturalIsConcealed,
     });
     const seatDiscardAnim = this.animator.getAnim(seat);
+    const discardWaitingToStart =
+      seatDiscardAnim !== null &&
+      this.animator.isDiscardWaitingToStart(seat);
     let hand: Array<string | null> = baseHand;
     let isFreshlyDrawn = baseFreshlyDrawn;
     let hiddenHandSlot: number | null = null;
     if (seat === 0 && !forceReveal && seat0Display) {
       rawIndices = seat0Display.rawIndices;
     }
-    // Apply the phase-A hand snapshot through BOTH phases. While
-    // phase A is parked (waiting for the next draw) and through
-    // phase B's slide, we keep the same gap-in-the-hand layout
-    // so the strip only "closes up" once the animation is fully
-    // dropped after phase B elapses. This matches the user-
-    // visible spec: the discarder's hand stays gapped while a
-    // call window is open, and only resorts after the next draw.
+    // Apply the phase-A hand snapshot through BOTH phases. Before a
+    // future-scheduled discard starts, retain its source tile so the
+    // thinking delay does not reveal the discard early. Once movement
+    // begins, keep the same gap-in-the-hand layout until the animation
+    // is fully dropped after phase B elapses.
     //
     // For seat 0 we also clear `rawIndices` while the snapshot
     // is in effect: the snapshot is captured one frame before
@@ -5938,7 +5939,9 @@ export class TableRenderer {
     if (seatDiscardAnim && seatDiscardAnim.phaseASnapshot) {
       hand = seatDiscardAnim.phaseASnapshot.hand;
       isFreshlyDrawn = seatDiscardAnim.phaseASnapshot.isFreshlyDrawn;
-      hiddenHandSlot = seatDiscardAnim.phaseASnapshot.hiddenSlot;
+      hiddenHandSlot = discardWaitingToStart
+        ? null
+        : seatDiscardAnim.phaseASnapshot.hiddenSlot;
       rawIndices = null;
     }
     if (presentation.historicalReveal) {
@@ -6805,7 +6808,12 @@ export class TableRenderer {
     // Phase B ("to-final"): interpolate from the +10/+10 nudged
     // position back to the flush row position.
     // -----------------------------------------------------------------
-    if (lastIsAnimating && seatDiscardAnim && animLastPlacement) {
+    if (
+      lastIsAnimating &&
+      seatDiscardAnim &&
+      animLastPlacement &&
+      !discardWaitingToStart
+    ) {
       const progress = this.animator.getProgress(seat);
       const finalX = animLastPlacement.wrap.x;
       const finalY = animLastPlacement.wrap.y;

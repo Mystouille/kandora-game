@@ -163,10 +163,11 @@ export function createCallPromptSoundSequencer(): CallPromptSoundSequencer {
       noCallEnabled
     ): CallPromptSoundDecision {
       const presentation = pendingPresentation;
-      pendingPresentation = null;
 
       if (!shouldPlayCallPrompt(nextActions, noCallEnabled)) {
         deferredPrompt = null;
+        // The discard frame arrives before its same-sequence call actions.
+        // Keep the presentation pending across that intermediate empty update.
         return "none";
       }
       if (
@@ -184,6 +185,12 @@ export function createCallPromptSoundSequencer(): CallPromptSoundSequencer {
     },
 
     presentationLanded(kind, seq): boolean {
+      if (
+        pendingPresentation?.kind === kind &&
+        pendingPresentation.seq === seq
+      ) {
+        pendingPresentation = null;
+      }
       if (deferredPrompt?.kind !== kind || deferredPrompt.seq !== seq) {
         return false;
       }

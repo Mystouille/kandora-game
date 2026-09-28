@@ -82,6 +82,16 @@ describe("call-prompt sound sequencing", () => {
     expect(sequencer.presentationLanded("discard", 41)).toBe(false);
   });
 
+  it("keeps a discard pending across the event frame's empty actions", () => {
+    const sequencer = createCallPromptSoundSequencer();
+
+    sequencer.notePresentation("discard", 41, true);
+
+    expect(sequencer.updateActions([], [], false)).toBe("none");
+    expect(sequencer.updateActions([], ronActions, false)).toBe("defer");
+    expect(sequencer.presentationLanded("discard", 41)).toBe(true);
+  });
+
   it("defers a winning draw prompt until the drawn tile lands", () => {
     const sequencer = createCallPromptSoundSequencer();
 
@@ -123,6 +133,7 @@ describe("call-prompt sound sequencing", () => {
 
     sequencer.notePresentation("draw", 42, true);
     expect(sequencer.updateActions([], discardActions, false)).toBe("none");
+    expect(sequencer.presentationLanded("draw", 42)).toBe(false);
 
     expect(sequencer.updateActions([], ronActions, false)).toBe("play");
   });
