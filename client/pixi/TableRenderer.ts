@@ -1006,11 +1006,14 @@ export function resolveSeatHandPresentation(
     : null;
   const currentReveal =
     resultSeatReveal(view.lastHandResult, seat) ?? declarationReveal;
-  const currentMask = resultSeatMask(
-    view.lastHandResult,
-    currentReveal,
-    liveHand
-  );
+  const declarationMask: Array<null> | null =
+    view.lastHandResult === null &&
+    view.ryuukyokuDeclarations[seat] === false
+      ? liveHand.map(() => null)
+      : null;
+  const currentMask =
+    resultSeatMask(view.lastHandResult, currentReveal, liveHand) ??
+    declarationMask;
   const historicalReveal =
     view.lastHandResult === null && seat !== view.mySeat
       ? resultSeatReveal(historicalResult, seat)

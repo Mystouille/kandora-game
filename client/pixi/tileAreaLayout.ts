@@ -266,7 +266,7 @@ export interface HandRevealOptions {
   /** Whether opponent tiles may be shown (showHands or a forced
    * win/tenpai reveal). Per-tile reveal also requires a known tile. */
   canReveal: boolean;
-  /** Whether a terminal hand result deliberately masked this hand. */
+  /** Whether result presentation has laid this hand face-down. */
   maskedForResult: boolean;
   isFreshlyDrawn: boolean;
   /** Slot left blank while its tile animates into the pond, or null. */
@@ -364,7 +364,7 @@ export function layoutSideHand(
  * Container-local placements for the top seat's hand (seat 2):
  * face-down `topSmall` backs by default, revealed face cells, or the
  * design's result back when laid flat after a hand. Result backs are
- * left unrotated so the seat container alone orients their lighting.
+ * left unrotated so the seat container turns them 180° in screen space.
  */
 export function layoutTopHand(
   design: TileDesign,

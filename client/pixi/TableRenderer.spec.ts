@@ -1100,9 +1100,9 @@ describe("resolveSeatHandPresentation", () => {
       reason: "ron",
       wins: [
         {
-          seat: 2,
+          seat: 1,
           winTile: "9s",
-          hand: ["1s", "2s", "3s", "9s"],
+          hand: ["4m", "5m", "6m", "9s"],
         },
       ],
     };
@@ -1118,7 +1118,8 @@ describe("resolveSeatHandPresentation", () => {
     };
 
     const activePlayer = resolveSeatHandPresentation(currentView, null, 0);
-    const winner = resolveSeatHandPresentation(currentView, null, 2);
+    const winner = resolveSeatHandPresentation(currentView, null, 1);
+    const topPlayer = resolveSeatHandPresentation(currentView, null, 2);
 
     expect(activePlayer.animationHand).toEqual([null, null, null]);
     expect(activePlayer.displayHand).toEqual([null, null, null]);
@@ -1127,6 +1128,9 @@ describe("resolveSeatHandPresentation", () => {
     expect(winner.displayHand.every((tile) => tile !== null)).toBe(true);
     expect(winner.displayForceReveal).toBe(true);
     expect(winner.maskedForResult).toBe(false);
+    expect(topPlayer.displayHand).toEqual([null, null, null]);
+    expect(topPlayer.displayForceReveal).toBe(false);
+    expect(topPlayer.maskedForResult).toBe(true);
   });
 
   it("reveals tenpai hands and masks no-ten hands at exhaustive draw", () => {
@@ -1192,10 +1196,16 @@ describe("resolveSeatHandPresentation", () => {
     expect(noTenOpponent.maskedForResult).toBe(true);
   });
 
-  it("progressively reveals declared Tenpai while Noten stays concealed", () => {
+  it("reveals Tenpai and lays Noten face-down before hand_end", () => {
     const declarationView = {
       ...view,
-      ryuukyokuDeclarations: [null, true, false, null],
+      hands: [
+        ["1m", "2m", "3m"],
+        [null, null, null],
+        ["1s", "2s", "3s"],
+        [null, null, null],
+      ],
+      ryuukyokuDeclarations: [false, true, false, null],
       ryuukyokuTenpaiHands: [
         null,
         ["4m", "5m", "6m"],
@@ -1209,7 +1219,12 @@ describe("resolveSeatHandPresentation", () => {
       null,
       1
     );
-    const notenPlayer = resolveSeatHandPresentation(
+    const focusedNotenPlayer = resolveSeatHandPresentation(
+      declarationView,
+      null,
+      0
+    );
+    const topNotenPlayer = resolveSeatHandPresentation(
       declarationView,
       null,
       2
@@ -1219,8 +1234,12 @@ describe("resolveSeatHandPresentation", () => {
     expect(tenpaiPlayer.displayHand).toEqual(["4m", "5m", "6m"]);
     expect(tenpaiPlayer.animationForceReveal).toBe(true);
     expect(tenpaiPlayer.displayForceReveal).toBe(true);
-    expect(notenPlayer.displayHand).toBe(liveHands[2]);
-    expect(notenPlayer.displayForceReveal).toBe(false);
+    expect(focusedNotenPlayer.displayHand).toEqual([null, null, null]);
+    expect(focusedNotenPlayer.displayForceReveal).toBe(false);
+    expect(focusedNotenPlayer.maskedForResult).toBe(true);
+    expect(topNotenPlayer.displayHand).toEqual([null, null, null]);
+    expect(topNotenPlayer.displayForceReveal).toBe(false);
+    expect(topNotenPlayer.maskedForResult).toBe(true);
   });
 });
 
