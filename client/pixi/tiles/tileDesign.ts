@@ -128,6 +128,8 @@ export interface DesignSheets {
   ownHand: AtlasId;
   /** Seat 0 concealed hand back, scaled to the focused-hand footprint. */
   ownHandBack: AtlasId;
+  /** Face-down hands laid flat when concealed by a hand result. */
+  resultHandBack: Record<Seat, AtlasId>;
   /** Seat 2 hand (same atlas for back and revealed faces). */
   topHand: AtlasId;
   /** Face-down side hand, keyed by side seat. */
@@ -307,6 +309,7 @@ export function validateTileDesign(design: TileDesign): string[] {
     ref(design.sheets.sideHandFace[s], `sideHandFace[${s}]`);
   }
   for (const s of SEAT_KEYS) {
+    ref(design.sheets.resultHandBack[s], `resultHandBack[${s}]`);
     ref(design.sheets.discard[s], `discard[${s}]`);
     ref(design.sheets.riichiDiscard[s], `riichiDiscard[${s}]`);
     ref(design.sheets.wallBack[s], `wallBack[${s}]`);

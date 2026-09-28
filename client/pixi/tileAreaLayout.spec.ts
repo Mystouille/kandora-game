@@ -174,7 +174,12 @@ describe("layoutDiscards", () => {
 describe("layoutSideHand", () => {
   const back = D.metrics.sideHandBack;
   const faceDownStride = back.h - D.spacing.sideHand;
-  const opts = { canReveal: false, isFreshlyDrawn: false, hiddenSlot: null };
+  const opts = {
+    canReveal: false,
+    isFreshlyDrawn: false,
+    hiddenSlot: null,
+    maskedForResult: false,
+  };
 
   describe("face-down (concealed)", () => {
     const p = layoutSideHand(D, 1, [null, null, null], opts);
@@ -210,6 +215,7 @@ describe("layoutSideHand", () => {
       canReveal: true,
       isFreshlyDrawn: false,
       hiddenSlot: null,
+      maskedForResult: false,
     });
 
     it("draws the discard face sheet sized to the side tile", () => {
@@ -222,6 +228,44 @@ describe("layoutSideHand", () => {
 
     it("strides like a side discard row", () => {
       expect(p[1].wrap.x).toBeCloseTo(side.h - D.spacing.discardRowHoriz, 10);
+    });
+  });
+
+  describe("masked for a hand result", () => {
+    const side = sideScreen(D);
+    const resultOpts = { ...opts, maskedForResult: true };
+    const right = layoutSideHand(D, 1, [null, null], resultOpts);
+    const left = layoutSideHand(D, 3, [null], resultOpts);
+
+    it("uses the rightSmall back for both side players", () => {
+      expect(right[0].atlasId).toBe("rightSmall");
+      expect(left[0].atlasId).toBe("rightSmall");
+      expect(right[0].tile).toBeNull();
+      expect(left[0].tile).toBeNull();
+    });
+
+    it("keeps the rightSmall artwork unrotated for both players", () => {
+      expect(right[0].sprite).toEqual({
+        width: side.w,
+        height: side.h,
+        rotation: 0,
+        x: side.w / 2,
+        y: side.h / 2,
+      });
+      expect(left[0].sprite).toEqual({
+        width: side.w,
+        height: side.h,
+        rotation: 0,
+        x: side.w / 2,
+        y: side.h / 2,
+      });
+    });
+
+    it("strides by the unrotated rightSmall width", () => {
+      expect(right[1].wrap.x).toBeCloseTo(
+        side.w - D.spacing.discardRowHoriz,
+        10
+      );
     });
   });
 
@@ -245,7 +289,12 @@ describe("layoutSideHand", () => {
 
 describe("layoutTopHand", () => {
   const t = D.metrics.topHand;
-  const opts = { canReveal: false, isFreshlyDrawn: false, hiddenSlot: null };
+  const opts = {
+    canReveal: false,
+    isFreshlyDrawn: false,
+    hiddenSlot: null,
+    maskedForResult: false,
+  };
 
   it("draws face-down topSmall backs rotated 180deg", () => {
     const p = layoutTopHand(D, [null, null], opts);
@@ -261,6 +310,17 @@ describe("layoutTopHand", () => {
     expect(p[0].wrap).toEqual({ x: 0, y: 0, rotation: 0 });
   });
 
+  it("uses the unrotated bottomSmall artwork when masked for a result", () => {
+    const p = layoutTopHand(D, [null], {
+      ...opts,
+      maskedForResult: true,
+    });
+
+    expect(p[0].atlasId).toBe("bottomSmall");
+    expect(p[0].tile).toBeNull();
+    expect(p[0].sprite.rotation).toBe(0);
+  });
+
   it("strides by the tile width and keeps zIndex flat", () => {
     const p = layoutTopHand(D, [null, null, null], opts);
     expect(p[1].wrap.x).toBeCloseTo(t.w, 10);
@@ -273,6 +333,7 @@ describe("layoutTopHand", () => {
       canReveal: true,
       isFreshlyDrawn: false,
       hiddenSlot: null,
+      maskedForResult: false,
     });
     expect(p[0].tile).toBe("3s");
     expect(p[0].atlasId).toBe("topSmall");
@@ -283,6 +344,7 @@ describe("layoutTopHand", () => {
       canReveal: false,
       isFreshlyDrawn: true,
       hiddenSlot: 1,
+      maskedForResult: false,
     });
     expect(p.map((x) => x.index)).toEqual([0, 2]);
     expect(p[1].wrap.x).toBeCloseTo(2 * t.w + D.spacing.tsumoGap, 10);

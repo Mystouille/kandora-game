@@ -919,6 +919,7 @@ export interface SeatHandPresentation {
   displayMelds: Meld[];
   displayForceReveal: boolean;
   displaySeparatesLastTile: boolean;
+  maskedForResult: boolean;
   historicalReveal: boolean;
 }
 
@@ -1008,6 +1009,7 @@ export function resolveSeatHandPresentation(
     displaySeparatesLastTile:
       displayReveal?.separatesLastTile ??
       (currentMask !== null ? false : view.freshlyDrawnSeat === seat),
+    maskedForResult: currentMask !== null,
     historicalReveal: historicalReveal !== null,
   };
 }
@@ -5962,17 +5964,24 @@ export class TableRenderer {
     // seat's discards (SIDE_TILE_W × SIDE_TILE_H, drawn from the
     // `rightSmall`/`leftSmall` discard sheets) so a flipped-up
     // opponent hand reads the same size as the row of tiles in
-    // that seat's pond. The face-down `sideHandL/R` artwork keeps
-    // the narrower `tileSide` dims because its source is portrait
-    // and would stretch badly at discard dims.
+    // that seat's pond. Result-masked hands also lie flat, using
+    // their lighting-specific result-back sheet. The regular
+    // face-down `sideHandL/R` artwork keeps the narrower `tileSide`
+    // dims because its source is portrait and would stretch badly
+    // at discard dims.
     const sideHandRevealed =
       isSideHand &&
       (this.showHands || displayForceReveal) &&
       hand.some((t) => t !== null);
+    const sideHandLiesFlat =
+      sideHandRevealed || (isSideHand && presentation.maskedForResult);
     if (isSideHand) {
       let stride: number;
       let endTileLong: number;
-      if (sideHandRevealed) {
+      if (presentation.maskedForResult) {
+        stride = SIDE_TILE_W - DISCARD_ROW_OVERLAP_HORIZ;
+        endTileLong = SIDE_TILE_W;
+      } else if (sideHandLiesFlat) {
         // Discard-style metrics: along-strip dim = SIDE_TILE_H
         // (the short side of the landscape source artwork after
         // the per-seat container ±π/2 rotation). Use the same
@@ -6018,6 +6027,7 @@ export class TableRenderer {
         hand,
         {
           canReveal: this.showHands || displayForceReveal,
+          maskedForResult: presentation.maskedForResult,
           isFreshlyDrawn,
           hiddenSlot: hiddenHandSlot,
         }
@@ -6073,6 +6083,10 @@ export class TableRenderer {
         const cos = Math.cos(rot);
         const sin = Math.sin(rot);
         const layer = this.screenShadowLayer(handContainer, rot);
+        const shadowSize = (p: TilePlacement) =>
+          presentation.maskedForResult
+            ? { w: p.sprite.height, h: p.sprite.width }
+            : { w: p.sprite.width, h: p.sprite.height };
         this.placeColumnShadows(
           layer,
           sidePlacements
@@ -6082,11 +6096,12 @@ export class TableRenderer {
             .map((p) => {
               const lx = p.wrap.x + p.sprite.x;
               const ly = p.wrap.y + p.sprite.y;
+              const size = shadowSize(p);
               return {
                 ax: lx * cos - ly * sin,
                 ay: lx * sin + ly * cos,
-                w: p.sprite.width,
-                h: p.sprite.height,
+                w: size.w,
+                h: size.h,
               };
             })
         );
@@ -6094,24 +6109,27 @@ export class TableRenderer {
           const p = lastSidePlacement;
           const lx = p.wrap.x + DRAW_SLIDE_PX * (1 - drawProgress) + p.sprite.x;
           const ly = p.wrap.y + p.sprite.y;
+          const size = shadowSize(p);
           this.placeColumnShadows(layer, [
             {
               ax: lx * cos - ly * sin,
               ay: lx * sin + ly * cos,
-              w: p.sprite.width,
-              h: p.sprite.height,
+              w: size.w,
+              h: size.h,
             },
           ]);
         }
       }
     } else if (seat === 2) {
-      // Top hand (opponent across): face-down `topSmall` backs
-      // rotated 180°, or the face cell when revealed. No interaction.
+      // Top hand (opponent across): standing `topSmall` backs during
+      // play, `bottomSmall` backs when laid flat for a result, or the
+      // face cell when revealed. No interaction.
       const topHand = this.tileDesign.metrics.topHand;
       const handGap = isFreshlyDrawn ? TSUMO_GAP : 0;
       handWidth = hand.length * topHand.w + handGap;
       const topPlacements = layoutTopHand(this.tileDesign, hand, {
         canReveal: this.showHands || displayForceReveal,
+        maskedForResult: presentation.maskedForResult,
         isFreshlyDrawn,
         hiddenSlot: hiddenHandSlot,
       });
@@ -6167,9 +6185,9 @@ export class TableRenderer {
             const ly = p.wrap.y + p.sprite.y;
             const ax = lx * cos - ly * sin;
             const ay = lx * sin + ly * cos;
-            // Face-down top tiles stand upright → dedicated upright
-            // shadow, sprite preserved; revealed faces read flat.
-            if (p.tile === null) {
+            // Ordinary face-down top tiles stand upright. Revealed
+            // faces and result-masked backs lie flat.
+            if (p.tile === null && !presentation.maskedForResult) {
               this.placeUprightShadow(
                 layer,
                 ax + p.sprite.width / 2,
@@ -6452,9 +6470,11 @@ export class TableRenderer {
     // the run is centred along the long axis and aligned to the
     // strip's *inner* edge (facing the centre of the table).
     const handRect = layout.hands[seat];
-    const sideHandScreenWidth = sideHandRevealed
-      ? SIDE_TILE_W
-      : layout.tileSide.w;
+    const sideHandScreenWidth = presentation.maskedForResult
+      ? SIDE_TILE_H
+      : sideHandLiesFlat
+        ? SIDE_TILE_W
+        : layout.tileSide.w;
     // The hand is left-aligned in the band (player's POV): the
     // leftmost tile sits at the band's player-left edge. The meld
     // strip is right-aligned at the band's player-right edge (see

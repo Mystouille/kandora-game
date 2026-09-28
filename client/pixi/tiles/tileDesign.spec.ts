@@ -59,6 +59,14 @@ describe("tileDesign contract", () => {
         3: "leftSmall",
       });
     });
+    it("uses lighting-correct flat backs for result-masked hands", () => {
+      expect(s.resultHandBack).toEqual({
+        0: "bottomSmall",
+        1: "rightSmall",
+        2: "bottomSmall",
+        3: "rightSmall",
+      });
+    });
     it("reads riichi tiles from a perpendicular sheet", () => {
       expect(s.riichiDiscard[0]).toBe("leftSmall");
       expect(s.riichiDiscard[1]).toBe("bottomSmall");

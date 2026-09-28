@@ -1091,8 +1091,10 @@ describe("resolveSeatHandPresentation", () => {
     expect(activePlayer.animationHand).toEqual([null, null, null]);
     expect(activePlayer.displayHand).toEqual([null, null, null]);
     expect(activePlayer.displayForceReveal).toBe(false);
+    expect(activePlayer.maskedForResult).toBe(true);
     expect(winner.displayHand.every((tile) => tile !== null)).toBe(true);
     expect(winner.displayForceReveal).toBe(true);
+    expect(winner.maskedForResult).toBe(false);
   });
 
   it("reveals tenpai hands and masks no-ten hands at exhaustive draw", () => {
@@ -1127,8 +1129,10 @@ describe("resolveSeatHandPresentation", () => {
     expect(activeNoTenPlayer.animationHand).toEqual([null, null, null]);
     expect(activeNoTenPlayer.displayHand).toEqual([null, null, null]);
     expect(activeNoTenPlayer.displayForceReveal).toBe(false);
+    expect(activeNoTenPlayer.maskedForResult).toBe(true);
     expect(tenpaiPlayer.displayHand).toEqual(["4m", "5m", "6m"]);
     expect(tenpaiPlayer.displayForceReveal).toBe(true);
+    expect(tenpaiPlayer.maskedForResult).toBe(false);
 
     const activeTenpaiView = {
       ...currentView,
@@ -1151,7 +1155,9 @@ describe("resolveSeatHandPresentation", () => {
 
     expect(activeTenpaiPlayer.displayHand).toEqual(["1m", "2m", "3m"]);
     expect(activeTenpaiPlayer.displayForceReveal).toBe(true);
+    expect(activeTenpaiPlayer.maskedForResult).toBe(false);
     expect(noTenOpponent.displayHand).toEqual([null, null, null]);
+    expect(noTenOpponent.maskedForResult).toBe(true);
   });
 });
 

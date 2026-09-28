@@ -266,6 +266,8 @@ export interface HandRevealOptions {
   /** Whether opponent tiles may be shown (showHands or a forced
    * win/tenpai reveal). Per-tile reveal also requires a known tile. */
   canReveal: boolean;
+  /** Whether a terminal hand result deliberately masked this hand. */
+  maskedForResult: boolean;
   isFreshlyDrawn: boolean;
   /** Slot left blank while its tile animates into the pond, or null. */
   hiddenSlot: number | null;
@@ -274,9 +276,9 @@ export interface HandRevealOptions {
 /**
  * Container-local placements for a side seat's concealed/revealed
  * hand (seats 1/3). Mirrors the legacy `renderSeat` side-hand loop:
- * face-down `sideHand*` art by default, or the seat's discard face
- * sheet when revealed, stacked with the matching overlap. Wait-tint
- * is applied by the caller (safe to call for the `null` back tiles).
+ * face-down `sideHand*` art by default, the seat's discard face sheet
+ * when revealed, or its result-back sheet when laid flat after a hand.
+ * Wait-tint is applied by the caller (safe for `null` back tiles).
  */
 export function layoutSideHand(
   design: TileDesign,
@@ -288,12 +290,18 @@ export function layoutSideHand(
   const back = design.metrics.sideHandBack;
   const backSheet = design.sheets.sideHandBack[seat];
   const faceSheet = design.sheets.sideHandFace[seat];
-  const localRot = seat === 1 ? Math.PI / 2 : -Math.PI / 2;
+  const resultBackSheet = design.sheets.resultHandBack[seat];
+  const screenCounterRotation = seat === 1 ? Math.PI / 2 : -Math.PI / 2;
   const zSign = seat === 1 ? -1 : 1;
-  const stripRevealed = opts.canReveal && hand.some((t) => t !== null);
-  const stride = stripRevealed
-    ? side.h - design.spacing.discardRowHoriz
-    : back.h - design.spacing.sideHand;
+  const stripRevealed =
+    !opts.maskedForResult &&
+    opts.canReveal &&
+    hand.some((tile) => tile !== null);
+  const stride = opts.maskedForResult
+    ? side.w - design.spacing.discardRowHoriz
+    : stripRevealed
+      ? side.h - design.spacing.discardRowHoriz
+      : back.h - design.spacing.sideHand;
   const handGap = opts.isFreshlyDrawn ? design.spacing.tsumoGap : 0;
   const last = hand.length - 1;
 
@@ -302,7 +310,7 @@ export function layoutSideHand(
     if (i === opts.hiddenSlot) {
       return;
     }
-    const reveal = opts.canReveal && tile !== null;
+    const reveal = !opts.maskedForResult && opts.canReveal && tile !== null;
     const extraGap = handGap > 0 && i === last ? handGap : 0;
     const wrap = { x: i * stride + extraGap, y: 0, rotation: 0 };
     const zIndex = nz(zSign * i);
@@ -315,9 +323,19 @@ export function layoutSideHand(
       sprite = {
         width: side.w,
         height: side.h,
-        rotation: -localRot + Math.PI,
+        rotation: screenCounterRotation,
         x: side.h / 2,
         y: side.w / 2,
+      };
+    } else if (opts.maskedForResult) {
+      atlasId = resultBackSheet;
+      placedTile = null;
+      sprite = {
+        width: side.w,
+        height: side.h,
+        rotation: 0,
+        x: side.w / 2,
+        y: side.h / 2,
       };
     } else {
       atlasId = backSheet;
@@ -325,7 +343,7 @@ export function layoutSideHand(
       sprite = {
         width: back.w,
         height: back.h,
-        rotation: localRot,
+        rotation: screenCounterRotation,
         x: back.h / 2,
         y: back.w / 2,
       };
@@ -345,8 +363,9 @@ export function layoutSideHand(
 
 /**
  * Container-local placements for the top seat's hand (seat 2):
- * face-down `topSmall` backs rotated 180°, or the face cell when
- * revealed. The slot pitch is the tile width; no interaction.
+ * face-down `topSmall` backs by default, revealed face cells, or the
+ * design's result back when laid flat after a hand. Result backs are
+ * left unrotated so the seat container alone orients their lighting.
  */
 export function layoutTopHand(
   design: TileDesign,
@@ -355,6 +374,7 @@ export function layoutTopHand(
 ): TilePlacement[] {
   const t = design.metrics.topHand;
   const sheet = design.sheets.topHand;
+  const resultBackSheet = design.sheets.resultHandBack[2];
   const handGap = opts.isFreshlyDrawn ? design.spacing.tsumoGap : 0;
   const last = hand.length - 1;
 
@@ -363,19 +383,19 @@ export function layoutTopHand(
     if (i === opts.hiddenSlot) {
       return;
     }
-    const reveal = opts.canReveal && tile !== null;
+    const reveal = !opts.maskedForResult && opts.canReveal && tile !== null;
     const extraGap = handGap > 0 && i === last ? handGap : 0;
     out.push({
       index: i,
       tile: reveal ? tile : null,
-      atlasId: sheet,
+      atlasId: opts.maskedForResult ? resultBackSheet : sheet,
       isRiichi: false,
       zIndex: 0,
       wrap: { x: i * t.w + extraGap, y: 0, rotation: 0 },
       sprite: {
         width: t.w,
         height: t.h,
-        rotation: Math.PI,
+        rotation: opts.maskedForResult ? 0 : Math.PI,
         x: t.w / 2,
         y: t.h / 2,
       },
