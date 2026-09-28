@@ -6008,10 +6008,7 @@ export class TableRenderer {
     if (isSideHand) {
       let stride: number;
       let endTileLong: number;
-      if (presentation.maskedForResult) {
-        stride = SIDE_TILE_W - DISCARD_ROW_OVERLAP_HORIZ;
-        endTileLong = SIDE_TILE_W;
-      } else if (sideHandLiesFlat) {
+      if (sideHandLiesFlat) {
         // Discard-style metrics: along-strip dim = SIDE_TILE_H
         // (the short side of the landscape source artwork after
         // the per-seat container ±π/2 rotation). Use the same
@@ -6113,10 +6110,10 @@ export class TableRenderer {
         const cos = Math.cos(rot);
         const sin = Math.sin(rot);
         const layer = this.screenShadowLayer(handContainer, rot);
-        const shadowSize = (p: TilePlacement) =>
-          presentation.maskedForResult
-            ? { w: p.sprite.height, h: p.sprite.width }
-            : { w: p.sprite.width, h: p.sprite.height };
+        const shadowSize = (p: TilePlacement) => ({
+          w: p.sprite.width,
+          h: p.sprite.height,
+        });
         this.placeColumnShadows(
           layer,
           sidePlacements
@@ -6500,11 +6497,9 @@ export class TableRenderer {
     // the run is centred along the long axis and aligned to the
     // strip's *inner* edge (facing the centre of the table).
     const handRect = layout.hands[seat];
-    const sideHandScreenWidth = presentation.maskedForResult
-      ? SIDE_TILE_H
-      : sideHandLiesFlat
-        ? SIDE_TILE_W
-        : layout.tileSide.w;
+    const sideHandScreenWidth = sideHandLiesFlat
+      ? SIDE_TILE_W
+      : layout.tileSide.w;
     // The hand is left-aligned in the band (player's POV): the
     // leftmost tile sits at the band's player-left edge. The meld
     // strip is right-aligned at the band's player-right edge (see

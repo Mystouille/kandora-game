@@ -297,11 +297,10 @@ export function layoutSideHand(
     !opts.maskedForResult &&
     opts.canReveal &&
     hand.some((tile) => tile !== null);
-  const stride = opts.maskedForResult
-    ? side.w - design.spacing.discardRowHoriz
-    : stripRevealed
-      ? side.h - design.spacing.discardRowHoriz
-      : back.h - design.spacing.sideHand;
+  const stripLiesFlat = opts.maskedForResult || stripRevealed;
+  const stride = stripLiesFlat
+    ? side.h - design.spacing.discardRowHoriz
+    : back.h - design.spacing.sideHand;
   const handGap = opts.isFreshlyDrawn ? design.spacing.tsumoGap : 0;
   const last = hand.length - 1;
 
@@ -333,9 +332,9 @@ export function layoutSideHand(
       sprite = {
         width: side.w,
         height: side.h,
-        rotation: 0,
-        x: side.w / 2,
-        y: side.h / 2,
+        rotation: screenCounterRotation,
+        x: side.h / 2,
+        y: side.w / 2,
       };
     } else {
       atlasId = backSheet;

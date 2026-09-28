@@ -244,26 +244,26 @@ describe("layoutSideHand", () => {
       expect(left[0].tile).toBeNull();
     });
 
-    it("keeps the rightSmall artwork unrotated for both players", () => {
+    it("rotates right backs clockwise and left backs counter-clockwise", () => {
       expect(right[0].sprite).toEqual({
         width: side.w,
         height: side.h,
-        rotation: 0,
-        x: side.w / 2,
-        y: side.h / 2,
+        rotation: Math.PI / 2,
+        x: side.h / 2,
+        y: side.w / 2,
       });
       expect(left[0].sprite).toEqual({
         width: side.w,
         height: side.h,
-        rotation: 0,
-        x: side.w / 2,
-        y: side.h / 2,
+        rotation: -Math.PI / 2,
+        x: side.h / 2,
+        y: side.w / 2,
       });
     });
 
-    it("strides by the unrotated rightSmall width", () => {
+    it("strides by the counter-rotated rightSmall width", () => {
       expect(right[1].wrap.x).toBeCloseTo(
-        side.w - D.spacing.discardRowHoriz,
+        side.h - D.spacing.discardRowHoriz,
         10
       );
     });
