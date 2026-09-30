@@ -546,6 +546,9 @@ export function parseTenhouReplayElements(
         } else if (yakuId === 54) {
           akaDoraCount += han;
         }
+        if (han <= 0) {
+          continue;
+        }
         const mapped = tenhouYakuIdToLegacyHan(yakuId);
         if (mapped !== undefined) {
           yakuHan.push(mapped);
