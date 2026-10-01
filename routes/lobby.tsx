@@ -1,6 +1,11 @@
 import { useLoaderData, useRevalidator } from "react-router";
 import { useCallback, useEffect, useState } from "react";
 import { PlayCircleOutlined } from "@ant-design/icons";
+import { SpectatorDelaySelect } from "~/game/components/SpectatorDelaySelect";
+import {
+  spectatorDelayLabel,
+  type SpectatorDelayMs,
+} from "~/game/protocol/spectatorDelay";
 import { openAppLink } from "~/game/client/appLinkNavigation";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
 import { ActiveMatchResponseSchema } from "~/game/protocol/activeMatch";
@@ -81,6 +86,7 @@ interface LiveRoom {
   presetId?: string;
   mode?: MatchModeConfig;
   buuMode: boolean;
+  spectatorDelayMs?: SpectatorDelayMs;
   seats: Array<LiveRoomSeat | null>;
 }
 
@@ -111,6 +117,7 @@ export default function LobbyRoute() {
   );
   const [starting, setStarting] = useState(false);
   const [presetId, setPresetId] = useState(DEFAULT_LOBBY_PRESET_ID);
+  const [spectatorDelayMs, setSpectatorDelayMs] = useState<SpectatorDelayMs>(0);
   const [duplicateEnabled, setDuplicateEnabled] = useState(false);
   const [duplicateSeed, setDuplicateSeed] = useState("");
   const [showDebug, setShowDebug] = useState(false);
@@ -274,7 +281,12 @@ export default function LobbyRoute() {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ debug, mode, preset: presetId }),
+        body: JSON.stringify({
+          debug,
+          mode,
+          preset: presetId,
+          spectatorDelayMs,
+        }),
       });
       if (res.status === 401 || res.status === 403) {
         window.location.reload();
@@ -388,6 +400,21 @@ export default function LobbyRoute() {
         </select>
         <span className="block mt-1 text-sm text-gray-500 dark:text-gray-400">
           {presets.find((preset) => preset.id === presetId)?.description}
+        </span>
+      </label>
+
+      <label className="block mb-6">
+        <span className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+          Spectator delay
+        </span>
+        <SpectatorDelaySelect
+          value={spectatorDelayMs}
+          onChange={setSpectatorDelayMs}
+          disabled={starting || activeMatchId !== null}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 rounded-md focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        />
+        <span className="block mt-1 text-sm text-gray-500 dark:text-gray-400">
+          Minimum delay enforced for all spectators.
         </span>
       </label>
 
@@ -602,6 +629,9 @@ export default function LobbyRoute() {
                     </div>
                     <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">
                       {seatLabels.join(" · ")}
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Spectators: {spectatorDelayLabel(r.spectatorDelayMs ?? 0)}
                     </div>
                   </div>
                   <div className="flex gap-2">

@@ -66,6 +66,59 @@ weaken the rule to land a feature — refactor through the adapter instead.
   spectator protocol, stateful decoder, relay lifecycle, delayed startup,
   tournament integration, fixture tests, and current limitations.
 
+## Live turn pacing
+
+The server pauses 500 ms before each draw and keeps the 700 ms automated
+draw-to-discard pause for bots, riichi, and disconnected seats. Live
+presentation uses a 250 ms discard slide followed by a 450 ms hover.
+The next draw then starts alongside the 150 ms discard settle, rather
+than waiting for settling to finish.
+
+The 500 ms minimum visual draw-to-discard interval keeps automated turns
+on a 1.2-second cadence without skipping draw animations or landing sounds.
+Manual replay/history navigation retains its immediate timing.
+
+## Authoritative timing (experimental)
+
+Cloud rooms can opt into explicit decision windows with
+`GAME_TIMING_MODE=windows-v2`. The default remains `legacy` until the full
+rollout gates in the [implementation plan](docs/plans/authoritative-timing/plan.md)
+are complete. Native local/Nearby creation has the corresponding build-time
+`VITE_GAME_TIMING_MODE=windows-v2` opt-in. Online clients negotiate support
+automatically; an incompatible player is rejected explicitly.
+
+The implemented turn/call/declaration slice uses a monotonic authority
+reference, clock probes, server-measured bounded latency allowance, input
+receipts before host queues, exact millisecond bank charging and checkpoint
+version 5. A normal draw's clock opens at its canonical landed/readable point.
+Late presentation uses the authoritative schedule instead of restarting a
+full animation at packet arrival. Legacy checkpoint readers and default
+timing remain supported.
+
+Readiness/vote-window migration, the remaining match-facade decomposition,
+full degraded-profile/device validation and shadow-rollout sign-off are
+still pending. This opt-in is not a claim that all competitive fairness
+gates have passed. Raw private-information delivery is unchanged.
+
+## Spectator delay
+
+Game creators choose **Instant** (the default) or **5 min** in the web lobby
+or the bottom-left selector of the mobile create-game modal. Room creation
+accepts `spectatorDelayMs` as `0` or `300000`; omitted settings preserve
+instant spectating for existing clients and checkpoints.
+
+The game server enforces this minimum for every spectator, including users
+redirected from a full running table. A viewer may request a longer delay,
+but cannot shorten the creator's setting. Delayed connections receive no
+current-state snapshot, and both event delivery and resync obey the delay.
+The initial `spectator_config` frame reports the effective delay without
+revealing game state, allowing web and mobile to explain the waiting period.
+The setting is stored in checkpoints and match documents, and game-link
+Open Graph/Discord descriptions reflect it.
+
+Tenhou relays retain their existing upstream five-minute delay and do not
+add another server-side delay.
+
 ## Layout (planned)
 
 ```

@@ -21,6 +21,17 @@ import {
 import { dispatchServerMessage } from "./dispatchServerMessage";
 import { getOrCreateGameClientSessionId } from "./connectionIdentity";
 import { useMatchStore } from "./store";
+import { ServerClock } from "./time/serverClock";
+import { bindLiveClock, releaseLiveClock } from "./time/liveClock";
+import {
+  displayedActionIntent,
+  refreshScheduledWindow,
+  clearScheduledWindow,
+} from "./time/liveTimingBinding";
+import {
+  TIMING_CAPABILITY,
+  type ActionIntentContext,
+} from "~/game/protocol/timing";
 
 export interface GameWSOptions {
   getConnectionDetails: () => Promise<GameWSConnectionDetails>;
@@ -107,9 +118,27 @@ const TERMINAL_PLAYER_ERRORS = new Set([
   "match_not_found",
   "room_full",
   "room_locked",
+  "timing_update_required",
 ]);
 
 export class GameWS {
+  readonly serverClock = new ServerClock();
+  private clockProbeTimer: ReturnType<typeof setInterval> | null = null;
+  private clockProbeIndex = 0;
+  private clockRecoveryProbes = 0;
+  private readonly clockStartupTimers: Array<ReturnType<typeof setTimeout>> =
+    [];
+  private supportsClock = false;
+  private listeningForVisibility = false;
+  private readonly refreshClockOnVisibility = (): void => {
+    if (!this.supportsClock || typeof document === "undefined") {
+      return;
+    }
+    this.stopClockSynchronization();
+    if (document.visibilityState === "visible") {
+      this.startClockSynchronization();
+    }
+  };
   private ws: WebSocket | null = null;
   private backoff = INITIAL_BACKOFF_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -130,6 +159,13 @@ export class GameWS {
 
   connect(): void {
     this.intentionallyClosed = false;
+    if (typeof document !== "undefined" && !this.listeningForVisibility) {
+      document.addEventListener(
+        "visibilitychange",
+        this.refreshClockOnVisibility
+      );
+      this.listeningForVisibility = true;
+    }
     void this.openSocket();
   }
 
@@ -141,6 +177,15 @@ export class GameWS {
       this.reconnectTimer = null;
     }
     this.stopStallWatchdog();
+    this.stopClockSynchronization();
+    releaseLiveClock(this);
+    if (typeof document !== "undefined" && this.listeningForVisibility) {
+      document.removeEventListener(
+        "visibilitychange",
+        this.refreshClockOnVisibility
+      );
+      this.listeningForVisibility = false;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -165,6 +210,7 @@ export class GameWS {
       this.reconnectTimer = null;
     }
     this.stopStallWatchdog();
+    this.stopClockSynchronization();
     this.backoff = INITIAL_BACKOFF_MS;
     if (this.ws) {
       // Retire the current socket before opening its replacement.
@@ -196,12 +242,35 @@ export class GameWS {
   }
 
   /** Convenience: send `act { actionId }`. */
-  act(actionId: string): boolean {
-    const { matchId } = useMatchStore.getState();
+  act(actionId: string, intent?: ActionIntentContext): boolean {
+    const { matchId, actionWindow, lastSeq } = useMatchStore.getState();
     if (!matchId) {
       return false;
     }
-    return this.send({ type: "act", matchId, actionId });
+    let context = intent;
+    if (context === undefined && actionWindow) {
+      try {
+        context = displayedActionIntent(actionId, actionWindow, lastSeq);
+      } catch (error) {
+        this.reportError(
+          "decision_not_ready",
+          error instanceof Error ? error.message : String(error)
+        );
+        return false;
+      }
+    }
+    return this.send({
+      type: "act",
+      matchId,
+      actionId,
+      ...(context
+        ? {
+            windowId: context.windowId,
+            clockEpoch: context.clockEpoch,
+            stateSeq: context.stateSeq,
+          }
+        : {}),
+    });
   }
 
   /** Convenience: ack the pre-match ready check. */
@@ -350,6 +419,7 @@ export class GameWS {
         token: connection.token,
         matchId: this.opts.matchId,
         clientSessionId: this.clientSessionId,
+        timingCapabilities: [TIMING_CAPABILITY],
         ...(takeoverRequested ? { takeover: true } : {}),
         debug: this.opts.debug,
         ...(this.opts.spectate ? { spectate: true } : {}),
@@ -396,6 +466,7 @@ export class GameWS {
       );
       this.ws = null;
       this.stopStallWatchdog();
+      this.stopClockSynchronization();
       if (
         this.intentionallyClosed ||
         event.code === SESSION_REPLACED_CLOSE_CODE
@@ -491,6 +562,29 @@ export class GameWS {
       this.reportError("validation_error", parsed.error.message);
       return;
     }
+    if (parsed.data.type === "latency_probe") {
+      this.send({
+        type: "latency_reply",
+        matchId: this.opts.matchId,
+        probeId: parsed.data.probeId,
+      });
+    } else if (parsed.data.type === "clock_sample") {
+      const sample = this.serverClock.observe(parsed.data);
+      if (!sample.accepted) {
+        this.reportError("clock_sample_rejected", sample.reason);
+      } else if (
+        (this.serverClock.quality()?.roundTripMs ?? 0) > 500 &&
+        this.clockRecoveryProbes < 4
+      ) {
+        this.clockRecoveryProbes += 1;
+        this.clockStartupTimers.push(
+          setTimeout(() => this.sendClockProbe(), 50)
+        );
+      }
+    } else if ("clock" in parsed.data && parsed.data.clock !== undefined) {
+      this.supportsClock = true;
+      this.startClockSynchronization();
+    }
     if (this.opts.onMessage) {
       if (parsed.data.type === "session_replaced") {
         this.sessionReplacementReported = true;
@@ -503,6 +597,7 @@ export class GameWS {
       }
     }
     this.dispatch(parsed.data);
+    refreshScheduledWindow();
   }
 
   private dispatch(msg: ServerMessage): void {
@@ -587,5 +682,41 @@ export class GameWS {
       // eslint-disable-next-line no-console
       console.error(`[game-ws] ${code}: ${message}`);
     }
+  }
+
+  private startClockSynchronization(): void {
+    if (this.clockProbeTimer !== null) {
+      return;
+    }
+    bindLiveClock(this, this.serverClock);
+    this.sendClockProbe();
+    for (const delayMs of [25, 50]) {
+      this.clockStartupTimers.push(
+        setTimeout(() => this.sendClockProbe(), delayMs)
+      );
+    }
+    this.clockProbeTimer = setInterval(() => this.sendClockProbe(), 5_000);
+  }
+
+  private sendClockProbe(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const probeId = `clock-${++this.clockProbeIndex}`;
+    this.serverClock.createProbe(probeId);
+    this.send({ type: "clock_probe", matchId: this.opts.matchId, probeId });
+  }
+
+  private stopClockSynchronization(): void {
+    for (const timer of this.clockStartupTimers.splice(0)) {
+      clearTimeout(timer);
+    }
+    if (this.clockProbeTimer !== null) {
+      clearInterval(this.clockProbeTimer);
+      this.clockProbeTimer = null;
+    }
+    this.serverClock.invalidate();
+    this.clockRecoveryProbes = 0;
+    clearScheduledWindow();
   }
 }

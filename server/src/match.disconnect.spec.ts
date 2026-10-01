@@ -260,6 +260,7 @@ describe("MatchProcess — disconnect / AFK", () => {
   });
 
   it("ignores a stale liveness result after a replacement attaches", async () => {
+    setActionTimeoutMs(0);
     const m = makeMatch(225);
     const first = sink();
     let resolveFirstProbe: ((alive: boolean) => void) | undefined;
@@ -268,15 +269,11 @@ describe("MatchProcess — disconnect / AFK", () => {
         resolveFirstProbe = resolve;
       });
     m.attachHuman(0, first.send, firstProbe);
-    setActionTimeoutMs(0);
     await m.start();
 
     const internals = m as unknown as {
-      bufferMs: [number, number, number, number];
-      livenessProbeMisses: [number, number, number, number];
       handleDeadlineExpiry: (seat: 0) => Promise<void>;
     };
-    internals.bufferMs[0] = 0;
     const expiry = internals.handleDeadlineExpiry(0);
 
     const replacement = sink();
@@ -284,7 +281,7 @@ describe("MatchProcess — disconnect / AFK", () => {
     resolveFirstProbe?.(false);
     await expiry;
 
-    expect(internals.livenessProbeMisses[0]).toBe(0);
+    expect(m.isHumanConnected(0)).toBe(true);
     expect(m.isHumanAttached(0, replacement.send)).toBe(true);
     const occupant = m.buildRoomState(0).seats[0].occupant;
     expect(occupant.kind).toBe("human");

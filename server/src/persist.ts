@@ -40,10 +40,7 @@ import {
   type PendingMatchCommand,
   type PersistedMatchEvent,
 } from "./repository";
-import {
-  parseMatchCheckpoint,
-  type MatchCheckpoint,
-} from "./checkpoint";
+import { parseMatchCheckpoint, type MatchCheckpoint } from "./checkpoint";
 
 const MatchCheckpointModel =
   mongoose.models.GameMatchCheckpoint ??
@@ -70,6 +67,7 @@ export async function createMatchDoc(args: CreateMatchArgs): Promise<void> {
         seed: args.seed,
         ruleSet: args.ruleSet,
         mode: args.mode,
+        spectatorDelayMs: args.spectatorDelayMs ?? 0,
         players: args.players,
         status: "playing",
         startedAt: new Date(),
@@ -138,12 +136,13 @@ export async function appendMatchEvents(args: {
   if (result.modifiedCount === 1) {
     return;
   }
-  const stored = (await MatchModel.findById(
-    args.matchId,
-    { status: 1, nextSeq: 1 }
-  ).lean()) as
-    | { status?: "playing" | "finished" | "aborted"; nextSeq?: number }
-    | null;
+  const stored = (await MatchModel.findById(args.matchId, {
+    status: 1,
+    nextSeq: 1,
+  }).lean()) as {
+    status?: "playing" | "finished" | "aborted";
+    nextSeq?: number;
+  } | null;
   if (stored === null) {
     throw new Error(`Cannot append events for unknown match ${args.matchId}`);
   }
@@ -155,18 +154,17 @@ export async function appendMatchEvents(args: {
   );
 }
 
-export async function loadMatchEventJournalState(
-  matchId: string
-): Promise<{
+export async function loadMatchEventJournalState(matchId: string): Promise<{
   status: "playing" | "finished" | "aborted";
   nextSeq: number;
 } | null> {
-  const stored = (await MatchModel.findById(
-    matchId,
-    { status: 1, nextSeq: 1 }
-  ).lean()) as
-    | { status?: "playing" | "finished" | "aborted"; nextSeq?: number }
-    | null;
+  const stored = (await MatchModel.findById(matchId, {
+    status: 1,
+    nextSeq: 1,
+  }).lean()) as {
+    status?: "playing" | "finished" | "aborted";
+    nextSeq?: number;
+  } | null;
   if (stored === null || stored.status === undefined) {
     return null;
   }
@@ -281,13 +279,11 @@ export async function saveMatchCommandTransaction(args: {
 export async function loadMatchRecoveryRecord(
   matchId: string
 ): Promise<MatchRecoveryRecord | null> {
-  const stored = (await MatchCheckpointModel.findById(matchId).lean()) as
-    | {
-        checkpoint?: unknown;
-        pendingCommand?: unknown;
-        terminalAt?: Date;
-      }
-    | null;
+  const stored = (await MatchCheckpointModel.findById(matchId).lean()) as {
+    checkpoint?: unknown;
+    pendingCommand?: unknown;
+    terminalAt?: Date;
+  } | null;
   return stored?.terminalAt !== undefined || stored?.checkpoint === undefined
     ? null
     : parseMatchRecoveryRecord({
@@ -333,8 +329,7 @@ export const mongoMatchRepository: MatchRepository = {
 
 export const mongoMatchEventJournalStore: MatchEventJournalStore = {
   appendMatchEvents: (args) => appendMatchEvents(args),
-  loadMatchEventJournalState: (matchId) =>
-    loadMatchEventJournalState(matchId),
+  loadMatchEventJournalState: (matchId) => loadMatchEventJournalState(matchId),
 };
 
 /**

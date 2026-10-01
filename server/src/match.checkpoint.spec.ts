@@ -9,6 +9,7 @@ import {
 } from "./checkpoint";
 import {
   MatchProcess,
+  setActionTimingMs,
   setDelayAfterDiscardMs,
   setNextHandDelayMs,
   setReadyCheckMs,
@@ -19,6 +20,9 @@ import {
   type MatchRepository,
 } from "./repository";
 import type { MatchRuntime } from "./runtime";
+import { FIVE_MINUTE_SPECTATOR_DELAY_MS } from "~/game/protocol/spectatorDelay";
+import type { HandLifecycle } from "./session/handLifecycle";
+import type { CallCoordinator } from "./session/callCoordinator";
 
 const runtime: MatchRuntime = {
   now: () => 1_234_567,
@@ -140,6 +144,7 @@ describe("MatchProcess checkpoints", () => {
     setReadyCheckMs(5_000);
     setNextHandDelayMs(5_000);
     setDelayAfterDiscardMs(350);
+    setActionTimingMs({ buffer: 20_000 });
   });
 
   it("round-trips a waiting room through JSON with sockets detached", () => {
@@ -208,6 +213,67 @@ describe("MatchProcess checkpoints", () => {
     );
   });
 
+  it("preserves the enforced spectator delay through checkpoint restoration", () => {
+    const room = MatchProcess.createWaitingRoom(
+      "checkpoint-spectator-delay",
+      42,
+      dependencies,
+      undefined,
+      undefined,
+      "m-league",
+      undefined,
+      FIVE_MINUTE_SPECTATOR_DELAY_MS
+    );
+    const checkpoint = room.createCheckpoint();
+    const restored = MatchProcess.restoreCheckpoint(
+      JSON.parse(JSON.stringify(checkpoint)),
+      dependencies
+    );
+
+    expect(checkpoint.spectatorDelayMs).toBe(300_000);
+    expect(restored.summary().spectatorDelayMs).toBe(300_000);
+    expect(restored.spectatorDispatchDelayMs(0)).toBe(300_000);
+  });
+
+  it("restores legacy checkpoints without a spectator delay as instant", () => {
+    const room = MatchProcess.createWaitingRoom(
+      "legacy-delay",
+      42,
+      dependencies
+    );
+    const { spectatorDelayMs: _delayMs, ...legacy } = room.createCheckpoint();
+    const restored = MatchProcess.restoreCheckpoint(
+      { ...legacy, schemaVersion: 3 },
+      dependencies
+    );
+
+    expect(restored.summary().spectatorDelayMs).toBe(0);
+    expect(restored.spectatorDispatchDelayMs(0)).toBe(0);
+  });
+
+  it("preserves the spectator delay in an in-progress checkpoint", async () => {
+    setReadyCheckMs(0);
+    const match = new MatchProcess(
+      "checkpoint-playing-delay",
+      42,
+      humanPlayers(),
+      dependencies,
+      undefined,
+      undefined,
+      "m-league",
+      undefined,
+      FIVE_MINUTE_SPECTATOR_DELAY_MS
+    );
+    await match.start();
+    const checkpoint = match.createCheckpoint();
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, dependencies);
+
+    expect(checkpoint.status).toBe("playing");
+    expect(checkpoint.spectatorDelayMs).toBe(300_000);
+    expect(restored.spectatorDispatchDelayMs(0)).toBe(300_000);
+    expect(restored.summary()).toEqual(match.summary());
+  });
+
   it("starts with the same seating and state after restoration", async () => {
     const room = MatchProcess.createWaitingRoom(
       "checkpoint-start",
@@ -234,11 +300,10 @@ describe("MatchProcess checkpoints", () => {
 
   it("pauses and restores a waiting room through the repository", async () => {
     const repository = createMemoryMatchRepository();
-    const room = MatchProcess.createWaitingRoom(
-      "checkpoint-waiting-save",
-      74,
-      { repository, runtime }
-    );
+    const room = MatchProcess.createWaitingRoom("checkpoint-waiting-save", 74, {
+      repository,
+      runtime,
+    });
     room.claimSeat("alice", "Alice");
 
     await room.pauseAndSaveCheckpoint();
@@ -362,7 +427,7 @@ describe("MatchProcess checkpoints", () => {
     await starting;
   });
 
-  it("accepts ready after a parent command hands off in memory", async () => {
+  it("accepts ready after a hand transition opens input in memory", async () => {
     const repository = createMemoryMatchRepository();
     const runtime = controlledRuntime(75_750, 1058);
     const match = new MatchProcess(
@@ -378,8 +443,6 @@ describe("MatchProcess checkpoints", () => {
     const internals = match as unknown as {
       state: MatchState;
       afterHandEnd: () => Promise<void>;
-      commandTransactionPromise: Promise<void> | null;
-      activeCommandTransactionId: number | null;
     };
     internals.state.phase = "hand_ended";
     internals.state.lastHandResult = {
@@ -392,8 +455,6 @@ describe("MatchProcess checkpoints", () => {
       winHan: null,
       winYakuman: null,
     };
-    internals.commandTransactionPromise = new Promise<void>(() => undefined);
-    internals.activeCommandTransactionId = 999;
     const advancing = internals.afterHandEnd();
     await vi.waitFor(() => {
       expect(match.createCheckpoint()).toMatchObject({
@@ -669,7 +730,7 @@ describe("MatchProcess checkpoints", () => {
     setNextHandDelayMs(5_000);
     const internals = match as unknown as {
       state: MatchState;
-      pendingWinRevealMs: number;
+      hand: HandLifecycle;
       afterHandEnd: () => Promise<void>;
     };
     internals.state.phase = "hand_ended";
@@ -683,7 +744,7 @@ describe("MatchProcess checkpoints", () => {
       winHan: 1,
       winYakuman: false,
     };
-    internals.pendingWinRevealMs = 3_000;
+    internals.hand.recordWinReveal(3_000);
     const advancing = internals.afterHandEnd();
     originalRuntime.advance(1_000);
     const checkpoint = match.createCheckpoint();
@@ -769,7 +830,7 @@ describe("MatchProcess checkpoints", () => {
     setNextHandDelayMs(5_000);
     const internals = match as unknown as {
       state: MatchState;
-      pendingWinRevealMs: number;
+      hand: HandLifecycle;
       afterHandEnd: () => Promise<void>;
     };
     internals.state.phase = "hand_ended";
@@ -783,7 +844,7 @@ describe("MatchProcess checkpoints", () => {
       winHan: 1,
       winYakuman: false,
     };
-    internals.pendingWinRevealMs = 3_000;
+    internals.hand.recordWinReveal(3_000);
     const advancing = internals.afterHandEnd();
     runtime.advance(1_000);
 
@@ -850,9 +911,7 @@ describe("MatchProcess checkpoints", () => {
     ).waitForWinReaction("draw");
     await Promise.resolve();
 
-    expect(() => match.createCheckpoint()).toThrow(
-      /transition win_reaction/
-    );
+    expect(() => match.createCheckpoint()).toThrow(/transition win_reaction/);
     expect(() => match.pauseAndSaveCheckpoint()).toThrow(
       /transition win_reaction/
     );
@@ -943,17 +1002,20 @@ describe("MatchProcess checkpoints", () => {
     expect(
       parseMatchCheckpoint({ ...legacyCheckpoint, schemaVersion: 1 })
     ).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
       mode: { type: "normal" },
       driver: { type: "normal" },
     });
     expect(
       parseMatchCheckpoint({ ...checkpoint, schemaVersion: 2 })
     ).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
     });
     expect(() =>
-      parseMatchCheckpoint({ ...checkpoint, schemaVersion: 4 })
+      parseMatchCheckpoint({
+        ...checkpoint,
+        schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION + 1,
+      })
     ).toThrow();
     expect(() =>
       parseMatchCheckpoint({
@@ -965,15 +1027,10 @@ describe("MatchProcess checkpoints", () => {
 
   it("round-trips and continues a quiescent human action window", async () => {
     const originalRuntime = controlledRuntime(10_000, 123);
-    const match = new MatchProcess(
-      "checkpoint-playing",
-      11,
-      humanPlayers(),
-      {
-        repository: ephemeralMatchRepository,
-        runtime: originalRuntime,
-      }
-    );
+    const match = new MatchProcess("checkpoint-playing", 11, humanPlayers(), {
+      repository: ephemeralMatchRepository,
+      runtime: originalRuntime,
+    });
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
     await match.start();
@@ -1035,15 +1092,10 @@ describe("MatchProcess checkpoints", () => {
 
   it("resumes the remaining deadline and applies the same default action", async () => {
     const originalRuntime = controlledRuntime(20_000, 321);
-    const match = new MatchProcess(
-      "checkpoint-expiry",
-      21,
-      humanPlayers(),
-      {
-        repository: ephemeralMatchRepository,
-        runtime: originalRuntime,
-      }
-    );
+    const match = new MatchProcess("checkpoint-expiry", 21, humanPlayers(), {
+      repository: ephemeralMatchRepository,
+      runtime: originalRuntime,
+    });
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
     await match.start();
@@ -1321,6 +1373,7 @@ describe("MatchProcess checkpoints", () => {
   });
 
   it("does not apply a liveness default after the match is paused", async () => {
+    setActionTimingMs({ buffer: 0 });
     const repository = createMemoryMatchRepository();
     const runtime = controlledRuntime(45_950, 812);
     const match = new MatchProcess(
@@ -1337,25 +1390,25 @@ describe("MatchProcess checkpoints", () => {
       resolveProbe = resolve;
     });
     const seat = match.createCheckpoint();
-    if (
-      seat.status !== "playing" ||
-      seat.checkpointKind !== "action_window"
-    ) {
+    if (seat.status !== "playing" || seat.checkpointKind !== "action_window") {
       throw new Error("expected an action checkpoint");
     }
-    match.attachHuman(seat.actionWindow.seat, () => undefined, () => probe);
+    let probeStarted = false;
+    match.attachHuman(
+      seat.actionWindow.seat,
+      () => undefined,
+      () => {
+        probeStarted = true;
+        return probe;
+      }
+    );
     const internals = match as unknown as {
-      bufferMs: [number, number, number, number];
       handleDeadlineExpiry: (seat: 0 | 1 | 2 | 3) => Promise<void>;
-      livenessProbeInflight: [boolean, boolean, boolean, boolean];
     };
-    internals.bufferMs[seat.actionWindow.seat] = 0;
     const beforeCount = match.replayFromBuffer(0, 0).length;
     const expiring = internals.handleDeadlineExpiry(seat.actionWindow.seat);
     await vi.waitFor(() => {
-      expect(internals.livenessProbeInflight[seat.actionWindow.seat]).toBe(
-        true
-      );
+      expect(probeStarted).toBe(true);
     });
 
     await match.pauseAndSaveCheckpoint();
@@ -1409,18 +1462,14 @@ describe("MatchProcess checkpoints", () => {
       .replayFromBuffer(0, 0)
       .filter(({ event }) => event.type === "discard").length;
     const internals = match as unknown as {
-      handleActDirect: (
-        seat: 0 | 1 | 2 | 3,
-        actionId: string
-      ) => Promise<void>;
-      automaticDefaultInFlight: boolean;
-      automaticDefaultPromise: Promise<void> | null;
-      automaticDefaultHandoffPromise: Promise<void> | null;
+      handleActDirect: (seat: 0 | 1 | 2 | 3, actionId: string) => Promise<void>;
     };
-
-    internals.automaticDefaultInFlight = true;
-    internals.automaticDefaultPromise = new Promise<void>(() => undefined);
-    internals.automaticDefaultHandoffPromise = gate.promise;
+    const handleActDirect = internals.handleActDirect.bind(match);
+    internals.handleActDirect = async (defaultSeat, actionId) => {
+      await gate.promise;
+      await handleActDirect(defaultSeat, actionId);
+    };
+    runtime.runNextTimer();
     let clientSettled = false;
     const clientAction = match.handleAct(seat, safeDefault.id).finally(() => {
       clientSettled = true;
@@ -1428,7 +1477,6 @@ describe("MatchProcess checkpoints", () => {
     await Promise.resolve();
     expect(clientSettled).toBe(false);
 
-    await internals.handleActDirect(seat, safeDefault.id);
     gate.resolve();
     await clientAction;
 
@@ -1496,16 +1544,13 @@ describe("MatchProcess checkpoints", () => {
     await match.start();
     const oldSocket = (): void => undefined;
     match.attachHuman(2, oldSocket);
-    const internals = match as unknown as {
-      livenessProbeMisses: [number, number, number, number];
-    };
-    internals.livenessProbeMisses[2] = 1;
     match.detachHuman(2, oldSocket);
 
     const checkpoint = match.createCheckpoint();
     if (checkpoint.status !== "playing") {
       throw new Error("expected a playing checkpoint");
     }
+    checkpoint.connectionPolicy.livenessProbeMisses[2] = 1;
     expect(checkpoint.connectionPolicy.disconnected[2]).toBe(true);
     expect(checkpoint.connectionPolicy.afkSelfReported[2]).toBe(false);
     expect(checkpoint.connectionPolicy.livenessProbeMisses[2]).toBe(1);
@@ -1519,9 +1564,15 @@ describe("MatchProcess checkpoints", () => {
       throw new Error("expected a restored playing checkpoint");
     }
     expect(restoredBeforeAttach.connectionPolicy.disconnected[2]).toBe(true);
-    expect(restoredBeforeAttach.connectionPolicy.livenessProbeMisses[2]).toBe(1);
+    expect(restoredBeforeAttach.connectionPolicy.livenessProbeMisses[2]).toBe(
+      1
+    );
 
-    restored.attachHuman(2, () => undefined, async () => true);
+    restored.attachHuman(
+      2,
+      () => undefined,
+      async () => true
+    );
     expect(restored.buildRoomState(2).seats[2].occupant).toMatchObject({
       kind: "human",
       connected: true,
@@ -1567,7 +1618,9 @@ describe("MatchProcess checkpoints", () => {
       captured?.status !== "playing" ||
       captured.checkpointKind !== "action_window"
     ) {
-      throw new Error("expected the repository to receive a playing checkpoint");
+      throw new Error(
+        "expected the repository to receive a playing checkpoint"
+      );
     }
     const discard = captured.actionWindow.legalActions.find(
       (action) => action.type === "discard"
@@ -1779,12 +1832,10 @@ describe("MatchProcess checkpoints", () => {
 
   it("replaces a saved checkpoint with a terminal tombstone", async () => {
     const repository = createMemoryMatchRepository();
-    const match = new MatchProcess(
-      "checkpoint-terminal",
-      71,
-      humanPlayers(),
-      { repository, runtime: controlledRuntime(120_000, 1701) }
-    );
+    const match = new MatchProcess("checkpoint-terminal", 71, humanPlayers(), {
+      repository,
+      runtime: controlledRuntime(120_000, 1701),
+    });
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
     await match.start();
@@ -1870,15 +1921,10 @@ describe("MatchProcess checkpoints", () => {
   });
 
   it("rejects corrupted active sequence and phase state", async () => {
-    const match = new MatchProcess(
-      "checkpoint-corrupt",
-      22,
-      humanPlayers(),
-      {
-        repository: ephemeralMatchRepository,
-        runtime: controlledRuntime(30_000, 456),
-      }
-    );
+    const match = new MatchProcess("checkpoint-corrupt", 22, humanPlayers(), {
+      repository: ephemeralMatchRepository,
+      runtime: controlledRuntime(30_000, 456),
+    });
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
     await match.start();
@@ -1902,12 +1948,12 @@ describe("MatchProcess checkpoints", () => {
     const disconnected = [...checkpoint.connectionPolicy.disconnected];
     disconnected[checkpoint.actionWindow.seat] = true;
     const disconnectedCheckpoint = parseMatchCheckpoint({
-        ...checkpoint,
-        connectionPolicy: {
-          ...checkpoint.connectionPolicy,
-          disconnected,
-        },
-      });
+      ...checkpoint,
+      connectionPolicy: {
+        ...checkpoint.connectionPolicy,
+        disconnected,
+      },
+    });
     expect(disconnectedCheckpoint).toMatchObject({
       checkpointKind: "action_window",
       connectionPolicy: { disconnected },
@@ -1925,9 +1971,15 @@ describe("MatchProcess checkpoints", () => {
     setDelayAfterDiscardMs(0);
     await match.start();
     const internals = match as unknown as {
-      callWindow: Array<unknown[] | null>;
+      calls: CallCoordinator;
     };
-    internals.callWindow[1] = [];
+    const calls = internals.calls.snapshot();
+    internals.calls.restore({
+      ...calls,
+      callWindows: calls.callWindows.map((window, seat) =>
+        seat === 1 ? [] : window
+      ),
+    });
 
     expect(() => match.createCheckpoint()).toThrow(
       /playing state is not quiescent \(engine phase awaiting_discard\)/

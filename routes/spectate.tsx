@@ -7,7 +7,7 @@ import type {
   TableRenderer,
   SeatEnrichment,
 } from "~/game/client/pixi/TableRenderer";
-import { useMatchStore } from "~/game/client/store";
+import { useMatchStore, type ConnStatus } from "~/game/client/store";
 import { GameWS, GameWSConnectionDetailsError } from "~/game/client/ws";
 import { mergeSeatNames } from "~/game/client/spectatorNames";
 import {
@@ -17,6 +17,8 @@ import {
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
 import { useScreenWakeLock } from "~/game/client/screenWakeLock";
 import { ViewerList } from "~/game/components/ViewerList";
+import { FIVE_MINUTE_SPECTATOR_DELAY_MS } from "~/game/protocol/spectatorDelay";
+import type { ClockStamp, PresentationContext } from "~/game/protocol/timing";
 import { POST_HAND_PEEK_DISCARD_LIMIT } from "~/game/client/postHandPeek";
 import {
   replayArrivalSoundTarget,
@@ -167,6 +169,12 @@ export default function GameSpectateRoute({
 
   // ---- Local replay-style state -----------------------------------------
   const [baseline, setBaseline] = useState<ReplayView | null>(null);
+  const [spectatorDelayMs, setSpectatorDelayMs] = useState(0);
+  const [liveTiming, setLiveTiming] = useState<{
+    clock: ClockStamp;
+    presentation?: PresentationContext;
+    seq: number;
+  } | null>(null);
   const [events, setEvents] = useState<GameEvent[]>([]);
   // `-1` = baseline (snapshot view). `>= 0` = state after applying
   // events[0..playIndex] over the baseline.
@@ -206,7 +214,7 @@ export default function GameSpectateRoute({
     ]
   >([null, null, null, null]);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
-  const [conn, setConn] = useState<string>("idle");
+  const [conn, setConn] = useState<ConnStatus>("idle");
   const [viewers, setViewers] = useState<ViewerPresence[]>([]);
   const [showViewerList, setShowViewerList] = useState(true);
   const [tenhouStreamStatus, setTenhouStreamStatus] = useState<
@@ -233,6 +241,7 @@ export default function GameSpectateRoute({
     beaconTelemetry("spectate_open", { matchId });
 
     useMatchStore.getState().setMatch(matchId, null);
+    setSpectatorDelayMs(tenhouRelay ? FIVE_MINUTE_SPECTATOR_DELAY_MS : 0);
     // NOTE: we deliberately do not call `installGameSoundBindings()`
     // here. That helper plays SFX off the live store's apply-event
     // bus, which would mean a spectator browsing past events (live
@@ -374,6 +383,17 @@ export default function GameSpectateRoute({
       matchId,
       spectate: true,
       onMessage: (msg: ServerMessage) => {
+        if ((msg.type === "snapshot" || msg.type === "event") && msg.clock) {
+          setLiveTiming({
+            clock: msg.clock,
+            presentation: msg.presentation,
+            seq: msg.seq,
+          });
+        }
+        if (msg.type === "spectator_config") {
+          setSpectatorDelayMs(msg.delayMs);
+          return;
+        }
         if (msg.type === "viewer_state") {
           setViewers(msg.viewers);
           return;
@@ -684,6 +704,12 @@ export default function GameSpectateRoute({
       currentWaits,
       roomState,
     });
+    if (live && liveTiming) {
+      args.conn = conn;
+      args.lastSeq = liveTiming.seq;
+      args.serverClock = liveTiming.clock;
+      args.presentation = liveTiming.presentation ?? null;
+    }
     latestRenderRef.current = args;
     r.render(args);
   }, [
@@ -700,6 +726,8 @@ export default function GameSpectateRoute({
     renderedPostHandPeekResult,
     currentWaits,
     t,
+    liveTiming,
+    conn,
   ]);
 
   // -----------------------------------------------------------------------
@@ -899,7 +927,7 @@ export default function GameSpectateRoute({
         <span
           className={`inline-block w-2 h-2 rounded-full ${
             isLive
-              ? tenhouRelay
+              ? spectatorDelayMs > 0
                 ? "bg-amber-400"
                 : "bg-red-500"
               : "bg-slate-400"
@@ -909,7 +937,9 @@ export default function GameSpectateRoute({
           {isLive
             ? tenhouRelay
               ? "Pseudo-live (5min delay)"
-              : "Live"
+              : spectatorDelayMs > 0
+                ? `Live (${spectatorDelayMs / 60_000} min delay)`
+                : "Live"
             : "Paused"}
         </span>
         <span className="opacity-60">·</span>
@@ -918,18 +948,22 @@ export default function GameSpectateRoute({
         </span>
         <span className="min-w-0 truncate text-xs opacity-50">{conn}</span>
       </div>
-      {tenhouRelay && tenhouStreamStatus === "waiting" && (
+      {((tenhouRelay && tenhouStreamStatus === "waiting") ||
+        (!tenhouRelay && spectatorDelayMs > 0 && baseline === null)) && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/40 px-4">
           <section
             role="status"
             aria-live="polite"
             className="w-[min(26rem,calc(100vw-2rem))] rounded-xl border border-white/25 bg-black/85 px-7 py-6 text-center text-white shadow-2xl"
           >
-            <h2 className="text-xl font-bold">Waiting for Tenhou</h2>
+            <h2 className="text-xl font-bold">
+              {tenhouRelay ? "Waiting for Tenhou" : "Waiting for delayed game"}
+            </h2>
             <div className="my-4 h-px w-full bg-white/25" />
             <p className="text-sm leading-6 text-white/80">
-              Tenhou makes live games available to spectators 5 minutes after
-              the game starts.
+              {tenhouRelay
+                ? "Tenhou makes live games available to spectators 5 minutes after the game starts."
+                : `This game has a ${spectatorDelayMs / 60_000} min spectator delay.`}
             </p>
             <p className="mt-2 text-sm leading-6 text-white/65">
               This viewer will begin automatically when the delayed stream is

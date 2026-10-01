@@ -31,6 +31,14 @@
  */
 
 import type { MatchView } from "../store";
+import { presentationStart } from "../presentation/presentationTimeline";
+import {
+  LIVE_DISCARD_SLIDE_MS,
+  LIVE_DISCARD_HOVER_MS,
+  LIVE_DISCARD_SETTLE_MS,
+  LIVE_DRAW_SLIDE_MS,
+  LIVE_MIN_DRAW_TO_DISCARD_MS,
+} from "~/game/presentation/policy";
 
 /** Number of seats. Matches the rest of the renderer. */
 const SEAT_COUNT = 4;
@@ -39,33 +47,33 @@ const SEAT_COUNT = 4;
  * there until the next draw proves the tile was not called. Phase B then
  * settles nudge → final. */
 export const PHASE_A_DURATION_MS = 350;
-export const PHASE_B_DURATION_MS = 150;
+export const PHASE_B_DURATION_MS = LIVE_DISCARD_SETTLE_MS;
 /** Draw-in slide: the freshly drawn tile enters sliding from the wall
  * into the tsumo slot. Fixed 0.3s. */
-export const DRAW_SLIDE_MS = 300;
+export const DRAW_SLIDE_MS = LIVE_DRAW_SLIDE_MS;
 /** Minimum visual time from a draw starting to that seat's discard starting. */
-export const MIN_DRAW_TO_DISCARD_MS = 500;
+export const MIN_DRAW_TO_DISCARD_MS = LIVE_MIN_DRAW_TO_DISCARD_MS;
 
 /**
  * Live "sequenced" presentation timeline, enabled via
  * {@link DiscardAnimator.setSequenced}. A burst can deliver the next
  * player's draw ~0 ms after the previous discard, so without spacing
- * the discard and draw animate on top of each other. In sequenced mode
- * each discard/draw is scheduled on a serial clock so
- * one turn reads:
+ * the discard's main slide and draw animate on top of each other.
+ * Sequenced mode schedules the discard slide/hover and draw on a serial
+ * clock, while final settling overlaps the draw:
  *
- *   0.0s  discard starts sliding out of the hand
- *   0.3s  discard reaches the hover (nudge) position   → discard SFX
- *   0.8s  discard starts settling flush
- *   0.95s next draw begins after the discard is settled
- *   1.25s draw slide finishes                          → draw SFX
- *   1.45s earliest following discard
+ *   0.00s discard starts sliding out of the hand
+ *   0.25s discard reaches the hover (nudge) position   → discard SFX
+ *   0.70s discard starts settling; next draw begins
+ *   0.85s discard finishes settling
+ *   1.00s draw slide finishes                         → draw SFX
+ *   1.20s earliest following discard
  *
  * (Plus any real server delay K from call windows, absorbed by the
  * `max(now, …)` in {@link DiscardAnimator.schedule}.)
  */
-export const SEQ_SLIDE_MS = 300;
-export const SEQ_HOVER_MS = 500;
+export const SEQ_SLIDE_MS = LIVE_DISCARD_SLIDE_MS;
+export const SEQ_HOVER_MS = LIVE_DISCARD_HOVER_MS;
 /**
  * Catch-up bound. If the serial clock would schedule an animation more
  * than this far ahead of real time, clear the queued presentation and
@@ -297,8 +305,8 @@ export class DiscardAnimator {
 
   /**
    * Enable / disable the live "sequenced" timeline. When on, discards
-   * hold at a hover, settle, and only then allow the following draw to
-   * begin. Off (default) starts the following draw immediately.
+   * slide and hold at a hover before the following draw begins. Final
+   * settling overlaps the draw. Off (default) starts the draw immediately.
    */
   setSequenced(flag: boolean): void {
     if (this.sequenced === flag) {
@@ -349,25 +357,20 @@ export class DiscardAnimator {
   }
 
   /**
-   * Reserve a draw after every unresolved discard has completed its
-   * final settle. The authoritative draw is already in `view`; this
-   * only delays its presentation overlay.
+   * Reserve a draw after the preceding slide/hover, starting final
+   * settling alongside it. The authoritative draw is already in `view`;
+   * this only delays its presentation overlay.
    */
   private scheduleDraw(now: number): number | null {
-    const unsettled = [...this.anims.values()].filter(
-      (anim) => anim.phase === "to-nudge" && anim.settleStartMs === null
-    );
-    const settleStartMs = Math.max(now, this.sequenceFreeMs);
-    const drawStartMs =
-      settleStartMs + (unsettled.length > 0 ? PHASE_B_DURATION_MS : 0);
-    if (drawStartMs - now > SEQ_CATCHUP_CAP_MS) {
-      this.snapBacklog(now);
+    const drawStartMs = this.schedule(now, DRAW_SLIDE_MS);
+    if (drawStartMs === null) {
       return null;
     }
-    for (const anim of unsettled) {
-      anim.settleStartMs = settleStartMs;
+    for (const anim of this.anims.values()) {
+      if (anim.phase === "to-nudge" && anim.settleStartMs === null) {
+        anim.settleStartMs = drawStartMs;
+      }
     }
-    this.sequenceFreeMs = drawStartMs + DRAW_SLIDE_MS;
     return drawStartMs;
   }
 
@@ -555,13 +558,21 @@ export class DiscardAnimator {
             : null;
           const earliestDiscardStartMs =
             drawStartMs === null ? now : drawStartMs + MIN_DRAW_TO_DISCARD_MS;
-          const discardStartMs = this.sequenced
-            ? this.schedule(
-                now,
-                SEQ_SLIDE_MS + SEQ_HOVER_MS,
-                earliestDiscardStartMs
-              )
-            : Math.max(now, earliestDiscardStartMs);
+          const timedStart = this.sequenced
+            ? presentationStart(view, "discard", now)
+            : null;
+          const discardStartMs =
+            timedStart ??
+            (this.sequenced
+              ? this.schedule(
+                  now,
+                  SEQ_SLIDE_MS + SEQ_HOVER_MS,
+                  earliestDiscardStartMs
+                )
+              : Math.max(now, earliestDiscardStartMs));
+          if (timedStart !== null) {
+            this.sequenceFreeMs = timedStart + SEQ_SLIDE_MS + SEQ_HOVER_MS;
+          }
           this.lastDrawStartMs[seat] = null;
           if (discardStartMs === null) {
             this.onDiscardLand?.(seat, isRiichiDeclaration, view.lastSeq);
@@ -610,7 +621,19 @@ export class DiscardAnimator {
           // Sequenced mode delays the slide until the preceding discard
           // has slid + hovered (serial clock), holding the drawn tile
           // hidden until then; otherwise it slides immediately.
-          const startMs = this.sequenced ? this.scheduleDraw(now) : now;
+          const timedStart = this.sequenced
+            ? presentationStart(view, "draw", now)
+            : null;
+          const startMs =
+            timedStart ?? (this.sequenced ? this.scheduleDraw(now) : now);
+          if (timedStart !== null) {
+            this.sequenceFreeMs = timedStart + DRAW_SLIDE_MS;
+            for (const anim of this.anims.values()) {
+              if (anim.phase === "to-nudge" && anim.settleStartMs === null) {
+                anim.settleStartMs = timedStart;
+              }
+            }
+          }
           if (startMs === null) {
             this.onDrawLand?.(seat, view.lastSeq);
             break;
@@ -629,8 +652,8 @@ export class DiscardAnimator {
     }
 
     // A hovering discard settles only after a following draw proves nobody
-    // called it. Sequenced mode reserves phase B immediately before that
-    // draw; non-sequenced mode retains the legacy concurrent transition.
+    // called it. Sequenced mode starts phase B with that queued draw;
+    // non-sequenced mode retains the legacy immediate transition.
     if (!snap) {
       for (const [seat, anim] of this.anims) {
         if (anim.phase !== "to-nudge") {

@@ -4,6 +4,7 @@ import type { GameEvent } from "~/game/protocol/messages";
 import type { Action, MatchState, Tile } from "~/game/rules";
 import { getPreset, presetToRuleSet } from "~/game/rules/presets";
 import { duplicateMatchSeed } from "./match-drivers/duplicatePlan";
+import { MATCH_CHECKPOINT_SCHEMA_VERSION } from "./checkpoint";
 import {
   MatchProcess,
   setDelayAfterDiscardMs,
@@ -113,22 +114,20 @@ describe("MatchProcess duplicate mode", () => {
           event.type === "hand_start"
       );
     expect(spectatorHandStart?.duplicateDrawQueues).toBeUndefined();
-      expect(spectatorHandStart?.duplicateWallState).toEqual(
-        projectedHandStart?.duplicateWallState
+    expect(spectatorHandStart?.duplicateWallState).toEqual(
+      projectedHandStart?.duplicateWallState
+    );
+    const snapshot = match.buildSnapshotForSeat(0);
+    expect(snapshot.type).toBe("snapshot");
+    if (snapshot.type === "snapshot") {
+      expect(snapshot.state.duplicateWallState).toEqual(
+        firstDraw?.duplicateWallState
       );
-      const snapshot = match.buildSnapshotForSeat(0);
-      expect(snapshot.type).toBe("snapshot");
-      if (snapshot.type === "snapshot") {
-        expect(snapshot.state.duplicateWallState).toEqual(
-          firstDraw?.duplicateWallState
-        );
-        useMatchStore
-          .getState()
-          .hydrateSnapshot(snapshot.state, snapshot.seq);
-        expect(useMatchStore.getState().duplicateWallState).toEqual(
-          firstDraw?.duplicateWallState
-        );
-      }
+      useMatchStore.getState().hydrateSnapshot(snapshot.state, snapshot.seq);
+      expect(useMatchStore.getState().duplicateWallState).toEqual(
+        firstDraw?.duplicateWallState
+      );
+    }
 
     const checkpoint = match.createCheckpoint();
     if (checkpoint.status !== "playing") {
@@ -144,7 +143,7 @@ describe("MatchProcess duplicate mode", () => {
     expect(firstDraw?.tile).toBe(handStart?.duplicateDrawQueues?.[0][0]);
 
     expect(checkpoint).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
       mode,
       driver: {
         type: "duplicate",
@@ -208,9 +207,7 @@ describe("MatchProcess duplicate mode", () => {
       throw new Error("expected a second seat-0 draw");
     }
     const matchInternals = internals(match);
-    matchInternals.state.hands[0] = tiles(
-      "4m4m4m4m1p2p3p4p5p6p7p8p9p1s"
-    );
+    matchInternals.state.hands[0] = tiles("4m4m4m4m1p2p3p4p5p6p7p8p9p1s");
     matchInternals.state.turn = 0;
     matchInternals.state.phase = "awaiting_discard";
     matchInternals.state.lastDrawn = ["1s", null, null, null];
@@ -273,9 +270,7 @@ describe("MatchProcess duplicate mode", () => {
     setDelayAfterDiscardMs(0);
     await match.start();
     const matchInternals = internals(match);
-    matchInternals.state.hands[2] = tiles(
-      "4m4m1p2p3p4p5p6p7p8p9p1s2s"
-    );
+    matchInternals.state.hands[2] = tiles("4m4m1p2p3p4p5p6p7p8p9p1s2s");
     matchInternals.state.discards = [["4m"], [], [], []];
     matchInternals.state.lastDiscard = { seat: 0, tile: "4m" };
     matchInternals.state.turn = 1;
@@ -325,15 +320,9 @@ describe("MatchProcess duplicate mode", () => {
     await match.start();
 
     const matchInternals = internals(match);
-    matchInternals.state.hands[1] = tiles(
-      "1m1m2m4m5m7p8p1s3s6s1z2z3z"
-    );
-    matchInternals.state.hands[2] = tiles(
-      "5z5z1m2m3m4p5p6p7s8s9s1z2z"
-    );
-    matchInternals.state.hands[3] = tiles(
-      "1m1m2m4m5m7p8p1s3s6s1z2z3z"
-    );
+    matchInternals.state.hands[1] = tiles("1m1m2m4m5m7p8p1s3s6s1z2z3z");
+    matchInternals.state.hands[2] = tiles("5z5z1m2m3m4p5p6p7s8s9s1z2z");
+    matchInternals.state.hands[3] = tiles("1m1m2m4m5m7p8p1s3s6s1z2z3z");
     matchInternals.state.discards = [["5z"], [], [], []];
     matchInternals.state.lastDiscard = { seat: 0, tile: "5z" };
     matchInternals.state.lastDrawn = [null, null, null, null];

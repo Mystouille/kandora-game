@@ -685,6 +685,7 @@ export default function GameMatchRoute({
     string | null
   >(null);
 
+  const [timingError, setTimingError] = useState<string | null>(null);
   const view = useMatchStore();
   const { t } = useLocale();
   const { track } = useTelemetry();
@@ -1098,7 +1099,7 @@ export default function GameMatchRoute({
           renderer.setResultPanelBoundsListener((rect) => {
             setResultPanelBounds(rect);
           });
-          renderer.setOnTileClick(({ index, tile, discardSource }) => {
+          renderer.setOnTileClick(({ index, tile, discardSource, intent }) => {
             cancelAutoDiscardTimer();
             // Optimistic discard for own seat; the server confirmation
             // (a `discard` event) will clear `pendingDiscard`.
@@ -1113,7 +1114,7 @@ export default function GameMatchRoute({
               tile,
               discardSource
             );
-            if (legal && wsRef.current?.act(legal.id)) {
+            if (legal && wsRef.current?.act(legal.id, intent)) {
               trackGameActionIntent("tile_click", legal.id, state);
               state.setPendingDiscard({
                 seat: state.mySeat,
@@ -1122,12 +1123,12 @@ export default function GameMatchRoute({
               });
             }
           });
-          renderer.setOnActionClick(({ action }) => {
+          renderer.setOnActionClick(({ action, intent }) => {
             cancelAutoDiscardTimer();
             // Generic dispatch for call / pass / ron / etc. buttons. The
             // server validated these into `legalActions`, so we just echo
             // the id back.
-            if (wsRef.current?.act(action.id)) {
+            if (wsRef.current?.act(action.id, intent)) {
               trackGameActionIntent(
                 "action_button",
                 action.id,
@@ -1264,6 +1265,10 @@ export default function GameMatchRoute({
         }
       },
       onError: (code, message) => {
+        if (code === "timing_update_required") {
+          setTimingError(message);
+          return;
+        }
         if (code === "takeover_required") {
           setSessionReplacedMessage(message);
           return;
@@ -1436,6 +1441,21 @@ export default function GameMatchRoute({
             }}
           />
         </div>
+        {timingError !== null && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80">
+            <div className="max-w-sm rounded-xl bg-emerald-950 px-8 py-6 text-center text-white">
+              <h2 className="text-lg font-semibold">Client update required</h2>
+              <p className="my-4">{timingError}</p>
+              <button
+                type="button"
+                className="rounded bg-emerald-500 px-5 py-2 font-bold text-emerald-950"
+                onClick={() => void navigate("/lobby", { replace: true })}
+              >
+                Return to lobby
+              </button>
+            </div>
+          </div>
+        )}
         {sessionReplacedMessage !== null && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 pointer-events-auto">
             <div className="flex max-w-sm flex-col items-center gap-4 rounded-xl border border-emerald-400/50 bg-emerald-950 px-8 py-6 text-center shadow-2xl">

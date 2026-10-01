@@ -98,13 +98,8 @@ interface MatchInternals {
   state: InternalState;
   afterHandEnd: () => Promise<void>;
   matchId: string;
-  sessionChips: number[];
-  sessionDabuken: boolean[];
-  gameIndex: number;
-  players: Map<number, { userId: string; displayName: string; isBot: boolean }>;
+  session: import("./session/sessionCoordinator").SessionCoordinator;
   continueVote: Array<"yes" | "no" | null>;
-  commandTransactionPromise: Promise<void> | null;
-  activeCommandTransactionId: number | null;
 }
 
 /**
@@ -271,9 +266,9 @@ describe("MatchProcess — Buu multi-game session", () => {
     }
     expect(checkpoint.votes).toEqual([null, "yes", "yes", "yes"]);
     expect(checkpoint.timeoutArmed).toBe(false);
-    expect(checkpoint.finalScores.find((score) => score.place === 1)?.seat).toBe(
-      0
-    );
+    expect(
+      checkpoint.finalScores.find((score) => score.place === 1)?.seat
+    ).toBe(0);
     expect(() =>
       parseMatchCheckpoint({
         ...checkpoint,
@@ -306,12 +301,10 @@ describe("MatchProcess — Buu multi-game session", () => {
     await done;
     await vi.waitFor(() => {
       expect(
-        (restored as unknown as MatchInternals).gameIndex
+        (restored as unknown as MatchInternals).session.snapshot().gameIndex
       ).toBe(1);
     });
-    expect(restored.replayFromBuffer(0, 0)).toEqual(
-      m.replayFromBuffer(0, 0)
-    );
+    expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
 
     // After resolving: a fresh match_start was emitted for game 1.
     const matchStarts = events.filter((e) => e.event.type === "match_start");
@@ -336,7 +329,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     }
 
     // gameIndex advanced; another Match doc was created for game 1.
-    expect(internals.gameIndex).toBe(1);
+    expect(internals.session.snapshot().gameIndex).toBe(1);
     expect(createMatchDocMock).toHaveBeenCalledTimes(2);
     const calls = createMatchDocMock.mock.calls as unknown as Array<
       [
@@ -387,9 +380,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     await vi.waitFor(() => {
       expect(restored.status).toBe("finished");
     });
-    expect(restored.replayFromBuffer(0, 0)).toEqual(
-      m.replayFromBuffer(0, 0)
-    );
+    expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
 
     const sessionEnds = events.filter((e) => e.event.type === "session_end");
     expect(sessionEnds).toHaveLength(1);
@@ -428,9 +419,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     await vi.waitFor(() => {
       expect(restored.status).toBe("finished");
     });
-    expect(restored.replayFromBuffer(0, 0)).toEqual(
-      m.replayFromBuffer(0, 0)
-    );
+    expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
 
     const sessionEnds = events.filter((e) => e.event.type === "session_end");
     expect(sessionEnds).toHaveLength(1);
@@ -484,7 +473,9 @@ describe("MatchProcess — Buu multi-game session", () => {
 
     await m.handleVoteContinue(0, "no");
     await done;
-    const sessionEnd = events.find((entry) => entry.event.type === "session_end");
+    const sessionEnd = events.find(
+      (entry) => entry.event.type === "session_end"
+    );
     expect(sessionEnd?.event).toMatchObject({
       type: "session_end",
       reason: "vote_no",
@@ -517,9 +508,9 @@ describe("MatchProcess — Buu multi-game session", () => {
     await done;
     expect(m.status).toBe("finished");
     expect(
-      m.replayFromBuffer(0, 0).filter(
-        ({ event }) => event.type === "session_end"
-      )
+      m
+        .replayFromBuffer(0, 0)
+        .filter(({ event }) => event.type === "session_end")
     ).toHaveLength(1);
   });
 
@@ -553,15 +544,15 @@ describe("MatchProcess — Buu multi-game session", () => {
     await restored.handleVoteContinue(1, "yes");
     await done;
     await vi.waitFor(() => {
-      expect((restored as unknown as MatchInternals).gameIndex).toBe(1);
+      expect(
+        (restored as unknown as MatchInternals).session.snapshot().gameIndex
+      ).toBe(1);
     });
 
-    expect(restored.replayFromBuffer(0, 0)).toEqual(
-      m.replayFromBuffer(0, 0)
-    );
-    expect((restored as unknown as MatchInternals).sessionChips).toEqual(
-      (m as unknown as MatchInternals).sessionChips
-    );
+    expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
+    expect(
+      (restored as unknown as MatchInternals).session.snapshot().sessionChips
+    ).toEqual((m as unknown as MatchInternals).session.snapshot().sessionChips);
   });
 
   it("replays a final yes vote and resumes its completed checkpoint", async () => {
@@ -608,8 +599,12 @@ describe("MatchProcess — Buu multi-game session", () => {
       throw new Error("expected a completed vote recovery");
     }
     await vi.waitFor(() => {
-      expect((restored as unknown as MatchInternals).gameIndex).toBe(1);
-      expect((recovered as unknown as MatchInternals).gameIndex).toBe(1);
+      expect(
+        (restored as unknown as MatchInternals).session.snapshot().gameIndex
+      ).toBe(1);
+      expect(
+        (recovered as unknown as MatchInternals).session.snapshot().gameIndex
+      ).toBe(1);
       expect(restored.createCheckpoint()).toMatchObject({
         checkpointKind: "action_window",
       });
@@ -725,23 +720,27 @@ describe("MatchProcess — Buu multi-game session", () => {
 
     // After permutation: new seat 0 = old seat 2 (winner).
     // Winner's post-settlement chips = 7.
-    expect(internals.sessionChips[0]).toBe(7);
+    expect(internals.session.snapshot().sessionChips[0]).toBe(7);
     // Dabuken was consumed by the chinmai doubling, not re-awarded.
-    expect(internals.sessionDabuken[0]).toBe(false);
+    expect(internals.session.snapshot().sessionDabuken[0]).toBe(false);
     // Chips total preserved across the permutation.
     const totalBefore = 1 + 0 + 5 + -3;
-    const totalAfter = internals.sessionChips.reduce((a, b) => a + b, 0);
+    const totalAfter = internals.session
+      .snapshot()
+      .sessionChips.reduce((a, b) => a + b, 0);
     expect(totalAfter).toBe(totalBefore);
 
     // New game's state.scores reset to ruleSet starting value.
     expect(internals.state.scores.every((s) => s === 6000)).toBe(true);
     // New game's state.chips/dabuken match the permuted session ledger.
-    expect(internals.state.chips).toEqual([...internals.sessionChips]);
-    expect(internals.state.dabuken).toEqual([...internals.sessionDabuken]);
+    expect(internals.state.chips).toEqual([
+      ...internals.session.snapshot().sessionChips,
+    ]);
+    expect(internals.state.dabuken).toEqual([
+      ...internals.session.snapshot().sessionDabuken,
+    ]);
 
-    const humanSeat = Array.from(internals.players.entries()).find(
-      ([, player]) => player.userId === "u0"
-    )?.[0];
+    const humanSeat = m.humanSeatForUser("u0");
     expect(m.humanSeatFor(sink)).toBe(humanSeat);
   });
 });

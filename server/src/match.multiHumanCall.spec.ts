@@ -43,16 +43,15 @@ import {
   setReadyCheckMs,
 } from "./match";
 import { parseMatchCheckpoint } from "./checkpoint";
+import { normalMatchMode } from "~/game/protocol/matchMode";
+import { createMatchDriver } from "./match-drivers/matchDriver";
+import { buildDiscardLegals } from "./session/legalActionBuilder";
 import {
   createMemoryMatchRepository,
   ephemeralMatchRepository,
   type MatchRepository,
 } from "./repository";
-import {
-  createInitialState,
-  type MatchState,
-  type Meld,
-} from "~/game/rules";
+import { createInitialState, type MatchState, type Meld } from "~/game/rules";
 import type {
   GameEvent,
   LegalAction,
@@ -155,7 +154,6 @@ interface MatchInternals {
     furitenTemp: [boolean, boolean, boolean, boolean];
     pendingShouminkan: unknown | null;
   };
-  legalActions: LegalAction[][];
   buildCallLegals: (
     options: Array<{ kind: "pon"; tiles: [Tile, Tile] }>
   ) => LegalAction[];
@@ -254,15 +252,13 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
   });
 
   it("does not advertise an edge-swap kuikae discard after chi", () => {
-    const m = makeFourHumanMatch(42);
-    const internals = m as unknown as MatchInternals;
-    internals.state = createInitialState(42);
-    internals.state.phase = "awaiting_discard";
-    internals.state.turn = 1;
-    internals.state.hands[1] = tiles("4m5m1p2p3p4p5p6p7p8p9p");
-    internals.state.lastDrawn = [null, null, null, null];
-    internals.state.lastDiscard = null;
-    internals.state.melds[1] = [
+    const state = createInitialState(42);
+    state.phase = "awaiting_discard";
+    state.turn = 1;
+    state.hands[1] = tiles("4m5m1p2p3p4p5p6p7p8p9p");
+    state.lastDrawn = [null, null, null, null];
+    state.lastDiscard = null;
+    state.melds[1] = [
       {
         type: "chi",
         tiles: ["1m", "2m", "3m"],
@@ -271,7 +267,11 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       },
     ];
 
-    const legals = internals.buildDiscardLegals(1);
+    const legals = buildDiscardLegals(
+      state,
+      createMatchDriver(normalMatchMode, "tenhou-hanchan"),
+      1
+    );
 
     expect(legals).not.toContainEqual(
       expect.objectContaining({ id: "discard:hand:4m" })
@@ -377,7 +377,7 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     // call window. Seat 1 also has chi (2m + 3m → 234m), so its
     // ron id is shifted by one; seats 2/3 only have ron.
     const ronId = (seat: 1 | 2 | 3): string => {
-      const legals = internals.legalActions[seat];
+      const legals = m.buildSnapshotForSeat(seat).legalActions;
       const ron = legals.find((a) => a.type === "ron");
       expect(ron, `seat ${seat} should have a ron legal`).toBeDefined();
       // Cast checked above.
@@ -452,11 +452,11 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     let seatOneExecutionStarted = false;
     const m = makeFourHumanMatch(242, repository);
     await m.start();
-    const internals = plantThreeRonScenario(m);
+    plantThreeRonScenario(m);
     await m.handleAct(0, "discard:4m");
-    const seat2Ron = internals.legalActions[2].find(
-      (action) => action.type === "ron"
-    );
+    const seat2Ron = m
+      .buildSnapshotForSeat(2)
+      .legalActions.find((action) => action.type === "ron");
     if (!seat2Ron) {
       throw new Error("expected seat 2 ron");
     }
@@ -481,9 +481,9 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     releaseSeatOne();
     await Promise.all([seatOnePass, seatTwoRon]);
 
-    expect(internals.legalActions[1]).toEqual([]);
-    expect(internals.legalActions[2]).toEqual([]);
-    expect(internals.legalActions[3]).not.toEqual([]);
+    expect(m.buildSnapshotForSeat(1).legalActions).toEqual([]);
+    expect(m.buildSnapshotForSeat(2).legalActions).toEqual([]);
+    expect(m.buildSnapshotForSeat(3).legalActions).not.toEqual([]);
     await m.handleAct(3, "pass");
     const win = m
       .replayFromBuffer(0, 0)
@@ -514,12 +514,12 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     const disconnected = [...checkpoint.connectionPolicy.disconnected];
     disconnected[2] = true;
     const disconnectedCheckpoint = parseMatchCheckpoint({
-        ...checkpoint,
-        connectionPolicy: {
-          ...checkpoint.connectionPolicy,
-          disconnected,
-        },
-      });
+      ...checkpoint,
+      connectionPolicy: {
+        ...checkpoint.connectionPolicy,
+        disconnected,
+      },
+    });
     expect(disconnectedCheckpoint).toMatchObject({
       checkpointKind: "call_window",
       connectionPolicy: { disconnected },
@@ -540,9 +540,7 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     await m.handleAct(3, "pass");
     await restored.handleAct(3, "pass");
 
-    expect(restored.replayFromBuffer(0, 0)).toEqual(
-      m.replayFromBuffer(0, 0)
-    );
+    expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
     for (const seat of [0, 1, 2, 3] as const) {
       const originalSnapshot = m.buildSnapshotForSeat(seat);
       const restoredSnapshot = restored.buildSnapshotForSeat(seat);
@@ -575,7 +573,7 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     };
     const m = makeFourHumanMatch(144, repository);
     await m.start();
-    const internals = plantThreeRonScenario(m);
+    plantThreeRonScenario(m);
     await m.handleAct(0, "discard:4m");
     await m.handleAct(1, "pass");
 
@@ -596,9 +594,9 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(rolledBack.callTimers[2]).not.toBeNull();
     expect(rolledBack.callTimers[3]).not.toBeNull();
 
-    const seat2Ron = internals.legalActions[2].find(
-      (action) => action.type === "ron"
-    );
+    const seat2Ron = m
+      .buildSnapshotForSeat(2)
+      .legalActions.find((action) => action.type === "ron");
     if (!seat2Ron) {
       throw new Error("expected seat 2 ron");
     }
@@ -647,7 +645,7 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       state: MatchState;
       setSeatLegals: (seat: 0, actions: LegalAction[]) => void;
     };
-    internals.state = chankanState;
+    Object.assign(internals.state, chankanState);
     internals.setSeatLegals(0, [
       {
         id: "discard:draw:3m",
@@ -691,9 +689,7 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(restoredState.phase).toBe("awaiting_discard");
     expect(restoredState.pendingShouminkan).toBeNull();
     expect(restoredState.melds[0][0].type).toBe("shouminkan");
-    expect(restored.replayFromBuffer(0, 0)).toEqual(
-      m.replayFromBuffer(0, 0)
-    );
+    expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
   });
 
   it("atamahane: seat 2's ron auto-closes seat 3's still-open ron window (downstream head-bumped)", async () => {
@@ -723,8 +719,7 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     await m.start();
 
     const internals = m as unknown as MatchInternals & {
-      callWindow: (unknown | null)[];
-      pendingHumanCallActions: (LegalAction | null)[];
+      calls: import("./session/callCoordinator").CallCoordinator;
       state: MatchInternals["state"] & { ruleSet: { atamahane: boolean } };
     };
     expect(internals.state.phase).toBe("awaiting_discard");
@@ -759,12 +754,14 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     await m.handleAct(0, "discard:4m");
 
     // All three non-discarder windows opened.
-    expect(internals.callWindow[1]).not.toBeNull();
-    expect(internals.callWindow[2]).not.toBeNull();
-    expect(internals.callWindow[3]).not.toBeNull();
+    expect(internals.calls.snapshot().callWindows[1]).not.toBeNull();
+    expect(internals.calls.snapshot().callWindows[2]).not.toBeNull();
+    expect(internals.calls.snapshot().callWindows[3]).not.toBeNull();
 
     const seat2Ron = (() => {
-      const ron = internals.legalActions[2].find((a) => a.type === "ron");
+      const ron = m
+        .buildSnapshotForSeat(2)
+        .legalActions.find((a) => a.type === "ron");
       expect(ron).toBeDefined();
       return (ron as LegalAction).id;
     })();
@@ -774,9 +771,11 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     // but leave seat 1's window open (upstream).
     await m.handleAct(2, seat2Ron);
 
-    expect(internals.callWindow[3]).toBeNull();
-    expect(internals.pendingHumanCallActions[3]?.type).toBe("pass");
-    expect(internals.callWindow[1]).not.toBeNull();
+    expect(internals.calls.snapshot().callWindows[3]).toBeNull();
+    expect(internals.calls.snapshot().pendingHumanCallActions[3]?.type).toBe(
+      "pass"
+    );
+    expect(internals.calls.snapshot().callWindows[1]).not.toBeNull();
     // Resolution must wait on seat 1.
     expect(internals.state.phase).toBe("awaiting_draw");
     // No win yet either.
@@ -867,7 +866,9 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(sinks[3].lastLegals?.length ?? 0).toBeGreaterThan(0);
 
     const seat2Ron = (() => {
-      const ron = internals.legalActions[2].find((a) => a.type === "ron");
+      const ron = m
+        .buildSnapshotForSeat(2)
+        .legalActions.find((a) => a.type === "ron");
       expect(ron).toBeDefined();
       return (ron as LegalAction).id;
     })();

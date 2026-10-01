@@ -13,6 +13,11 @@
  */
 import { create } from "zustand";
 import type {
+  ActionWindowView,
+  ClockStamp,
+  PresentationContext,
+} from "~/game/protocol/timing";
+import type {
   DuplicateWallState,
   GameEvent,
   LegalAction,
@@ -104,6 +109,9 @@ export interface PendingDiscard {
 }
 
 export interface MatchView {
+  actionWindow?: ActionWindowView | null;
+  serverClock?: ClockStamp | null;
+  presentation?: PresentationContext | null;
   matchId: string | null;
   mySeat: Seat | null;
   /** Hand-by-seat: `Tile[]` for own seat, `(Tile|null)[]` for opponents. */
@@ -468,6 +476,11 @@ interface MatchStore extends MatchView {
   ) => void;
   setRoomState: (rs: RoomState | null) => void;
   setViewers: (viewers: ViewerPresence[]) => void;
+  setTimingMetadata: (metadata: {
+    actionWindow?: ActionWindowView | null;
+    clock?: ClockStamp;
+    presentation?: PresentationContext;
+  }) => void;
   reset: () => void;
 }
 
@@ -476,6 +489,9 @@ const emptyDiscards: Tile[][] = [[], [], [], []];
 const emptyMelds: Meld[][] = [[], [], [], []];
 
 const initialState: MatchView = {
+  actionWindow: null,
+  serverClock: null,
+  presentation: null,
   matchId: null,
   mySeat: null,
   hands: emptyHands,
@@ -567,6 +583,18 @@ export const useMatchStore = create<MatchStore>((set) => ({
     set({ actionDeadline });
   },
 
+  setTimingMetadata: (metadata) => {
+    set({
+      ...(metadata.actionWindow !== undefined
+        ? { actionWindow: metadata.actionWindow }
+        : {}),
+      ...(metadata.clock !== undefined ? { serverClock: metadata.clock } : {}),
+      ...(metadata.presentation !== undefined
+        ? { presentation: metadata.presentation }
+        : {}),
+    });
+  },
+
   setActionBufferMs: (actionBufferMs) => {
     set({ actionBufferMs });
   },
@@ -650,9 +678,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
         boolean | null,
       ],
       ryuukyokuTenpaiHands: (snap.ryuukyokuTenpaiHands
-        ? snap.ryuukyokuTenpaiHands.map((hand) =>
-            hand ? [...hand] : null
-          )
+        ? snap.ryuukyokuTenpaiHands.map((hand) => (hand ? [...hand] : null))
         : [null, null, null, null]) as [
         Tile[] | null,
         Tile[] | null,
@@ -1052,8 +1078,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ...state.ryuukyokuDeclarations,
           ] as MatchView["ryuukyokuDeclarations"];
           ryuukyokuDeclarations[event.seat] = event.tenpai;
-          const ryuukyokuTenpaiHands = state.ryuukyokuTenpaiHands.map(
-            (hand) => (hand ? [...hand] : null)
+          const ryuukyokuTenpaiHands = state.ryuukyokuTenpaiHands.map((hand) =>
+            hand ? [...hand] : null
           ) as MatchView["ryuukyokuTenpaiHands"];
           ryuukyokuTenpaiHands[event.seat] =
             event.tenpai && event.hand ? [...event.hand] : null;

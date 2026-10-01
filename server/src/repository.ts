@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { GameEvent, Seat } from "~/game/protocol/messages";
 import type { MatchModeConfig } from "~/game/protocol/matchMode";
+import type { SpectatorDelayMs } from "~/game/protocol/spectatorDelay";
 import {
   MatchCheckpointSchema,
   parseMatchCheckpoint,
@@ -69,8 +70,9 @@ function checkpointDefaultActionId(
         (action.discardSource === "draw" || action.discardSource === undefined)
     );
     return (
-      tsumogiri ?? legals.find((action) => action.type === "discard")
-    )?.id ?? null;
+      (tsumogiri ?? legals.find((action) => action.type === "discard"))?.id ??
+      null
+    );
   }
   if (checkpoint.checkpointKind === "call_window") {
     return (
@@ -222,6 +224,7 @@ export interface CreateMatchArgs {
   seed: number;
   ruleSet: string;
   mode?: MatchModeConfig;
+  spectatorDelayMs?: SpectatorDelayMs;
   players: PersistedMatchPlayer[];
   initialEventSeq: number;
   sessionId?: string;
@@ -307,12 +310,13 @@ interface MemoryMatchJournal {
 }
 
 export interface MemoryMatchRepository
-  extends MatchRepository,
-    MatchEventJournalStore {
+  extends MatchRepository, MatchEventJournalStore {
   inspectMatchEventJournal(matchId: string): MemoryMatchJournal | null;
 }
 
-function cloneMatchEvents(events: PersistedMatchEvent[]): PersistedMatchEvent[] {
+function cloneMatchEvents(
+  events: PersistedMatchEvent[]
+): PersistedMatchEvent[] {
   return JSON.parse(JSON.stringify(events)) as PersistedMatchEvent[];
 }
 
@@ -330,7 +334,9 @@ export function assertContiguousMatchEvents(events: PersistedMatchEvent[]): {
   for (let index = 0; index < events.length; index += 1) {
     const entry = events[index];
     if (entry.seq !== firstSeq + index) {
-      throw new Error(`Match event batch is not contiguous at seq ${entry.seq}`);
+      throw new Error(
+        `Match event batch is not contiguous at seq ${entry.seq}`
+      );
     }
     if (!Number.isFinite(entry.emittedAt)) {
       throw new Error(`Match event ${entry.seq} has an invalid timestamp`);
@@ -359,7 +365,7 @@ export function createMemoryMatchRepository(): MemoryMatchRepository {
     archiveMatch: async ({ matchId, events }) => {
       const nextSeq =
         events.length === 0
-          ? journals.get(matchId)?.nextSeq ?? 0
+          ? (journals.get(matchId)?.nextSeq ?? 0)
           : assertContiguousMatchEvents(events).nextSeq;
       journals.set(matchId, {
         status: "finished",
@@ -412,15 +418,12 @@ export function createMemoryMatchRepository(): MemoryMatchRepository {
       if (records.get(matchId)?.kind === "terminal") {
         throw new Error(`Cannot save command for terminal match ${matchId}`);
       }
-      records.set(
-        matchId,
-        {
-          kind: "checkpoint",
-          recovery: parseMatchRecoveryRecord(
-            JSON.parse(JSON.stringify({ checkpoint, pendingCommand: command }))
-          ),
-        }
-      );
+      records.set(matchId, {
+        kind: "checkpoint",
+        recovery: parseMatchRecoveryRecord(
+          JSON.parse(JSON.stringify({ checkpoint, pendingCommand: command }))
+        ),
+      });
     },
     loadCheckpoint: async (matchId) => {
       const record = records.get(matchId);

@@ -24,8 +24,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatchProcess, setDelayAfterDiscardMs } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
+import {
+  FIVE_MINUTE_SPECTATOR_DELAY_MS,
+  type SpectatorDelayMs,
+} from "~/game/protocol/spectatorDelay";
 
-function makeMatch(seed: number): MatchProcess {
+function makeMatch(
+  seed: number,
+  spectatorDelayMs: SpectatorDelayMs = 0
+): MatchProcess {
   return new MatchProcess(
     `m-delay-${seed}-${Math.random().toString(36).slice(2, 8)}`,
     seed,
@@ -35,7 +42,12 @@ function makeMatch(seed: number): MatchProcess {
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
     ],
-    { repository: ephemeralMatchRepository }
+    { repository: ephemeralMatchRepository },
+    undefined,
+    undefined,
+    "tenhou-hanchan",
+    undefined,
+    spectatorDelayMs
   );
 }
 
@@ -111,6 +123,55 @@ describe("MatchProcess delayed-spectator API", () => {
     const match = makeMatch(30);
 
     expect(match.spectatorDispatchDelayMs(5 * 60_000)).toBe(5 * 60_000);
+  });
+
+  it("enforces the creator's minimum delay even when a viewer requests instant", () => {
+    const match = makeMatch(33, FIVE_MINUTE_SPECTATOR_DELAY_MS);
+
+    expect(match.spectatorDispatchDelayMs(0)).toBe(300_000);
+    expect(match.spectatorDispatchDelayMs(60_000)).toBe(300_000);
+    expect(match.spectatorDispatchDelayMs(600_000)).toBe(600_000);
+    expect(match.summary().spectatorDelayMs).toBe(300_000);
+    expect(match.buildRoomState(null).spectatorDelayMs).toBe(300_000);
+    expect(() => match.attachSpectator(() => undefined)).toThrow(
+      /requires delayed spectating/
+    );
+  });
+
+  it("withholds game events and resync until the full five-minute threshold", async () => {
+    vi.useFakeTimers();
+    const t0 = 5_000_000_000;
+    vi.setSystemTime(t0);
+    const match = makeMatch(35, FIVE_MINUTE_SPECTATOR_DELAY_MS);
+    await match.start();
+    const sink = makeDelayedSink();
+    const delayMs = match.spectatorDispatchDelayMs(0);
+    const spectator = match.attachDelayedSpectator(sink.send, 0);
+
+    expect(spectator.delayMs).toBe(300_000);
+    expect(sink.messages).toContainEqual({
+      type: "spectator_config",
+      matchId: match.matchId,
+      delayMs: 300_000,
+    });
+    expect(sink.events).toHaveLength(0);
+    expect(sink.messages.some((message) => message.type === "snapshot")).toBe(
+      false
+    );
+    expect(
+      match.replayDelayedSpectatorBuffer(0, delayMs, t0 + 299_999)
+    ).toEqual([]);
+    expect(match.replayDelayedSpectatorBuffer(0, 0, t0 + 299_999)).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(sink.events).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sink.events.length).toBeGreaterThan(0);
+    expect(
+      match.replayDelayedSpectatorBuffer(0, delayMs).length
+    ).toBeGreaterThan(0);
+
+    match.detachDelayedSpectator(spectator);
   });
 
   it("broadcasts presence immediately without releasing delayed events", async () => {

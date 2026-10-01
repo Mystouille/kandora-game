@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { MatchModeConfigSchema } from "~/game/protocol/matchMode";
+import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
+import {
+  ActionWindowViewSchema,
+  TimingModeSchema,
+} from "~/game/protocol/timing";
 import {
   GameEventSchema,
   LegalActionSchema,
@@ -9,7 +14,20 @@ import {
 import { MatchStateSchema } from "~/game/rules/state";
 import { RuleSetSchema } from "~/game/rules/ruleSet";
 
-export const MATCH_CHECKPOINT_SCHEMA_VERSION = 3 as const;
+export const MATCH_CHECKPOINT_SCHEMA_VERSION = 5 as const;
+
+const DecisionTimingCheckpointSchema = z
+  .object({
+    mode: TimingModeSchema,
+    nextWindow: z.number().int().positive(),
+    windows: z.tuple([
+      ActionWindowViewSchema.nullable(),
+      ActionWindowViewSchema.nullable(),
+      ActionWindowViewSchema.nullable(),
+      ActionWindowViewSchema.nullable(),
+    ]),
+  })
+  .strict();
 
 const CheckpointPlayerSchema = z
   .object({
@@ -83,6 +101,8 @@ export const WaitingRoomCheckpointSchema = z
     matchId: z.string().min(1),
     seed: z.number().int(),
     presetId: z.string().min(1),
+    spectatorDelayMs: SpectatorDelayMsSchema.default(0),
+    decisionTiming: DecisionTimingCheckpointSchema.optional(),
     mode: MatchModeConfigSchema,
     driver: MatchDriverSnapshotSchema,
     ruleSet: RuleSetSchema,
@@ -113,9 +133,7 @@ export const WaitingRoomCheckpointSchema = z
     }
   });
 
-export type WaitingRoomCheckpoint = z.infer<
-  typeof WaitingRoomCheckpointSchema
->;
+export type WaitingRoomCheckpoint = z.infer<typeof WaitingRoomCheckpointSchema>;
 
 const PlayingCheckpointBaseShape = {
   schemaVersion: z.literal(MATCH_CHECKPOINT_SCHEMA_VERSION),
@@ -124,6 +142,8 @@ const PlayingCheckpointBaseShape = {
   matchId: z.string().min(1),
   seed: z.number().int(),
   presetId: z.string().min(1),
+  spectatorDelayMs: SpectatorDelayMsSchema.default(0),
+  decisionTiming: DecisionTimingCheckpointSchema.optional(),
   mode: MatchModeConfigSchema,
   driver: MatchDriverSnapshotSchema,
   seats: z.tuple([
@@ -228,9 +248,7 @@ export const PlayingActionCheckpointSchema = z
     checkpointKind: z.literal("action_window"),
     actionWindow: z
       .object({
-        kind: z
-          .enum(["turn", "ryuukyoku_declaration"])
-          .default("turn"),
+        kind: z.enum(["turn", "ryuukyoku_declaration"]).default("turn"),
         seat: SeatSchema,
         legalActions: z.array(LegalActionSchema).min(1),
         elapsedMs: z.number().int().nonnegative(),
@@ -285,8 +303,7 @@ export const PlayingActionCheckpointSchema = z
         context.addIssue({
           code: "custom",
           path: ["actionWindow", "legalActions"],
-          message:
-            "Ryuukyoku declaration window must contain Tenpai and Noten",
+          message: "Ryuukyoku declaration window must contain Tenpai and Noten",
         });
       }
     }
@@ -337,9 +354,7 @@ export const PlayingCallCheckpointSchema = z
     ]),
     pendingBotRons: z.array(SeatSchema),
     pendingBotCalls: z.array(
-      z
-        .object({ seat: SeatSchema, option: CallOptionSchema })
-        .strict()
+      z.object({ seat: SeatSchema, option: CallOptionSchema }).strict()
     ),
     pendingChankanBotRons: z.array(SeatSchema),
     callTimers: z.tuple([
@@ -422,7 +437,9 @@ export const PlayingCallCheckpointSchema = z
             path: ["callTimers", seat],
             message: "Open call window requires an active timer",
           });
-        } else if (!timer.legalActions.some((action) => action.type === "pass")) {
+        } else if (
+          !timer.legalActions.some((action) => action.type === "pass")
+        ) {
           context.addIssue({
             code: "custom",
             path: ["callTimers", seat, "legalActions"],
@@ -476,9 +493,7 @@ export const PlayingCallCheckpointSchema = z
     });
   });
 
-export type PlayingCallCheckpoint = z.infer<
-  typeof PlayingCallCheckpointSchema
->;
+export type PlayingCallCheckpoint = z.infer<typeof PlayingCallCheckpointSchema>;
 
 export const PlayingReadyCheckpointSchema = z
   .object({
@@ -682,7 +697,11 @@ function migrateLegacyCheckpoint(input: unknown): unknown {
   ) {
     return input;
   }
-  if (input.schemaVersion === 2) {
+  if (
+    input.schemaVersion === 2 ||
+    input.schemaVersion === 3 ||
+    input.schemaVersion === 4
+  ) {
     return {
       ...input,
       schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,

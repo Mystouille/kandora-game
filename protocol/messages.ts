@@ -1,5 +1,18 @@
 import { z } from "zod";
 import { MatchModeConfigSchema } from "./matchMode";
+import { SpectatorDelayMsSchema } from "./spectatorDelay";
+import { SeatSchema } from "./seat";
+import {
+  ActionWindowViewSchema,
+  ClockProbeSchema,
+  ClockSampleSchema,
+  ClockStampSchema,
+  PresentationContextSchema,
+  TIMING_CAPABILITY,
+  TimingModeSchema,
+  LatencyProbeSchema,
+  LatencyReplySchema,
+} from "./timing";
 
 /**
  * WebSocket protocol between game client and game-server.
@@ -28,13 +41,7 @@ import { MatchModeConfigSchema } from "./matchMode";
 export const TileSchema = z.string().regex(/^([0-9][mps]|[1-7]z)$/);
 export type Tile = z.infer<typeof TileSchema>;
 
-const SeatSchema = z.union([
-  z.literal(0),
-  z.literal(1),
-  z.literal(2),
-  z.literal(3),
-]);
-export type Seat = z.infer<typeof SeatSchema>;
+export type { Seat } from "./seat";
 
 const NonnegativeCountTupleSchema = z.tuple([
   z.number().int().nonnegative(),
@@ -336,77 +343,77 @@ const HandEndEvent = z
     abortKind: z
       .enum(["kyuushuu", "suufon_renda", "suucha_riichi", "sanchahou"])
       .optional(),
-  /** Combined per-seat point delta for this hand. */
-  delta: z.array(z.number().int()).length(4).optional(),
-  /** Per-seat tenpai status at exhaustive draw. */
-  tenpai: z.array(z.boolean()).length(4).optional(),
-  /**
-   * Native in-app declaration sequence, ordered East through North.
-   * Archived replay logs merge the four transient live declaration
-   * events into this field. Legacy and platform replays omit it.
-   */
-  declarations: z
-    .array(
-      z.object({
-        seat: SeatSchema,
-        tenpai: z.boolean(),
-      })
-    )
-    .length(4)
-    .optional(),
-  /** Per-seat nagashi mangan flag at exhaustive draw. */
-  nagashi: z.array(z.boolean()).length(4).optional(),
-  /** Scores after this hand is settled. */
-  scores: z.array(z.number().int()).length(4).optional(),
-  /** Honba on this hand (the value used in payments). */
-  honba: z.number().int().nonnegative().optional(),
-  /** Riichi sticks on the table when the hand ended (pre-collection). */
-  riichiSticks: z.number().int().nonnegative().optional(),
-  /**
-   * Per-seat wait tiles at hand end (length 4). `null` for seats
-   * not tenpai (or when the source doesn't record waits). Used
-   * by the replay `showWaits` overlay to render each tenpai
-   * seat's wait set without recomputing on the client — the
-   * server-recorded value is authoritative (accounts for open
-   * melds, furiten, kuikae, etc., as far as the rules engine
-   * knows about them).
-   */
-  waits: z.array(z.array(TileSchema).nullable()).length(4).optional(),
-  /**
-   * Per-seat full concealed hand revealed at hand end (length 4).
-   * Populated for every tenpai seat when
-   * `reason === "exhaustive_draw"`, or for just the declaring seat
-   * when `reason === "abort"` and `abortKind === "kyuushuu"`;
-   * `null` for seats that don't reveal. Lets the renderer flip the
-   * revealed hand(s) face-up at their seat band — the tenpai
-   * player's wait shape at a draw, or the ≥9 terminals/honors that
-   * justified a kyuushuu abort.
-   */
-  tenpaiHands: z.array(z.array(TileSchema).nullable()).length(4).optional(),
-  /**
-   * Buu Mahjong chip delta for this hand (winner gain + sinker
-   * losses). Sums to zero. Omitted when `ruleSet.buuMode` is off.
-   */
-  chipDelta: z.array(z.number().int()).length(4).optional(),
-  /** Number of sinking seats (winner excluded) at hand-end. */
-  sinkingCount: z.number().int().min(0).max(3).optional(),
-  /** True iff this hand consumed the winner's dabuken token. */
-  dabukenConsumed: z.boolean().optional(),
-  /** True iff this hand awarded a dabuken to the winner. */
-  dabukenAwarded: z.boolean().optional(),
-  /**
-   * Buu Mahjong absolute chip totals AFTER this hand's
-   * chipDelta has been applied. Lets the client refresh the
-   * player-nameplate chip counters immediately on hand_end
-   * without recomputing from chipDelta. Omitted for non-Buu.
-   */
-  chips: z.array(z.number().int()).length(4).optional(),
-  /**
-   * Buu Mahjong per-seat dabuken token state AFTER this hand's
-   * award / clearing has been applied. Lets the client refresh
-   * the dabuken token overlay immediately on hand_end. Omitted
-   * for non-Buu.
-   */
+    /** Combined per-seat point delta for this hand. */
+    delta: z.array(z.number().int()).length(4).optional(),
+    /** Per-seat tenpai status at exhaustive draw. */
+    tenpai: z.array(z.boolean()).length(4).optional(),
+    /**
+     * Native in-app declaration sequence, ordered East through North.
+     * Archived replay logs merge the four transient live declaration
+     * events into this field. Legacy and platform replays omit it.
+     */
+    declarations: z
+      .array(
+        z.object({
+          seat: SeatSchema,
+          tenpai: z.boolean(),
+        })
+      )
+      .length(4)
+      .optional(),
+    /** Per-seat nagashi mangan flag at exhaustive draw. */
+    nagashi: z.array(z.boolean()).length(4).optional(),
+    /** Scores after this hand is settled. */
+    scores: z.array(z.number().int()).length(4).optional(),
+    /** Honba on this hand (the value used in payments). */
+    honba: z.number().int().nonnegative().optional(),
+    /** Riichi sticks on the table when the hand ended (pre-collection). */
+    riichiSticks: z.number().int().nonnegative().optional(),
+    /**
+     * Per-seat wait tiles at hand end (length 4). `null` for seats
+     * not tenpai (or when the source doesn't record waits). Used
+     * by the replay `showWaits` overlay to render each tenpai
+     * seat's wait set without recomputing on the client — the
+     * server-recorded value is authoritative (accounts for open
+     * melds, furiten, kuikae, etc., as far as the rules engine
+     * knows about them).
+     */
+    waits: z.array(z.array(TileSchema).nullable()).length(4).optional(),
+    /**
+     * Per-seat full concealed hand revealed at hand end (length 4).
+     * Populated for every tenpai seat when
+     * `reason === "exhaustive_draw"`, or for just the declaring seat
+     * when `reason === "abort"` and `abortKind === "kyuushuu"`;
+     * `null` for seats that don't reveal. Lets the renderer flip the
+     * revealed hand(s) face-up at their seat band — the tenpai
+     * player's wait shape at a draw, or the ≥9 terminals/honors that
+     * justified a kyuushuu abort.
+     */
+    tenpaiHands: z.array(z.array(TileSchema).nullable()).length(4).optional(),
+    /**
+     * Buu Mahjong chip delta for this hand (winner gain + sinker
+     * losses). Sums to zero. Omitted when `ruleSet.buuMode` is off.
+     */
+    chipDelta: z.array(z.number().int()).length(4).optional(),
+    /** Number of sinking seats (winner excluded) at hand-end. */
+    sinkingCount: z.number().int().min(0).max(3).optional(),
+    /** True iff this hand consumed the winner's dabuken token. */
+    dabukenConsumed: z.boolean().optional(),
+    /** True iff this hand awarded a dabuken to the winner. */
+    dabukenAwarded: z.boolean().optional(),
+    /**
+     * Buu Mahjong absolute chip totals AFTER this hand's
+     * chipDelta has been applied. Lets the client refresh the
+     * player-nameplate chip counters immediately on hand_end
+     * without recomputing from chipDelta. Omitted for non-Buu.
+     */
+    chips: z.array(z.number().int()).length(4).optional(),
+    /**
+     * Buu Mahjong per-seat dabuken token state AFTER this hand's
+     * award / clearing has been applied. Lets the client refresh
+     * the dabuken token overlay immediately on hand_end. Omitted
+     * for non-Buu.
+     */
     dabuken: z.array(z.boolean()).length(4).optional(),
   })
   .superRefine((event, context) => {
@@ -788,6 +795,9 @@ const SnapshotMsg = z.object({
    * to the per-hand allowance at every `hand_start`.
    */
   bufferMs: z.number().int().nonnegative().optional(),
+  clock: ClockStampSchema.optional(),
+  actionWindow: ActionWindowViewSchema.nullable().optional(),
+  presentation: PresentationContextSchema.optional(),
 });
 
 const EventMsg = z.object({
@@ -798,6 +808,9 @@ const EventMsg = z.object({
   deadline: z.number().int().optional(),
   /** See `SnapshotMsg.bufferMs`. */
   bufferMs: z.number().int().nonnegative().optional(),
+  clock: ClockStampSchema.optional(),
+  actionWindow: ActionWindowViewSchema.nullable().optional(),
+  presentation: PresentationContextSchema.optional(),
 });
 
 const ErrorMsg = z.object({
@@ -897,6 +910,9 @@ const RoomStateMsg = z.object({
   matchId: z.string(),
   /** Match-driving mode. Absent legacy frames are normal mode. */
   mode: MatchModeConfigSchema.optional(),
+  spectatorDelayMs: SpectatorDelayMsSchema.optional(),
+  timingMode: TimingModeSchema.optional(),
+  clock: ClockStampSchema.optional(),
   /** Lifecycle: `waiting` = pre-start; `playing` = match running;
    * `finished` = match ended (post-game lobby). */
   status: z.enum(["waiting", "playing", "finished"]),
@@ -922,6 +938,15 @@ const RoomKickedMsg = z.object({
 const SpectateRedirectMsg = z.object({
   type: z.literal("spectate_redirect"),
   matchId: z.string(),
+});
+
+/** Confirms the enforced delay without exposing current game state. */
+const SpectatorConfigMsg = z.object({
+  type: z.literal("spectator_config"),
+  matchId: z.string(),
+  delayMs: z.number().int().nonnegative(),
+  presentationOffsetMs: z.number().int().nonnegative().optional(),
+  clock: ClockStampSchema.optional(),
 });
 
 export const ViewerPresenceSchema = z.object({
@@ -952,9 +977,12 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   RoomStateMsg,
   RoomKickedMsg,
   SpectateRedirectMsg,
+  SpectatorConfigMsg,
   SessionReplacedMsg,
   ViewerStateMsg,
   KeepaliveMsg,
+  ClockSampleSchema,
+  LatencyProbeSchema,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 
@@ -997,6 +1025,7 @@ const HelloMsg = z.object({
   /** Opaque transport-owner identifier. Required by the server for
    * player connections and ignored for spectators. */
   clientSessionId: ClientSessionIdSchema.optional(),
+  timingCapabilities: z.array(z.literal(TIMING_CAPABILITY)).max(1).optional(),
   /** One-shot permission to replace a different client session
    * currently owning this user's seat. */
   takeover: z.boolean().optional(),
@@ -1017,6 +1046,9 @@ const ActMsg = z.object({
   type: z.literal("act"),
   matchId: z.string(),
   actionId: z.string(),
+  windowId: z.string().min(1).max(256).optional(),
+  clockEpoch: z.string().min(1).max(128).optional(),
+  stateSeq: z.number().int().nonnegative().optional(),
 });
 
 const ResyncMsg = z.object({
@@ -1032,6 +1064,7 @@ const ResyncMsg = z.object({
 const ReadyMsg = z.object({
   type: z.literal("ready"),
   matchId: z.string(),
+  windowId: z.string().min(1).max(256).optional(),
 });
 
 /**
@@ -1106,6 +1139,7 @@ const VoteContinueMsg = z.object({
   type: z.literal("vote_continue"),
   matchId: z.string(),
   vote: z.enum(["yes", "no"]),
+  windowId: z.string().min(1).max(256).optional(),
 });
 
 export const ClientMessageSchema = z.discriminatedUnion("type", [
@@ -1120,5 +1154,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   LeaveSeatMsg,
   AfkMsg,
   VoteContinueMsg,
+  ClockProbeSchema,
+  LatencyReplySchema,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;

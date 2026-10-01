@@ -16,17 +16,106 @@ import {
 } from "./discardAnimator";
 
 describe("live presentation cadence", () => {
+  it("uses the requested faster timings without shortening the bot pause", () => {
+    expect(LIVE_DISCARD_TO_DRAW_DELAY_MS).toBe(500);
+    expect(LIVE_AUTOMATED_DRAW_TO_DISCARD_DELAY_MS).toBe(700);
+    expect(SEQ_SLIDE_MS).toBe(250);
+    expect(SEQ_HOVER_MS).toBe(450);
+    expect(PHASE_B_DURATION_MS).toBe(150);
+    expect(MIN_DRAW_TO_DISCARD_MS).toBe(500);
+  });
+
   it("matches automated event throughput to the sequenced timeline", () => {
     const serverTurnMs =
-      LIVE_AUTOMATED_DRAW_TO_DISCARD_DELAY_MS +
-      LIVE_DISCARD_TO_DRAW_DELAY_MS;
+      LIVE_AUTOMATED_DRAW_TO_DISCARD_DELAY_MS + LIVE_DISCARD_TO_DRAW_DELAY_MS;
     const presentedTurnMs =
       Math.max(MIN_DRAW_TO_DISCARD_MS, DRAW_SLIDE_MS) +
       SEQ_SLIDE_MS +
-      SEQ_HOVER_MS +
-      PHASE_B_DURATION_MS;
+      SEQ_HOVER_MS;
 
     expect(serverTurnMs).toBe(presentedTurnMs);
+    expect(serverTurnMs).toBe(1_200);
+  });
+
+  it("keeps repeated bot turns in sync with every landing cue and no catch-up snaps", () => {
+    let now = 0;
+    const discardLandings: number[] = [];
+    const drawLandings: number[] = [];
+    const catchUpSnaps: number[] = [];
+    const animator = new DiscardAnimator({ now: () => now });
+    animator.setSequenced(true);
+    animator.setMinimumDrawToDiscardDelayEnabled(true);
+    animator.setSoundHooks({
+      onDiscardLand: () => discardLandings.push(now),
+      onDrawLand: () => drawLandings.push(now),
+      onCatchUpSnap: () => catchUpSnaps.push(now),
+    });
+    let view = makeView({
+      hands: [["1m", "9m"], ["1m"], ["1m"], ["1m"]],
+    });
+    const frameAt = (timeMs: number): void => {
+      now = timeMs;
+      animator.beginFrame(view);
+      recordLayouts(
+        animator,
+        view.hands.map((sorted, seat) => ({
+          sorted,
+          isFreshlyDrawn: view.freshlyDrawnSeat === seat,
+        }))
+      );
+    };
+    frameAt(0);
+
+    for (let turn = 0; turn < 24; turn++) {
+      const seat = turn % 4;
+      const nextSeat = (seat + 1) % 4;
+      const discardAt = turn * 1_200;
+      const discards = view.discards.map((tiles, index) =>
+        index === seat ? [...tiles, "9m"] : [...tiles]
+      );
+      view = makeView({
+        hands: view.hands.map((hand, index) =>
+          index === seat ? ["1m"] : [...hand]
+        ),
+        discards,
+        discardTsumogiri: discards.map((tiles) => tiles.map(() => true)),
+        totalDiscards: turn + 1,
+        lastSeq: 2 * turn + 1,
+        freshlyDiscardedSeat: seat,
+      });
+      frameAt(discardAt);
+      expect(animator.getAnim(seat)?.startMs).toBe(discardAt);
+      frameAt(discardAt + 250);
+
+      view = makeView({
+        hands: view.hands.map((hand, index) =>
+          index === nextSeat ? [...hand, "9m"] : [...hand]
+        ),
+        discards,
+        discardTsumogiri: view.discardTsumogiri,
+        totalDiscards: turn + 1,
+        lastSeq: 2 * turn + 2,
+        freshlyDrawnSeat: nextSeat,
+      });
+      frameAt(discardAt + 500);
+      expect(animator.isDrawing(nextSeat)).toBe(false);
+      frameAt(discardAt + 700);
+      expect(animator.getAnim(seat)?.phase).toBe("to-final");
+      expect(animator.isDrawing(nextSeat)).toBe(true);
+      frameAt(discardAt + 850);
+      expect(animator.getAnim(seat)).toBeNull();
+      expect(animator.isDrawing(nextSeat)).toBe(true);
+      frameAt(discardAt + 1_000);
+      expect(animator.isDrawing(nextSeat)).toBe(false);
+    }
+
+    expect(discardLandings).toEqual(
+      Array.from({ length: 24 }, (_, turn) => turn * 1_200 + 250)
+    );
+    expect(drawLandings).toEqual(
+      Array.from({ length: 24 }, (_, turn) => turn * 1_200 + 1_000)
+    );
+    expect(catchUpSnaps).toEqual([]);
   });
 });
 
@@ -566,7 +655,7 @@ describe("DiscardAnimator", () => {
     expect(animator.hasActive()).toBe(false);
   });
 
-  it("sequenced: settles a discard completely before the next draw begins", () => {
+  it("sequenced: overlaps settling with a draw after an open call window", () => {
     let now = 0;
     const discardSfx: Array<{
       seat: number;
@@ -624,8 +713,7 @@ describe("DiscardAnimator", () => {
     expect(animator.getAnim(0)?.phase).toBe("to-nudge");
     expect(discardSfx).toHaveLength(1);
 
-    // The next player draws → settle the discard first, then start
-    // the draw only after phase B has completed.
+    // A late draw starts together with the discard's final settle.
     const drew = makeView({
       hands: [[], [], [], []],
       discards: [["1m"], [], [], []],
@@ -635,14 +723,14 @@ describe("DiscardAnimator", () => {
     });
     animator.beginFrame(drew);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
-    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.isDrawing(1)).toBe(true);
 
     now += PHASE_B_DURATION_MS - 1;
     animator.beginFrame(drew);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
-    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.isDrawing(1)).toBe(true);
 
-    // Phase B elapses before the draw becomes visible.
+    // The draw continues after the discard finishes settling.
     now += 2;
     animator.beginFrame(drew);
     expect(animator.getAnim(0)).toBeNull();
@@ -727,7 +815,7 @@ describe("DiscardAnimator", () => {
     expect(declarations).toEqual([true]);
   });
 
-  it("sequenced: delays the next draw until the discard has hovered and settled", () => {
+  it("sequenced: starts the next draw at 700 ms while the discard settles", () => {
     let now = 0;
     const drawSfx: Array<{ seat: number; presentationSeq: number }> = [];
     const animator = new DiscardAnimator({ now: () => now });
@@ -772,30 +860,37 @@ describe("DiscardAnimator", () => {
     expect(animator.getDrawProgress(1)).toBe(0);
 
     // Still pending late in the hover while the discard holds.
-    now = SEQ_SLIDE_MS + SEQ_HOVER_MS - 100;
+    now = 699;
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.isDrawTileHidden(1)).toBe(true);
 
-    // After slide + hover, phase B starts but the draw remains pending.
-    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + 1;
+    now = 700;
     animator.beginFrame(drew);
     expect(animator.getAnim(0)?.phase).toBe("to-final");
-    expect(animator.isDrawing(1)).toBe(false);
+    expect(animator.isDrawing(1)).toBe(true);
     expect(animator.getDrawProgress(1)).toBe(0);
 
-    // Only after the discard settles does the draw start.
-    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + PHASE_B_DURATION_MS + 1;
+    now = 849;
+    animator.beginFrame(drew);
+    expect(animator.getAnim(0)?.phase).toBe("to-final");
+    expect(animator.isDrawing(1)).toBe(true);
+    expect(animator.getDrawProgress(1)).toBeGreaterThan(0);
+
+    now = 850;
     animator.beginFrame(drew);
     expect(animator.getAnim(0)).toBeNull();
     expect(animator.isDrawing(1)).toBe(true);
     expect(animator.getDrawProgress(1)).toBeGreaterThan(0);
 
     // Draw slide completes → draw-land SFX fires once.
-    now = SEQ_SLIDE_MS + SEQ_HOVER_MS + PHASE_B_DURATION_MS + DRAW_SLIDE_MS;
+    now = 1_000;
     animator.beginFrame(drew);
     expect(drawSfx).toEqual([{ seat: 1, presentationSeq: 42 }]);
     expect(animator.isDrawing(1)).toBe(false);
     expect(animator.isDrawTileHidden(1)).toBe(false);
+    now = 1_001;
+    animator.beginFrame(drew);
+    expect(drawSfx).toHaveLength(1);
   });
 
   it("sequenced: snaps cleanly instead of overlapping when the backlog exceeds its cap", () => {
@@ -874,15 +969,50 @@ describe("DiscardAnimator", () => {
       freshlyDrawnSeat: 2,
     });
     animator.beginFrame(secondDraw);
+    expect(catchUpSnaps).toEqual([]);
+    expect(drawLandings).toEqual([]);
+    recordLayouts(animator, [
+      { sorted: [] },
+      { sorted: ["2p"] },
+      { sorted: ["3s", "9s"], isFreshlyDrawn: true },
+      { sorted: [] },
+    ]);
 
-    expect(catchUpSnaps).toEqual([0]);
-    // Seat 1's queued draw was never presented before the catch-up snap,
-    // so only the current snapped draw releases a landing cue.
-    expect(drawLandings).toEqual([2]);
+    now =
+      2 * (SEQ_SLIDE_MS + SEQ_HOVER_MS + MIN_DRAW_TO_DISCARD_MS) -
+      SEQ_CATCHUP_CAP_MS;
+    const thirdDiscard = makeView({
+      hands: [[], ["2p"], ["3s"], []],
+      discards: [["1m"], ["9p"], ["9s"], []],
+      totalDiscards: 3,
+      freshlyDiscardedSeat: 2,
+    });
+    animator.beginFrame(thirdDiscard);
+    recordLayouts(animator, [
+      { sorted: [] },
+      { sorted: ["2p"] },
+      { sorted: ["3s"] },
+      { sorted: [] },
+    ]);
+    expect(catchUpSnaps).toEqual([]);
+    expect(animator.getAnim(2)?.startMs).toBe(now + SEQ_CATCHUP_CAP_MS);
+
+    const thirdDraw = makeView({
+      hands: [[], ["2p"], ["3s"], ["9m"]],
+      discards: [["1m"], ["9p"], ["9s"], []],
+      totalDiscards: 3,
+      freshlyDrawnSeat: 3,
+    });
+    animator.beginFrame(thirdDraw);
+
+    expect(catchUpSnaps).toEqual([now]);
+    // Queued draws never landed; only the snapped draw releases a cue.
+    expect(drawLandings).toEqual([3]);
     expect(animator.hasActive()).toBe(false);
     expect(animator.getAnim(0)).toBeNull();
     expect(animator.getAnim(1)).toBeNull();
-    expect(animator.isDrawing(2)).toBe(false);
+    expect(animator.getAnim(2)).toBeNull();
+    expect(animator.isDrawing(3)).toBe(false);
   });
 
   it("sources a tsumogiri from the tsumo slot even when the wire flag is missing", () => {

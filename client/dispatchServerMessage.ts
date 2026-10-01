@@ -14,6 +14,13 @@ export function dispatchServerMessage(
   const store = useMatchStore.getState();
   switch (message.type) {
     case "snapshot": {
+      if (
+        message.clock ||
+        message.actionWindow !== undefined ||
+        message.presentation
+      ) {
+        store.setTimingMetadata(message);
+      }
       store.hydrateSnapshot(message.state, message.seq);
       store.setLegalActions(message.legalActions);
       store.setActionDeadline(message.deadline ?? null);
@@ -32,6 +39,13 @@ export function dispatchServerMessage(
             receivedSeq: message.seq,
           });
           return;
+        }
+        if (
+          message.clock ||
+          message.actionWindow !== undefined ||
+          message.presentation
+        ) {
+          store.setTimingMetadata(message);
         }
         store.setLegalActions(message.legalActions);
         store.setActionDeadline(message.deadline ?? null);
@@ -53,6 +67,13 @@ export function dispatchServerMessage(
       }
 
       const unseenOffset = Math.max(0, expectedSeq - startSeq);
+      if (
+        message.clock ||
+        message.actionWindow !== undefined ||
+        message.presentation
+      ) {
+        store.setTimingMetadata(message);
+      }
       message.events.slice(unseenOffset).forEach((event, index) => {
         store.applyEvent(event, startSeq + unseenOffset + index);
       });
@@ -88,6 +109,9 @@ export function dispatchServerMessage(
     case "spectate_redirect": {
       return;
     }
+    case "spectator_config": {
+      return;
+    }
     case "session_replaced": {
       return;
     }
@@ -96,6 +120,12 @@ export function dispatchServerMessage(
       return;
     }
     case "keepalive": {
+      return;
+    }
+    case "clock_sample": {
+      return;
+    }
+    case "latency_probe": {
       return;
     }
   }

@@ -1,4 +1,5 @@
 import { createPRNG } from "~/game/rules";
+import type { AuthorityClock } from "./timing/authorityClock";
 
 export interface MatchTimer {
   cancel(): void;
@@ -9,6 +10,7 @@ export interface MatchTimerOptions {
 }
 
 export interface MatchRuntime {
+  readonly clockEpoch?: string;
   now(): number;
   random(): number;
   captureRandomState(): number;
@@ -21,10 +23,14 @@ export interface MatchRuntime {
   sleep(delayMs: number): Promise<void>;
 }
 
-export function createSystemMatchRuntime(seed: number): MatchRuntime {
+export function createSystemMatchRuntime(
+  seed: number,
+  clock?: AuthorityClock
+): MatchRuntime {
   const random = createPRNG(seed);
   return {
-    now: () => Date.now(),
+    now: () => clock?.now() ?? Date.now(),
+    ...(clock ? { clockEpoch: clock.epoch } : {}),
     random: () => random.next(),
     captureRandomState: () => random.getState(),
     restoreRandomState: (state) => random.setState(state),

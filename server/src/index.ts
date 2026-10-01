@@ -33,6 +33,7 @@ import {
   MatchModeConfigSchema,
   normalMatchMode,
 } from "~/game/protocol/matchMode";
+import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
 import {
   getPreset,
   presetToRuleSet,
@@ -69,12 +70,22 @@ import { createWsTenhouClient } from "./relay/tenhouClient";
 import { listLobbyRoomSummaries } from "./lobbyRooms";
 import { duplicateMatchSeed } from "./match-drivers/duplicatePlan";
 import { closePlayerConnection } from "./playerConnectionLifecycle";
+import { createAuthorityClock } from "./timing/authorityClock";
+import { clockSampleForProbe } from "./transport/clockSync";
+import { LatencySampler } from "./transport/latencyProfile";
+import { TIMING_CAPABILITY, TimingModeSchema } from "~/game/protocol/timing";
+import { DecisionWindowError } from "./timing/actionWindows";
 
 // The host bootstrap (portal or standalone) injects the PortalAdapter via
 // `setAdapter(...)` before importing this module.
 const PORT = Number(process.env.GAME_SERVER_PORT ?? 8787);
 const GAME_ENABLED = process.env.GAME_ENABLED === "true";
 const HELLO_TIMEOUT_MS = 5_000;
+const transportClock = createAuthorityClock();
+const socketLatencies = new WeakMap<WebSocket, LatencySampler>();
+const configuredTimingMode = TimingModeSchema.parse(
+  process.env.GAME_TIMING_MODE ?? "legacy"
+);
 /**
  * Liveness-probe timeout. A WS that doesn't return a pong frame
  * within this window after `ping()` is treated as a missed
@@ -136,6 +147,8 @@ const playerSocketsBySender = new WeakMap<
 >();
 
 const nativeMatchDependencies = {
+  authorityClock: transportClock,
+  timingMode: configuredTimingMode,
   repository: mongoMatchRepository,
   eventJournalStore: mongoMatchEventJournalStore,
   onAutomaticAction: (context: {
@@ -384,7 +397,7 @@ async function readJsonBody(
  * `matchId`. The portal calls this on behalf of the user, then
  * navigates the client to `/game/:matchId` to join via WS.
  *
- * Body: `{ token, debug?, preset?, mode? }`.
+ * Body: `{ token, debug?, preset?, mode?, spectatorDelayMs? }`.
  *
  * Splitting creation off the WS upgrade is what makes the URL
  * itself idempotent: visiting `/game/:id` only joins; it never
@@ -410,11 +423,12 @@ async function handleCreateRoom(
     reply(400, { error: "invalid_body" });
     return;
   }
-  const { token, debug, preset, mode } = body as {
+  const { token, debug, preset, mode, spectatorDelayMs } = body as {
     token?: unknown;
     debug?: unknown;
     preset?: unknown;
     mode?: unknown;
+    spectatorDelayMs?: unknown;
   };
   if (typeof token !== "string" || token.length === 0) {
     reply(401, { error: "missing_token" });
@@ -456,6 +470,12 @@ async function handleCreateRoom(
     reply(400, { error: "invalid_mode" });
     return;
   }
+  const parsedSpectatorDelay =
+    SpectatorDelayMsSchema.default(0).safeParse(spectatorDelayMs);
+  if (!parsedSpectatorDelay.success) {
+    reply(400, { error: "invalid_spectator_delay" });
+    return;
+  }
   if (parsedMode.data.type === "duplicate" && parsedDebug !== undefined) {
     reply(400, { error: "debug_not_allowed_in_duplicate_mode" });
     return;
@@ -480,7 +500,8 @@ async function handleCreateRoom(
     parsedDebug,
     presetToRuleSet(getPreset(presetId)),
     presetId,
-    parsedMode.data
+    parsedMode.data,
+    parsedSpectatorDelay.data
   );
   matches.set(matchId, match);
   // Post-creation grace timer: if nobody connects within the
@@ -493,7 +514,11 @@ async function handleCreateRoom(
     evictWaitingRoomIfEmpty(matchId);
   }, WAITING_ROOM_GRACE_MS);
   waitingRoomGraceTimers.set(matchId, graceTimer);
-  reply(200, { matchId, mode: parsedMode.data });
+  reply(200, {
+    matchId,
+    mode: parsedMode.data,
+    spectatorDelayMs: parsedSpectatorDelay.data,
+  });
 }
 
 async function handleActiveMatch(
@@ -1055,6 +1080,17 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     }
     throw error;
   }
+  if (
+    match.timingMode === "windows-v2" &&
+    !hello.timingCapabilities?.includes(TIMING_CAPABILITY)
+  ) {
+    sendError(
+      "timing_update_required",
+      "This game requires an updated client."
+    );
+    ws.close();
+    return;
+  }
   let assignedSeat: Seat | null;
   try {
     assignedSeat = match.claimSeat(verified.userId, profile.displayName);
@@ -1079,6 +1115,12 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     ws.close();
     return;
   }
+
+  match.configurePlayerTiming(
+    assignedSeat,
+    "remote",
+    () => socketLatencies.get(ws)?.profile() ?? null
+  );
 
   let attachResult;
   try {
@@ -1143,17 +1185,24 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   // Install the frame loop BEFORE sending the baseline — clients
   // may immediately respond with `ready` / `start_match`.
   ws.on("message", (raw) => {
+    const receivedAt = match.authorityNow();
     const currentSeat = match.humanSeatFor(send);
     if (currentSeat === null) {
       return;
     }
-    void handleClientFrame(raw, match, currentSeat, send, sendError).catch(
-      (error: unknown) => {
-        // eslint-disable-next-line no-console
-        console.error("[game-server] client frame failed", error);
-        sendError("command_failed", "The command could not be processed.");
-      }
-    );
+    void handleClientFrame(
+      raw,
+      match,
+      currentSeat,
+      send,
+      sendError,
+      receivedAt,
+      socketLatencies.get(ws)
+    ).catch((error: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error("[game-server] client frame failed", error);
+      sendError("command_failed", "The command could not be processed.");
+    });
   });
   ws.on("close", () => {
     const result = closePlayerConnection(match, send);
@@ -1237,7 +1286,9 @@ async function handleClientFrame(
   match: MatchProcess,
   seat: Seat,
   send: (msg: ServerMessage) => void,
-  sendError: (code: string, message: string) => void
+  sendError: (code: string, message: string) => void,
+  receivedAt = match.authorityNow(),
+  latency?: LatencySampler
 ): Promise<void> {
   let data: unknown;
   try {
@@ -1253,7 +1304,20 @@ async function handleClientFrame(
   }
   switch (parsed.data.type) {
     case "act": {
-      await match.handleAct(seat, parsed.data.actionId);
+      try {
+        await match.handleAct(seat, parsed.data.actionId, {
+          receivedAt,
+          windowId: parsed.data.windowId,
+          clockEpoch: parsed.data.clockEpoch,
+          stateSeq: parsed.data.stateSeq,
+        });
+      } catch (error) {
+        if (!(error instanceof DecisionWindowError)) {
+          throw error;
+        }
+        sendError("decision_rejected", error.message);
+        send(match.buildSnapshotForSeat(seat));
+      }
       return;
     }
     case "ready": {
@@ -1372,6 +1436,31 @@ async function handleClientFrame(
       // Stray hello after handshake — ignore.
       return;
     }
+    case "clock_probe": {
+      send(
+        clockSampleForProbe(
+          parsed.data,
+          match.matchId,
+          transportClock,
+          transportClock.now()
+        )
+      );
+      if (latency) {
+        const probeId = nanoid(16);
+        latency.sent(probeId);
+        send({ type: "latency_probe", probeId });
+      }
+      return;
+    }
+    case "latency_reply": {
+      if (!latency?.received(parsed.data.probeId)) {
+        sendError(
+          "latency_sample_rejected",
+          "Unknown or stale latency sample."
+        );
+      }
+      return;
+    }
   }
 }
 
@@ -1432,6 +1521,17 @@ function handleSpectatorConnection(
       return;
     }
     switch (parsed.data.type) {
+      case "clock_probe": {
+        send(
+          clockSampleForProbe(
+            parsed.data,
+            match.matchId,
+            transportClock,
+            transportClock.now()
+          )
+        );
+        return;
+      }
       case "resync": {
         const fromSeq = parsed.data.lastSeq + 1;
         const events = match.replaySpectatorBuffer(fromSeq);
@@ -1525,6 +1625,17 @@ function handleDelayedSpectatorConnection(
       return;
     }
     switch (parsed.data.type) {
+      case "clock_probe": {
+        send(
+          clockSampleForProbe(
+            parsed.data,
+            match.matchId,
+            transportClock,
+            transportClock.now()
+          )
+        );
+        return;
+      }
       case "resync": {
         const fromSeq = parsed.data.lastSeq + 1;
         const events = match.replayDelayedSpectatorBuffer(fromSeq, delayMs);
@@ -1587,6 +1698,8 @@ function handleDelayedSpectatorConnection(
  */
 function attachHeartbeat(ws: WebSocket): void {
   const connId = nanoid(8);
+  const latency = new LatencySampler(() => transportClock.now());
+  socketLatencies.set(ws, latency);
   const openedAt = Date.now();
   let lastInboundAt = openedAt;
   let lastPongAt = openedAt;
@@ -1605,10 +1718,11 @@ function attachHeartbeat(ws: WebSocket): void {
   );
 
   let alive = true;
-  ws.on("pong", () => {
+  ws.on("pong", (data: Buffer) => {
     alive = true;
     pongsReceived += 1;
     lastPongAt = Date.now();
+    latency.received(data.toString());
   });
   ws.on("message", () => {
     messagesIn += 1;
@@ -1654,7 +1768,9 @@ function attachHeartbeat(ws: WebSocket): void {
     alive = false;
     pingsSent += 1;
     try {
-      ws.ping();
+      const probeId = `${connId}-${pingsSent}`;
+      latency.sent(probeId);
+      ws.ping(probeId);
       // Browsers do NOT expose WS protocol pongs to JavaScript,
       // so the client's stall watchdog (which only counts
       // application frames) cannot use our `ws.ping()` as a
