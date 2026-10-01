@@ -6,24 +6,21 @@ import {
   setExhaustiveDrawDelayMs,
   setReadyCheckMs,
 } from "./match";
-import type { EngineEvent } from "~/game/rules/step";
 import {
   ephemeralMatchRepository,
   type MatchEventJournalStore,
 } from "./repository";
 import type { MatchRuntime } from "./runtime";
-
 describe("MatchProcess runtime", () => {
   afterEach(() => {
-    setReadyCheckMs(5_000);
+    setReadyCheckMs(5000);
     setDelayAfterDiscardMs(350);
-    setExhaustiveDrawDelayMs(1_000);
+    setExhaustiveDrawDelayMs(1000);
   });
-
   it("uses injected randomness for authoritative dice rolls", async () => {
     const randomValues = [0, 0.999];
     const runtime: MatchRuntime = {
-      now: () => 1_000,
+      now: () => 1000,
       random: () => randomValues.shift() ?? 0,
       captureRandomState: () => randomValues.length,
       restoreRandomState: () => undefined,
@@ -44,21 +41,24 @@ describe("MatchProcess runtime", () => {
       "tenhou-hanchan"
     );
     setReadyCheckMs(0);
-
     await match.start();
-
     const handStart = match
       .replayFromBuffer(0)
       .map(({ event }) => event)
       .find(
-        (event): event is Extract<GameEvent, { type: "hand_start" }> =>
-          event.type === "hand_start"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "hand_start";
+          }
+        > => event.type === "hand_start"
       );
     expect(handStart?.dice).toEqual([1, 6]);
   });
-
   it("waits until one second after the last discard before revealing an exhaustive draw", async () => {
-    let now = 1_000;
+    let now = 1000;
     const sleeps: number[] = [];
     const runtime: MatchRuntime = {
       now: () => now,
@@ -83,15 +83,13 @@ describe("MatchProcess runtime", () => {
     );
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
-    setExhaustiveDrawDelayMs(1_000);
+    setExhaustiveDrawDelayMs(1000);
     await match.start();
     sleeps.length = 0;
-
-    const emitEngineEvent = (
-      match as unknown as {
-        emitEngineEvent(event: EngineEvent): Promise<void>;
-      }
-    ).emitEngineEvent.bind(match);
+    const emitEngineEvent =
+      match.owners.lifecycle.engineEvents.emitEngineEvent.bind(
+        match.owners.lifecycle.engineEvents
+      );
     await emitEngineEvent({
       type: "discard",
       seat: 0,
@@ -105,10 +103,8 @@ describe("MatchProcess runtime", () => {
       reason: "exhaustive_draw",
       delta: [0, 0, 0, 0],
     });
-
     expect(sleeps).toEqual([600]);
   });
-
   it("does not await an in-flight event journal append", async () => {
     let releaseWrite!: () => void;
     const heldWrite = new Promise<void>((resolve) => {
@@ -138,14 +134,11 @@ describe("MatchProcess runtime", () => {
       "tenhou-hanchan"
     );
     setReadyCheckMs(0);
-
     await match.start();
-
     expect(appendMatchEvents).toHaveBeenCalledTimes(1);
     expect(match.replayFromBuffer(0).length).toBeGreaterThan(1);
     releaseWrite();
   });
-
   it("flushes the event journal before saving an explicit checkpoint", async () => {
     let releaseWrite!: () => void;
     const heldWrite = new Promise<void>((resolve) => {
@@ -176,17 +169,14 @@ describe("MatchProcess runtime", () => {
     );
     setReadyCheckMs(0);
     await match.start();
-
     const pausing = match.pauseAndSaveCheckpoint();
     await Promise.resolve();
     expect(saveCheckpoint).not.toHaveBeenCalled();
-
     releaseWrite();
     await pausing;
     expect(saveCheckpoint).toHaveBeenCalledTimes(1);
     expect(match.isPaused).toBe(true);
   });
-
   it("waits for active command execution before creating a checkpoint", async () => {
     const savedCheckpoints: Array<
       ReturnType<MatchProcess["createCheckpoint"]>
@@ -231,17 +221,20 @@ describe("MatchProcess runtime", () => {
     const commandGate = new Promise<void>((resolve) => {
       releaseCommand = resolve;
     });
-    const internals = match as unknown as {
-      handleActDirect(seat: 0 | 1 | 2 | 3, actionId: string): Promise<void>;
-    };
-    const handleActDirect = internals.handleActDirect.bind(match);
+    const internals = match;
+    const handleActDirect =
+      internals.owners.gameplay.actions.handleActDirect.bind(
+        internals.owners.gameplay.actions
+      );
     let commandExecutions = 0;
-    internals.handleActDirect = async (seat, actionId) => {
+    internals.owners.gameplay.actions.handleActDirect = async (
+      seat,
+      actionId
+    ) => {
       commandExecutions += 1;
       await commandGate;
       await handleActDirect(seat, actionId);
     };
-
     const acting = match.handleAct(before.actionWindow.seat, discard.id);
     await vi.waitFor(() => {
       expect(commandExecutions).toBe(1);
@@ -251,7 +244,6 @@ describe("MatchProcess runtime", () => {
     expect(savedCheckpoints).toHaveLength(0);
     await match.handleAct(before.actionWindow.seat, discard.id);
     expect(commandExecutions).toBe(1);
-
     releaseCommand();
     await acting;
     await pausing;
@@ -263,7 +255,6 @@ describe("MatchProcess runtime", () => {
     expect(savedCheckpoint.nextSeq).toBeGreaterThan(before.nextSeq);
     expect(match.isPaused).toBe(true);
   });
-
   it("does not call checkpoint storage for an accepted command", async () => {
     const saveCheckpoint = vi.fn(async () => {
       throw new Error("checkpoint storage must not be on the command path");
@@ -307,9 +298,7 @@ describe("MatchProcess runtime", () => {
       throw new Error("expected a discard action");
     }
     const beforeEvents = match.replayFromBuffer(0).length;
-
     await match.handleAct(checkpoint.actionWindow.seat, discard.id);
-
     expect(match.replayFromBuffer(0).length).toBeGreaterThan(beforeEvents);
     expect(saveCommandTransaction).not.toHaveBeenCalled();
     expect(saveCheckpoint).not.toHaveBeenCalled();

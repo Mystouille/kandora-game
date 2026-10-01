@@ -2,6 +2,12 @@ import type { Seat } from "~/game/protocol/messages";
 import type { MatchCheckpoint } from "../checkpoint";
 import type { PendingMatchCommand } from "../repository";
 import { ActionWindowRegistry } from "../timing/actionWindows";
+import { DecisionWindowError } from "../timing/windowReceipt";
+
+export interface CommandFence {
+  current(): boolean;
+  onStale(): void;
+}
 
 export interface CommandExecutionPort {
   sequence(): number;
@@ -10,6 +16,7 @@ export interface CommandExecutionPort {
   pendingCheckpointSave(): Promise<MatchCheckpoint> | null;
   accept(command: PendingMatchCommand): boolean;
   execute(command: PendingMatchCommand): Promise<void>;
+  decisionId?(command: PendingMatchCommand): string | null;
   afkDefaultAction(seat: Seat): string | null;
   persistRecovery(): Promise<void>;
 }
@@ -76,12 +83,12 @@ export class CommandCoordinator {
     this.replayingLegacyCommand = false;
   }
 
-  handleAct(seat: Seat, actionId: string): Promise<void> {
-    return this.submit({ type: "act", seat, actionId });
+  handleAct(seat: Seat, actionId: string, fence?: CommandFence): Promise<void> {
+    return this.submit({ type: "act", seat, actionId }, fence);
   }
 
-  handleReady(seat: Seat): Promise<void> {
-    return this.submit({ type: "ready", seat });
+  handleReady(seat: Seat, fence?: CommandFence): Promise<void> {
+    return this.submit({ type: "ready", seat }, fence);
   }
 
   handleAfk(seat: Seat, afk: boolean): Promise<void> {
@@ -99,8 +106,12 @@ export class CommandCoordinator {
     });
   }
 
-  handleVoteContinue(seat: Seat, vote: "yes" | "no"): Promise<void> {
-    return this.submit({ type: "vote_continue", seat, vote });
+  handleVoteContinue(
+    seat: Seat,
+    vote: "yes" | "no",
+    fence?: CommandFence
+  ): Promise<void> {
+    return this.submit({ type: "vote_continue", seat, vote }, fence);
   }
 
   async waitUntilConnectionReady(): Promise<boolean> {
@@ -187,17 +198,36 @@ export class CommandCoordinator {
     }
   }
 
-  private async submit(command: PendingMatchCommand): Promise<void> {
+  private assertFence(fence?: CommandFence): void {
+    if (fence && !fence.current()) {
+      this.rejectFence(fence);
+    }
+  }
+
+  private rejectFence(fence: CommandFence): never {
+    fence.onStale();
+    throw new DecisionWindowError(
+      "The input belongs to a replaced owner or decision."
+    );
+  }
+
+  private async submit(
+    command: PendingMatchCommand,
+    fence?: CommandFence
+  ): Promise<void> {
+    this.assertFence(fence);
     const receivedAtSeq = this.port.sequence();
     const receivedWindowId =
-      command.type === "act"
+      this.port.decisionId?.(command) ??
+      (command.type === "act"
         ? (this.windows.timedView(command.seat)?.id ?? null)
-        : null;
+        : null);
     const requiresSameSequence =
       command.type === "act" || command.type === "ready";
     const sameDecision = (): boolean =>
       receivedWindowId !== null
-        ? this.windows.timedView(command.seat)?.id === receivedWindowId
+        ? (this.port.decisionId?.(command) ??
+            this.windows.timedView(command.seat)?.id) === receivedWindowId
         : !requiresSameSequence || this.port.sequence() === receivedAtSeq;
     if (
       this.port.pendingCheckpointSave() !== null ||
@@ -212,7 +242,9 @@ export class CommandCoordinator {
       }
       await (this.defaultHandoff ?? activeDefault);
       if (!this.port.isPaused() && sameDecision()) {
-        await this.retry(command);
+        await this.retry(command, fence);
+      } else if (fence) {
+        this.rejectFence(fence);
       }
       return;
     }
@@ -232,7 +264,9 @@ export class CommandCoordinator {
         this.pendingTransaction = null;
       }
       if (!this.port.isPaused() && sameDecision()) {
-        await this.retry(command);
+        await this.retry(command, fence);
+      } else if (fence) {
+        this.rejectFence(fence);
       }
       return;
     }
@@ -243,7 +277,7 @@ export class CommandCoordinator {
     ) {
       return;
     }
-    const transaction = this.runCommand(command);
+    const transaction = this.runCommand(command, false, fence);
     this.pendingTransaction = transaction;
     try {
       await transaction;
@@ -254,21 +288,26 @@ export class CommandCoordinator {
     }
   }
 
-  private retry(command: PendingMatchCommand): Promise<void> {
+  private retry(
+    command: PendingMatchCommand,
+    fence?: CommandFence
+  ): Promise<void> {
     if (command.type === "afk") {
       return this.handleAfk(command.seat, command.afk);
     }
-    return this.submit(command);
+    return this.submit(command, fence);
   }
 
   private async runCommand(
     command: PendingMatchCommand,
-    replaying = false
+    replaying = false,
+    fence?: CommandFence
   ): Promise<void> {
     const transactionId = this.nextTransactionId++;
     this.activeTransactionId = transactionId;
     try {
       await Promise.resolve();
+      this.assertFence(fence);
       if (
         command.type === "act" ||
         (command.type === "afk" && command.defaultActionId !== null)

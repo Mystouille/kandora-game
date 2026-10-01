@@ -202,6 +202,7 @@ export interface PersistedMatchEvent {
   seq: number;
   event: GameEvent;
   emittedAt: number;
+  calendarAt?: number;
 }
 
 /**

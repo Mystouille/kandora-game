@@ -2,9 +2,10 @@ import type { Seat } from "~/game/protocol/messages";
 
 import type { MatchEndReason } from "~/game/rules";
 
-import type { MatchRuntime } from "../runtime";
+import { runtimeCalendarNow, type MatchRuntime } from "../runtime";
 
-import type { MatchRepository, PersistedMatchPlayer } from "../repository";
+import type { MatchRepository } from "../repository";
+import { persistedRoster, matchStartEvent } from "./matchStart";
 
 import { MatchKernel } from "./matchKernel";
 
@@ -21,6 +22,7 @@ import { deterministicShuffle } from "./seating";
 export interface SessionSnapshot {
   readonly status: "waiting" | "playing" | "finished";
   readonly startedAt: Date | null;
+  readonly startedReferenceAt?: number | null;
   readonly finalized: boolean;
   readonly gameIndex: number;
   readonly gameStartLogIdx: number;
@@ -35,6 +37,7 @@ export interface SessionSnapshot {
 export class SessionCoordinator {
   private statusValue: "waiting" | "playing" | "finished" = "waiting";
   private startedAt: Date | null = null;
+  private startedReferenceAt: number | null = null;
   private finalized = false;
   private gameIndex = 0;
   private gameStartLogIdx = 0;
@@ -64,6 +67,7 @@ export class SessionCoordinator {
       status: this.statusValue,
       startedAt:
         this.startedAt === null ? null : new Date(this.startedAt.getTime()),
+      startedReferenceAt: this.startedReferenceAt,
       finalized: this.finalized,
       gameIndex: this.gameIndex,
       gameStartLogIdx: this.gameStartLogIdx,
@@ -80,6 +84,8 @@ export class SessionCoordinator {
       snapshot.startedAt === null
         ? null
         : new Date(snapshot.startedAt.getTime());
+    this.startedReferenceAt =
+      snapshot.startedReferenceAt ?? snapshot.startedAt?.getTime() ?? null;
     this.finalized = snapshot.finalized;
     this.gameIndex = snapshot.gameIndex;
     this.gameStartLogIdx = snapshot.gameStartLogIdx;
@@ -97,7 +103,8 @@ export class SessionCoordinator {
   }
   startRelay(): void {
     this.statusValue = "playing";
-    this.startedAt = new Date(this.runtime.now());
+    this.startedReferenceAt = this.runtime.now();
+    this.startedAt = new Date(runtimeCalendarNow(this.runtime));
   }
   finishRelay(): void {
     this.statusValue = "finished";
@@ -118,7 +125,8 @@ export class SessionCoordinator {
       }
     }
     this.statusValue = "playing";
-    this.startedAt = new Date(this.runtime.now());
+    this.startedReferenceAt = this.runtime.now();
+    this.startedAt = new Date(runtimeCalendarNow(this.runtime));
     this.kernel.initialize(
       this.config.seed,
       this.gameIndex,
@@ -143,19 +151,7 @@ export class SessionCoordinator {
     // Apply debug seed (no validation — dev surface only).
     this.kernel.applyDebugSeed(this.config.debug);
 
-    const matchPlayers: PersistedMatchPlayer[] = [];
-    for (const [seat, p] of this.roster.players()) {
-      if (p === null) {
-        // Already asserted above; satisfies the type narrower.
-        continue;
-      }
-      matchPlayers.push({
-        userId: p.userId,
-        seat,
-        displayName: p.displayName,
-        isBot: p.isBot,
-      });
-    }
+    const matchPlayers = persistedRoster(this.roster.players());
     const isBuu = this.kernel.currentState().ruleSet.buuMode;
     const initialEventSeq = this.port.eventCount();
     await this.repository.createMatch({
@@ -176,36 +172,9 @@ export class SessionCoordinator {
     this.gameStartLogIdx = initialEventSeq;
     this.port.openEventJournal(this.currentGameMongoId(), initialEventSeq);
 
-    await this.port.emitEvent({
-      type: "match_start",
-      seats: matchPlayers.map((p) => ({
-        seat: p.seat,
-        userId: p.userId,
-        displayName: p.displayName,
-      })),
-      ruleSet: this.config.presetId,
-      riichiBetValue: this.kernel.currentState().ruleSet.riichiBetValue,
-      uraDoraEnabled: this.kernel.currentState().ruleSet.uraDora,
-      ...(this.kernel.currentState().ruleSet.scoreCap
-        ? { scoreCap: this.kernel.currentState().ruleSet.scoreCap }
-        : {}),
-      ...(this.kernel.currentState().ruleSet.buuMode
-        ? {
-            chips: [...this.kernel.currentState().chips] as [
-              number,
-              number,
-              number,
-              number,
-            ],
-            dabuken: [...this.kernel.currentState().dabuken] as [
-              boolean,
-              boolean,
-              boolean,
-              boolean,
-            ],
-          }
-        : {}),
-    });
+    await this.port.emitEvent(
+      matchStartEvent(matchPlayers, this.config.presetId, this.kernel.view)
+    );
 
     // Pre-match ready check. Bots are pre-acked; if the human
     // is the only seat that hasn't acked we wait up to
@@ -385,18 +354,7 @@ export class SessionCoordinator {
       this.port.clearLegals(s as Seat);
     }
 
-    const matchPlayers: PersistedMatchPlayer[] = [];
-    for (const [seat, p] of this.roster.players()) {
-      if (p === null) {
-        continue;
-      }
-      matchPlayers.push({
-        userId: p.userId,
-        seat,
-        displayName: p.displayName,
-        isBot: p.isBot,
-      });
-    }
+    const matchPlayers = persistedRoster(this.roster.players());
 
     const initialEventSeq = this.port.eventCount();
     await this.repository.createMatch({
@@ -416,36 +374,9 @@ export class SessionCoordinator {
     this.gameStartLogIdx = initialEventSeq;
     this.port.openEventJournal(this.currentGameMongoId(), initialEventSeq);
 
-    await this.port.emitEvent({
-      type: "match_start",
-      seats: matchPlayers.map((p) => ({
-        seat: p.seat,
-        userId: p.userId,
-        displayName: p.displayName,
-      })),
-      ruleSet: this.config.presetId,
-      riichiBetValue: this.kernel.currentState().ruleSet.riichiBetValue,
-      uraDoraEnabled: this.kernel.currentState().ruleSet.uraDora,
-      ...(this.kernel.currentState().ruleSet.scoreCap
-        ? { scoreCap: this.kernel.currentState().ruleSet.scoreCap }
-        : {}),
-      ...(this.kernel.currentState().ruleSet.buuMode
-        ? {
-            chips: [...this.kernel.currentState().chips] as [
-              number,
-              number,
-              number,
-              number,
-            ],
-            dabuken: [...this.kernel.currentState().dabuken] as [
-              boolean,
-              boolean,
-              boolean,
-              boolean,
-            ],
-          }
-        : {}),
-    });
+    await this.port.emitEvent(
+      matchStartEvent(matchPlayers, this.config.presetId, this.kernel.view)
+    );
 
     await this.port.runReadyCheck(legacyTiming.READY_CHECK_MS, "initial_hand");
 
@@ -475,7 +406,7 @@ export class SessionCoordinator {
     try {
       await this.repository.markCheckpointTerminal({
         matchId: this.config.matchId,
-        finishedAt: this.runtime.now(),
+        finishedAt: runtimeCalendarNow(this.runtime),
       });
       this.sessionFinalized = true;
       this.statusValue = "finished";

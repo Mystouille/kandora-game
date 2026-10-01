@@ -1,3 +1,4 @@
+import { editMatchState } from "~/game/testing/matchState";
 /**
  * Snapshot hydration tests.
  *
@@ -9,13 +10,11 @@
  * a database.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { MatchProcess, setDelayAfterDiscardMs } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import { ServerMessageSchema } from "~/game/protocol/messages";
 import { useMatchStore } from "~/game/client/store";
 import type { RuleSetOverride } from "~/game/rules/ruleSet";
-
 function makeMatch(
   seed: number,
   ruleSetOverride?: RuleSetOverride
@@ -34,7 +33,6 @@ function makeMatch(
     ruleSetOverride
   );
 }
-
 describe("snapshot hydration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -45,7 +43,6 @@ describe("snapshot hydration", () => {
     vi.clearAllMocks();
     setDelayAfterDiscardMs(350);
   });
-
   it("server snapshot validates against the protocol schema", async () => {
     const m = makeMatch(1);
     m.attachHuman(0, () => undefined);
@@ -64,7 +61,6 @@ describe("snapshot hydration", () => {
       expect(parsed.data.state.roundWind).toBe("E");
     }
   });
-
   it("hydrateSnapshot populates round/score/dealer fields", async () => {
     const m = makeMatch(1, { uraDora: false });
     m.attachHuman(0, () => undefined);
@@ -93,27 +89,16 @@ describe("snapshot hydration", () => {
     }
     expect(view.lastSeq).toBe(parsed.data.seq);
   });
-
   it("preserves fresh draws without marking chi or pon discard turns", async () => {
     const m = makeMatch(1);
     m.attachHuman(0, () => undefined);
     await m.start();
-    const state = (
-      m as unknown as {
-        state: {
-          phase: string;
-          turn: 0 | 1 | 2 | 3;
-          lastDrawn: Array<string | null>;
-        };
-      }
-    ).state;
-    state.phase = "awaiting_discard";
-    state.turn = 0;
-    state.lastDrawn = ["9s", null, null, null];
-
-    const drawnSnapshot = ServerMessageSchema.parse(
-      m.buildSnapshotForSeat(0)
-    );
+    editMatchState(m, (state) => {
+      state.phase = "awaiting_discard";
+      state.turn = 0;
+      state.lastDrawn = ["9s", null, null, null];
+    });
+    const drawnSnapshot = ServerMessageSchema.parse(m.buildSnapshotForSeat(0));
     expect(drawnSnapshot.type).toBe("snapshot");
     if (drawnSnapshot.type !== "snapshot") {
       return;
@@ -123,8 +108,9 @@ describe("snapshot hydration", () => {
       .getState()
       .hydrateSnapshot(drawnSnapshot.state, drawnSnapshot.seq);
     expect(useMatchStore.getState().freshlyDrawnSeat).toBe(0);
-
-    state.lastDrawn[0] = null;
+    editMatchState(m, (state) => {
+      state.lastDrawn[0] = null;
+    });
     const callTurnSnapshot = ServerMessageSchema.parse(
       m.buildSnapshotForSeat(0)
     );
@@ -138,7 +124,6 @@ describe("snapshot hydration", () => {
       .hydrateSnapshot(callTurnSnapshot.state, callTurnSnapshot.seq);
     expect(useMatchStore.getState().freshlyDrawnSeat).toBeNull();
   });
-
   it("hydrateSnapshot clears stale lastHandResult and matchEnded", () => {
     // Pre-populate the store as if a previous hand had ended.
     useMatchStore.setState({
@@ -187,18 +172,13 @@ describe("snapshot hydration", () => {
     expect(view.honba).toBe(1);
     expect(view.scores).toEqual([27000, 24000, 24000, 25000]);
   });
-
   it("captures the completed hand dealer in the live result", () => {
     useMatchStore.setState({ dealer: 3 });
-
-    useMatchStore.getState().applyEvent(
-      { type: "hand_end", reason: "exhaustive_draw" },
-      1
-    );
-
+    useMatchStore
+      .getState()
+      .applyEvent({ type: "hand_end", reason: "exhaustive_draw" }, 1);
     expect(useMatchStore.getState().lastHandResult?.dealer).toBe(3);
   });
-
   it("snapshot includes furiten with only the recipient's own slot populated", async () => {
     const m = makeMatch(1);
     m.attachHuman(0, () => undefined);
@@ -214,37 +194,19 @@ describe("snapshot hydration", () => {
     // furiten, so the whole tuple is false.
     expect(parsed.data.state.furiten).toEqual([false, false, false, false]);
   });
-
   it("rehydrates completed declarations without exposing concealed seats", async () => {
     const m = makeMatch(7);
     m.attachHuman(0, () => undefined);
     await m.start();
-    const state = (
-      m as unknown as {
-        state: {
-          phase: string;
-          turn: 0 | 1 | 2 | 3;
-          pendingRyuukyoku: {
-            actualTenpai: [boolean, boolean, boolean, boolean];
-            declarations: [
-              boolean | null,
-              boolean | null,
-              boolean | null,
-              boolean | null,
-            ];
-            nagashi: [boolean, boolean, boolean, boolean];
-          } | null;
-        };
-      }
-    ).state;
-    state.phase = "awaiting_ryuukyoku_declarations";
-    state.turn = 3;
-    state.pendingRyuukyoku = {
-      actualTenpai: [true, false, true, false],
-      declarations: [null, false, true, null],
-      nagashi: [false, false, false, false],
-    };
-
+    editMatchState(m, (state) => {
+      state.phase = "awaiting_ryuukyoku_declarations";
+      state.turn = 3;
+      state.pendingRyuukyoku = {
+        actualTenpai: [true, false, true, false],
+        declarations: [null, false, true, null],
+        nagashi: [false, false, false, false],
+      };
+    });
     const snapshot = ServerMessageSchema.parse(m.buildSnapshotForSeat(0));
     expect(snapshot.type).toBe("snapshot");
     if (snapshot.type !== "snapshot") {

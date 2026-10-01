@@ -1,3 +1,4 @@
+import { editMatchState } from "~/game/testing/matchState";
 /**
  * Orchestrator integration tests for end-of-hand → next-hand
  * transitions.
@@ -8,7 +9,6 @@
  * until the engine's exhaustive-draw branch fires.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   MatchProcess,
   setNextHandDelayMs,
@@ -16,19 +16,25 @@ import {
 } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
-
 interface CapturedEvent {
   seq: number;
   event: GameEvent;
 }
-
 function captureSink(): {
   sink: (msg: ServerMessage) => void;
   events: CapturedEvent[];
-  legals: () => Array<{ id: string; type: string; tile?: string }>;
+  legals: () => Array<{
+    id: string;
+    type: string;
+    tile?: string;
+  }>;
 } {
   const events: CapturedEvent[] = [];
-  let legals: Array<{ id: string; type: string; tile?: string }> = [];
+  let legals: Array<{
+    id: string;
+    type: string;
+    tile?: string;
+  }> = [];
   const sink = (msg: ServerMessage): void => {
     if (msg.type === "event") {
       for (const ev of msg.events) {
@@ -42,7 +48,6 @@ function captureSink(): {
   };
   return { sink, events, legals: () => legals };
 }
-
 function makeMatch(seed: number): MatchProcess {
   return new MatchProcess(
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
@@ -56,16 +61,15 @@ function makeMatch(seed: number): MatchProcess {
     { repository: ephemeralMatchRepository }
   );
 }
-
 /**
  * Force the live wall down to one tile so the next draw triggers
  * the engine's exhaustive-draw branch on the very next pop.
  */
 function drainWallToOne(m: MatchProcess): void {
-  const state = (m as unknown as { state: { liveWall: unknown[] } }).state;
-  state.liveWall.length = 1;
+  editMatchState(m, (state) => {
+    state.liveWall.length = 1;
+  });
 }
-
 describe("MatchProcess — hand transition", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -77,7 +81,6 @@ describe("MatchProcess — hand transition", () => {
     setNextHandDelayMs(3000);
     setDelayAfterDiscardMs(350);
   });
-
   it("emits hand_start at match start with round/wind/scores populated", async () => {
     const m = makeMatch(1);
     const { sink, events } = captureSink();
@@ -103,7 +106,6 @@ describe("MatchProcess — hand transition", () => {
       }
     }
   });
-
   it("includes dice in the snapshot built for the human seat", async () => {
     const m = makeMatch(3);
     const { sink } = captureSink();
@@ -127,7 +129,6 @@ describe("MatchProcess — hand transition", () => {
       expect(snap.state.drawsTaken).toBe(1);
     }
   });
-
   it("does not emit match_end on a normal hand_end", async () => {
     const m = makeMatch(2);
     const { sink, events, legals } = captureSink();
@@ -153,7 +154,6 @@ describe("MatchProcess — hand transition", () => {
     expect(handEnds.length).toBeGreaterThan(0);
     expect(matchEnds.length).toBe(0);
   });
-
   it("emits a new hand_start after a hand ends (when match continues)", async () => {
     const m = makeMatch(2);
     const { sink, events, legals } = captureSink();
@@ -193,7 +193,6 @@ describe("MatchProcess — hand transition", () => {
       expect(same).toBe(false);
     }
   });
-
   it("hand_end carries delta + scores from the engine", async () => {
     const m = makeMatch(2);
     const { sink, events, legals } = captureSink();

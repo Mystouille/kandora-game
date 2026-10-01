@@ -1,6 +1,7 @@
 import type { GameEvent } from "~/game/protocol/messages";
 import { MatchEventJournal } from "../eventJournal";
 import type { MatchRuntime } from "../runtime";
+import { runtimeCalendarNow } from "../runtime";
 import type { Seat } from "~/game/protocol/messages";
 import type {
   MatchEventJournalStore,
@@ -8,7 +9,7 @@ import type {
 } from "../repository";
 import type { DecisionTiming } from "../timing/decisionTiming";
 export interface EventPublisherPort {
-  readonly runtime: Pick<MatchRuntime, "now">;
+  readonly runtime: Pick<MatchRuntime, "now" | "wallNow">;
   readonly timing: Pick<DecisionTiming, "record">;
   readonly eventJournalStore: MatchEventJournalStore | null;
   readonly onEventJournalError?: (
@@ -33,6 +34,7 @@ export class MatchEventPublisher {
      * appended to the log. Used by the delayed-spectator scheduler
      * to gate dispatch (`emittedAt + delayMs <= now`). */
     emittedAt: number;
+    calendarAt?: number;
   }> = [];
 
   private spectatorSeq = 0;
@@ -77,6 +79,9 @@ export class MatchEventPublisher {
       seq: omniSeq,
       event: archived,
       emittedAt,
+      ...(this.port.runtime.wallNow
+        ? { calendarAt: runtimeCalendarNow(this.port.runtime) }
+        : {}),
     });
     this.eventJournal?.record(omniSeq);
     // Live broadcast — per recipient. Each seat's per-seat seq is
@@ -144,6 +149,9 @@ export class MatchEventPublisher {
       seq: this.nextSeq++,
       event,
       emittedAt: this.port.runtime.now(),
+      ...(this.port.runtime.wallNow
+        ? { calendarAt: runtimeCalendarNow(this.port.runtime) }
+        : {}),
     });
   }
 }

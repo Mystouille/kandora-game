@@ -1,3 +1,4 @@
+import { editMatchState } from "~/game/testing/matchState";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
 import {
@@ -10,7 +11,6 @@ import {
 } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import type { MatchRuntime } from "./runtime";
-
 function handStart(dealer: 0 | 1 | 2 | 3): GameEvent {
   return {
     type: "hand_start",
@@ -19,7 +19,6 @@ function handStart(dealer: 0 | 1 | 2 | 3): GameEvent {
     doraIndicators: ["1z"],
   };
 }
-
 describe("native ryuukyoku replay compaction", () => {
   it("merges four live declarations into the exhaustive hand_end", () => {
     const events: GameEvent[] = [
@@ -34,13 +33,11 @@ describe("native ryuukyoku replay compaction", () => {
         tenpai: [true, false, true, false],
       },
     ];
-
     const compacted = compactRyuukyokuDeclarationsForReplay(events);
-
     expect(compacted).toHaveLength(2);
-    expect(compacted.some((event) => event.type === "ryuukyoku_declaration")).toBe(
-      false
-    );
+    expect(
+      compacted.some((event) => event.type === "ryuukyoku_declaration")
+    ).toBe(false);
     expect(compacted[1]).toMatchObject({
       type: "hand_end",
       declarations: [
@@ -51,23 +48,24 @@ describe("native ryuukyoku replay compaction", () => {
       ],
     });
   });
-
   describe("MatchProcess ryuukyoku declaration pacing", () => {
     afterEach(() => {
-      setReadyCheckMs(5_000);
-      setNextHandDelayMs(5_000);
+      setReadyCheckMs(5000);
+      setNextHandDelayMs(5000);
       setDelayAfterDiscardMs(350);
       setRyuukyokuDeclarationTimingMs({
         automatic: 700,
-        action: 5_000,
-        result: 1_000,
+        action: 5000,
+        result: 1000,
       });
     });
-
     it("waits 700 ms per automatic declaration and 1 second before hand_end", async () => {
-      let now = 10_000;
+      let now = 10000;
       const sleeps: number[] = [];
-      const emitted: Array<{ at: number; event: GameEvent }> = [];
+      const emitted: Array<{
+        at: number;
+        event: GameEvent;
+      }> = [];
       const runtime: MatchRuntime = {
         now: () => now,
         random: () => 0.5,
@@ -102,51 +100,29 @@ describe("native ryuukyoku replay compaction", () => {
       setDelayAfterDiscardMs(0);
       setRyuukyokuDeclarationTimingMs({
         automatic: 700,
-        action: 5_000,
-        result: 1_000,
+        action: 5000,
+        result: 1000,
       });
       await match.start();
-
-      const internals = match as unknown as {
-        state: {
-          phase: string;
-          dealer: 0 | 1 | 2 | 3;
-          turn: 0 | 1 | 2 | 3;
-          roundWind: "E" | "S" | "W" | "N";
-          roundNumber: number;
-          pendingRyuukyoku: {
-            actualTenpai: [boolean, boolean, boolean, boolean];
-            declarations: [
-              boolean | null,
-              boolean | null,
-              boolean | null,
-              boolean | null,
-            ];
-            nagashi: [boolean, boolean, boolean, boolean];
-          } | null;
-          lastHandResult: unknown;
+      const internals = match;
+      internals.owners.gameplay.effects.setSeatLegals(0, []);
+      editMatchState(internals, (state) => {
+        state.phase = "awaiting_ryuukyoku_declarations";
+        state.dealer = 0;
+        state.turn = 0;
+        state.roundWind = "S";
+        state.roundNumber = 4;
+        state.lastHandResult = null;
+        state.pendingRyuukyoku = {
+          actualTenpai: [false, false, false, false],
+          declarations: [null, null, null, null],
+          nagashi: [false, false, false, false],
         };
-        setSeatLegals(seat: 0 | 1 | 2 | 3, actions: []): void;
-        continueRyuukyokuDeclarations(): Promise<void>;
-      };
-      internals.setSeatLegals(0, []);
-      internals.state.phase = "awaiting_ryuukyoku_declarations";
-      internals.state.dealer = 0;
-      internals.state.turn = 0;
-      internals.state.roundWind = "S";
-      internals.state.roundNumber = 4;
-      internals.state.lastHandResult = null;
-      internals.state.pendingRyuukyoku = {
-        actualTenpai: [false, false, false, false],
-        declarations: [null, null, null, null],
-        nagashi: [false, false, false, false],
-      };
+      });
       sleeps.length = 0;
       emitted.length = 0;
-
-      await internals.continueRyuukyokuDeclarations();
-
-      expect(sleeps).toEqual([700, 700, 700, 700, 1_000]);
+      await internals.owners.gameplay.turns.continueRyuukyokuDeclarations();
+      expect(sleeps).toEqual([700, 700, 700, 700, 1000]);
       const declarations = emitted.filter(
         ({ event }) => event.type === "ryuukyoku_declaration"
       );
@@ -161,7 +137,7 @@ describe("native ryuukyoku replay compaction", () => {
       if (!handEnd) {
         throw new Error("expected exhaustive hand_end");
       }
-      expect(handEnd.at - declarations[3].at).toBe(1_000);
+      expect(handEnd.at - declarations[3].at).toBe(1000);
       const settledSnapshot = match.buildSnapshotForSeat(0);
       expect(settledSnapshot.type).toBe("snapshot");
       if (settledSnapshot.type !== "snapshot") {
@@ -178,9 +154,8 @@ describe("native ryuukyoku replay compaction", () => {
         ],
       });
     });
-
     it("offers a fixed five-second prompt and defaults a silent human to tenpai", async () => {
-      let now = 20_000;
+      let now = 20000;
       const sleeps: number[] = [];
       const emitted: GameEvent[] = [];
       const runtime: MatchRuntime = {
@@ -215,47 +190,26 @@ describe("native ryuukyoku replay compaction", () => {
       setDelayAfterDiscardMs(0);
       setRyuukyokuDeclarationTimingMs({
         automatic: 700,
-        action: 5_000,
+        action: 5000,
         result: 0,
       });
       await match.start();
-
-      const internals = match as unknown as {
-        state: {
-          phase: string;
-          dealer: 0 | 1 | 2 | 3;
-          turn: 0 | 1 | 2 | 3;
-          pendingRyuukyoku: {
-            actualTenpai: [boolean, boolean, boolean, boolean];
-            declarations: [
-              boolean | null,
-              boolean | null,
-              boolean | null,
-              boolean | null,
-            ];
-            nagashi: [boolean, boolean, boolean, boolean];
-          } | null;
-          lastHandResult: unknown;
+      const internals = match;
+      internals.owners.gameplay.effects.setSeatLegals(0, []);
+      editMatchState(internals, (state) => {
+        state.phase = "awaiting_ryuukyoku_declarations";
+        state.dealer = 0;
+        state.turn = 0;
+        state.lastHandResult = null;
+        state.pendingRyuukyoku = {
+          actualTenpai: [true, false, false, false],
+          declarations: [null, null, null, null],
+          nagashi: [false, false, false, false],
         };
-        setSeatLegals(seat: 0 | 1 | 2 | 3, actions: []): void;
-        continueRyuukyokuDeclarations(): Promise<void>;
-        handleDeadlineExpiry(seat: 0 | 1 | 2 | 3): Promise<void>;
-      };
-      internals.setSeatLegals(0, []);
-      internals.state.phase = "awaiting_ryuukyoku_declarations";
-      internals.state.dealer = 0;
-      internals.state.turn = 0;
-      internals.state.lastHandResult = null;
-      internals.state.pendingRyuukyoku = {
-        actualTenpai: [true, false, false, false],
-        declarations: [null, null, null, null],
-        nagashi: [false, false, false, false],
-      };
+      });
       emitted.length = 0;
       sleeps.length = 0;
-
-      await internals.continueRyuukyokuDeclarations();
-
+      await internals.owners.gameplay.turns.continueRyuukyokuDeclarations();
       const prompt = match.buildSnapshotForSeat(0);
       expect(prompt.type).toBe("snapshot");
       if (prompt.type !== "snapshot") {
@@ -265,9 +219,8 @@ describe("native ryuukyoku replay compaction", () => {
         "declare_noten",
         "declare_tenpai",
       ]);
-      expect(prompt.deadline).toBe(now + 5_000);
+      expect(prompt.deadline).toBe(now + 5000);
       expect(prompt.bufferMs).toBeUndefined();
-
       const checkpoint = match.createCheckpoint();
       expect(checkpoint.status).toBe("playing");
       if (
@@ -277,7 +230,7 @@ describe("native ryuukyoku replay compaction", () => {
         throw new Error("expected declaration action checkpoint");
       }
       expect(checkpoint.actionWindow.kind).toBe("ryuukyoku_declaration");
-      expect(checkpoint.actionWindow.visibleRemainingMs).toBe(5_000);
+      expect(checkpoint.actionWindow.visibleRemainingMs).toBe(5000);
       const restored = MatchProcess.restoreCheckpoint(checkpoint, {
         repository: ephemeralMatchRepository,
         runtime,
@@ -290,10 +243,8 @@ describe("native ryuukyoku replay compaction", () => {
       expect(restoredPrompt.legalActions).toEqual(prompt.legalActions);
       expect(restoredPrompt.deadline).toBe(prompt.deadline);
       expect(restoredPrompt.bufferMs).toBeUndefined();
-
-      now += 5_000;
-      await internals.handleDeadlineExpiry(0);
-
+      now += 5000;
+      await internals.owners.gameplay.decisions.handleDeadlineExpiry(0);
       expect(sleeps[0]).toBe(700);
       expect(emitted).toContainEqual({
         type: "ryuukyoku_declaration",
@@ -303,7 +254,6 @@ describe("native ryuukyoku replay compaction", () => {
       });
     });
   });
-
   it("leaves legacy exhaustive draws unchanged", () => {
     const events: GameEvent[] = [
       handStart(0),
@@ -313,10 +263,8 @@ describe("native ryuukyoku replay compaction", () => {
         tenpai: [false, false, false, false],
       },
     ];
-
     expect(compactRyuukyokuDeclarationsForReplay(events)).toEqual(events);
   });
-
   it("rejects a declaration sequence that is not in current wind order", () => {
     const events: GameEvent[] = [
       handStart(1),
@@ -330,12 +278,10 @@ describe("native ryuukyoku replay compaction", () => {
         tenpai: [false, true, false, false],
       },
     ];
-
     expect(() => compactRyuukyokuDeclarationsForReplay(events)).toThrow(
       "misordered"
     );
   });
-
   it("rejects an orphaned partial declaration sequence", () => {
     expect(() =>
       compactRyuukyokuDeclarationsForReplay([

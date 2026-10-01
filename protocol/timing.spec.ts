@@ -4,6 +4,7 @@ import {
   ClockSampleSchema,
   PresentationEventSchema,
 } from "./timing";
+import { ClientMessageSchema } from "./messages";
 
 const window = {
   id: "match-1:0:1",
@@ -24,6 +25,18 @@ const window = {
 };
 
 describe("timing contracts", () => {
+  it("advertises fixed-prompt support separately from the earlier turn-only capability", () => {
+    const hello = {
+      type: "hello", matchId: "match-1", token: "test-token",
+      timingCapabilities: ["clock-window-v2"], fixedPromptVersion: 1,
+    };
+    expect(ClientMessageSchema.parse(hello)).toMatchObject({ fixedPromptVersion: 1 });
+    expect(ClientMessageSchema.safeParse({ ...hello, fixedPromptVersion: 2 }).success).toBe(false);
+    expect(ClientMessageSchema.parse({
+      type: "hello", matchId: "legacy-match", token: "test-token",
+    })).not.toHaveProperty("fixedPromptVersion");
+  });
+
   it("retains the explicit base, bank and transport ends", () => {
     expect(ActionWindowViewSchema.parse(window)).toEqual(window);
   });

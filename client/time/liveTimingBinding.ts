@@ -4,7 +4,43 @@ import type {
 } from "~/game/protocol/timing";
 import { useMatchStore } from "../store";
 import { intentForWindow, actionTimerView } from "./actionWindowViewModel";
-import { liveServerNow } from "./liveClock";
+import { liveServerNow, liveClockQuality } from "./liveClock";
+import { reportClientTiming } from "./timingDiagnostics";
+
+export function synchronizedWindowNow(window: ActionWindowView): number | null {
+  const quality = liveClockQuality();
+  if (quality?.clockEpoch !== window.clockEpoch) {
+    reportClientTiming({
+      kind: "epoch-mismatch",
+      clockEpoch: window.clockEpoch,
+      windowId: window.id,
+    });
+    return null;
+  }
+  return liveServerNow();
+}
+
+export function promptCountdown(
+  window: ActionWindowView | null | undefined,
+  legacyDeadline: number
+) {
+  if (!window) {
+    return {
+      remainingMs: Math.max(0, legacyDeadline - Date.now()),
+      canRespond: true,
+      synchronized: true,
+    };
+  }
+  const now = synchronizedWindowNow(window);
+  return {
+    remainingMs:
+      now === null
+        ? window.baseEndsAt - window.opensAt
+        : Math.max(0, window.baseEndsAt - Math.max(now, window.opensAt)),
+    canRespond: now !== null && actionTimerView(window, now).ready,
+    synchronized: now !== null,
+  };
+}
 
 let pending: ReturnType<typeof setTimeout> | null = null;
 
@@ -17,7 +53,7 @@ export function displayedActionIntent(
     return undefined;
   }
 
-  const now = liveServerNow();
+  const now = synchronizedWindowNow(window);
   if (
     now === null ||
     !actionTimerView(window, now).ready ||
@@ -36,7 +72,7 @@ export function decisionIsReady(
   if (!window) {
     return true;
   }
-  const now = liveServerNow();
+  const now = synchronizedWindowNow(window);
   return now !== null && actionTimerView(window, now).ready;
 }
 

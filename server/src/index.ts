@@ -73,8 +73,12 @@ import { closePlayerConnection } from "./playerConnectionLifecycle";
 import { createAuthorityClock } from "./timing/authorityClock";
 import { clockSampleForProbe } from "./transport/clockSync";
 import { LatencySampler } from "./transport/latencyProfile";
-import { TIMING_CAPABILITY, TimingModeSchema } from "~/game/protocol/timing";
+import {
+  TIMING_CAPABILITY,
+  FIXED_PROMPT_VERSION,
+} from "~/game/protocol/timing";
 import { DecisionWindowError } from "./timing/actionWindows";
+import { timingConfiguration } from "./timing/configuration";
 
 // The host bootstrap (portal or standalone) injects the PortalAdapter via
 // `setAdapter(...)` before importing this module.
@@ -83,9 +87,7 @@ const GAME_ENABLED = process.env.GAME_ENABLED === "true";
 const HELLO_TIMEOUT_MS = 5_000;
 const transportClock = createAuthorityClock();
 const socketLatencies = new WeakMap<WebSocket, LatencySampler>();
-const configuredTimingMode = TimingModeSchema.parse(
-  process.env.GAME_TIMING_MODE ?? "legacy"
-);
+const configuredTiming = timingConfiguration(process.env);
 /**
  * Liveness-probe timeout. A WS that doesn't return a pong frame
  * within this window after `ping()` is treated as a missed
@@ -148,7 +150,7 @@ const playerSocketsBySender = new WeakMap<
 
 const nativeMatchDependencies = {
   authorityClock: transportClock,
-  timingMode: configuredTimingMode,
+  ...configuredTiming,
   repository: mongoMatchRepository,
   eventJournalStore: mongoMatchEventJournalStore,
   onAutomaticAction: (context: {
@@ -1082,7 +1084,8 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
   }
   if (
     match.timingMode === "windows-v2" &&
-    !hello.timingCapabilities?.includes(TIMING_CAPABILITY)
+    (!hello.timingCapabilities?.includes(TIMING_CAPABILITY) ||
+      hello.fixedPromptVersion !== FIXED_PROMPT_VERSION)
   ) {
     sendError(
       "timing_update_required",
@@ -1302,6 +1305,10 @@ async function handleClientFrame(
     sendError("validation_error", parsed.error.message);
     return;
   }
+  if (parsed.data.matchId !== match.matchId) {
+    sendError("matchid_mismatch", "The command targets a different match.");
+    return;
+  }
   switch (parsed.data.type) {
     case "act": {
       try {
@@ -1321,7 +1328,19 @@ async function handleClientFrame(
       return;
     }
     case "ready": {
-      await match.handleReady(seat);
+      try {
+        await match.handleReady(seat, {
+          receivedAt,
+          windowId: parsed.data.windowId,
+          clockEpoch: parsed.data.clockEpoch,
+        });
+      } catch (error) {
+        if (!(error instanceof DecisionWindowError)) {
+          throw error;
+        }
+        sendError("decision_rejected", error.message);
+        send(match.buildSnapshotForSeat(seat));
+      }
       return;
     }
     case "set_room_ready": {
@@ -1429,7 +1448,19 @@ async function handleClientFrame(
       return;
     }
     case "vote_continue": {
-      await match.handleVoteContinue(seat, parsed.data.vote);
+      try {
+        await match.handleVoteContinue(seat, parsed.data.vote, {
+          receivedAt,
+          windowId: parsed.data.windowId,
+          clockEpoch: parsed.data.clockEpoch,
+        });
+      } catch (error) {
+        if (!(error instanceof DecisionWindowError)) {
+          throw error;
+        }
+        sendError("decision_rejected", error.message);
+        send(match.buildSnapshotForSeat(seat));
+      }
       return;
     }
     case "hello": {

@@ -84,4 +84,67 @@ describe("explicit authoritative windows", () => {
     expect(restored?.expiresAt).toBe(26_700);
     expect(restored?.clockEpoch).toBe("epoch-2");
   });
+
+  it("never resurrects a resolved decision or debits its bank again on restore", async () => {
+    const { runtime, windows, bank } = setup();
+    await runtime.advanceBy(6_300);
+    windows.reserve(0, "discard:1m", {
+      receivedAt: 6_300,
+      windowId: "window-1",
+      clockEpoch: "epoch-1",
+    });
+    windows.consumeTimedBuffer(0, bank);
+    const resolved = windows.timedView(0);
+    if (!resolved) {
+      throw new Error("Expected resolved decision");
+    }
+    windows.restoreTimed(0, [], resolved, runtime.now(), "epoch-2");
+    expect(windows.legals(0)).toEqual([]);
+    expect(windows.view(0).timerPending).toBe(false);
+    expect(windows.timedView(0)?.state).toBe("resolved");
+    expect(() =>
+      windows.reserve(0, "discard:1m", {
+        receivedAt: 6_400,
+        windowId: "window-1",
+        clockEpoch: "epoch-2",
+      })
+    ).toThrow(/no longer accepting/);
+    windows.consumeTimedBuffer(0, bank);
+    expect(bank.balance(0)).toBe(19_900);
+  });
+
+  it("preserves a cancelled restored decision without charging it later", async () => {
+    const { runtime, windows, bank, timing } = setup();
+    windows.restoreTimed(
+      0,
+      [],
+      { ...timing, state: "cancelled" },
+      runtime.now(),
+      "epoch-2"
+    );
+    await runtime.advanceBy(30_000);
+    windows.consumeTimedBuffer(0, bank);
+    expect(windows.legals(0)).toEqual([]);
+    expect(windows.view(0).timerPending).toBe(false);
+    expect(windows.timedView(0)?.state).toBe("cancelled");
+    expect(bank.balance(0)).toBe(20_000);
+  });
+
+  it("matches the receipt owner when reserving or releasing equal-millisecond inputs", () => {
+    const { windows } = setup();
+    const receipt = {
+      receivedAt: 1_000,
+      windowId: "window-1",
+      clockEpoch: "epoch-1",
+      ownerGeneration: 2,
+    };
+    windows.reserve(0, "discard:1m", receipt);
+    expect(() =>
+      windows.reserve(0, "discard:1m", { ...receipt, ownerGeneration: 1 })
+    ).toThrow(/already reserved/);
+    windows.releaseReservation(0, { ...receipt, ownerGeneration: 1 });
+    expect(windows.hasReservedInput(0)).toBe(true);
+    windows.releaseReservation(0, receipt);
+    expect(windows.hasReservedInput(0)).toBe(false);
+  });
 });

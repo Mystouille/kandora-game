@@ -19,7 +19,6 @@
  * `handleAfk(seat, false)` from the reconnect button.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   HumanSessionTakeoverRequiredError,
   MatchProcess,
@@ -33,7 +32,6 @@ import type {
   RoomState,
   ServerMessage,
 } from "~/game/protocol/messages";
-
 function makeMatch(seed: number): MatchProcess {
   return new MatchProcess(
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
@@ -47,7 +45,6 @@ function makeMatch(seed: number): MatchProcess {
     { repository: ephemeralMatchRepository }
   );
 }
-
 function sink(): {
   send: (msg: ServerMessage) => void;
   events: GameEvent[];
@@ -70,10 +67,8 @@ function sink(): {
     rooms,
   };
 }
-
 const wait = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
-
 describe("MatchProcess — disconnect / AFK", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -84,9 +79,8 @@ describe("MatchProcess — disconnect / AFK", () => {
   afterEach(() => {
     setNextHandDelayMs(3000);
     setDelayAfterDiscardMs(350);
-    setActionTimeoutMs(30_000);
+    setActionTimeoutMs(30000);
   });
-
   it("detachHuman during play flags the seat as disconnected and auto-defaults the open window", async () => {
     const m = makeMatch(21);
     const s = sink();
@@ -108,7 +102,6 @@ describe("MatchProcess — disconnect / AFK", () => {
     ).length;
     expect(after).toBeGreaterThan(before);
   });
-
   it("handleAfk(true) flags the seat without dropping the socket and auto-defaults the open window", async () => {
     const m = makeMatch(22);
     const s = sink();
@@ -134,7 +127,6 @@ describe("MatchProcess — disconnect / AFK", () => {
     ).length;
     expect(after).toBeGreaterThan(before);
   });
-
   it("handleAfk(false) reverses the flag and restores normal connected reporting", async () => {
     const m = makeMatch(23);
     const s = sink();
@@ -150,7 +142,6 @@ describe("MatchProcess — disconnect / AFK", () => {
       expect(occ.connected).toBe(true);
     }
   });
-
   it("re-attaching after a network detach auto-clears the seat's disconnect flag", async () => {
     const m = makeMatch(24);
     const s = sink();
@@ -170,20 +161,16 @@ describe("MatchProcess — disconnect / AFK", () => {
       expect(occ.connected).toBe(true);
     }
   });
-
   it("ignores a stale socket detach after a replacement attaches", async () => {
     const m = makeMatch(224);
     const first = sink();
     const replacement = sink();
     m.attachHuman(0, first.send);
     await m.start();
-
     m.attachHuman(0, replacement.send);
-
     expect(m.detachHuman(0, first.send)).toBe(false);
     expect(m.isHumanAttached(0, replacement.send)).toBe(true);
     expect(m.hasConnectedHumanPlayers()).toBe(true);
-
     const room = m.buildRoomState(0);
     const occupant = room.seats[0].occupant;
     expect(occupant.kind).toBe("human");
@@ -191,7 +178,6 @@ describe("MatchProcess — disconnect / AFK", () => {
       expect(occupant.connected).toBe(true);
     }
   });
-
   it("requires explicit takeover for a different client session", async () => {
     const m = makeMatch(226);
     const first = sink();
@@ -200,14 +186,12 @@ describe("MatchProcess — disconnect / AFK", () => {
       clientSessionId: "source-session-123456",
     });
     await m.start();
-
     expect(() =>
       m.attachHuman(0, replacement.send, undefined, {
         clientSessionId: "destination-session-123",
       })
     ).toThrow(HumanSessionTakeoverRequiredError);
     expect(m.isHumanAttached(0, first.send)).toBe(true);
-
     const result = m.attachHuman(0, replacement.send, undefined, {
       clientSessionId: "destination-session-123",
       takeover: true,
@@ -220,7 +204,6 @@ describe("MatchProcess — disconnect / AFK", () => {
     expect(m.isHumanAttached(0, replacement.send)).toBe(true);
     expect(m.detachHuman(0, first.send)).toBe(false);
   });
-
   it("preserves client-session ownership across a playing disconnect", async () => {
     const m = makeMatch(227);
     const first = sink();
@@ -229,14 +212,12 @@ describe("MatchProcess — disconnect / AFK", () => {
     });
     await m.start();
     m.detachHuman(0, first.send);
-
     expect(() =>
       m.attachHuman(0, sink().send, undefined, {
         clientSessionId: "destination-session-123",
       })
     ).toThrow(HumanSessionTakeoverRequiredError);
   });
-
   it("treats an explicit device takeover as opting back in from AFK", async () => {
     const m = makeMatch(228);
     const first = sink();
@@ -245,20 +226,17 @@ describe("MatchProcess — disconnect / AFK", () => {
     });
     await m.start();
     await m.handleAfk(0, true);
-
     const replacement = sink();
     m.attachHuman(0, replacement.send, undefined, {
       clientSessionId: "destination-session-123",
       takeover: true,
     });
-
     const occupant = m.buildRoomState(0).seats[0].occupant;
     expect(occupant.kind).toBe("human");
     if (occupant.kind === "human") {
       expect(occupant.connected).toBe(true);
     }
   });
-
   it("ignores a stale liveness result after a replacement attaches", async () => {
     setActionTimeoutMs(0);
     const m = makeMatch(225);
@@ -270,17 +248,12 @@ describe("MatchProcess — disconnect / AFK", () => {
       });
     m.attachHuman(0, first.send, firstProbe);
     await m.start();
-
-    const internals = m as unknown as {
-      handleDeadlineExpiry: (seat: 0) => Promise<void>;
-    };
-    const expiry = internals.handleDeadlineExpiry(0);
-
+    const internals = m;
+    const expiry = internals.owners.gameplay.decisions.handleDeadlineExpiry(0);
     const replacement = sink();
     m.attachHuman(0, replacement.send, async () => true);
     resolveFirstProbe?.(false);
     await expiry;
-
     expect(m.isHumanConnected(0)).toBe(true);
     expect(m.isHumanAttached(0, replacement.send)).toBe(true);
     const occupant = m.buildRoomState(0).seats[0].occupant;
@@ -289,7 +262,6 @@ describe("MatchProcess — disconnect / AFK", () => {
       expect(occupant.connected).toBe(true);
     }
   });
-
   it("re-attaching after self-reported AFK keeps the seat flagged until afk:false", async () => {
     const m = makeMatch(124);
     const s = sink();
@@ -309,14 +281,13 @@ describe("MatchProcess — disconnect / AFK", () => {
       expect(occ.connected).toBe(false);
     }
   });
-
   it("flagged seats skip the deadline wait on subsequent windows", async () => {
     const m = makeMatch(25);
     const s = sink();
     // Set a deliberately long action timeout. A non-flagged
     // seat would not produce a discard for ~5s+; a flagged
     // seat should auto-default almost immediately.
-    setActionTimeoutMs(5_000);
+    setActionTimeoutMs(5000);
     m.attachHuman(0, s.send);
     await m.start();
     await m.handleAfk(0, true);
@@ -326,7 +297,6 @@ describe("MatchProcess — disconnect / AFK", () => {
     );
     expect(discards.length).toBeGreaterThan(0);
   });
-
   it("attached spectators receive room_state with the disconnect flag broadcast", async () => {
     const m = makeMatch(26);
     const s = sink();

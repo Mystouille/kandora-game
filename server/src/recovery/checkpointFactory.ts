@@ -60,7 +60,7 @@ export interface CheckpointFactoryPort {
   readonly runtime: Pick<MatchRuntime, "now" | "captureRandomState">;
   isRelay(): boolean;
   delayedSpectators(): ReadonlySet<unknown>;
-  history(): readonly { seq: number; event: GameEvent; emittedAt: number }[];
+  history(): readonly { seq: number; event: GameEvent; emittedAt: number; calendarAt?: number }[];
   nextSequence(): number;
   seatSequences(): readonly [number, number, number, number];
   spectatorSequence(): number;
@@ -181,13 +181,17 @@ export class CheckpointFactory {
       state: this.port.kernel.view,
       startedAgoMs: Math.max(
         0,
-        savedAt - (this.port.session.snapshot().startedAt?.getTime() ?? savedAt)
+        savedAt - (this.port.session.snapshot().startedReferenceAt ??
+          this.port.session.snapshot().startedAt?.getTime() ?? savedAt)
       ),
+      ...(this.port.session.snapshot().startedAt
+        ? { startedCalendarAt: this.port.session.snapshot().startedAt?.getTime() } : {}),
       randomState: this.port.runtime.captureRandomState(),
       eventLog: this.port.history().map((entry) => ({
         seq: entry.seq,
         event: entry.event,
         emittedAgoMs: Math.max(0, savedAt - entry.emittedAt),
+        ...(entry.calendarAt !== undefined ? { calendarAt: entry.calendarAt } : {}),
       })),
       nextSeq: this.port.nextSequence(),
       seatSeq: [...this.port.seatSequences()],
@@ -266,7 +270,10 @@ export class CheckpointFactory {
           : legacyTiming.BASE_ACTION_MS +
             this.port.bank.balance(seat) +
             legacyTiming.ACTION_GRACE_MS;
-    const expiryRemainingMs = Math.max(0, expiryDurationMs - elapsedMs);
+    const timed = this.port.windows.timedView(seat);
+    const expiryRemainingMs = Math.max(0,
+      timed ? timed.expiresAt - savedAt : expiryDurationMs - elapsedMs
+    );
     return PlayingActionCheckpointSchema.parse({
       ...this.playingCheckpointBase(savedAt),
       checkpointKind: "action_window",
@@ -327,7 +334,9 @@ export class CheckpointFactory {
           legalActions: this.port.windows.legals(seat),
           elapsedMs,
           visibleRemainingMs: Math.max(0, deadline - savedAt),
-          expiryRemainingMs: Math.max(0, expiryDurationMs - elapsedMs),
+          expiryRemainingMs: Math.max(0, this.port.windows.timedView(seat)
+            ? (this.port.windows.timedView(seat)?.expiresAt ?? savedAt) - savedAt
+            : expiryDurationMs - elapsedMs),
         };
       });
     return PlayingCallCheckpointSchema.parse({

@@ -17,6 +17,7 @@ export function dispatchServerMessage(
       if (
         message.clock ||
         message.actionWindow !== undefined ||
+        message.promptWindow !== undefined ||
         message.presentation
       ) {
         store.setTimingMetadata(message);
@@ -43,6 +44,7 @@ export function dispatchServerMessage(
         if (
           message.clock ||
           message.actionWindow !== undefined ||
+          message.promptWindow !== undefined ||
           message.presentation
         ) {
           store.setTimingMetadata(message);
@@ -70,6 +72,7 @@ export function dispatchServerMessage(
       if (
         message.clock ||
         message.actionWindow !== undefined ||
+        message.promptWindow !== undefined ||
         message.presentation
       ) {
         store.setTimingMetadata(message);
@@ -87,16 +90,26 @@ export function dispatchServerMessage(
       return;
     }
     case "ready_check": {
+      if (message.clock || message.window !== undefined) {
+        store.setTimingMetadata({
+          clock: message.clock,
+          promptWindow: message.window ?? null,
+        });
+      }
       store.setActionDeadline(null);
       store.setActionBufferMs(null);
       store.setReadyCheck({
         deadline: message.deadline,
         acked: message.acked,
+        ...(message.window !== undefined ? { window: message.window } : {}),
       });
       return;
     }
     case "ready_check_end": {
       store.setReadyCheck(null);
+      if (store.promptWindow?.kind === "ready") {
+        store.setTimingMetadata({ promptWindow: null });
+      }
       return;
     }
     case "room_state": {

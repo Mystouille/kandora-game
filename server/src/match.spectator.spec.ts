@@ -16,7 +16,6 @@
  * without a database.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { MatchProcess, setDelayAfterDiscardMs } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import {
@@ -25,7 +24,6 @@ import {
   type ServerMessage,
 } from "~/game/protocol/messages";
 import type { RuleSetOverride } from "~/game/rules/ruleSet";
-
 function makeMatch(
   seed: number,
   ruleSetOverride?: RuleSetOverride
@@ -44,13 +42,11 @@ function makeMatch(
     ruleSetOverride
   );
 }
-
 interface SpectatorSink {
   send: (msg: ServerMessage) => void;
   events: GameEvent[];
   seqs: number[];
 }
-
 function makeSpectator(): SpectatorSink {
   const events: GameEvent[] = [];
   const seqs: number[] = [];
@@ -67,7 +63,6 @@ function makeSpectator(): SpectatorSink {
     seqs,
   };
 }
-
 describe("MatchProcess spectator API", () => {
   beforeEach(() => {
     setDelayAfterDiscardMs(0);
@@ -76,7 +71,6 @@ describe("MatchProcess spectator API", () => {
     vi.clearAllMocks();
     setDelayAfterDiscardMs(350);
   });
-
   it("buildSpectatorSnapshot has mySeat=null, all hands visible, validates against the schema", async () => {
     const m = makeMatch(7, { uraDora: false });
     await m.start();
@@ -108,16 +102,20 @@ describe("MatchProcess spectator API", () => {
     expect(parsed.data.state.furiten).toEqual([false, false, false, false]);
     expect(parsed.data.state.uraDoraEnabled).toBe(false);
   });
-
   it("broadcasts deduplicated spectator-only presence and prefers live", () => {
-    const match = new MatchProcess("presence", 1, [
-      { userId: "player", displayName: "Player", isBot: false },
-      { userId: "b1", displayName: "Bot1", isBot: true },
-      { userId: "b2", displayName: "Bot2", isBot: true },
-      { userId: "b3", displayName: "Bot3", isBot: true },
-    ], {
-      repository: ephemeralMatchRepository,
-    });
+    const match = new MatchProcess(
+      "presence",
+      1,
+      [
+        { userId: "player", displayName: "Player", isBot: false },
+        { userId: "b1", displayName: "Bot1", isBot: true },
+        { userId: "b2", displayName: "Bot2", isBot: true },
+        { userId: "b3", displayName: "Bot3", isBot: true },
+      ],
+      {
+        repository: ephemeralMatchRepository,
+      }
+    );
     const playerMessages: ServerMessage[] = [];
     const firstMessages: ServerMessage[] = [];
     const duplicateMessages: ServerMessage[] = [];
@@ -130,23 +128,17 @@ describe("MatchProcess spectator API", () => {
     const duplicateSend = (message: ServerMessage): void => {
       duplicateMessages.push(message);
     };
-
     match.attachHuman(0, playerSend);
-    const delayedSession = match.attachDelayedSpectator(
-      firstSend,
-      5 * 60_000,
-      {
-        userId: "viewer",
-        displayName: "Viewer",
-        role: "spectator",
-      }
-    );
+    const delayedSession = match.attachDelayedSpectator(firstSend, 5 * 60000, {
+      userId: "viewer",
+      displayName: "Viewer",
+      role: "spectator",
+    });
     match.attachSpectator(duplicateSend, {
       userId: "viewer",
       displayName: "Viewer",
       role: "spectator",
     });
-
     expect(match.buildViewerState()).toEqual({
       type: "viewer_state",
       viewers: [
@@ -158,45 +150,46 @@ describe("MatchProcess spectator API", () => {
         },
       ],
     });
-    expect(ServerMessageSchema.safeParse(match.buildViewerState()).success).toBe(
-      true
-    );
+    expect(
+      ServerMessageSchema.safeParse(match.buildViewerState()).success
+    ).toBe(true);
     expect(
       playerMessages.some((message) => message.type === "viewer_state")
     ).toBe(true);
-
     match.detachSpectator(duplicateSend);
     expect(match.buildViewerState().viewers).toEqual([
       {
         userId: "viewer",
         displayName: "Viewer",
         role: "spectator",
-        delayMs: 5 * 60_000,
+        delayMs: 5 * 60000,
       },
     ]);
     match.detachDelayedSpectator(delayedSession);
     expect(match.buildViewerState().viewers).toEqual([]);
   });
-
   it("excludes a seated player even when that identity also spectates", () => {
-    const match = new MatchProcess("player-spectating", 2, [
-      { userId: "player", displayName: "Player", isBot: false },
-      { userId: "b1", displayName: "Bot1", isBot: true },
-      { userId: "b2", displayName: "Bot2", isBot: true },
-      { userId: "b3", displayName: "Bot3", isBot: true },
-    ], {
-      repository: ephemeralMatchRepository,
-    });
+    const match = new MatchProcess(
+      "player-spectating",
+      2,
+      [
+        { userId: "player", displayName: "Player", isBot: false },
+        { userId: "b1", displayName: "Bot1", isBot: true },
+        { userId: "b2", displayName: "Bot2", isBot: true },
+        { userId: "b3", displayName: "Bot3", isBot: true },
+      ],
+      {
+        repository: ephemeralMatchRepository,
+      }
+    );
     match.attachHuman(0, () => undefined);
     match.attachSpectator(() => undefined, {
       userId: "player",
       displayName: "Player",
       role: "spectator",
     });
-
     expect(match.buildViewerState().viewers).toEqual([]);
   });
-
   it("attached spectator receives projected events with omniscient draw tile and contiguous seq", async () => {
     const m = makeMatch(11);
     const sink = makeSpectator();
@@ -216,7 +209,13 @@ describe("MatchProcess spectator API", () => {
     const draws = sink.events.filter((e) => e.type === "draw");
     expect(draws.length).toBeGreaterThan(0);
     for (const ev of draws) {
-      expect((ev as { tile?: unknown }).tile).toBeDefined();
+      expect(
+        (
+          ev as {
+            tile?: unknown;
+          }
+        ).tile
+      ).toBeDefined();
     }
     // `hand_start` is present and carries omniscient
     // `startingHands` so the client can render every seat. The
@@ -237,7 +236,6 @@ describe("MatchProcess spectator API", () => {
       expect(hs.liveDrawSchedule).toBeUndefined();
     }
   });
-
   it("detachSpectator stops further fan-out", async () => {
     const m = makeMatch(13);
     const sink = makeSpectator();
@@ -246,27 +244,16 @@ describe("MatchProcess spectator API", () => {
     const countBefore = sink.events.length;
     expect(countBefore).toBeGreaterThan(0);
     m.detachSpectator(sink.send);
-    const seqBefore = m["spectatorSeq"] as number;
-    // Run a few more ticks of the match by advancing the action
-    // through the bots. We can't easily inject one event without
-    // hitting internals, so we assert the negative path: no new
-    // events arrive at the detached sink even though more events
-    // may continue to emit. We approximate by directly calling the
-    // internal sender via reflection — only safe in tests.
-    type WithEmit = {
-      emitEvent: (e: GameEvent) => Promise<void>;
-    };
-    const internal = m as unknown as WithEmit;
-    await internal.emitEvent({
+    const seqBefore = m.owners.publisher.spectatorSequence;
+    await m.owners.publisher.emitEvent({
       type: "new_dora",
-      indicator: "1m" as GameEvent extends { indicator: infer T } ? T : never,
-    } as GameEvent);
+      indicator: "1m",
+    });
     expect(sink.events.length).toBe(countBefore);
     // The spectator seq line still advances (other spectators
     // attached later see contiguous seqs starting beyond this point).
-    expect((m["spectatorSeq"] as number) > seqBefore).toBe(true);
+    expect(m.owners.publisher.spectatorSequence).toBeGreaterThan(seqBefore);
   });
-
   it("replaySpectatorBuffer returns a contiguous slice from fromSeq", async () => {
     const m = makeMatch(17);
     const sink = makeSpectator();
@@ -287,7 +274,6 @@ describe("MatchProcess spectator API", () => {
       expect(tail[i].seq).toBe(halfway + i);
     }
   });
-
   it("a late-attaching spectator's snapshot reports the current spectatorSeq - 1", async () => {
     const m = makeMatch(19);
     const early = makeSpectator();

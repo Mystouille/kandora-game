@@ -79,13 +79,14 @@ export class ResultTransition {
 
   installCheckpointResultTransition(
     checkpoint: PlayingResultTransitionCheckpoint,
-    restored: boolean
+    restored: boolean,
+    restoredAt = this.runtime.now()
   ): void {
     const transitionKind = checkpoint.transitionKind;
     const nextReadyMs = checkpoint.nextReadyMs;
     this.resultTransitionKind = transitionKind;
     this.resultTransitionDeadline =
-      this.runtime.now() + checkpoint.transitionRemainingMs;
+      restoredAt + checkpoint.transitionRemainingMs;
     this.resultTransitionNextReadyMs = nextReadyMs;
     if (restored) {
       this.resultTransitionResolve = () => {
@@ -101,7 +102,7 @@ export class ResultTransition {
       () => {
         this.finishResultTransition();
       },
-      checkpoint.transitionRemainingMs,
+      Math.max(0, this.resultTransitionDeadline - this.runtime.now()),
       { unref: true }
     );
   }

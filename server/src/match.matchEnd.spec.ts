@@ -1,3 +1,4 @@
+import { editMatchState } from "~/game/testing/matchState";
 /**
  * Match-end orchestrator integration test.
  *
@@ -15,12 +16,10 @@
  * `afterHandEnd()` directly.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 const { archiveMatchMock, archiveReplayLogMock } = vi.hoisted(() => ({
   archiveMatchMock: vi.fn(async () => undefined),
   archiveReplayLogMock: vi.fn(async () => undefined),
 }));
-
 import {
   MatchProcess,
   setNextHandDelayMs,
@@ -32,7 +31,6 @@ import type { ReplayLog } from "~/game/replay/types";
 import { replayReducer } from "~/game/replay/player";
 import type { MatchRepository } from "./repository";
 import type { MatchEventJournalStore } from "./repository";
-
 const recordingRepository: MatchRepository = {
   createMatch: async () => undefined,
   archiveMatch: archiveMatchMock,
@@ -44,12 +42,10 @@ const recordingRepository: MatchRepository = {
   markCheckpointTerminal: async () => undefined,
   deleteCheckpoint: async () => undefined,
 };
-
 interface CapturedEvent {
   seq: number;
   event: GameEvent;
 }
-
 function captureSink(): {
   sink: (msg: ServerMessage) => void;
   events: CapturedEvent[];
@@ -64,7 +60,6 @@ function captureSink(): {
   };
   return { sink, events };
 }
-
 function makeMatch(
   seed: number,
   eventJournalStore?: MatchEventJournalStore
@@ -84,30 +79,6 @@ function makeMatch(
     "tenhou-hanchan"
   );
 }
-
-interface InternalState {
-  phase: string;
-  scores: number[];
-  riichiSticks: number;
-  dealer: number;
-  roundNumber: number;
-  roundWind: "E" | "S" | "W" | "N";
-  lastHandResult: {
-    reason: string;
-    winner: number | null;
-    loser: number | null;
-    delta: number[];
-    tenpai: boolean[] | null;
-    abortKind: string | null;
-  } | null;
-  ruleSet: { roundWindCount: number };
-}
-
-interface MatchInternals {
-  state: InternalState;
-  afterHandEnd: () => Promise<void>;
-}
-
 describe("MatchProcess — match-end transition", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -119,7 +90,6 @@ describe("MatchProcess — match-end transition", () => {
     setNextHandDelayMs(3000);
     setDelayAfterDiscardMs(350);
   });
-
   it("supersedes queued journal events before writing the complete archive", async () => {
     let releaseAppend!: () => void;
     const heldAppend = new Promise<void>((resolve) => {
@@ -134,29 +104,31 @@ describe("MatchProcess — match-end transition", () => {
     };
     const m = makeMatch(91, eventJournalStore);
     await m.start();
-    const internals = m as unknown as MatchInternals;
-    internals.state.phase = "hand_ended";
-    internals.state.scores = [38000, 30000, 20000, 10000];
-    internals.state.riichiSticks = 0;
-    internals.state.dealer = 3;
-    internals.state.roundWind = "E";
-    internals.state.roundNumber = 4;
-    internals.state.ruleSet.roundWindCount = 1;
-    internals.state.lastHandResult = {
-      reason: "exhaustive_draw",
-      winner: null,
-      loser: null,
-      delta: [0, 0, 0, 0],
-      tenpai: [false, false, false, false],
-      abortKind: null,
-    };
+    const internals = m;
+    editMatchState(internals, (state) => {
+      state.phase = "hand_ended";
+      state.scores = [38000, 30000, 20000, 10000];
+      state.riichiSticks = 0;
+      state.dealer = 3;
+      state.roundWind = "E";
+      state.roundNumber = 4;
+      state.ruleSet.roundWindCount = 1;
+      state.lastHandResult = {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: [false, false, false, false],
+        abortKind: null,
+        winHan: null,
+        winYakuman: null,
+      };
+    });
     archiveMatchMock.mockClear();
-
-    const ending = internals.afterHandEnd();
+    const ending = internals.owners.lifecycle.hand.afterHandEnd();
     await new Promise((resolve) => setImmediate(resolve));
     expect(archiveMatchMock).not.toHaveBeenCalled();
     expect(appendMatchEvents).toHaveBeenCalledTimes(1);
-
     releaseAppend();
     await ending;
     expect(appendMatchEvents).toHaveBeenCalledTimes(1);
@@ -167,43 +139,42 @@ describe("MatchProcess — match-end transition", () => {
     const archived = archiveCalls[0][0];
     expect(archived.events.at(-1)?.event.type).toBe("match_end");
   });
-
   it("emits match_end with real engine scores when the round limit is exceeded", async () => {
     const m = makeMatch(1);
     const { sink, events } = captureSink();
     m.attachHuman(0, sink);
     await m.start();
-
-    const internals = m as unknown as MatchInternals;
-    // Force the engine into "just finished the last hand of the
-    // last round wind" with non-tenpai dealer so `start_next_hand`
-    // rotates the dealer past the round limit and ends the match.
-    internals.state.phase = "hand_ended";
-    internals.state.scores = [38000, 30000, 20000, 10000];
-    internals.state.riichiSticks = 2;
-    internals.state.dealer = 3;
-    internals.state.roundWind = "E";
-    internals.state.roundNumber =
-      internals.state.ruleSet.roundWindCount === 1 ? 4 : 4; // E4 of an east-only or hanchan E-round; we'll force wind exhaust below
-    internals.state.ruleSet.roundWindCount = 1; // east-only — E4 is the last hand
-    internals.state.lastHandResult = {
-      reason: "exhaustive_draw",
-      winner: null,
-      loser: null,
-      delta: [0, 0, 0, 0],
-      tenpai: [false, false, false, false], // dealer (seat 3) NOT tenpai → rotates
-      abortKind: null,
-    };
-
+    const internals = m;
+    editMatchState(internals, (state) => {
+      // Force the engine into "just finished the last hand of the
+      // last round wind" with non-tenpai dealer so `start_next_hand`
+      // rotates the dealer past the round limit and ends the match.
+      state.phase = "hand_ended";
+      state.scores = [38000, 30000, 20000, 10000];
+      state.riichiSticks = 2;
+      state.dealer = 3;
+      state.roundWind = "E";
+      state.roundNumber = state.ruleSet.roundWindCount === 1 ? 4 : 4; // E4 of an east-only or hanchan E-round; we'll force wind exhaust below
+      state.ruleSet.roundWindCount = 1; // east-only — E4 is the last hand
+      state.lastHandResult = {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: [false, false, false, false], // dealer (seat 3) NOT tenpai → rotates
+        abortKind: null,
+        winHan: null,
+        winYakuman: null,
+      };
+    });
     // Reset captured events so we only inspect the match_end batch.
     events.length = 0;
     archiveMatchMock.mockClear();
-
-    await internals.afterHandEnd();
-
-    expect(internals.state.scores).toEqual([40000, 30000, 20000, 10000]);
-    expect(internals.state.riichiSticks).toBe(0);
-
+    await internals.owners.lifecycle.hand.afterHandEnd();
+    expect(internals.owners.kernel.view.scores).toEqual([
+      40000, 30000, 20000, 10000,
+    ]);
+    expect(internals.owners.kernel.view.riichiSticks).toBe(0);
     const matchEnds = events.filter((e) => e.event.type === "match_end");
     expect(matchEnds).toHaveLength(1);
     if (matchEnds[0].event.type === "match_end") {
@@ -224,7 +195,15 @@ describe("MatchProcess — match-end transition", () => {
     }
     expect(archiveMatchMock).toHaveBeenCalledTimes(1);
     const calls = archiveMatchMock.mock.calls as unknown as Array<
-      [{ finalScores: Array<{ seat: number; score: number; place: number }> }]
+      [
+        {
+          finalScores: Array<{
+            seat: number;
+            score: number;
+            place: number;
+          }>;
+        },
+      ]
     >;
     const finalizeArg = calls[0][0];
     const persistedScores = new Map(
@@ -232,7 +211,6 @@ describe("MatchProcess — match-end transition", () => {
     );
     expect(persistedScores.get(0)).toBe(40000);
     expect(persistedScores.get(3)).toBe(10000);
-
     // Phase 4.5: `archiveReplayLog` is invoked alongside
     // `archiveMatch` with a structurally-valid `ReplayLog`.
     expect(archiveReplayLogMock).toHaveBeenCalledTimes(1);
@@ -255,9 +233,7 @@ describe("MatchProcess — match-end transition", () => {
       ]
     >;
     const replayArg = replayCalls[0][0];
-    expect(replayArg.matchId).toBe(
-      (m as unknown as { matchId: string }).matchId
-    );
+    expect(replayArg.matchId).toBe(m.matchId);
     expect(replayArg.startedAt.getTime()).toBeLessThanOrEqual(
       replayArg.endedAt.getTime()
     );
@@ -275,7 +251,6 @@ describe("MatchProcess — match-end transition", () => {
     expect(replayArg.events.some((e) => e.type === "match_end")).toBe(true);
     // The version stamp is the one we'd write to Mongo.
     expect(REPLAY_LOG_SCHEMA_VERSION).toBeGreaterThanOrEqual(1);
-
     // End-to-end through the Phase 4.5 reducer: build a ReplayLog
     // from the writer args + fold every event. The final view must
     // report the same finalScores the engine emitted on the wire.
@@ -297,32 +272,32 @@ describe("MatchProcess — match-end transition", () => {
     expect(replayedScores.get(0)).toBe(40000);
     expect(replayedScores.get(3)).toBe(10000);
   });
-
   it("breaks ties by seat order (closer to dealer wins on equal score)", async () => {
     const m = makeMatch(2);
     const { sink, events } = captureSink();
     m.attachHuman(0, sink);
     await m.start();
-
-    const internals = m as unknown as MatchInternals;
-    internals.state.phase = "hand_ended";
-    internals.state.scores = [25000, 25000, 25000, 25000];
-    internals.state.dealer = 3;
-    internals.state.roundWind = "E";
-    internals.state.roundNumber = 4;
-    internals.state.ruleSet.roundWindCount = 1;
-    internals.state.lastHandResult = {
-      reason: "exhaustive_draw",
-      winner: null,
-      loser: null,
-      delta: [0, 0, 0, 0],
-      tenpai: [false, false, false, false],
-      abortKind: null,
-    };
-
+    const internals = m;
+    editMatchState(internals, (state) => {
+      state.phase = "hand_ended";
+      state.scores = [25000, 25000, 25000, 25000];
+      state.dealer = 3;
+      state.roundWind = "E";
+      state.roundNumber = 4;
+      state.ruleSet.roundWindCount = 1;
+      state.lastHandResult = {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: [false, false, false, false],
+        abortKind: null,
+        winHan: null,
+        winYakuman: null,
+      };
+    });
     events.length = 0;
-    await internals.afterHandEnd();
-
+    await internals.owners.lifecycle.hand.afterHandEnd();
     const matchEnd = events.find((e) => e.event.type === "match_end");
     expect(matchEnd).toBeTruthy();
     if (matchEnd && matchEnd.event.type === "match_end") {

@@ -97,7 +97,7 @@ export async function archiveMatch(args: ArchiveMatchArgs): Promise<void> {
     endedAt: now,
     events: args.events.map((e) => ({
       seq: e.seq,
-      timestamp: new Date(e.emittedAt),
+      timestamp: new Date(e.calendarAt ?? e.emittedAt),
       event: e.event,
     })),
     nextSeq,
@@ -112,7 +112,7 @@ export async function archiveMatch(args: ArchiveMatchArgs): Promise<void> {
 function journalEventDocuments(events: PersistedMatchEvent[]) {
   return events.map((entry) => ({
     seq: entry.seq,
-    timestamp: new Date(entry.emittedAt),
+    timestamp: new Date(entry.calendarAt ?? entry.emittedAt),
     event: entry.event,
   }));
 }

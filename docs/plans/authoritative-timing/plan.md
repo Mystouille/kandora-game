@@ -1,6 +1,6 @@
 # Implementation plan: authoritative timing and readable game modules
 
-Date: 2026-10-01. Status: implementation in progress; the verified foundation and turn/call/declaration slice are implemented, but the full plan is not complete.
+Date: 2026-10-01. Status: implementation and software verification complete (41/43 tasks); native/rollout gates and user-deferred 30 FPS browser evidence remain separately tracked.
 
 Requirements and acceptance criteria: [spec.md](spec.md). Current architecture and compatibility/recovery boundaries: [architecture.md](architecture.md).
 
@@ -9,25 +9,44 @@ Requirements and acceptance criteria: [spec.md](spec.md). Current architecture a
 Implemented and verified:
 
 - Domain renderer extraction: the public renderer is 485 lines, with scene/assets/geometry, hand/pond/meld/wall, results, interaction/controls and HUD owners.
-- Server kernel, roster, connections, commands, turn/call and hand/session owners, plus snapshot/checkpoint composers, event/journal publication and pause/save coordination.
+- The public match facade is 650 lines, with a 441-line typed composition and cohesive kernel, roster, connection, command, turn/call, hand/session, archive, spectator/relay and recovery owners. Automated gates enforce facade <=800 and new handwritten concern <=500 physical lines.
 - Clock/window/presentation DTOs, monotonic authority/client clocks, quality filtering and correlated clock/latency probes.
-- Opt-in scheduled turn/call/declaration windows, readiness at draw landing, bounded frozen allowance, ingress reservation, exact bank accounting and version-5 outstanding-window recovery.
+- Opt-in turn/call/declaration and fixed ready/continue-vote windows, readiness at draw landing, bounded frozen allowance, ingress reservations and exact bank accounting.
+- Version-6 recovery retains fixed prompts, partial acknowledgements/votes, calendar timestamps and the same remaining budgets. Every owner uses one captured restoration reference; cancelled/resolved decisions cannot debit or resume again. Versions 1-5 and legacy pending commands remain readable.
 - Web/native online/local/Nearby integration and historical spectator presentation timing; raw private-information delivery is unchanged.
-- Repeatable canonical tests now include real Chromium/Pixi/authority journeys.
+- Web/native fixed-prompt controls and Buu reconnect snapshots use shared countdown/intent helpers. Foreground clock refresh does not reset a budget; local seats explicitly use zero network delay.
+- Queued commands retain receipt/window/connection identity, including equal-millisecond stale-owner cleanup.
+- Bounded sanitized authority/client diagnostics, legacy-only shadow comparisons, strict additive fixed-prompt capability negotiation and match-pinned mode controls.
+- Repeatable canonical tests include real Chromium/Pixi/authority journeys.
 
-Latest complete verification: 294 Vitest files / 2088 tests and 8 Chromium
-journeys passed; web/server and mobile builds plus mobile/application-source
-type checks passed. Browser journeys cover clock skew, real control readiness,
-near-base-deadline inputs at 0/100/300 ms transport latency, auth failure and
-reconnect without a new budget. These include the recorded legacy fixture and
-queued-window regression, but are not a native-device or full stress-matrix sign-off.
+Final canonical `npm test` passed **312 Vitest files / 2205 tests** and
+**30 Chromium journeys**, with **eight explicitly user-deferred 30 FPS skips**.
+Web/server and mobile production builds passed. Mobile types and the strict
+application-source compiler passed for 1065 inputs, excluding unrelated ignored
+utilities; all 102 changed host/game source files passed scoped ESLint with zero
+errors/warnings using the TypeScript-aware overload rule. Both worktrees passed
+whitespace checks. No commits, remote changes, native installation or production
+activation were performed.
 
-Still pending:
+The eleven retained normal-frame-rate profiles exercise RTT 0/100/300 ms and
+jitter/asymmetry within 50 ms. Fresh recorded measurements passed the unchanged
+100 ms limits:
 
-- The match facade is about 3065 lines, above the 800-line target. Remaining composition, recovery installation and spectator/relay routing need further extraction.
-- Readiness and continue-vote windows still use their legacy timing policy.
-- Full jitter/asymmetry/low-FPS/default-race/degraded-profile matrix and actual native storage/lifecycle/Nearby-device evidence.
-- Complete correlated diagnostics, shadow comparisons and rollout/rollback sign-off.
+| Measurement                                        |         Observed |       Required |
+| -------------------------------------------------- | ---------------: | -------------: |
+| Base remaining at first real readable/usable frame |     4970-4997 ms |      >=4900 ms |
+| Accepted real Pixi input interval                  | 4991.4-5012.9 ms | 5000 +/-100 ms |
+| Countdown/reference error bound                    |          <=76 ms |       <=100 ms |
+
+Higher latency, burst delivery, 15/5 FPS and UI stalls remain explicit degraded
+diagnostics, not passing supported-profile evidence. Results use real shared
+Pixi controls and WebSocket/MatchProcess authority, not DTO-presence assertions.
+
+Remaining release gates are current-code native storage/lifecycle, two physical
+Nearby peers, iOS, isolated Mongo durability and final rollout sign-off. The user explicitly deferred the
+30 FPS Playwright profiles after unstable runs: do not keep retrying them,
+weaken the <=100 ms threshold, or count normal-frame-rate evidence as 30 FPS
+sign-off. The specification's numeric fairness target remains unchanged.
 
 `GAME_TIMING_MODE` and `VITE_GAME_TIMING_MODE` default to `legacy`; the
 `windows-v2` mode is an experimental opt-in, not production activation.
@@ -82,7 +101,7 @@ The user chose broader extraction over timing-only cleanup, draw landing over fi
 - Separate structural moves from intentional timer-start, precise-charging and allowance changes. Verify each increment before activation.
 - Add clock/window metadata in shadow mode; pin one timing version for an entire match rather than silently mixing legacy and upgraded players.
 - Keep manual replay/external relay timing separate from human windows. A known local zero-network path is not an unusable remote profile.
-- Preserve existing uncommitted spectator/pacing work. This documentation task does not implement, commit or deploy runtime changes.
+- Preserve existing spectator/pacing behavior. Implementation does not authorize committing, pushing, deploying or enabling production timing.
 
 See [architecture.md](architecture.md) for the source references, preserved behaviors and concrete compatibility/recovery mappings.
 
@@ -206,7 +225,7 @@ Task paths are relative to the game repository root. `../../...` denotes the par
   - Depends on: T009. Done when hand/session ordering and ledger/archive game indexes match fixtures.
 - [x] T011 [Plan:2.2] Extract `server/src/session/eventPublisher.ts` for event sequences, existing projection/redaction, journal and archive composition. [Source: server/src/match.ts#emitEvent,emitEngineEvent,sendToSeat,sendToSpectators,enrichForArchive]
   - Depends on: T006, T007, T010. Done when archives and private/public streams retain their exact semantic events.
-- [ ] T012 [Plan:2.2] Extract `server/src/session/recoveryCoordinator.ts` and continuation codecs under `server/src/recovery/`, retaining version 4 during this mechanical phase. [Source: server/src/match.ts#createCheckpoint,pauseAndSaveCheckpoint,restoreCheckpoint,restoreSavedCheckpoint]
+- [x] T012 [Plan:2.2] Extract `server/src/session/recoveryCoordinator.ts` and continuation codecs under `server/src/recovery/`, retaining version 4 during this mechanical phase. [Source: server/src/match.ts#createCheckpoint,pauseAndSaveCheckpoint,restoreCheckpoint,restoreSavedCheckpoint]
   - Depends on: T008, T010, T011. Done when command/journal barriers precede a consistent owner snapshot and every existing continuation round-trips.
 
 ### Phase 3 - Behavior-preserving renderer extraction
@@ -234,13 +253,13 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 
 - [x] T020 [Plan:3.2] Add `protocol/timing.ts` for clock probes/samples, immutable window snapshots, capabilities and per-event presentation metadata; reference it from `protocol/messages.ts`. Keep game/archive events separate from transport-only timing.
   - Depends on: T005, T013. Done when additive schemas validate and legacy frames still parse during shadow rollout.
-- [ ] T021 [Plan:3.1] Add `server/src/timing/authorityClock.ts` and extend the portable runtime composition for a monotonic compatibility reference, clock epoch and independent calendar time. [Source: server/src/runtime.ts]
+- [x] T021 [Plan:3.1] Add `server/src/timing/authorityClock.ts` and extend the portable runtime composition for a monotonic compatibility reference, clock epoch and independent calendar time. [Source: server/src/runtime.ts]
   - Depends on: T012, T020. Done when wall-clock changes cannot move a live budget, and PRNG/scheduling portability remains intact.
 - [x] T022 [Plan:3.1,3.2] Add `server/src/transport/socketTiming.ts` and clock-probe handling in `server/src/index.ts`; collect bounded correlated authority RTT/quality without relying on browser-visible protocol pongs. [Source: server/src/index.ts#attachHeartbeat,handleClientFrame]
   - Depends on: T021. Done when liveness remains intact, unmatched/stale samples are rejected, and profiles are scoped to the current connection.
 - [x] T023 [Plan:3.1,3.2] Add `client/time/serverClock.ts` and `clockSync.ts`, bound through `client/ws.ts`; update the estimate before message observers/store projection. [Source: client/ws.ts]
   - Depends on: T020, T022. Done when offset/uncertainty are monotonic, noisy samples are filtered, and reconnect/foreground invalidate stale quality.
-- [ ] T024 [Plan:3.1] Add shared timing adapters for host `../../mobile/src/nearby/` and local direct runtime; implement host/guest probes and explicit known-zero-network semantics. [Source: ../../mobile/src/nearby/NearbyMatchController.ts] [Source: ../../mobile/src/local/LocalMatchController.ts]
+- [x] T024 [Plan:3.1] Add shared timing adapters for host `../../mobile/src/nearby/` and local direct runtime; implement host/guest probes and explicit known-zero-network semantics. [Source: ../../mobile/src/nearby/NearbyMatchController.ts] [Source: ../../mobile/src/local/LocalMatchController.ts]
   - Depends on: T021, T023. Done when no Node/Mongo dependency leaks into the portable timing services.
 
 **3.2 Negotiate the new data contract without changing live legacy budgets.** Requirements: REQ-002, REQ-010. T020/T022/T023 provide the schema/clock foundation; activation remains a later gate.
@@ -251,7 +270,7 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 
 - [x] T025 [US1] [Plan:4.1,4.2] Add shared `presentation/policy.ts` and `server/src/timing/presentationPlanner.ts`; retain existing constants through compatibility exports and publish canonical sequence-associated starts/landing/readiness.
   - Depends on: T009, T010, T011, T020, T021. Done when the authority derives draw landing D+1000 and maintains the 1200 ms automated cadence without client acknowledgement authority.
-- [ ] T026 [US1] [Plan:4.1] Evolve `server/src/timing/actionWindows.ts` to scheduled/open/resolved/expired/cancelled state with stable IDs, explicit ends and generation guards; cover each existing timed decision kind.
+- [x] T026 [US1] [Plan:4.1] Evolve `server/src/timing/actionWindows.ts` to scheduled/open/resolved/expired/cancelled state with stable IDs, explicit ends and generation guards; cover each existing timed decision kind.
   - Depends on: T005, T025. Done when every window uses one readiness/policy record and can be shadowed without altering legacy execution.
 
 **4.2 Make presentation and controls consume that contract.** Requirements: REQ-001, REQ-003, REQ-004, REQ-008, REQ-015.
@@ -276,9 +295,9 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 
 **5.2 Preserve outstanding decisions across clock epochs and recovery.** Requirements: REQ-002, REQ-008, REQ-009, REQ-012.
 
-- [ ] T033 [US3] [Plan:5.2] Evolve `server/src/recovery/` and `server/src/checkpoint.ts` to a new explicit version with window identity, timing mode, frozen policy and relative readiness/base/expiry durations; retain v1-v4 and legacy pending-command readers.
+- [x] T033 [US3] [Plan:5.2] Evolve `server/src/recovery/` and `server/src/checkpoint.ts` to a new explicit version with window identity, timing mode, frozen policy and relative readiness/base/expiry durations; retain v1-v4 and legacy pending-command readers.
   - Depends on: T012, T026, T030, T032. Done when every continuation rebases once and expired/bank state is not resurrected.
-- [ ] T034 [US3] [Plan:5.2] Update snapshot/resync/ownership transfer and local/Nearby restore adapters to restore the same decision and remaining times, invalidating only connection/clock estimates. [Source: server/src/index.ts#handleClientFrame] [Source: server/src/match.ts#buildSnapshotForSeat,restoreSavedCheckpoint]
+- [x] T034 [US3] [Plan:5.2] Update snapshot/resync/ownership transfer and local/Nearby restore adapters to restore the same decision and remaining times, invalidating only connection/clock estimates. [Source: server/src/index.ts#handleClientFrame] [Source: server/src/match.ts#buildSnapshotForSeat,restoreSavedCheckpoint]
   - Depends on: T023, T031, T033. Done when reconnect/transfer does not reissue a base budget or frozen allowance.
 
 ### Phase 7 - Surface integration, spectator axes and diagnostics
@@ -287,33 +306,35 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 
 - [x] T035 [US1] [Plan:6.1] Bind web player timing through a small `client/time/liveTimingBinding.ts` adapter in `routes/match.tsx`, keeping game authority outside the Pixi scene.
   - Depends on: T029, T034. Done when window/pose/countdown/input all share the same clock and IDs.
-- [ ] T036 [US3] [Plan:6.1] Bind native online/local/Nearby through host `../../mobile/src/game/liveTimingBinding.ts` and thin `App.tsx` integration; refresh on foreground without changing local pause semantics.
+- [x] T036 [US3] [Plan:6.1] Bind native online/local/Nearby through host `../../mobile/src/game/liveTimingBinding.ts` and thin `App.tsx` integration; refresh on foreground without changing local pause semantics.
   - Depends on: T024, T029, T034. Done when all three authority paths preserve their existing lifecycle and ready-ack behavior.
 - [x] T037 [US4] [Plan:6.1] Bind `routes/spectate.tsx` and native spectator history with explicit actual presentation offset and baseline/catch-up mode; do not use descriptive upstream source delay as another dispatch offset.
   - Depends on: T028, T035, T036. Done when native delayed streams remain delayed once, external relay streams remain pseudo-live once, and manual history remains immediate.
 
 **6.2 Expose bounded quality and safe activation.** Requirements: REQ-010, REQ-018.
 
-- [ ] T038 [US2] [Plan:6.2] Add match-pinned timing mode/capability activation in the cloud/native hello paths, explicit incompatible-client terminal errors, and a shadow/off switch; keep existing authentication/seat ownership intact.
+- [x] T038 [US2] [Plan:6.2] Add match-pinned timing mode/capability activation in the cloud/native hello paths, explicit incompatible-client terminal errors, and a shadow/off switch; keep existing authentication/seat ownership intact.
   - Depends on: T020, T034, T035, T036, T037. Done when legacy and new-mode clients cannot silently share different decision rules.
-- [ ] T039 [US2] [Plan:6.2] Add `server/src/timing/timingDiagnostics.ts` and client diagnostic hooks for epoch/window/profile/ready/receipt/resolution; surface degraded quality without charging from client render reports.
+- [x] T039 [US2] [Plan:6.2] Add `server/src/timing/timingDiagnostics.ts` and client diagnostic hooks for epoch/window/profile/ready/receipt/resolution; surface degraded quality without charging from client render reports.
   - Depends on: T031, T035, T036, T038. Done when logs/metrics explain lateness without storing private tile/hand content or trusting client claims.
 
 ### Phase 8 - Fairness sign-off and gradual rollout
 
 **7.1 Verify actual usable budgets and preserve the game.** Requirements: REQ-004, REQ-018, REQ-019.
 
-- [ ] T040 [Plan:7.1] Complete deterministic timing and owner-level suites under `server/src/timing/`, `client/time/`, `client/presentation/` and `testing/timing/`, including window races, exact bank, offsets, low FPS and frozen allowance boundaries.
+- [x] T040 [Plan:7.1] Complete deterministic timing and owner-level suites under `server/src/timing/`, `client/time/`, `client/presentation/` and `testing/timing/`, including window races, exact bank, offsets, low FPS and frozen allowance boundaries.
   - Depends on: T002, T030, T032, T033, T039. Done when the measured scenarios satisfy SC-001 through SC-008, not only file/field presence.
-- [ ] T041 [Plan:7.1] Complete real WebSocket/controller/checkpoint integration suites under `server/src/transport/`, `server/src/recovery/` and host `../../mobile/src/{online,local,nearby,persistence}/`; retain existing archive/rules/pacing regressions.
+- [x] T041 [Plan:7.1] Complete real WebSocket/controller/checkpoint integration suites under `server/src/transport/`, `server/src/recovery/` and host `../../mobile/src/{online,local,nearby,persistence}/`; retain existing archive/rules/pacing regressions.
   - Depends on: T034, T037, T038, T040. Done when actual messages, delays, receipt capture and recovery prove the contract.
 - [ ] T042 [Plan:7.1] Complete host `../../tests/e2e/timing/` browser journeys and native device checks, measuring info-visible/controls-ready/last-accepted action intervals under network and frame profiles.
   - Depends on: T003, T035, T036, T037, T041. Done when supported profiles meet SC-002 and unsupported conditions are explicit; mocked component timing is not browser sign-off.
+  - Software portion verified: 30 real Chromium journeys; eight 30 FPS profiles explicitly deferred by the user. Current-code Android lifecycle/storage, two-device Nearby and iOS remain open. The old installed Android bridge/isolated SQLite round-trip is not current-code acceptance.
 
 **7.2 Review ownership/readability and activate safely.** Requirements: REQ-010, REQ-014, REQ-020.
 
 - [ ] T043 [Plan:7.2] Review domain ownership/facade/module budgets and public callers; complete shadow comparison, documentation and per-new-match activation in `docs/plans/authoritative-timing/`, `README.md` and host `../../mobile/README.md`.
   - Depends on: T019, T038, T039, T040, T041, T042. Done when every requirement has evidence, deliberate policy deltas are named, no duplicated authority/private-context cast remains, and rollback cannot reinterpret an active new-mode window as a fresh legacy decision.
+  - Ownership/budgets, software shadow comparisons, pinned negotiation and rollback controls are implemented and tested. Production activation/sign-off remains gated by T042 and isolated durable-adapter evidence; creation still defaults to legacy.
 
 ## Proposed project structure
 
@@ -397,10 +418,9 @@ Do not split merely to create this exact tree. Each concern must justify its sta
 ### Scope and environment
 
 - **appType:** mixed Node WebSocket authority plus web/native React/Pixi views and portable local/Nearby authority.
-- **Canonical command:** current `npm test` runs Vitest with `app/**/*.spec.ts` and `mobile/**/*.spec.ts` discovery. T003 must retain focused selectors and make the new browser journeys reachable by the full common command.
-- **Current evidence:** the preceding pacing task passed 304 scoped tests; that is not a fresh full baseline or fairness sign-off. T001 records a new baseline at implementation start.
-- **Planning probes:** Node 22.14.0 is available. Docker command is absent. Project-local `@playwright/test` and `playwright` are absent. `js-yaml` is present for document validation.
-- No browser/dependency installation or runtime test execution is claimed by this planning-only packet.
+- **Canonical command:** `npm test` runs Vitest with `app/**/*.spec.ts` and `mobile/**/*.spec.ts` discovery, then Chromium when no selectors are supplied. Focused selectors run only the relevant unit/integration tests.
+- **Current evidence:** 312 files / 2205 tests and 30 Chromium journeys pass; eight user-deferred 30 FPS profiles skip. Module budgets and the 24-turn pacing/sound regressions remain enforced.
+- **Environment:** Node 22.14.0, declared Playwright and installed Chromium are available. Docker is absent; isolated Mongo durability and appropriate current-code native devices remain external gates.
 
 ### Primary validation stack
 
@@ -445,6 +465,7 @@ Missing capability does not silently reduce a release gate. The acceptance repor
 ### Fairness matrix and measurements
 
 - Controlled supported profiles: RTT 0/100/300 ms, jitter up to 50 ms, one-way asymmetry up to 50 ms, at least 30 FPS.
+- The 30 FPS Playwright profile is deferred at the user's request. Keep normal-frame-rate browser measurements and deterministic low-FPS/stall tests, but neither substitutes for 30 FPS browser acceptance.
 - Stress/degraded profiles: higher RTT up to and beyond the 500 ms allowance envelope, asymmetric paths, burst delivery, 15/5 FPS, UI thread stalls, background/resume, missing/noisy samples.
 - Clock profiles: plus/minus five-minute device error, wall-clock steps, monotonic progression, new epoch, stale and reordered samples.
 - Exact boundaries: one millisecond before/at/after readiness/base/bank/expiry, 0/500 ms allowance and exact 200 ms fallback, 100 ms overage, changed quality mid-window.
@@ -467,6 +488,13 @@ The reviewer checks spec coverage, extraction fidelity, all host paths, exact ac
 5. Existing legacy matches keep legacy semantics. Existing checkpoints remain readable and preserve their known remaining values.
 6. A rollback disables creation of new-mode matches; it must not reinterpret an existing explicit window/checkpoint as a fresh legacy budget. Keep compatible readers while such games/recoveries exist.
 7. Remove internal extraction wrappers after caller migration, not old archive/checkpoint readers as incidental cleanup.
+
+Implemented switches are `GAME_TIMING_MODE=legacy|windows-v2`,
+legacy-only `GAME_TIMING_SHADOW=true`, and `GAME_TIMING_DIAGNOSTICS=true`.
+Native creation uses `VITE_GAME_TIMING_MODE`; online rooms follow their pinned
+server mode. New-mode player negotiation requires `clock-window-v2` plus the
+additive `fixedPromptVersion: 1` field. Turning creation back to legacy does
+not authorize dropping version-6 readers or refreshing an outstanding window.
 
 ## Requirement mapping
 

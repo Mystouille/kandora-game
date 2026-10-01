@@ -1,3 +1,5 @@
+import { editMatchState } from "~/game/testing/matchState";
+import { buildCallLegals } from "./session/callActions";
 /**
  * Multi-human call window resolver — integration test.
  *
@@ -33,7 +35,6 @@
  * can't seed our way into a guaranteed pinfu shape).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   MatchProcess,
   setNextHandDelayMs,
@@ -55,11 +56,9 @@ import { createInitialState, type MatchState, type Meld } from "~/game/rules";
 import type {
   GameEvent,
   LegalAction,
-  Seat,
   ServerMessage,
   Tile,
 } from "~/game/protocol/messages";
-
 function tiles(value: string): Tile[] {
   const result: Tile[] = [];
   let digits = "";
@@ -75,14 +74,12 @@ function tiles(value: string): Tile[] {
   }
   return result;
 }
-
 interface SinkHandle {
   send: (msg: ServerMessage) => void;
   events: GameEvent[];
   lastLegals: LegalAction[] | null;
   lastDeadline: number | null | undefined;
 }
-
 function makeSink(): SinkHandle {
   const events: GameEvent[] = [];
   let lastLegals: LegalAction[] | null = null;
@@ -116,7 +113,6 @@ function makeSink(): SinkHandle {
     },
   };
 }
-
 function makeFourHumanMatch(
   seed: number,
   repository: MatchRepository = ephemeralMatchRepository
@@ -133,34 +129,6 @@ function makeFourHumanMatch(
     { repository }
   );
 }
-
-/**
- * Minimal view of the orchestrator + engine internals we need to
- * mutate to plant a deterministic tenpai scenario.
- */
-interface MatchInternals {
-  state: {
-    phase: string;
-    turn: number;
-    hands: Tile[][];
-    discards: Tile[][];
-    lastDrawn: (Tile | null)[];
-    lastDiscard: { seat: number; tile: Tile } | null;
-    melds: unknown[][];
-    riichiDeclared: [boolean, boolean, boolean, boolean];
-    doubleRiichi: [boolean, boolean, boolean, boolean];
-    ippatsuEligible: [boolean, boolean, boolean, boolean];
-    furitenLocked: [boolean, boolean, boolean, boolean];
-    furitenTemp: [boolean, boolean, boolean, boolean];
-    pendingShouminkan: unknown | null;
-  };
-  buildCallLegals: (
-    options: Array<{ kind: "pon"; tiles: [Tile, Tile] }>
-  ) => LegalAction[];
-  buildDiscardLegals: (seat: number) => LegalAction[];
-  setSeatLegals: (seat: number, actions: LegalAction[]) => void;
-}
-
 // Pinfu + tanyao tenpai on 4m / 1m (closed):
 //   234p + 234s + 567s + 55m + 23m, ryanmen wait on 23m.
 // Winning on 4m completes 234m → 4 sequences + non-yakuhai pair.
@@ -179,7 +147,6 @@ const TENPAI_HAND: Tile[] = [
   "2m",
   "3m",
 ];
-
 // Seat-0 stuffer hand: 13 honor/terminal tiles + drawn "4m" so the
 // only meaningful discard is "4m" and no call-relevant shape leaks.
 const DISCARDER_HAND: Tile[] = [
@@ -197,50 +164,46 @@ const DISCARDER_HAND: Tile[] = [
   "2z",
   "3z",
 ];
-
-function plantThreeRonScenario(m: MatchProcess): MatchInternals {
-  const internals = m as unknown as MatchInternals;
-  internals.state.hands[0] = [...DISCARDER_HAND, "4m"];
-  internals.state.hands[1] = [...TENPAI_HAND];
-  internals.state.hands[2] = [...TENPAI_HAND];
-  internals.state.hands[3] = [...TENPAI_HAND];
-  internals.state.lastDrawn = ["4m", null, null, null];
-  internals.state.discards = [[], [], [], []];
-  internals.state.melds = [[], [], [], []];
-  internals.state.lastDiscard = null;
-  internals.state.pendingShouminkan = null;
-  internals.state.riichiDeclared = [false, false, false, false];
-  internals.state.doubleRiichi = [false, false, false, false];
-  internals.state.ippatsuEligible = [false, false, false, false];
-  internals.state.furitenLocked = [false, false, false, false];
-  internals.state.furitenTemp = [false, false, false, false];
-  internals.setSeatLegals(0, [
+function plantThreeRonScenario(m: MatchProcess): MatchProcess {
+  const internals = m;
+  editMatchState(internals, (state) => {
+    state.hands[0] = [...DISCARDER_HAND, "4m"];
+    state.hands[1] = [...TENPAI_HAND];
+    state.hands[2] = [...TENPAI_HAND];
+    state.hands[3] = [...TENPAI_HAND];
+    state.lastDrawn = ["4m", null, null, null];
+    state.discards = [[], [], [], []];
+    state.melds = [[], [], [], []];
+    state.lastDiscard = null;
+    state.pendingShouminkan = null;
+    state.riichiDeclared = [false, false, false, false];
+    state.doubleRiichi = [false, false, false, false];
+    state.ippatsuEligible = [false, false, false, false];
+    state.furitenLocked = [false, false, false, false];
+    state.furitenTemp = [false, false, false, false];
+  });
+  internals.owners.gameplay.effects.setSeatLegals(0, [
     { id: "discard:4m", type: "discard", tile: "4m" },
   ]);
   return internals;
 }
-
 describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setNextHandDelayMs(0);
     setDelayAfterDiscardMs(0);
-    setActionTimeoutMs(30_000);
+    setActionTimeoutMs(30000);
     setReadyCheckMs(0);
   });
   afterEach(() => {
     setNextHandDelayMs(3000);
     setDelayAfterDiscardMs(350);
-    setActionTimeoutMs(30_000);
+    setActionTimeoutMs(30000);
     setReadyCheckMs(8000);
   });
-
   it("projects red-five pon choices into distinct legal action ids", () => {
-    const m = makeFourHumanMatch(40);
-    const internals = m as unknown as MatchInternals;
-
     expect(
-      internals.buildCallLegals([
+      buildCallLegals([
         { kind: "pon", tiles: ["0p", "5p"] },
         { kind: "pon", tiles: ["5p", "5p"] },
       ])
@@ -250,7 +213,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       { id: "pass", type: "pass" },
     ]);
   });
-
   it("does not advertise an edge-swap kuikae discard after chi", () => {
     const state = createInitialState(42);
     state.phase = "awaiting_discard";
@@ -266,13 +228,11 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
         from: 0,
       },
     ];
-
     const legals = buildDiscardLegals(
       state,
       createMatchDriver(normalMatchMode, "tenhou-hanchan"),
       1
     );
-
     expect(legals).not.toContainEqual(
       expect.objectContaining({ id: "discard:hand:4m" })
     );
@@ -280,7 +240,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       expect.objectContaining({ id: "discard:hand:5m" })
     );
   });
-
   it("broadcasts tedashi when a hand copy matches the drawn tile", async () => {
     const m = makeFourHumanMatch(41);
     const sinks = [makeSink(), makeSink(), makeSink(), makeSink()];
@@ -288,14 +247,15 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       m.attachHuman(seat as 0 | 1 | 2 | 3, sinks[seat].send);
     }
     await m.start();
-
-    const internals = m as unknown as MatchInternals;
-    const drawn = internals.state.lastDrawn[0];
+    const internals = m;
+    const drawn = internals.owners.kernel.view.lastDrawn[0];
     if (drawn === null) {
       throw new Error("expected seat 0 to have drawn");
     }
-    internals.state.hands[0][0] = drawn;
-    const legals = internals.buildDiscardLegals(0);
+    editMatchState(internals, (state) => {
+      state.hands[0][0] = drawn;
+    });
+    const legals = internals.owners.kernel.discardLegals(0);
     expect(legals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -308,13 +268,11 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
         }),
       ])
     );
-    internals.setSeatLegals(0, legals);
+    internals.owners.gameplay.effects.setSeatLegals(0, legals);
     for (const sink of sinks) {
       sink.events.length = 0;
     }
-
     await m.handleAct(0, `discard:hand:${drawn}`);
-
     const discard = sinks[0].events.find(
       (event) => event.type === "discard" && event.seat === 0
     );
@@ -325,7 +283,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       discardSource: "hand",
     });
   });
-
   it("awards the ron to seat 2 when seat 1 passes and seat 2 calls (seat 3 also passes)", async () => {
     const m = makeFourHumanMatch(42);
     const sinks: SinkHandle[] = [
@@ -339,40 +296,37 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     m.attachHuman(2, sinks[2].send);
     m.attachHuman(3, sinks[3].send);
     await m.start();
-
-    const internals = m as unknown as MatchInternals;
+    const internals = m;
     // Sanity: start() must have landed us at seat 0's discard turn.
-    expect(internals.state.phase).toBe("awaiting_discard");
-    expect(internals.state.turn).toBe(0);
-
-    // Plant the deterministic scenario.
-    internals.state.hands[0] = [...DISCARDER_HAND, "4m"];
-    internals.state.hands[1] = [...TENPAI_HAND];
-    internals.state.hands[2] = [...TENPAI_HAND];
-    internals.state.hands[3] = [...TENPAI_HAND];
-    internals.state.lastDrawn[0] = "4m";
-    internals.state.lastDrawn[1] = null;
-    internals.state.lastDrawn[2] = null;
-    internals.state.lastDrawn[3] = null;
-    internals.state.discards = [[], [], [], []];
-    internals.state.melds = [[], [], [], []];
-    internals.state.lastDiscard = null;
-    internals.state.pendingShouminkan = null;
-    internals.state.riichiDeclared = [false, false, false, false];
-    internals.state.doubleRiichi = [false, false, false, false];
-    internals.state.ippatsuEligible = [false, false, false, false];
-    internals.state.furitenLocked = [false, false, false, false];
-    internals.state.furitenTemp = [false, false, false, false];
-
+    expect(internals.owners.kernel.view.phase).toBe("awaiting_discard");
+    expect(internals.owners.kernel.view.turn).toBe(0);
+    editMatchState(internals, (state) => {
+      // Plant the deterministic scenario.
+      state.hands[0] = [...DISCARDER_HAND, "4m"];
+      state.hands[1] = [...TENPAI_HAND];
+      state.hands[2] = [...TENPAI_HAND];
+      state.hands[3] = [...TENPAI_HAND];
+      state.lastDrawn[0] = "4m";
+      state.lastDrawn[1] = null;
+      state.lastDrawn[2] = null;
+      state.lastDrawn[3] = null;
+      state.discards = [[], [], [], []];
+      state.melds = [[], [], [], []];
+      state.lastDiscard = null;
+      state.pendingShouminkan = null;
+      state.riichiDeclared = [false, false, false, false];
+      state.doubleRiichi = [false, false, false, false];
+      state.ippatsuEligible = [false, false, false, false];
+      state.furitenLocked = [false, false, false, false];
+      state.furitenTemp = [false, false, false, false];
+    });
     // Replace seat 0's stale legals (built from the random initial
     // hand) with the only action we want them to take.
-    internals.setSeatLegals(0, [
+    internals.owners.gameplay.effects.setSeatLegals(0, [
       { id: "discard:4m", type: "discard", tile: "4m" },
     ]);
-
     // Step 1: seat 0 discards 4m → afterDiscard opens windows for 1/2/3.
     await m.handleAct(0, "discard:4m");
-
     // Each non-discarder human seat must have a ron option in their
     // call window. Seat 1 also has chi (2m + 3m → 234m), so its
     // ron id is shifted by one; seats 2/3 only have ron.
@@ -389,22 +343,18 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(seat1Ron).toBeTruthy();
     expect(seat2Ron).toBeTruthy();
     expect(seat3Ron).toBeTruthy();
-
     // Step 2: seat 1 passes (declines ron). Window for 1 closes,
     // 2 and 3 stay open. No finalize yet.
     await m.handleAct(1, "pass");
-    expect(internals.state.phase).toBe("awaiting_draw");
-
+    expect(internals.owners.kernel.view.phase).toBe("awaiting_draw");
     // Step 3: seat 2 calls ron. Priority short-circuit MUST NOT
     // close seat 3's window (it also has a ron option @ prio 4,
     // and `4 < 4` is false → preserved for multi-ron).
     await m.handleAct(2, seat2Ron);
-    expect(internals.state.phase).toBe("awaiting_draw");
-
+    expect(internals.owners.kernel.view.phase).toBe("awaiting_draw");
     // Step 4: seat 3 passes. All windows closed → finalize → ron
     // applies for the lone ron candidate (seat 2).
     await m.handleAct(3, "pass");
-
     // Exactly one `win` event must have fired, and it must be for
     // seat 2 with seat 0 as the loser. We inspect seat 2's sink
     // (the winner) — they see their own win event.
@@ -414,7 +364,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(win.seat).toBe(2);
     expect(win.loser).toBe(0);
     expect(win.winTile).toBe("4m");
-
     // No other seat should have won.
     for (const otherSeat of [0, 1, 3] as const) {
       const otherWins = sinks[otherSeat].events.filter((e) => e.type === "win");
@@ -425,7 +374,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       expect(otherWins).toHaveLength(1);
       expect(otherWins[0].seat).toBe(2);
     }
-
     // Hand-end reason must be ron, with seat 2 in the delta winner
     // position (positive delta) and seat 0 paying (negative delta).
     const handEnd = sinks[2].events.find((e) => e.type === "hand_end");
@@ -442,7 +390,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       }
     }
   });
-
   it("queues a concurrent call response behind active command execution", async () => {
     const repository = createMemoryMatchRepository();
     let releaseSeatOne = (): void => undefined;
@@ -460,27 +407,28 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     if (!seat2Ron) {
       throw new Error("expected seat 2 ron");
     }
-    const commandInternals = m as unknown as {
-      handleActDirect(seat: Seat, actionId: string): Promise<void>;
-    };
-    const handleActDirect = commandInternals.handleActDirect.bind(m);
-    commandInternals.handleActDirect = async (seat, actionId) => {
+    const commandInternals = m;
+    const handleActDirect =
+      commandInternals.owners.gameplay.actions.handleActDirect.bind(
+        commandInternals.owners.gameplay.actions
+      );
+    commandInternals.owners.gameplay.actions.handleActDirect = async (
+      seat,
+      actionId
+    ) => {
       if (seat === 1 && !seatOneExecutionStarted) {
         seatOneExecutionStarted = true;
         await seatOneGate;
       }
       await handleActDirect(seat, actionId);
     };
-
     const seatOnePass = m.handleAct(1, "pass");
     await vi.waitFor(() => {
       expect(seatOneExecutionStarted).toBe(true);
     });
     const seatTwoRon = m.handleAct(2, seat2Ron.id);
-
     releaseSeatOne();
     await Promise.all([seatOnePass, seatTwoRon]);
-
     expect(m.buildSnapshotForSeat(1).legalActions).toEqual([]);
     expect(m.buildSnapshotForSeat(2).legalActions).toEqual([]);
     expect(m.buildSnapshotForSeat(3).legalActions).not.toEqual([]);
@@ -491,13 +439,11 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       .find((event) => event.type === "win");
     expect(win).toMatchObject({ type: "win", seat: 2, loser: 0 });
   });
-
   it("restores a partially-answered multi-ron call window", async () => {
-    setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
+    setActionTimingMs({ base: 5000, grace: 200, buffer: 20000 });
     const m = makeFourHumanMatch(142);
     await m.start();
     plantThreeRonScenario(m);
-
     await m.handleAct(0, "discard:4m");
     await m.handleAct(1, "pass");
     const checkpoint = m.createCheckpoint();
@@ -524,7 +470,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       checkpointKind: "call_window",
       connectionPolicy: { disconnected },
     });
-
     const restored = MatchProcess.restoreCheckpoint(
       JSON.parse(JSON.stringify(checkpoint)),
       { repository: ephemeralMatchRepository }
@@ -539,7 +484,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     await restored.handleAct(2, seat2Ron.id);
     await m.handleAct(3, "pass");
     await restored.handleAct(3, "pass");
-
     expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
     for (const seat of [0, 1, 2, 3] as const) {
       const originalSnapshot = m.buildSnapshotForSeat(seat);
@@ -557,9 +501,8 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       expect(restoredSnapshot.bufferMs).toBe(originalSnapshot.bufferMs);
     }
   });
-
   it("rearms a partially-answered call window after save failure", async () => {
-    setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
+    setActionTimingMs({ base: 5000, grace: 200, buffer: 20000 });
     const storage = createMemoryMatchRepository();
     let failCheckpointSave = false;
     const repository: MatchRepository = {
@@ -576,7 +519,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     plantThreeRonScenario(m);
     await m.handleAct(0, "discard:4m");
     await m.handleAct(1, "pass");
-
     failCheckpointSave = true;
     await expect(m.pauseAndSaveCheckpoint()).rejects.toThrow(
       "call checkpoint write failed"
@@ -593,7 +535,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     expect(rolledBack.pendingHumanCallActions[1]?.type).toBe("pass");
     expect(rolledBack.callTimers[2]).not.toBeNull();
     expect(rolledBack.callTimers[3]).not.toBeNull();
-
     const seat2Ron = m
       .buildSnapshotForSeat(2)
       .legalActions.find((action) => action.type === "ron");
@@ -608,9 +549,8 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       .find((event) => event.type === "win");
     expect(win).toMatchObject({ type: "win", seat: 2, loser: 0 });
   });
-
   it("restores a chankan pass window and completes shouminkan", async () => {
-    setActionTimingMs({ base: 5_000, grace: 200, buffer: 20_000 });
+    setActionTimingMs({ base: 5000, grace: 200, buffer: 20000 });
     const m = makeFourHumanMatch(143);
     await m.start();
     const ponMeld: Meld = {
@@ -641,12 +581,9 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       pendingShouminkan: null,
       lastHandResult: null,
     };
-    const internals = m as unknown as {
-      state: MatchState;
-      setSeatLegals: (seat: 0, actions: LegalAction[]) => void;
-    };
-    Object.assign(internals.state, chankanState);
-    internals.setSeatLegals(0, [
+    const internals = m;
+    Object.assign(internals.owners.kernel.view, chankanState);
+    internals.owners.gameplay.effects.setSeatLegals(0, [
       {
         id: "discard:draw:3m",
         type: "discard",
@@ -660,7 +597,6 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
         tiles: ["3m"],
       },
     ]);
-
     await m.handleAct(0, "kan:shouminkan:3m");
     const checkpoint = m.createCheckpoint();
     if (
@@ -676,22 +612,17 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     });
     expect(checkpoint.callTimers[0]).toBeNull();
     expect(checkpoint.callWindows[1]).toEqual([{ kind: "ron" }]);
-
     const restored = MatchProcess.restoreCheckpoint(checkpoint, {
       repository: ephemeralMatchRepository,
     });
     await m.handleAct(1, "pass");
     await restored.handleAct(1, "pass");
-
-    const originalState = (m as unknown as { state: MatchState }).state;
-    const restoredState = (restored as unknown as { state: MatchState }).state;
-    expect(restoredState).toEqual(originalState);
-    expect(restoredState.phase).toBe("awaiting_discard");
-    expect(restoredState.pendingShouminkan).toBeNull();
-    expect(restoredState.melds[0][0].type).toBe("shouminkan");
+    expect(restored.owners.kernel.view).toEqual(m.owners.kernel.view);
+    expect(restored.owners.kernel.view.phase).toBe("awaiting_discard");
+    expect(restored.owners.kernel.view.pendingShouminkan).toBeNull();
+    expect(restored.owners.kernel.view.melds[0][0].type).toBe("shouminkan");
     expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
   });
-
   it("atamahane: seat 2's ron auto-closes seat 3's still-open ron window (downstream head-bumped)", async () => {
     // Same plant as the multi-ron test, but with the head-bump
     // rule turned on. Sequence: seat 0 discards 4m, then seat 2
@@ -717,47 +648,45 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     m.attachHuman(2, sinks[2].send);
     m.attachHuman(3, sinks[3].send);
     await m.start();
-
-    const internals = m as unknown as MatchInternals & {
-      calls: import("./session/callCoordinator").CallCoordinator;
-      state: MatchInternals["state"] & { ruleSet: { atamahane: boolean } };
-    };
-    expect(internals.state.phase).toBe("awaiting_discard");
-    expect(internals.state.turn).toBe(0);
-
-    // Flip atamahane on for this match.
-    internals.state.ruleSet.atamahane = true;
-
-    // Plant the same tenpai scenario.
-    internals.state.hands[0] = [...DISCARDER_HAND, "4m"];
-    internals.state.hands[1] = [...TENPAI_HAND];
-    internals.state.hands[2] = [...TENPAI_HAND];
-    internals.state.hands[3] = [...TENPAI_HAND];
-    internals.state.lastDrawn[0] = "4m";
-    internals.state.lastDrawn[1] = null;
-    internals.state.lastDrawn[2] = null;
-    internals.state.lastDrawn[3] = null;
-    internals.state.discards = [[], [], [], []];
-    internals.state.melds = [[], [], [], []];
-    internals.state.lastDiscard = null;
-    internals.state.pendingShouminkan = null;
-    internals.state.riichiDeclared = [false, false, false, false];
-    internals.state.doubleRiichi = [false, false, false, false];
-    internals.state.ippatsuEligible = [false, false, false, false];
-    internals.state.furitenLocked = [false, false, false, false];
-    internals.state.furitenTemp = [false, false, false, false];
-
-    internals.setSeatLegals(0, [
+    const internals = m;
+    expect(internals.owners.kernel.view.phase).toBe("awaiting_discard");
+    expect(internals.owners.kernel.view.turn).toBe(0);
+    editMatchState(internals, (state) => {
+      // Flip atamahane on for this match.
+      state.ruleSet.atamahane = true;
+      // Plant the same tenpai scenario.
+      state.hands[0] = [...DISCARDER_HAND, "4m"];
+      state.hands[1] = [...TENPAI_HAND];
+      state.hands[2] = [...TENPAI_HAND];
+      state.hands[3] = [...TENPAI_HAND];
+      state.lastDrawn[0] = "4m";
+      state.lastDrawn[1] = null;
+      state.lastDrawn[2] = null;
+      state.lastDrawn[3] = null;
+      state.discards = [[], [], [], []];
+      state.melds = [[], [], [], []];
+      state.lastDiscard = null;
+      state.pendingShouminkan = null;
+      state.riichiDeclared = [false, false, false, false];
+      state.doubleRiichi = [false, false, false, false];
+      state.ippatsuEligible = [false, false, false, false];
+      state.furitenLocked = [false, false, false, false];
+      state.furitenTemp = [false, false, false, false];
+    });
+    internals.owners.gameplay.effects.setSeatLegals(0, [
       { id: "discard:4m", type: "discard", tile: "4m" },
     ]);
-
     await m.handleAct(0, "discard:4m");
-
     // All three non-discarder windows opened.
-    expect(internals.calls.snapshot().callWindows[1]).not.toBeNull();
-    expect(internals.calls.snapshot().callWindows[2]).not.toBeNull();
-    expect(internals.calls.snapshot().callWindows[3]).not.toBeNull();
-
+    expect(
+      internals.owners.gameplay.calls.snapshot().callWindows[1]
+    ).not.toBeNull();
+    expect(
+      internals.owners.gameplay.calls.snapshot().callWindows[2]
+    ).not.toBeNull();
+    expect(
+      internals.owners.gameplay.calls.snapshot().callWindows[3]
+    ).not.toBeNull();
     const seat2Ron = (() => {
       const ron = m
         .buildSnapshotForSeat(2)
@@ -765,30 +694,30 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       expect(ron).toBeDefined();
       return (ron as LegalAction).id;
     })();
-
     // Step 2: seat 2 rons. Atamahane short-circuit MUST close
     // seat 3's window (downstream) AND record an auto-pass there,
     // but leave seat 1's window open (upstream).
     await m.handleAct(2, seat2Ron);
-
-    expect(internals.calls.snapshot().callWindows[3]).toBeNull();
-    expect(internals.calls.snapshot().pendingHumanCallActions[3]?.type).toBe(
-      "pass"
-    );
-    expect(internals.calls.snapshot().callWindows[1]).not.toBeNull();
+    expect(
+      internals.owners.gameplay.calls.snapshot().callWindows[3]
+    ).toBeNull();
+    expect(
+      internals.owners.gameplay.calls.snapshot().pendingHumanCallActions[3]
+        ?.type
+    ).toBe("pass");
+    expect(
+      internals.owners.gameplay.calls.snapshot().callWindows[1]
+    ).not.toBeNull();
     // Resolution must wait on seat 1.
-    expect(internals.state.phase).toBe("awaiting_draw");
+    expect(internals.owners.kernel.view.phase).toBe("awaiting_draw");
     // No win yet either.
     expect(sinks[2].events.filter((e) => e.type === "win")).toHaveLength(0);
-
     // Step 3: seat 1 passes. Finalize runs → seat 2 wins.
     await m.handleAct(1, "pass");
-
     const winEvents = sinks[2].events.filter((e) => e.type === "win");
     expect(winEvents).toHaveLength(1);
     expect(winEvents[0].seat).toBe(2);
     expect(winEvents[0].loser).toBe(0);
-
     // Seat 3 must NOT have won — atamahane dropped them before
     // `resolveRons` even saw their ron.
     for (const otherSeat of [0, 1, 3] as const) {
@@ -796,14 +725,12 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       expect(wins).toHaveLength(1);
       expect(wins[0].seat).toBe(2);
     }
-
     const handEnd = sinks[2].events.find((e) => e.type === "hand_end");
     expect(handEnd).toBeDefined();
     if (handEnd && handEnd.type === "hand_end") {
       expect(handEnd.reason).toBe("ron");
     }
   });
-
   it("flushes empty legals + cleared deadline to the submitter and to dominated seats immediately on call submission", async () => {
     // The HUD timer keeps ticking unless the server pushes a fresh
     // legals frame after closing a seat's call window. This test
@@ -826,45 +753,39 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
     m.attachHuman(2, sinks[2].send);
     m.attachHuman(3, sinks[3].send);
     await m.start();
-
-    const internals = m as unknown as MatchInternals & {
-      state: MatchInternals["state"] & { ruleSet: { atamahane: boolean } };
-    };
-    expect(internals.state.phase).toBe("awaiting_discard");
-    expect(internals.state.turn).toBe(0);
-
-    // Enable atamahane so seat 2's ron force-passes seat 3.
-    internals.state.ruleSet.atamahane = true;
-
-    internals.state.hands[0] = [...DISCARDER_HAND, "4m"];
-    internals.state.hands[1] = [...TENPAI_HAND];
-    internals.state.hands[2] = [...TENPAI_HAND];
-    internals.state.hands[3] = [...TENPAI_HAND];
-    internals.state.lastDrawn[0] = "4m";
-    internals.state.lastDrawn[1] = null;
-    internals.state.lastDrawn[2] = null;
-    internals.state.lastDrawn[3] = null;
-    internals.state.discards = [[], [], [], []];
-    internals.state.melds = [[], [], [], []];
-    internals.state.lastDiscard = null;
-    internals.state.pendingShouminkan = null;
-    internals.state.riichiDeclared = [false, false, false, false];
-    internals.state.doubleRiichi = [false, false, false, false];
-    internals.state.ippatsuEligible = [false, false, false, false];
-    internals.state.furitenLocked = [false, false, false, false];
-    internals.state.furitenTemp = [false, false, false, false];
-
-    internals.setSeatLegals(0, [
+    const internals = m;
+    expect(internals.owners.kernel.view.phase).toBe("awaiting_discard");
+    expect(internals.owners.kernel.view.turn).toBe(0);
+    editMatchState(internals, (state) => {
+      // Enable atamahane so seat 2's ron force-passes seat 3.
+      state.ruleSet.atamahane = true;
+      state.hands[0] = [...DISCARDER_HAND, "4m"];
+      state.hands[1] = [...TENPAI_HAND];
+      state.hands[2] = [...TENPAI_HAND];
+      state.hands[3] = [...TENPAI_HAND];
+      state.lastDrawn[0] = "4m";
+      state.lastDrawn[1] = null;
+      state.lastDrawn[2] = null;
+      state.lastDrawn[3] = null;
+      state.discards = [[], [], [], []];
+      state.melds = [[], [], [], []];
+      state.lastDiscard = null;
+      state.pendingShouminkan = null;
+      state.riichiDeclared = [false, false, false, false];
+      state.doubleRiichi = [false, false, false, false];
+      state.ippatsuEligible = [false, false, false, false];
+      state.furitenLocked = [false, false, false, false];
+      state.furitenTemp = [false, false, false, false];
+    });
+    internals.owners.gameplay.effects.setSeatLegals(0, [
       { id: "discard:4m", type: "discard", tile: "4m" },
     ]);
     await m.handleAct(0, "discard:4m");
-
     // Sanity: all three non-discarder windows open, each with a
     // non-null deadline pushed to the seat.
     expect(sinks[1].lastLegals?.length ?? 0).toBeGreaterThan(0);
     expect(sinks[2].lastLegals?.length ?? 0).toBeGreaterThan(0);
     expect(sinks[3].lastLegals?.length ?? 0).toBeGreaterThan(0);
-
     const seat2Ron = (() => {
       const ron = m
         .buildSnapshotForSeat(2)
@@ -872,20 +793,17 @@ describe("MatchProcess — concurrent call windows (multi-human ron)", () => {
       expect(ron).toBeDefined();
       return (ron as LegalAction).id;
     })();
-
     // Seat 2 rons. The submitter (seat 2) and the dominated seat
     // (seat 3, head-bumped) must both receive an immediate empty-
     // legals frame so their UIs drop the buttons + timer. Seat 1
     // (upstream) keeps its window open.
     await m.handleAct(2, seat2Ron);
-
     expect(sinks[2].lastLegals).toEqual([]);
     expect(sinks[2].lastDeadline).toBeNull();
     expect(sinks[3].lastLegals).toEqual([]);
     expect(sinks[3].lastDeadline).toBeNull();
     // Seat 1 still has an open window — they haven't been flushed.
     expect(sinks[1].lastLegals?.length ?? 0).toBeGreaterThan(0);
-
     // Resolve cleanly so vitest's leak checker is happy.
     await m.handleAct(1, "pass");
   });

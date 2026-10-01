@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import type {
+  ActionWindowView,
+  PromptIntentContext,
+} from "~/game/protocol/timing";
+import { usePromptCountdown } from "~/game/client/time/usePromptCountdown";
+import { ClockQualityNotice } from "~/game/components/ClockQualityNotice";
 import {
   CheckOutlined,
   DeleteOutlined,
@@ -357,6 +363,7 @@ function SessionVoteOverlay({
   mySeat,
   seatNames,
   onVote,
+  window,
 }: {
   sessionVote: {
     deadline: number;
@@ -365,28 +372,10 @@ function SessionVoteOverlay({
   } | null;
   mySeat: number | null;
   seatNames: [string, string, string, string] | null;
-  onVote: (vote: "yes" | "no") => void;
+  onVote: (vote: "yes" | "no", intent?: PromptIntentContext) => void;
+  window?: ActionWindowView | null;
 }) {
-  const [remainingMs, setRemainingMs] = useState<number>(() =>
-    sessionVote ? Math.max(0, sessionVote.deadline - Date.now()) : 0
-  );
-  useEffect(() => {
-    if (!sessionVote) {
-      return;
-    }
-    let frame: number;
-    const loop = () => {
-      const ms = Math.max(0, sessionVote.deadline - Date.now());
-      setRemainingMs(ms);
-      if (ms > 0) {
-        frame = requestAnimationFrame(loop);
-      }
-    };
-    frame = requestAnimationFrame(loop);
-    return () => {
-      cancelAnimationFrame(frame);
-    };
-  }, [sessionVote]);
+  const countdown = usePromptCountdown(window, sessionVote?.deadline ?? null);
 
   if (!sessionVote) {
     return null;
@@ -398,7 +387,7 @@ function SessionVoteOverlay({
     "P3",
     "P4",
   ];
-  const seconds = Math.ceil(remainingMs / 1000);
+  const seconds = Math.ceil(countdown.remainingMs / 1000);
   const myVote = mySeat !== null ? sessionVote.votes[mySeat] : null;
 
   return (
@@ -437,9 +426,14 @@ function SessionVoteOverlay({
             <button
               type="button"
               onClick={() => {
-                onVote("yes");
+                onVote(
+                  "yes",
+                  window
+                    ? { windowId: window.id, clockEpoch: window.clockEpoch }
+                    : undefined
+                );
               }}
-              disabled={myVote === "yes"}
+              disabled={myVote === "yes" || !countdown.canRespond}
               className="rounded bg-emerald-500 px-5 py-1.5 text-base font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
             >
               YES
@@ -447,16 +441,23 @@ function SessionVoteOverlay({
             <button
               type="button"
               onClick={() => {
-                onVote("no");
+                onVote(
+                  "no",
+                  window
+                    ? { windowId: window.id, clockEpoch: window.clockEpoch }
+                    : undefined
+                );
               }}
-              disabled={myVote === "no"}
+              disabled={myVote === "no" || !countdown.canRespond}
               className="rounded bg-rose-500 px-5 py-1.5 text-base font-bold text-black shadow disabled:cursor-default disabled:bg-rose-800 disabled:text-rose-300"
             >
               NO
             </button>
           </div>
         )}
-        <div className="font-mono text-sm text-amber-200">{seconds}s</div>
+        <div className="font-mono text-sm text-amber-200">
+          {countdown.synchronized ? `${seconds}s` : "Synchronizing clock"}
+        </div>
       </div>
     </div>
   );
@@ -481,18 +482,17 @@ function ReadyCheckOverlay({
   readyCheck: {
     deadline: number;
     acked: [boolean, boolean, boolean, boolean];
+    window?: ActionWindowView | null;
   } | null;
   mySeat: number | null;
   seatNames: [string, string, string, string] | null;
   chips: [number, number, number, number] | null;
   buuMode: boolean;
   resultPanelBounds: { x: number; y: number; w: number; h: number } | null;
-  onReady: () => void;
+  onReady: (intent?: PromptIntentContext) => void;
 }) {
   const readyDeadline = readyCheck?.deadline ?? null;
-  const [remainingMs, setRemainingMs] = useState<number>(() =>
-    readyDeadline === null ? 0 : Math.max(0, readyDeadline - Date.now())
-  );
+  const countdown = usePromptCountdown(readyCheck?.window, readyDeadline);
   const lastTickRef = useRef<ReadyCheckTickState>({
     deadline: null,
     seconds: -1,
@@ -508,26 +508,7 @@ function ReadyCheckOverlay({
     humanAcked ||
     (readyDeadline !== null && submittedDeadline === readyDeadline);
 
-  useEffect(() => {
-    if (readyDeadline === null) {
-      setRemainingMs(0);
-      return;
-    }
-    let frame: number;
-    const loop = () => {
-      const ms = Math.max(0, readyDeadline - Date.now());
-      setRemainingMs(ms);
-      if (ms > 0) {
-        frame = requestAnimationFrame(loop);
-      }
-    };
-    loop();
-    return () => {
-      cancelAnimationFrame(frame);
-    };
-  }, [readyDeadline]);
-
-  const seconds = Math.ceil(remainingMs / 1000);
+  const seconds = Math.ceil(countdown.remainingMs / 1000);
   useEffect(() => {
     const tick = advanceReadyCheckTick(
       lastTickRef.current,
@@ -587,18 +568,27 @@ function ReadyCheckOverlay({
       >
         <button
           type="button"
-          disabled={locallyReady}
+          disabled={locallyReady || !countdown.canRespond}
           onClick={() => {
-            if (!locallyReady) {
+            if (!locallyReady && countdown.canRespond) {
               setSubmittedDeadline(readyDeadline);
-              onReady();
+              onReady(
+                readyCheck.window
+                  ? {
+                      windowId: readyCheck.window.id,
+                      clockEpoch: readyCheck.window.clockEpoch,
+                    }
+                  : undefined
+              );
             }
           }}
           className="rounded bg-emerald-500 px-4 py-1.5 text-base font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
         >
           {locallyReady ? "READY" : "OK"}
         </button>
-        <div className="font-mono text-base text-emerald-200">{seconds}s</div>
+        <div className="font-mono text-base text-emerald-200">
+          {countdown.synchronized ? `${seconds}s` : "Synchronizing clock"}
+        </div>
       </div>
     );
   }
@@ -651,18 +641,25 @@ function ReadyCheckOverlay({
         </div>
         <button
           type="button"
-          disabled={locallyReady}
+          disabled={locallyReady || !countdown.canRespond}
           onClick={() => {
-            if (!locallyReady) {
+            if (!locallyReady && countdown.canRespond) {
               setSubmittedDeadline(readyDeadline);
-              onReady();
+              onReady(
+                readyCheck.window
+                  ? {
+                      windowId: readyCheck.window.id,
+                      clockEpoch: readyCheck.window.clockEpoch,
+                    }
+                  : undefined
+              );
             }
           }}
           className="flex flex-row items-center gap-2 rounded-lg bg-emerald-500 px-8 py-3 text-2xl font-bold text-black shadow disabled:cursor-default disabled:bg-emerald-800 disabled:text-emerald-300"
         >
           <span>{locallyReady ? "READY" : "GO"}</span>
           <span className="font-mono text-xs font-normal opacity-80">
-            {seconds}s
+            {countdown.synchronized ? `${seconds}s` : "Synchronizing clock"}
           </span>
         </button>
       </div>
@@ -1441,6 +1438,7 @@ export default function GameMatchRoute({
             }}
           />
         </div>
+        <ClockQualityNotice clockEpoch={view.serverClock?.clockEpoch} />
         {timingError !== null && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80">
             <div className="max-w-sm rounded-xl bg-emerald-950 px-8 py-6 text-center text-white">
@@ -1650,23 +1648,32 @@ export default function GameMatchRoute({
             </button>
           )}
         <ReadyCheckOverlay
-          key={view.readyCheck?.deadline ?? "inactive"}
+          key={
+            view.readyCheck?.window
+              ? `${view.readyCheck.window.id}:${view.readyCheck.window.clockEpoch}`
+              : (view.readyCheck?.deadline ?? "inactive")
+          }
           readyCheck={view.readyCheck}
           mySeat={view.mySeat}
           seatNames={view.seatNames}
           chips={view.chips}
           buuMode={view.buuMode}
           resultPanelBounds={view.lastHandResult ? resultPanelBounds : null}
-          onReady={() => {
-            wsRef.current?.ready();
+          onReady={(intent) => {
+            wsRef.current?.ready(intent);
           }}
         />
         <SessionVoteOverlay
           sessionVote={view.sessionVote}
+          window={
+            view.promptWindow?.kind === "session_vote"
+              ? view.promptWindow
+              : undefined
+          }
           mySeat={view.mySeat}
           seatNames={view.seatNames}
-          onVote={(vote) => {
-            wsRef.current?.voteContinue(vote);
+          onVote={(vote, intent) => {
+            wsRef.current?.voteContinue(vote, intent);
           }}
         />
         <WaitingRoomOverlay

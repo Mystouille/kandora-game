@@ -4,6 +4,7 @@ import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
 import {
   ActionWindowViewSchema,
   TimingModeSchema,
+  PromptTimingSnapshotSchema,
 } from "~/game/protocol/timing";
 import {
   GameEventSchema,
@@ -14,12 +15,13 @@ import {
 import { MatchStateSchema } from "~/game/rules/state";
 import { RuleSetSchema } from "~/game/rules/ruleSet";
 
-export const MATCH_CHECKPOINT_SCHEMA_VERSION = 5 as const;
+export const MATCH_CHECKPOINT_SCHEMA_VERSION = 6 as const;
 
 const DecisionTimingCheckpointSchema = z
   .object({
     mode: TimingModeSchema,
     nextWindow: z.number().int().positive(),
+    prompts: PromptTimingSnapshotSchema.optional(),
     windows: z.tuple([
       ActionWindowViewSchema.nullable(),
       ActionWindowViewSchema.nullable(),
@@ -27,7 +29,23 @@ const DecisionTimingCheckpointSchema = z
       ActionWindowViewSchema.nullable(),
     ]),
   })
-  .strict();
+  .strict()
+  .superRefine((timing, context) => {
+    timing.windows.forEach((window, seat) => {
+      if (!window) {
+        return;
+      }
+      if (window.seat !== seat || window.kind === "ready" || window.kind === "session_vote") {
+        context.addIssue({ code: "custom", path: ["windows", seat], message: "Action-window seat or kind is inconsistent" });
+      }
+      if (timing.mode === "legacy") {
+        context.addIssue({ code: "custom", path: ["mode"], message: "Legacy checkpoints cannot activate explicit windows" });
+      }
+    });
+    if (timing.mode === "legacy" && timing.prompts?.windows.some((window) => window !== null)) {
+      context.addIssue({ code: "custom", path: ["prompts"], message: "Legacy checkpoints cannot activate explicit prompts" });
+    }
+  });
 
 const CheckpointPlayerSchema = z
   .object({
@@ -154,6 +172,7 @@ const PlayingCheckpointBaseShape = {
   ]),
   state: MatchStateSchema,
   startedAgoMs: z.number().int().nonnegative(),
+  startedCalendarAt: z.number().int().nonnegative().optional(),
   randomState: z.number().int().min(0).max(0xffffffff),
   eventLog: z.array(
     z
@@ -161,6 +180,7 @@ const PlayingCheckpointBaseShape = {
         seq: z.number().int().nonnegative(),
         event: GameEventSchema,
         emittedAgoMs: z.number().int().nonnegative(),
+        calendarAt: z.number().int().nonnegative().optional(),
       })
       .strict()
   ),
@@ -700,7 +720,8 @@ function migrateLegacyCheckpoint(input: unknown): unknown {
   if (
     input.schemaVersion === 2 ||
     input.schemaVersion === 3 ||
-    input.schemaVersion === 4
+    input.schemaVersion === 4 ||
+    input.schemaVersion === 5
   ) {
     return {
       ...input,

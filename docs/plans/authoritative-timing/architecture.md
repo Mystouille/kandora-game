@@ -2,7 +2,7 @@
 
 Read this with [plan.md](plan.md) for tasks/target ownership and [spec.md](spec.md) for requirements and acceptance criteria. No separate YAML or checkpoint documents are needed.
 
-Evidence: static inspection of the active game submodule and tournament native hosts on 2026-10-01, including the existing uncommitted spectator/pacing work. This is a scoped planning baseline, not a whole-portal inventory or runtime sign-off.
+Evidence: the original static inspection and the subsequent implementation of the active game submodule and tournament native hosts. Original size/timing observations below remain labeled as a baseline; current ownership and verification gaps are separate from that baseline.
 
 ## Ownership and runtime paths
 
@@ -32,7 +32,7 @@ Recorded line counts from the original scoped inspection:
 
 These sizes justify looking for concerns, not splitting arbitrary line ranges. The plan's target owners and module-size goals are separate from these observations.
 
-## Current timing and state
+## Original timing and state baseline
 
 - `MatchRuntime.now()` uses `Date.now()`; the port also owns cancellable scheduling, sleep and PRNG capture/restore.
 - [MatchProcess](../../../server/src/match.ts) owns four-seat roster/state/driver, command/default arbitration, turn/call workflows, hand/session continuations, events, recovery and timing.
@@ -44,6 +44,25 @@ These sizes justify looking for concerns, not splitting arbitrary line ranges. T
 - [DiscardAnimator](../../../client/pixi/discardAnimator.ts) serializes slide/hover and the next draw while settling overlaps. Keep its minimum display time, catch-up protection, once-only cues and fast-confirmed-discard draw-landing fix.
 
 The bank/window/runtime must each retain one authority. Client state and renderer state are projections, not another bank or legality owner.
+
+## Implemented ownership and timing
+
+The match facade is now 650 lines; its readonly
+[composition](../../../server/src/composition/matchComposition.ts) points to
+real concern owners, not a mutable copy of former private fields. The renderer
+facade is 485 lines. Automated physical-line gates cover both facades and new
+handwritten modules.
+
+- [Kernel](../../../server/src/session/matchKernel.ts), roster/connections, command/default arbitration, gameplay and lifecycle concerns own their actual state.
+- [Action windows](../../../server/src/timing/actionWindows.ts), [fixed prompts](../../../server/src/timing/promptWindows.ts) and [bank](../../../server/src/timing/timeBank.ts) own identities, reservations, timers and accounting. Internal owner generation remains off the wire.
+- [Recovery](../../../server/src/recovery/matchRecovery.ts) and [installer](../../../server/src/recovery/checkpointInstaller.ts) use one captured authority reference across every continuation. Version 6 adds fixed prompts and independent calendar timestamps without changing repository ownership.
+- Web/native controls share clock/window/countdown and intent projection; the native Buu vote overlay restores from snapshots. Foreground refresh affects clock quality, not budget.
+- Sanitized bounded diagnostics correlate epoch/window/seat/connection generation; shadow comparisons never change legacy enforcement. New-mode fixed prompts require additive capability negotiation.
+
+Production remains legacy. Normal-frame-rate browser evidence does not replace
+current-code native lifecycle/radio/storage, iOS or isolated Mongo durability sign-off, nor the 30 FPS
+Playwright profile that the user explicitly deferred. Numeric fairness
+tolerances remain unchanged.
 
 ## Refactor boundaries
 
@@ -104,7 +123,7 @@ Timer-start, exact millisecond charging and adaptive allowance are intentional c
 
 ## Recovery mapping and atomicity
 
-[Checkpoint version 4](../../../server/src/checkpoint.ts) stores state/driver/PRNG, roster, bank, sequences, connection policy, relative event/start ages and continuation timing. Action continuations hold kind/seat/actions plus elapsed, visible remaining and expiry remaining; call/readiness/vote/result continuations have their own fields.
+The original checkpoint version 4 stored state/driver/PRNG, roster, bank, sequences, connection policy, relative event/start ages and continuation timing. Current [version 6](../../../server/src/checkpoint.ts) adds explicit fixed-prompt state and independent calendar timestamps while retaining readers for versions 1-5. Action continuations hold kind/seat/actions plus elapsed, visible remaining and expiry remaining; call/readiness/vote/result continuations have their own fields.
 
 [The repository port](../../../server/src/repository.ts) atomically replaces checkpoints, reads legacy pending-command recovery, marks terminal tombstones and archives matches/replays. Mongo and [native SQLite/memory](../../../../../mobile/src/persistence/mobileMatchRepository.ts) implement that port. Native database version 2 is not the game checkpoint version.
 
@@ -122,4 +141,8 @@ When adding explicit-window recovery:
 
 Use the [plan's fairness matrix](plan.md#testing-strategy) to measure usable decision intervals, not only animation duration equality. Clock skew, foreground/resume, ingress/default races, ownership transfer and delayed/external presentation axes require behavioral evidence.
 
-The planning baseline found Node 22.14.0, no Docker command and no project-local Playwright package. Those are recorded prerequisites/gaps, not a reason to silently omit browser/native acceptance. Runtime implementation and sign-off have not been performed by this documentation packet.
+The planning baseline found Node 22.14.0 and no Docker command. Playwright and
+Chromium are now installed and wired into canonical tests. The
+[plan](plan.md#implementation-progress) records actual implementation evidence,
+the user-deferred 30 FPS browser profile and remaining device/durable-adapter
+release gates; memory/browser results are not native or Mongo sign-off.

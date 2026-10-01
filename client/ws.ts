@@ -22,6 +22,7 @@ import { dispatchServerMessage } from "./dispatchServerMessage";
 import { getOrCreateGameClientSessionId } from "./connectionIdentity";
 import { useMatchStore } from "./store";
 import { ServerClock } from "./time/serverClock";
+import { reportClockQuality } from "./time/timingDiagnostics";
 import { bindLiveClock, releaseLiveClock } from "./time/liveClock";
 import {
   displayedActionIntent,
@@ -30,6 +31,7 @@ import {
 } from "./time/liveTimingBinding";
 import {
   TIMING_CAPABILITY,
+  FIXED_PROMPT_VERSION,
   type ActionIntentContext,
 } from "~/game/protocol/timing";
 
@@ -227,6 +229,13 @@ export class GameWS {
     void this.openSocket();
   }
 
+  refreshClock(): void {
+    if (this.supportsClock && this.ws?.readyState === WebSocket.OPEN) {
+      this.stopClockSynchronization();
+      this.startClockSynchronization();
+    }
+  }
+
   send(message: ClientMessage): boolean {
     const parsed = ClientMessageSchema.safeParse(message);
     if (!parsed.success) {
@@ -274,12 +283,24 @@ export class GameWS {
   }
 
   /** Convenience: ack the pre-match ready check. */
-  ready(): void {
-    const { matchId } = useMatchStore.getState();
+  ready(intent?: Pick<ActionIntentContext, "windowId" | "clockEpoch">): void {
+    const { matchId, readyCheck, lastSeq } = useMatchStore.getState();
     if (!matchId) {
       return;
     }
-    this.send({ type: "ready", matchId });
+    let context = intent;
+    if (context === undefined && readyCheck?.window) {
+      try {
+        context = displayedActionIntent("ready", readyCheck.window, lastSeq);
+      } catch (error) {
+        this.reportError(
+          "decision_not_ready",
+          error instanceof Error ? error.message : String(error)
+        );
+        return;
+      }
+    }
+    this.send({ type: "ready", matchId, ...(context ?? {}) });
   }
 
   /** Request the server start the match (fills empty seats with
@@ -349,12 +370,27 @@ export class GameWS {
    * window (server-side guard); may be sent repeatedly to
    * change one's mind before the window resolves.
    */
-  voteContinue(vote: "yes" | "no"): void {
-    const { matchId } = useMatchStore.getState();
+  voteContinue(
+    vote: "yes" | "no",
+    intent?: Pick<ActionIntentContext, "windowId" | "clockEpoch">
+  ): void {
+    const { matchId, promptWindow, lastSeq } = useMatchStore.getState();
     if (!matchId) {
       return;
     }
-    this.send({ type: "vote_continue", matchId, vote });
+    let context = intent;
+    if (context === undefined && promptWindow?.kind === "session_vote") {
+      try {
+        context = displayedActionIntent(vote, promptWindow, lastSeq);
+      } catch (error) {
+        this.reportError(
+          "decision_not_ready",
+          error instanceof Error ? error.message : String(error)
+        );
+        return;
+      }
+    }
+    this.send({ type: "vote_continue", matchId, vote, ...(context ?? {}) });
   }
 
   // -------------------------------------------------------------------------
@@ -420,6 +456,7 @@ export class GameWS {
         matchId: this.opts.matchId,
         clientSessionId: this.clientSessionId,
         timingCapabilities: [TIMING_CAPABILITY],
+        fixedPromptVersion: FIXED_PROMPT_VERSION,
         ...(takeoverRequested ? { takeover: true } : {}),
         debug: this.opts.debug,
         ...(this.opts.spectate ? { spectate: true } : {}),
@@ -570,6 +607,9 @@ export class GameWS {
       });
     } else if (parsed.data.type === "clock_sample") {
       const sample = this.serverClock.observe(parsed.data);
+      if (sample.accepted) {
+        reportClockQuality(this.serverClock.quality());
+      }
       if (!sample.accepted) {
         this.reportError("clock_sample_rejected", sample.reason);
       } else if (

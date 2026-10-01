@@ -7,12 +7,12 @@ import {
   type InputReceipt,
 } from "~/game/protocol/timing";
 
-export class DecisionWindowError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "DecisionWindowError";
-  }
-}
+import {
+  DecisionWindowError,
+  sameWindowReceipt,
+  validateWindowReceipt,
+} from "./windowReceipt";
+export { DecisionWindowError } from "./windowReceipt";
 
 export type ActionWindowKind = "turn" | "ryuukyoku_declaration";
 
@@ -196,7 +196,10 @@ export class ActionWindowRegistry {
     window.kind = saved.kind;
     window.startedAt = restoredAt - saved.elapsedMs;
     window.deadline = restoredAt + saved.visibleRemainingMs;
-    this.schedule(seat, saved.expiryRemainingMs);
+    this.schedule(
+      seat,
+      Math.max(0, restoredAt + saved.expiryRemainingMs - this.runtime.now())
+    );
   }
 
   consumeLegacyBuffer(
@@ -271,32 +274,11 @@ export class ActionWindowRegistry {
     if (timing === null) {
       throw new DecisionWindowError("No explicit decision window");
     }
-    if (
-      receipt.windowId !== timing.id ||
-      receipt.clockEpoch !== timing.clockEpoch
-    ) {
-      throw new DecisionWindowError("Stale decision window or authority epoch");
-    }
-    if (
-      !Number.isSafeInteger(receipt.receivedAt) ||
-      receipt.receivedAt < timing.opensAt
-    ) {
-      throw new DecisionWindowError("Decision window is not open");
-    }
-    if (
-      receipt.receivedAt > timing.expiresAt ||
-      !timing.legalActionIds.includes(actionId)
-    ) {
-      throw new DecisionWindowError(
-        "Decision window expired or action is no longer legal"
-      );
-    }
+    validateWindowReceipt(timing, actionId, receipt);
     if (window.reservation !== null) {
       if (
-        window.reservation.receivedAt === receipt.receivedAt &&
-        window.reservedActionId === actionId &&
-        window.reservation.windowId === receipt.windowId &&
-        window.reservation.clockEpoch === receipt.clockEpoch
+        sameWindowReceipt(window.reservation, receipt) &&
+        window.reservedActionId === actionId
       ) {
         return;
       }
@@ -311,9 +293,15 @@ export class ActionWindowRegistry {
   consumeTimedBuffer(seat: Seat, bank: TimeBank): void {
     const window = this.windows[seat];
     const timing = window.timing;
-    if (timing === null || window.debited) {
+    if (
+      timing === null ||
+      window.debited ||
+      timing.state === "resolved" ||
+      timing.state === "cancelled"
+    ) {
       return;
     }
+
     const receivedAt = window.reservation?.receivedAt ?? this.runtime.now();
     const effectiveAt = Math.max(
       timing.opensAt,
@@ -330,14 +318,32 @@ export class ActionWindowRegistry {
     timing.state = "resolved";
   }
 
+  releaseReservation(seat: Seat, receipt: InputReceipt): void {
+    const window = this.windows[seat];
+    if (
+      sameWindowReceipt(window.reservation, receipt) &&
+      window.timing?.id === receipt.windowId
+    ) {
+      window.reservation = null;
+      window.reservedActionId = null;
+      if (window.timing && !window.debited) {
+        this.schedule(
+          seat,
+          Math.max(0, window.timing.expiresAt - this.runtime.now())
+        );
+      }
+    }
+  }
+
   restoreTimed(
     seat: Seat,
     actions: readonly LegalAction[],
     timing: ActionWindowView,
     savedAt: number,
-    clockEpoch: string
+    clockEpoch: string,
+    restoredAt = this.runtime.now()
   ): void {
-    const shift = this.runtime.now() - savedAt;
+    const shift = restoredAt - savedAt;
     this.openTimed(seat, actions, {
       ...timing,
       clockEpoch,
@@ -347,6 +353,17 @@ export class ActionWindowRegistry {
       budgetEndsAt: timing.budgetEndsAt + shift,
       expiresAt: timing.expiresAt + shift,
     });
+    const restored = this.windows[seat];
+    if (restored.timing) {
+      restored.timing.generation = timing.generation;
+      restored.timing.state = timing.state;
+    }
+    if (timing.state === "resolved" || timing.state === "cancelled") {
+      this.cancelTimer(seat);
+      restored.debited = true;
+      restored.actions = [];
+      restored.kind = null;
+    }
   }
 
   private schedule(seat: Seat, delayMs: number): void {

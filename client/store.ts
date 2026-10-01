@@ -110,6 +110,7 @@ export interface PendingDiscard {
 
 export interface MatchView {
   actionWindow?: ActionWindowView | null;
+  promptWindow?: ActionWindowView | null;
   serverClock?: ClockStamp | null;
   presentation?: PresentationContext | null;
   matchId: string | null;
@@ -448,6 +449,7 @@ export interface MatchView {
   readyCheck: {
     deadline: number;
     acked: [boolean, boolean, boolean, boolean];
+    window?: ActionWindowView | null;
   } | null;
 
   /**
@@ -472,12 +474,17 @@ interface MatchStore extends MatchView {
   setActionDeadline: (deadline: number | null) => void;
   setActionBufferMs: (ms: number | null) => void;
   setReadyCheck: (
-    rc: { deadline: number; acked: [boolean, boolean, boolean, boolean] } | null
+    rc: {
+      deadline: number;
+      acked: [boolean, boolean, boolean, boolean];
+      window?: ActionWindowView | null;
+    } | null
   ) => void;
   setRoomState: (rs: RoomState | null) => void;
   setViewers: (viewers: ViewerPresence[]) => void;
   setTimingMetadata: (metadata: {
     actionWindow?: ActionWindowView | null;
+    promptWindow?: ActionWindowView | null;
     clock?: ClockStamp;
     presentation?: PresentationContext;
   }) => void;
@@ -490,6 +497,7 @@ const emptyMelds: Meld[][] = [[], [], [], []];
 
 const initialState: MatchView = {
   actionWindow: null,
+  promptWindow: null,
   serverClock: null,
   presentation: null,
   matchId: null,
@@ -588,6 +596,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
       ...(metadata.actionWindow !== undefined
         ? { actionWindow: metadata.actionWindow }
         : {}),
+      ...(metadata.promptWindow !== undefined
+        ? { promptWindow: metadata.promptWindow }
+        : {}),
       ...(metadata.clock !== undefined ? { serverClock: metadata.clock } : {}),
       ...(metadata.presentation !== undefined
         ? { presentation: metadata.presentation }
@@ -627,6 +638,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
   hydrateSnapshot: (snap, seq) => {
     set((state) => ({
       ...state,
+      ...(snap.sessionVote !== undefined ? {
+        sessionVote: snap.sessionVote ? {
+          ...snap.sessionVote, votes: [...snap.sessionVote.votes],
+        } : null,
+      } : {}),
       mySeat: snap.mySeat,
       hands: snap.hands.map((h) => [...h]),
       melds: snap.melds.map((m) => m.map((x) => ({ ...x }))),

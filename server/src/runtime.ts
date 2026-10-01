@@ -12,6 +12,7 @@ export interface MatchTimerOptions {
 export interface MatchRuntime {
   readonly clockEpoch?: string;
   now(): number;
+  wallNow?(): number;
   random(): number;
   captureRandomState(): number;
   restoreRandomState(state: number): void;
@@ -30,6 +31,7 @@ export function createSystemMatchRuntime(
   const random = createPRNG(seed);
   return {
     now: () => clock?.now() ?? Date.now(),
+    wallNow: () => clock?.wallNow() ?? Date.now(),
     ...(clock ? { clockEpoch: clock.epoch } : {}),
     random: () => random.next(),
     captureRandomState: () => random.getState(),
@@ -39,6 +41,7 @@ export function createSystemMatchRuntime(
       if (options?.unref) {
         (handle as unknown as { unref?: () => void }).unref?.();
       }
+
       return {
         cancel: () => globalThis.clearTimeout(handle),
       };
@@ -49,4 +52,10 @@ export function createSystemMatchRuntime(
       });
     },
   };
+}
+
+export function runtimeCalendarNow(
+  runtime: Pick<MatchRuntime, "now" | "wallNow">
+): number {
+  return runtime.wallNow?.() ?? runtime.now();
 }

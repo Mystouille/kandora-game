@@ -15,6 +15,8 @@ import type { FinalScore } from "./sessionTypes";
 import type { ContinueVotePort } from "./lifecyclePorts";
 
 import { legacyTiming } from "./legacyPolicy";
+import type { InputReceipt } from "~/game/protocol/timing";
+import type { PromptTimingService } from "../timing/promptWindows";
 
 export interface ContinueVoteSnapshot {
   readonly votes: [
@@ -48,7 +50,8 @@ export class ContinueVote {
     private readonly roster: RoomRoster,
     private readonly connections: PlayerConnections,
     private readonly commands: CommandCoordinator,
-    private readonly port: ContinueVotePort
+    private readonly port: ContinueVotePort,
+    private readonly timing?: PromptTimingService
   ) {}
   snapshot(): ContinueVoteSnapshot {
     return {
@@ -88,6 +91,17 @@ export class ContinueVote {
       this.continueVoteDeadline =
         this.runtime.now() + legacyTiming.CONTINUE_VOTE_MS;
       this.continueVoteResolve = resolve;
+      if (legacyTiming.CONTINUE_VOTE_MS > 0) {
+        this.timing?.open(
+          "session_vote",
+          [...this.roster.players()].flatMap(([seat, player]) =>
+            player && !player.isBot && !this.connections.view(seat).disconnected
+              ? [seat]
+              : []
+          ),
+          legacyTiming.CONTINUE_VOTE_MS
+        );
+      }
 
       void this.port.emitEvent({
         type: "session_vote_open",
@@ -106,14 +120,7 @@ export class ContinueVote {
         return;
       }
       if (legacyTiming.CONTINUE_VOTE_MS > 0) {
-        this.continueVoteTimer = this.runtime.schedule(
-          () => {
-            this.lastVoteReason = "vote_timeout";
-            this.finishContinueVote(false);
-          },
-          legacyTiming.CONTINUE_VOTE_MS,
-          { unref: true }
-        );
+        this.scheduleExpiry(legacyTiming.CONTINUE_VOTE_MS);
       }
     });
     if (this.continueVoteResolve !== null) {
@@ -140,6 +147,7 @@ export class ContinueVote {
     vote: "yes" | "no"
   ): Promise<void> {
     this.continueVote[seat] = vote;
+    this.timing?.releaseVote(seat);
     await this.port.emitEvent({
       type: "session_vote_update",
       votes: [...this.continueVote] as [
@@ -151,7 +159,54 @@ export class ContinueVote {
     });
     if (!this.commands.legacyRecoveryInProgress) {
       this.tallyContinueVote();
+      if (
+        this.timing &&
+        this.continueVoteResolve &&
+        this.runtime.now() >= (this.timing.deadline("session_vote") ?? Infinity)
+      ) {
+        this.expire();
+      }
     }
+  }
+
+  reserve(seat: Seat, vote: "yes" | "no", receipt: InputReceipt): void {
+    this.timing?.reserve(seat, vote, receipt);
+    if (this.continueVote[seat] === vote) {
+      this.timing?.releaseVote(seat);
+    }
+  }
+
+  releaseReceipt(seat: Seat, receipt: InputReceipt): void {
+    this.timing?.releaseReservation(seat, receipt);
+    if (this.continueVoteResolve !== null && this.continueVoteTimer === null) {
+      this.scheduleExpiry(
+        Math.max(
+          0,
+          (this.continueVoteDeadline ?? this.runtime.now()) - this.runtime.now()
+        )
+      );
+    }
+  }
+
+  private scheduleExpiry(remainingMs: number): void {
+    this.continueVoteTimer?.cancel();
+    const expiry = this.timing?.deadline("session_vote");
+    const delay =
+      expiry === undefined || expiry === null
+        ? remainingMs
+        : Math.max(0, expiry - this.runtime.now());
+    this.continueVoteTimer = this.runtime.schedule(() => this.expire(), delay, {
+      unref: true,
+    });
+  }
+
+  private expire(): void {
+    this.continueVoteTimer = null;
+    if (this.port.isPaused() || this.timing?.hasReserved("session_vote")) {
+      return;
+    }
+    this.lastVoteReason = "vote_timeout";
+    this.finishContinueVote(false);
   }
 
   tallyContinueVote(): void {
@@ -181,6 +236,7 @@ export class ContinueVote {
     this.continueVoteResolve = null;
     this.continueVoteDeadline = null;
     this.continueVoteFinalScores = null;
+    this.timing?.clear("session_vote");
     if (resolve) {
       resolve(cont);
     }
@@ -188,12 +244,36 @@ export class ContinueVote {
 
   installCheckpointContinueVote(
     checkpoint: PlayingContinueVoteCheckpoint,
-    restored: boolean
+    restored: boolean,
+    restoredAt = this.runtime.now()
   ): void {
     const finalScores = checkpoint.finalScores.map((score) => ({ ...score }));
     this.continueVote = [...checkpoint.votes];
-    this.continueVoteDeadline = this.runtime.now() + checkpoint.voteRemainingMs;
+    this.continueVoteDeadline = restoredAt + checkpoint.voteRemainingMs;
     this.continueVoteFinalScores = finalScores;
+    if (this.timing && checkpoint.decisionTiming?.prompts) {
+      this.timing.restore(
+        checkpoint.decisionTiming.prompts,
+        checkpoint.savedAt,
+        restoredAt
+      );
+      const bases = [...this.roster.players()].flatMap(([seat]) => {
+        const window = this.timing?.view(seat);
+        return window ? [window.baseEndsAt] : [];
+      });
+      if (bases.length > 0) {
+        this.continueVoteDeadline = Math.max(...bases);
+      }
+    } else if (this.timing) {
+      this.timing.restoreLegacy(
+        "session_vote",
+        [...this.roster.players()].flatMap(([seat, player]) =>
+          player && !player.isBot ? [seat] : []
+        ),
+        checkpoint.voteRemainingMs,
+        restoredAt
+      );
+    }
     this.lastVoteReason = null;
     this.port.gameFinalized();
     if (restored) {
@@ -216,18 +296,12 @@ export class ContinueVote {
       this.finishContinueVote(allYes);
       return;
     }
-    this.continueVoteTimer = checkpoint.timeoutArmed
-      ? this.runtime.schedule(
-          () => {
-            if (this.port.isPaused()) {
-              return;
-            }
-            this.lastVoteReason = "vote_timeout";
-            this.finishContinueVote(false);
-          },
-          checkpoint.voteRemainingMs,
-          { unref: true }
-        )
-      : null;
+    if (checkpoint.timeoutArmed) {
+      this.scheduleExpiry(
+        Math.max(0, this.continueVoteDeadline - this.runtime.now())
+      );
+    } else {
+      this.continueVoteTimer = null;
+    }
   }
 }

@@ -1,3 +1,4 @@
+import { editMatchState } from "~/game/testing/matchState";
 /**
  * Buu multi-game session orchestration.
  *
@@ -15,14 +16,12 @@
  *     `reason: "single_game"` immediately after `match_end`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 const { createMatchDocMock, archiveMatchMock, archiveReplayLogMock } =
   vi.hoisted(() => ({
     createMatchDocMock: vi.fn(async () => undefined),
     archiveMatchMock: vi.fn(async () => undefined),
     archiveReplayLogMock: vi.fn(async () => undefined),
   }));
-
 import {
   MatchProcess,
   setNextHandDelayMs,
@@ -37,7 +36,6 @@ import {
   ephemeralMatchRepository,
   type MatchRepository,
 } from "./repository";
-
 const recordingRepository: MatchRepository = {
   createMatch: createMatchDocMock,
   archiveMatch: archiveMatchMock,
@@ -49,12 +47,10 @@ const recordingRepository: MatchRepository = {
   markCheckpointTerminal: async () => undefined,
   deleteCheckpoint: async () => undefined,
 };
-
 interface CapturedEvent {
   seq: number;
   event: GameEvent;
 }
-
 function captureSink(): {
   sink: (msg: ServerMessage) => void;
   events: CapturedEvent[];
@@ -72,36 +68,6 @@ function captureSink(): {
   };
   return { sink, events, messages };
 }
-
-interface InternalState {
-  phase: string;
-  scores: number[];
-  dealer: number;
-  roundNumber: number;
-  roundWind: "E" | "S" | "W" | "N";
-  chips: number[];
-  dabuken: boolean[];
-  lastHandResult: {
-    reason: string;
-    winner: number | null;
-    loser: number | null;
-    delta: number[];
-    tenpai: boolean[] | null;
-    abortKind: string | null;
-    winHan: number | null;
-    winYakuman: boolean | null;
-  } | null;
-  ruleSet: { roundWindCount: number; buuMode: boolean };
-}
-
-interface MatchInternals {
-  state: InternalState;
-  afterHandEnd: () => Promise<void>;
-  matchId: string;
-  session: import("./session/sessionCoordinator").SessionCoordinator;
-  continueVote: Array<"yes" | "no" | null>;
-}
-
 /**
  * Force the engine into "last hand of an East-only round just
  * finished without a tenpai dealer" so `start_next_hand` rotates
@@ -110,30 +76,33 @@ interface MatchInternals {
 function forceMatchEndAtScores(
   m: MatchProcess,
   scores: [number, number, number, number],
-  opts?: { chips?: [number, number, number, number] }
-): void {
-  const internals = m as unknown as MatchInternals;
-  internals.state.phase = "hand_ended";
-  internals.state.scores = [...scores];
-  internals.state.dealer = 3;
-  internals.state.roundWind = "E";
-  internals.state.roundNumber = 4;
-  internals.state.ruleSet.roundWindCount = 1;
-  internals.state.lastHandResult = {
-    reason: "exhaustive_draw",
-    winner: null,
-    loser: null,
-    delta: [0, 0, 0, 0],
-    tenpai: [false, false, false, false],
-    abortKind: null,
-    winHan: null,
-    winYakuman: null,
-  };
-  if (opts?.chips) {
-    internals.state.chips = [...opts.chips];
+  opts?: {
+    chips?: [number, number, number, number];
   }
+): void {
+  const internals = m;
+  editMatchState(internals, (state) => {
+    state.phase = "hand_ended";
+    state.scores = [...scores];
+    state.dealer = 3;
+    state.roundWind = "E";
+    state.roundNumber = 4;
+    state.ruleSet.roundWindCount = 1;
+    state.lastHandResult = {
+      reason: "exhaustive_draw",
+      winner: null,
+      loser: null,
+      delta: [0, 0, 0, 0],
+      tenpai: [false, false, false, false],
+      abortKind: null,
+      winHan: null,
+      winYakuman: null,
+    };
+    if (opts?.chips) {
+      state.chips = [...opts.chips];
+    }
+  });
 }
-
 function makeMatch(opts: {
   seed?: number;
   buu?: boolean;
@@ -167,7 +136,6 @@ function makeMatch(opts: {
       : undefined
   );
 }
-
 describe("MatchProcess — Buu multi-game session", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -181,9 +149,8 @@ describe("MatchProcess — Buu multi-game session", () => {
     setNextHandDelayMs(3000);
     setDelayAfterDiscardMs(350);
     setMatchEndDisplayMs(3000);
-    setContinueVoteMs(30_000);
+    setContinueVoteMs(30000);
   });
-
   it("non-Buu match emits session_end:single_game after match_end", async () => {
     const m = makeMatch({ seed: 1, buu: false });
     const { sink, events } = captureSink();
@@ -191,9 +158,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     await m.start();
     forceMatchEndAtScores(m, [40000, 30000, 20000, 10000]);
     events.length = 0;
-
-    await (m as unknown as MatchInternals).afterHandEnd();
-
+    await m.owners.lifecycle.hand.afterHandEnd();
     const matchEnds = events.filter((e) => e.event.type === "match_end");
     expect(matchEnds).toHaveLength(1);
     const sessionEnds = events.filter((e) => e.event.type === "session_end");
@@ -208,13 +173,11 @@ describe("MatchProcess — Buu multi-game session", () => {
       false
     );
   });
-
   it("Buu match emits match_end with chips/dabuken/gameIndex + opens vote", async () => {
     const m = makeMatch({ seed: 7, buu: true });
     const { sink, events } = captureSink();
     m.attachHuman(0, sink);
     await m.start();
-
     // Pre-seed chips in the engine so match_end carries them.
     // Scores: seat 0 wins (9000), seats 2 (5000) and 3 (4000)
     // sink — that's a nikoro (per-sinker chinmai chip ×2 sinkers,
@@ -227,18 +190,17 @@ describe("MatchProcess — Buu multi-game session", () => {
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000], {
       chips: [3, 0, 0, -3],
     });
-    const internals = m as unknown as MatchInternals;
-    internals.state.dabuken = [true, false, false, false];
-
+    const internals = m;
+    editMatchState(internals, (state) => {
+      state.dabuken = [true, false, false, false];
+    });
     events.length = 0;
     // The vote will resolve "yes" because 3 bots auto-yes and the
     // human (seat 0) hasn't voted yet — but the orchestrator only
     // proceeds on unanimous yes. So this call will block.
-    const done = internals.afterHandEnd();
-
+    const done = internals.owners.lifecycle.hand.afterHandEnd();
     // Allow microtasks to run so the vote opens.
     await new Promise((r) => setImmediate(r));
-
     const matchEnds = events.filter((e) => e.event.type === "match_end");
     expect(matchEnds).toHaveLength(1);
     if (matchEnds[0].event.type === "match_end") {
@@ -256,7 +218,6 @@ describe("MatchProcess — Buu multi-game session", () => {
       // Seat 0 is the human (null); seats 1/2/3 are bots (pre-voted yes).
       expect(voteOpens[0].event.votes).toEqual([null, "yes", "yes", "yes"]);
     }
-
     const checkpoint = m.createCheckpoint();
     if (
       checkpoint.status !== "playing" ||
@@ -294,18 +255,14 @@ describe("MatchProcess — Buu multi-game session", () => {
     const restored = MatchProcess.restoreCheckpoint(checkpoint, {
       repository: ephemeralMatchRepository,
     });
-
     // Cast the human's yes vote → unanimous → next game starts.
     await m.handleVoteContinue(0, "yes");
     await restored.handleVoteContinue(0, "yes");
     await done;
     await vi.waitFor(() => {
-      expect(
-        (restored as unknown as MatchInternals).session.snapshot().gameIndex
-      ).toBe(1);
+      expect(restored.owners.lifecycle.session.snapshot().gameIndex).toBe(1);
     });
     expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
-
     // After resolving: a fresh match_start was emitted for game 1.
     const matchStarts = events.filter((e) => e.event.type === "match_start");
     // Game 0's match_start was emitted in `start()` (before our reset);
@@ -327,9 +284,8 @@ describe("MatchProcess — Buu multi-game session", () => {
       // Sum of chips is conserved across permutation.
       expect((chipsAtStart ?? []).reduce((a, b) => a + b, 0)).toBe(0);
     }
-
     // gameIndex advanced; another Match doc was created for game 1.
-    expect(internals.session.snapshot().gameIndex).toBe(1);
+    expect(internals.owners.lifecycle.session.snapshot().gameIndex).toBe(1);
     expect(createMatchDocMock).toHaveBeenCalledTimes(2);
     const calls = createMatchDocMock.mock.calls as unknown as Array<
       [
@@ -341,7 +297,7 @@ describe("MatchProcess — Buu multi-game session", () => {
         },
       ]
     >;
-    const sessionId = (m as unknown as { matchId: string }).matchId;
+    const sessionId = m.matchId;
     expect(calls[0][0].matchId).toBe(`${sessionId}-g0`);
     expect(calls[0][0].sessionId).toBe(sessionId);
     expect(calls[0][0].gameIndex).toBe(0);
@@ -351,18 +307,16 @@ describe("MatchProcess — Buu multi-game session", () => {
     expect(calls[1][0].gameIndex).toBe(1);
     expect(calls[1][0].initialEventSeq).toBeGreaterThan(0);
   });
-
   it("Buu vote: human votes no → session ends with vote_no", async () => {
     const m = makeMatch({ seed: 11, buu: true });
     const { sink, events } = captureSink();
     m.attachHuman(0, sink);
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
-    const internals = m as unknown as MatchInternals;
+    const internals = m;
     events.length = 0;
-    const done = internals.afterHandEnd();
+    const done = internals.owners.lifecycle.hand.afterHandEnd();
     await new Promise((r) => setImmediate(r));
-
     const checkpoint = m.createCheckpoint();
     if (
       checkpoint.status !== "playing" ||
@@ -373,7 +327,6 @@ describe("MatchProcess — Buu multi-game session", () => {
     const restored = MatchProcess.restoreCheckpoint(checkpoint, {
       repository: ephemeralMatchRepository,
     });
-
     await m.handleVoteContinue(0, "no");
     await restored.handleVoteContinue(0, "no");
     await done;
@@ -381,7 +334,6 @@ describe("MatchProcess — Buu multi-game session", () => {
       expect(restored.status).toBe("finished");
     });
     expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
-
     const sessionEnds = events.filter((e) => e.event.type === "session_end");
     expect(sessionEnds).toHaveLength(1);
     if (sessionEnds[0].event.type === "session_end") {
@@ -393,7 +345,6 @@ describe("MatchProcess — Buu multi-game session", () => {
     // Game 0 was archived once.
     expect(archiveMatchMock).toHaveBeenCalledTimes(1);
   });
-
   it("Buu vote: timeout ends the session with vote_timeout", async () => {
     setContinueVoteMs(100); // long enough to checkpoint before expiry
     const m = makeMatch({ seed: 13, buu: true });
@@ -402,7 +353,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
     events.length = 0;
-    const done = (m as unknown as MatchInternals).afterHandEnd();
+    const done = m.owners.lifecycle.hand.afterHandEnd();
     await new Promise((r) => setImmediate(r));
     const checkpoint = m.createCheckpoint();
     if (
@@ -420,16 +371,14 @@ describe("MatchProcess — Buu multi-game session", () => {
       expect(restored.status).toBe("finished");
     });
     expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
-
     const sessionEnds = events.filter((e) => e.event.type === "session_end");
     expect(sessionEnds).toHaveLength(1);
     if (sessionEnds[0].event.type === "session_end") {
       expect(sessionEnds[0].event.reason).toBe("vote_timeout");
     }
   });
-
   it("Buu vote resumes after checkpoint save failure", async () => {
-    setContinueVoteMs(10_000);
+    setContinueVoteMs(10000);
     let failNextSave = true;
     const repository: MatchRepository = {
       ...ephemeralMatchRepository,
@@ -445,9 +394,8 @@ describe("MatchProcess — Buu multi-game session", () => {
     m.attachHuman(0, sink);
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
-    const done = (m as unknown as MatchInternals).afterHandEnd();
+    const done = m.owners.lifecycle.hand.afterHandEnd();
     await new Promise((r) => setImmediate(r));
-
     const before = m.createCheckpoint();
     if (
       before.status !== "playing" ||
@@ -458,7 +406,6 @@ describe("MatchProcess — Buu multi-game session", () => {
     await expect(m.pauseAndSaveCheckpoint()).rejects.toThrow(
       "vote checkpoint write failed"
     );
-
     expect(m.isPaused).toBe(false);
     const rolledBack = m.createCheckpoint();
     if (
@@ -470,7 +417,6 @@ describe("MatchProcess — Buu multi-game session", () => {
     expect(rolledBack.votes).toEqual(before.votes);
     expect(rolledBack.timeoutArmed).toBe(true);
     expect(rolledBack.voteRemainingMs).toBeGreaterThan(0);
-
     await m.handleVoteContinue(0, "no");
     await done;
     const sessionEnd = events.find(
@@ -481,9 +427,8 @@ describe("MatchProcess — Buu multi-game session", () => {
       reason: "vote_no",
     });
   });
-
   it("opens the vote without checkpointing the command boundary", async () => {
-    setContinueVoteMs(10_000);
+    setContinueVoteMs(10000);
     const saveCheckpoint = vi.fn(async () => {
       throw new Error("checkpoint persistence must not run");
     });
@@ -494,28 +439,40 @@ describe("MatchProcess — Buu multi-game session", () => {
     const m = makeMatch({ seed: 16, buu: true, repository });
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
-    const internals = m as unknown as MatchInternals;
-    const done = internals.afterHandEnd();
+    const internals = m;
+    const done = internals.owners.lifecycle.hand.afterHandEnd();
     await new Promise((resolve) => setImmediate(resolve));
-
     expect(m.createCheckpoint()).toMatchObject({
       checkpointKind: "continue_vote",
       votes: [null, "yes", "yes", "yes"],
     });
     expect(saveCheckpoint).not.toHaveBeenCalled();
-
+    const historyLength = m.owners.publisher.history().length;
+    const sessionVote = m.buildSnapshotForSeat(0).state.sessionVote;
+    expect(sessionVote).toEqual({
+      deadline: m.owners.lifecycle.votes.snapshot().deadline,
+      votes: [null, "yes", "yes", "yes"],
+      gameIndex: m.sessionSnapshot().gameIndex,
+    });
+    if (!sessionVote) {
+      throw new Error("expected an outstanding vote in the private snapshot");
+    }
+    sessionVote.votes[0] = "no";
+    expect(m.owners.lifecycle.votes.snapshot().votes[0]).toBeNull();
+    expect(m.buildSnapshotForSeat(0).state.sessionVote?.votes[0]).toBeNull();
+    expect(m.owners.publisher.history()).toHaveLength(historyLength);
     await m.handleVoteContinue(0, "no");
     await done;
     expect(m.status).toBe("finished");
+    expect(m.buildSnapshotForSeat(0).state.sessionVote).toBeNull();
     expect(
       m
         .replayFromBuffer(0, 0)
         .filter(({ event }) => event.type === "session_end")
     ).toHaveLength(1);
   });
-
   it("restores a partially-completed multi-human continue vote", async () => {
-    setContinueVoteMs(10_000);
+    setContinueVoteMs(10000);
     const m = makeMatch({
       seed: 17,
       buu: true,
@@ -524,10 +481,9 @@ describe("MatchProcess — Buu multi-game session", () => {
     });
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
-    const done = (m as unknown as MatchInternals).afterHandEnd();
+    const done = m.owners.lifecycle.hand.afterHandEnd();
     await new Promise((r) => setImmediate(r));
     await m.handleVoteContinue(0, "yes");
-
     const checkpoint = m.createCheckpoint();
     if (
       checkpoint.status !== "playing" ||
@@ -539,29 +495,34 @@ describe("MatchProcess — Buu multi-game session", () => {
     const restored = MatchProcess.restoreCheckpoint(checkpoint, {
       repository: ephemeralMatchRepository,
     });
-
+    const historyLength = restored.owners.publisher.history().length;
+    for (const seat of [0, 1] as const) {
+      expect(restored.buildSnapshotForSeat(seat).state.sessionVote).toEqual({
+        deadline: restored.owners.lifecycle.votes.snapshot().deadline,
+        votes: ["yes", null, "yes", "yes"],
+        gameIndex: restored.sessionSnapshot().gameIndex,
+      });
+    }
+    expect(restored.owners.publisher.history()).toHaveLength(historyLength);
     await m.handleVoteContinue(1, "yes");
     await restored.handleVoteContinue(1, "yes");
     await done;
     await vi.waitFor(() => {
-      expect(
-        (restored as unknown as MatchInternals).session.snapshot().gameIndex
-      ).toBe(1);
+      expect(restored.owners.lifecycle.session.snapshot().gameIndex).toBe(1);
     });
-
+    expect(restored.buildSnapshotForSeat(0).state.sessionVote).toBeNull();
     expect(restored.replayFromBuffer(0, 0)).toEqual(m.replayFromBuffer(0, 0));
-    expect(
-      (restored as unknown as MatchInternals).session.snapshot().sessionChips
-    ).toEqual((m as unknown as MatchInternals).session.snapshot().sessionChips);
+    expect(restored.owners.lifecycle.session.snapshot().sessionChips).toEqual(
+      m.owners.lifecycle.session.snapshot().sessionChips
+    );
   });
-
   it("replays a final yes vote and resumes its completed checkpoint", async () => {
-    setContinueVoteMs(10_000);
+    setContinueVoteMs(10000);
     const repository = createMemoryMatchRepository();
     const m = makeMatch({ seed: 18, buu: true, repository });
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
-    void (m as unknown as MatchInternals).afterHandEnd();
+    void m.owners.lifecycle.hand.afterHandEnd();
     await new Promise((resolve) => setImmediate(resolve));
     const checkpoint = m.createCheckpoint();
     if (
@@ -575,7 +536,6 @@ describe("MatchProcess — Buu multi-game session", () => {
       checkpoint,
       command: { type: "vote_continue", seat: 0, vote: "yes" },
     });
-
     const restored = await MatchProcess.restoreSavedCheckpoint(m.matchId, {
       repository,
     });
@@ -591,7 +551,6 @@ describe("MatchProcess — Buu multi-game session", () => {
       },
       pendingCommand: null,
     });
-
     const recovered = await MatchProcess.restoreSavedCheckpoint(m.matchId, {
       repository,
     });
@@ -599,12 +558,8 @@ describe("MatchProcess — Buu multi-game session", () => {
       throw new Error("expected a completed vote recovery");
     }
     await vi.waitFor(() => {
-      expect(
-        (restored as unknown as MatchInternals).session.snapshot().gameIndex
-      ).toBe(1);
-      expect(
-        (recovered as unknown as MatchInternals).session.snapshot().gameIndex
-      ).toBe(1);
+      expect(restored.owners.lifecycle.session.snapshot().gameIndex).toBe(1);
+      expect(recovered.owners.lifecycle.session.snapshot().gameIndex).toBe(1);
       expect(restored.createCheckpoint()).toMatchObject({
         checkpointKind: "action_window",
       });
@@ -616,9 +571,8 @@ describe("MatchProcess — Buu multi-game session", () => {
       restored.replayFromBuffer(0, 0)
     );
   });
-
   it("records a vote without checkpoint persistence and keeps the timeout armed", async () => {
-    setContinueVoteMs(10_000);
+    setContinueVoteMs(10000);
     const saveCheckpoint = vi.fn(async () => {
       throw new Error("checkpoint persistence must not run");
     });
@@ -638,9 +592,8 @@ describe("MatchProcess — Buu multi-game session", () => {
     });
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
-    const done = (m as unknown as MatchInternals).afterHandEnd();
+    const done = m.owners.lifecycle.hand.afterHandEnd();
     await new Promise((resolve) => setImmediate(resolve));
-
     await m.handleVoteContinue(0, "yes");
     const committed = m.createCheckpoint();
     if (
@@ -656,14 +609,13 @@ describe("MatchProcess — Buu multi-game session", () => {
     await m.handleVoteContinue(1, "yes");
     await done;
   });
-
   it("replays a no vote into one terminal session", async () => {
-    setContinueVoteMs(10_000);
+    setContinueVoteMs(10000);
     const repository = createMemoryMatchRepository();
     const m = makeMatch({ seed: 19, buu: true, repository });
     await m.start();
     forceMatchEndAtScores(m, [9000, 6000, 5000, 4000]);
-    void (m as unknown as MatchInternals).afterHandEnd();
+    void m.owners.lifecycle.hand.afterHandEnd();
     await new Promise((resolve) => setImmediate(resolve));
     const checkpoint = m.createCheckpoint();
     if (
@@ -677,7 +629,6 @@ describe("MatchProcess — Buu multi-game session", () => {
       checkpoint,
       command: { type: "vote_continue", seat: 0, vote: "no" },
     });
-
     const restored = await MatchProcess.restoreSavedCheckpoint(m.matchId, {
       repository,
     });
@@ -694,13 +645,11 @@ describe("MatchProcess — Buu multi-game session", () => {
         .filter(({ event }) => event.type === "session_end")
     ).toHaveLength(1);
   });
-
   it("Buu next-game: winner becomes seat 0 and carries chips/dabuken", async () => {
     const m = makeMatch({ seed: 21, buu: true });
     const { sink, events } = captureSink();
     m.attachHuman(0, sink);
     await m.start();
-
     // Seat 2 wins; pre-game chips arranged seat-0:1, seat-2:5.
     // End-of-game settlement: only seat 3 (5000) sinks → chinmai
     // (base 1 chip). Seat 2 holds a dabuken → consumed → doubled
@@ -710,36 +659,41 @@ describe("MatchProcess — Buu multi-game session", () => {
     forceMatchEndAtScores(m, [6000, 6000, 9000, 5000], {
       chips: [1, 0, 5, -3],
     });
-    const internals = m as unknown as MatchInternals;
-    internals.state.dabuken = [false, false, true, false];
+    const internals = m;
+    editMatchState(internals, (state) => {
+      state.dabuken = [false, false, true, false];
+    });
     events.length = 0;
-    const done = internals.afterHandEnd();
+    const done = internals.owners.lifecycle.hand.afterHandEnd();
     await new Promise((r) => setImmediate(r));
     await m.handleVoteContinue(0, "yes");
     await done;
-
     // After permutation: new seat 0 = old seat 2 (winner).
     // Winner's post-settlement chips = 7.
-    expect(internals.session.snapshot().sessionChips[0]).toBe(7);
+    expect(internals.owners.lifecycle.session.snapshot().sessionChips[0]).toBe(
+      7
+    );
     // Dabuken was consumed by the chinmai doubling, not re-awarded.
-    expect(internals.session.snapshot().sessionDabuken[0]).toBe(false);
+    expect(
+      internals.owners.lifecycle.session.snapshot().sessionDabuken[0]
+    ).toBe(false);
     // Chips total preserved across the permutation.
     const totalBefore = 1 + 0 + 5 + -3;
-    const totalAfter = internals.session
+    const totalAfter = internals.owners.lifecycle.session
       .snapshot()
       .sessionChips.reduce((a, b) => a + b, 0);
     expect(totalAfter).toBe(totalBefore);
-
     // New game's state.scores reset to ruleSet starting value.
-    expect(internals.state.scores.every((s) => s === 6000)).toBe(true);
+    expect(internals.owners.kernel.view.scores.every((s) => s === 6000)).toBe(
+      true
+    );
     // New game's state.chips/dabuken match the permuted session ledger.
-    expect(internals.state.chips).toEqual([
-      ...internals.session.snapshot().sessionChips,
+    expect(internals.owners.kernel.view.chips).toEqual([
+      ...internals.owners.lifecycle.session.snapshot().sessionChips,
     ]);
-    expect(internals.state.dabuken).toEqual([
-      ...internals.session.snapshot().sessionDabuken,
+    expect(internals.owners.kernel.view.dabuken).toEqual([
+      ...internals.owners.lifecycle.session.snapshot().sessionDabuken,
     ]);
-
     const humanSeat = m.humanSeatForUser("u0");
     expect(m.humanSeatFor(sink)).toBe(humanSeat);
   });

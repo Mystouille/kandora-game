@@ -1,7 +1,8 @@
+import { editMatchState } from "~/game/testing/matchState";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DuplicateMatchModeConfig } from "~/game/protocol/matchMode";
 import type { GameEvent } from "~/game/protocol/messages";
-import type { Action, MatchState, Tile } from "~/game/rules";
+import type { Tile } from "~/game/rules";
 import { getPreset, presetToRuleSet } from "~/game/rules/presets";
 import { duplicateMatchSeed } from "./match-drivers/duplicatePlan";
 import { MATCH_CHECKPOINT_SCHEMA_VERSION } from "./checkpoint";
@@ -13,13 +14,11 @@ import {
 } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import { useMatchStore } from "~/game/client/store";
-
 const mode: DuplicateMatchModeConfig = {
   type: "duplicate",
   seed: "Integration-A",
   generationVersion: 1,
 };
-
 function players() {
   return [0, 1, 2, 3].map((seat) => ({
     userId: `human-${seat}`,
@@ -27,7 +26,6 @@ function players() {
     isBot: false,
   }));
 }
-
 function tiles(compact: string): Tile[] {
   const result: Tile[] = [];
   let digits = "";
@@ -43,29 +41,16 @@ function tiles(compact: string): Tile[] {
   }
   return result;
 }
-
-function internals(match: MatchProcess): {
-  state: MatchState;
-  applyEngineAction(action: Action): Promise<void>;
-  afterDiscard(): Promise<void>;
-  afterHandEnd(): Promise<void>;
-} {
-  return match as unknown as {
-    state: MatchState;
-    applyEngineAction(action: Action): Promise<void>;
-    afterDiscard(): Promise<void>;
-    afterHandEnd(): Promise<void>;
-  };
+function internals(match: MatchProcess): MatchProcess {
+  return match;
 }
-
 describe("MatchProcess duplicate mode", () => {
   afterEach(() => {
-    setReadyCheckMs(5_000);
+    setReadyCheckMs(5000);
     setDelayAfterDiscardMs(350);
-    setNextHandDelayMs(5_000);
+    setNextHandDelayMs(5000);
     useMatchStore.getState().reset();
   });
-
   it("drives the first draw from the public seeded seat queue", async () => {
     const match = new MatchProcess(
       "duplicate-room",
@@ -79,19 +64,29 @@ describe("MatchProcess duplicate mode", () => {
     );
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
-
     await match.start();
-
     expect(match.summary().mode).toEqual(mode);
     expect(match.buildRoomState(0).mode).toEqual(mode);
     const projectedEvents = match.replayFromBuffer(0).map(({ event }) => event);
     const projectedHandStart = projectedEvents.find(
-      (event): event is Extract<GameEvent, { type: "hand_start" }> =>
-        event.type === "hand_start"
+      (
+        event
+      ): event is Extract<
+        GameEvent,
+        {
+          type: "hand_start";
+        }
+      > => event.type === "hand_start"
     );
     const firstDraw = projectedEvents.find(
-      (event): event is Extract<GameEvent, { type: "draw" }> =>
-        event.type === "draw"
+      (
+        event
+      ): event is Extract<
+        GameEvent,
+        {
+          type: "draw";
+        }
+      > => event.type === "draw"
     );
     expect(projectedHandStart?.duplicateDrawQueues).toBeUndefined();
     expect(projectedHandStart?.duplicateWallState).toEqual({
@@ -110,8 +105,14 @@ describe("MatchProcess duplicate mode", () => {
       .replaySpectatorBuffer(0)
       .map(({ event }) => event)
       .find(
-        (event): event is Extract<GameEvent, { type: "hand_start" }> =>
-          event.type === "hand_start"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "hand_start";
+          }
+        > => event.type === "hand_start"
       );
     expect(spectatorHandStart?.duplicateDrawQueues).toBeUndefined();
     expect(spectatorHandStart?.duplicateWallState).toEqual(
@@ -128,7 +129,6 @@ describe("MatchProcess duplicate mode", () => {
         firstDraw?.duplicateWallState
       );
     }
-
     const checkpoint = match.createCheckpoint();
     if (checkpoint.status !== "playing") {
       throw new Error("expected a playing checkpoint");
@@ -136,12 +136,17 @@ describe("MatchProcess duplicate mode", () => {
     const handStart = checkpoint.eventLog
       .map(({ event }) => event)
       .find(
-        (event): event is Extract<GameEvent, { type: "hand_start" }> =>
-          event.type === "hand_start"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "hand_start";
+          }
+        > => event.type === "hand_start"
       );
     expect(handStart?.duplicateDrawQueues).toHaveLength(4);
     expect(firstDraw?.tile).toBe(handStart?.duplicateDrawQueues?.[0][0]);
-
     expect(checkpoint).toMatchObject({
       schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
       mode,
@@ -161,7 +166,6 @@ describe("MatchProcess duplicate mode", () => {
       },
     });
   });
-
   it("rejects developer overrides in duplicate mode", () => {
     expect(
       () =>
@@ -177,7 +181,6 @@ describe("MatchProcess duplicate mode", () => {
         )
     ).toThrow(/debug/i);
   });
-
   it("consumes the declarer's next queue tile for ankan", async () => {
     const match = new MatchProcess(
       "duplicate-kan",
@@ -199,45 +202,65 @@ describe("MatchProcess duplicate mode", () => {
     const handStart = before.eventLog
       .map(({ event }) => event)
       .find(
-        (event): event is Extract<GameEvent, { type: "hand_start" }> =>
-          event.type === "hand_start"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "hand_start";
+          }
+        > => event.type === "hand_start"
       );
     const replacement = handStart?.duplicateDrawQueues?.[0][1];
     if (replacement === undefined) {
       throw new Error("expected a second seat-0 draw");
     }
     const matchInternals = internals(match);
-    matchInternals.state.hands[0] = tiles("4m4m4m4m1p2p3p4p5p6p7p8p9p1s");
-    matchInternals.state.turn = 0;
-    matchInternals.state.phase = "awaiting_discard";
-    matchInternals.state.lastDrawn = ["1s", null, null, null];
-    const deadWallBefore = [...matchInternals.state.deadWall];
-    const liveWallLength = matchInternals.state.liveWall.length;
-
-    await matchInternals.applyEngineAction({
+    editMatchState(matchInternals, (state) => {
+      state.hands[0] = tiles("4m4m4m4m1p2p3p4p5p6p7p8p9p1s");
+      state.turn = 0;
+      state.phase = "awaiting_discard";
+      state.lastDrawn = ["1s", null, null, null];
+    });
+    const deadWallBefore = [...matchInternals.owners.kernel.view.deadWall];
+    const liveWallLength = matchInternals.owners.kernel.view.liveWall.length;
+    await matchInternals.owners.gameplay.effects.applyEngineAction({
       type: "kan",
       seat: 0,
       kind: "ankan",
       tile: "4m",
     });
-
-    expect(matchInternals.state.lastDrawn[0]).toBe(replacement);
-    expect(matchInternals.state.liveWall).toHaveLength(liveWallLength - 1);
-    expect(matchInternals.state.deadWall).toEqual(deadWallBefore);
+    expect(matchInternals.owners.kernel.view.lastDrawn[0]).toBe(replacement);
+    expect(matchInternals.owners.kernel.view.liveWall).toHaveLength(
+      liveWallLength - 1
+    );
+    expect(matchInternals.owners.kernel.view.deadWall).toEqual(deadWallBefore);
     const latestDraw = match
       .replayFromBuffer(0)
       .map(({ event }) => event)
       .filter(
-        (event): event is Extract<GameEvent, { type: "draw" }> =>
-          event.type === "draw"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "draw";
+          }
+        > => event.type === "draw"
       )
       .at(-1);
     const latestCall = match
       .replayFromBuffer(0)
       .map(({ event }) => event)
       .filter(
-        (event): event is Extract<GameEvent, { type: "call" }> =>
-          event.type === "call"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "call";
+          }
+        > => event.type === "call"
       )
       .at(-1);
     expect(latestCall?.duplicateWallState).toBeUndefined();
@@ -254,7 +277,6 @@ describe("MatchProcess duplicate mode", () => {
       },
     });
   });
-
   it("recomputes the limiting seat after a pon changes turn order", async () => {
     const match = new MatchProcess(
       "duplicate-pon",
@@ -270,24 +292,30 @@ describe("MatchProcess duplicate mode", () => {
     setDelayAfterDiscardMs(0);
     await match.start();
     const matchInternals = internals(match);
-    matchInternals.state.hands[2] = tiles("4m4m1p2p3p4p5p6p7p8p9p1s2s");
-    matchInternals.state.discards = [["4m"], [], [], []];
-    matchInternals.state.lastDiscard = { seat: 0, tile: "4m" };
-    matchInternals.state.turn = 1;
-    matchInternals.state.phase = "awaiting_draw";
-
-    await matchInternals.applyEngineAction({
+    editMatchState(matchInternals, (state) => {
+      state.hands[2] = tiles("4m4m1p2p3p4p5p6p7p8p9p1s2s");
+      state.discards = [["4m"], [], [], []];
+      state.lastDiscard = { seat: 0, tile: "4m" };
+      state.turn = 1;
+      state.phase = "awaiting_draw";
+    });
+    await matchInternals.owners.gameplay.effects.applyEngineAction({
       type: "pon",
       seat: 2,
       tiles: ["4m", "4m"],
     });
-
     const call = match
       .replayFromBuffer(0)
       .map(({ event }) => event)
       .filter(
-        (event): event is Extract<GameEvent, { type: "call" }> =>
-          event.type === "call"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "call";
+          }
+        > => event.type === "call"
       )
       .at(-1);
     expect(call?.duplicateWallState).toEqual({
@@ -297,7 +325,6 @@ describe("MatchProcess duplicate mode", () => {
       estimatedDrawsRemaining: 68,
     });
   });
-
   it("makes a bot discard immediately after pon in duplicate Buu", async () => {
     const botPlayers = players();
     botPlayers[2] = {
@@ -318,20 +345,19 @@ describe("MatchProcess duplicate mode", () => {
     setReadyCheckMs(0);
     setDelayAfterDiscardMs(0);
     await match.start();
-
     const matchInternals = internals(match);
-    matchInternals.state.hands[1] = tiles("1m1m2m4m5m7p8p1s3s6s1z2z3z");
-    matchInternals.state.hands[2] = tiles("5z5z1m2m3m4p5p6p7s8s9s1z2z");
-    matchInternals.state.hands[3] = tiles("1m1m2m4m5m7p8p1s3s6s1z2z3z");
-    matchInternals.state.discards = [["5z"], [], [], []];
-    matchInternals.state.lastDiscard = { seat: 0, tile: "5z" };
-    matchInternals.state.lastDrawn = [null, null, null, null];
-    matchInternals.state.turn = 1;
-    matchInternals.state.phase = "awaiting_draw";
+    editMatchState(matchInternals, (state) => {
+      state.hands[1] = tiles("1m1m2m4m5m7p8p1s3s6s1z2z3z");
+      state.hands[2] = tiles("5z5z1m2m3m4p5p6p7s8s9s1z2z");
+      state.hands[3] = tiles("1m1m2m4m5m7p8p1s3s6s1z2z3z");
+      state.discards = [["5z"], [], [], []];
+      state.lastDiscard = { seat: 0, tile: "5z" };
+      state.lastDrawn = [null, null, null, null];
+      state.turn = 1;
+      state.phase = "awaiting_draw";
+    });
     const eventCountBeforeCall = match.replayFromBuffer(0).length;
-
-    await matchInternals.afterDiscard();
-
+    await matchInternals.owners.gameplay.calls.afterDiscard();
     const eventsAfterCall = match
       .replayFromBuffer(0)
       .slice(eventCountBeforeCall)
@@ -345,7 +371,6 @@ describe("MatchProcess duplicate mode", () => {
       seat: 2,
     });
   });
-
   it("prepares the next hand from its progressed round key", async () => {
     const match = new MatchProcess(
       "duplicate-next-hand",
@@ -362,20 +387,20 @@ describe("MatchProcess duplicate mode", () => {
     setDelayAfterDiscardMs(0);
     await match.start();
     const matchInternals = internals(match);
-    matchInternals.state.phase = "hand_ended";
-    matchInternals.state.lastHandResult = {
-      reason: "abort",
-      winner: null,
-      loser: null,
-      delta: [0, 0, 0, 0],
-      tenpai: null,
-      abortKind: "kyuushuu",
-      winHan: null,
-      winYakuman: null,
-    };
-
-    await matchInternals.afterHandEnd();
-
+    editMatchState(matchInternals, (state) => {
+      state.phase = "hand_ended";
+      state.lastHandResult = {
+        reason: "abort",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: null,
+        abortKind: "kyuushuu",
+        winHan: null,
+        winYakuman: null,
+      };
+    });
+    await matchInternals.owners.lifecycle.hand.afterHandEnd();
     const checkpoint = match.createCheckpoint();
     if (checkpoint.status !== "playing") {
       throw new Error("expected playing checkpoint");
@@ -383,8 +408,14 @@ describe("MatchProcess duplicate mode", () => {
     const handStarts = checkpoint.eventLog
       .map(({ event }) => event)
       .filter(
-        (event): event is Extract<GameEvent, { type: "hand_start" }> =>
-          event.type === "hand_start"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "hand_start";
+          }
+        > => event.type === "hand_start"
       );
     const latestHand = handStarts.at(-1);
     const archivedEvents = checkpoint.eventLog.map(({ event }) => event);
@@ -398,10 +429,15 @@ describe("MatchProcess duplicate mode", () => {
     const drawsAfterLatest = archivedEvents
       .slice(latestHandStartIndex + 1)
       .filter(
-        (event): event is Extract<GameEvent, { type: "draw" }> =>
-          event.type === "draw"
+        (
+          event
+        ): event is Extract<
+          GameEvent,
+          {
+            type: "draw";
+          }
+        > => event.type === "draw"
       );
-
     expect(latestHand).toMatchObject({
       roundWind: "E",
       roundNumber: 1,

@@ -3,6 +3,7 @@ import { SeatSchema } from "./seat";
 
 export const TIMING_CAPABILITY = "clock-window-v2" as const;
 export const TIMING_VERSION = 2 as const;
+export const FIXED_PROMPT_VERSION = 1 as const;
 export const MAX_LATENCY_ALLOWANCE_MS = 500;
 export const FALLBACK_LATENCY_ALLOWANCE_MS = 200;
 
@@ -89,6 +90,39 @@ export const ActionWindowViewSchema = z
   });
 export type ActionWindowView = z.infer<typeof ActionWindowViewSchema>;
 
+export const PromptTimingSnapshotSchema = z
+  .object({
+    nextWindow: z.number().int().positive(),
+    windows: z.tuple([
+      ActionWindowViewSchema.nullable(),
+      ActionWindowViewSchema.nullable(),
+      ActionWindowViewSchema.nullable(),
+      ActionWindowViewSchema.nullable(),
+    ]),
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    const identities = new Set<string>();
+    const kinds = new Set<string>();
+    snapshot.windows.forEach((window, seat) => {
+      if (!window) {
+        return;
+      }
+      if (window.seat !== seat || (window.kind !== "ready" && window.kind !== "session_vote")) {
+        context.addIssue({ code: "custom", path: ["windows", seat], message: "Fixed prompt seat or kind is inconsistent" });
+      }
+      if (identities.has(window.id)) {
+        context.addIssue({ code: "custom", path: ["windows", seat, "id"], message: "Fixed prompt identities must be unique" });
+      }
+      identities.add(window.id);
+      kinds.add(window.kind);
+    });
+    if (kinds.size > 1) {
+      context.addIssue({ code: "custom", path: ["windows"], message: "Ready and vote prompts cannot coexist" });
+    }
+  });
+export type PromptTimingSnapshot = z.infer<typeof PromptTimingSnapshotSchema>;
+
 export const PresentationEventSchema = z
   .object({
     seq: z.number().int().nonnegative(),
@@ -116,6 +150,10 @@ export interface ActionIntentContext {
   clockEpoch: string;
   stateSeq: number;
 }
+export type PromptIntentContext = Pick<
+  ActionIntentContext,
+  "windowId" | "clockEpoch"
+>;
 
 export interface InputReceipt {
   receivedAt: number;
@@ -123,4 +161,5 @@ export interface InputReceipt {
   clockEpoch?: string;
   stateSeq?: number;
   clientSessionId?: string;
+  ownerGeneration?: number;
 }

@@ -19,6 +19,7 @@ export interface SnapshotComposerPort {
   handStartWall(): readonly Tile[] | null;
   duplicateWallEventFields(): { duplicateWallState?: DuplicateWallState };
   computeSinking(): [boolean, boolean, boolean, boolean];
+  sessionVote?(): import("~/game/protocol/messages").SnapshotState["sessionVote"];
   readonly kernel: Pick<MatchKernel, "isFuriten">;
   readonly metadata: Pick<HandMetadata, "snapshot">;
   readonly windows: Pick<ActionWindowRegistry, "view" | "legals">;
@@ -130,6 +131,7 @@ export class SnapshotComposer {
   ): Extract<ServerMessage, { type: "snapshot" }> {
     const ryuukyoku = this.ryuukyokuPublicState();
     const lastHandResult = this.settledRyuukyokuResult();
+    const sessionVote = this.port.sessionVote?.();
     return {
       ...this.port.timing.metadata(seat, this.port.seatSequences()[seat] - 1),
       type: "snapshot",
@@ -209,6 +211,7 @@ export class SnapshotComposer {
             }
           : {}),
         ...(lastHandResult ? { lastHandResult } : {}),
+        ...(sessionVote !== undefined ? { sessionVote } : {}),
         dice: [
           this.port.metadata.snapshot().dice[0],
           this.port.metadata.snapshot().dice[1],

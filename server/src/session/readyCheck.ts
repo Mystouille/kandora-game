@@ -11,6 +11,8 @@ import { CommandCoordinator } from "./commandCoordinator";
 import type { ReadyCheckPort } from "./lifecyclePorts";
 
 import { legacyTiming } from "./legacyPolicy";
+import type { InputReceipt } from "~/game/protocol/timing";
+import type { PromptTimingService } from "../timing/promptWindows";
 
 export interface ReadyCheckSnapshot {
   readonly acked: [boolean, boolean, boolean, boolean];
@@ -37,7 +39,8 @@ export class ReadyCheck {
     private readonly runtime: MatchRuntime,
     private readonly roster: RoomRoster,
     private readonly commands: CommandCoordinator,
-    private readonly port: ReadyCheckPort
+    private readonly port: ReadyCheckPort,
+    private readonly timing?: PromptTimingService
   ) {}
   snapshot(): ReadyCheckSnapshot {
     return {
@@ -55,6 +58,12 @@ export class ReadyCheck {
   unackHuman(seat: Seat): void {
     if (this.readyResolve !== null) {
       this.readyAcked[seat] = false;
+      if (this.timing && this.readyDeadline !== null) {
+        this.timing.addReadySeat(seat, this.readyDeadline);
+        this.scheduleExpiry(
+          Math.max(0, this.readyDeadline - this.runtime.now())
+        );
+      }
     }
   }
 
@@ -72,17 +81,12 @@ export class ReadyCheck {
     }
     this.readyContinuationKind = continuation;
     this.readyDeadline = this.runtime.now() + ms;
-    this.broadcastReadyCheck();
+    this.timing?.open("ready", this.port.humanSeats(), ms);
     const waiting = new Promise<void>((resolve) => {
       this.readyResolve = resolve;
-      this.readyTimer = this.runtime.schedule(
-        () => {
-          this.finishReadyCheck();
-        },
-        ms,
-        { unref: true }
-      );
+      this.scheduleExpiry(ms);
     });
+    this.broadcastReadyCheck();
     await this.commands.commitOpenInputBoundary();
     await waiting;
   }
@@ -99,6 +103,7 @@ export class ReadyCheck {
   }
 
   handleReadyDirect(seat: Seat): void {
+    this.timing?.resolve(seat);
     this.readyAcked[seat] = true;
     if (this.readyAcked.every(Boolean)) {
       if (!this.commands.legacyRecoveryInProgress) {
@@ -107,6 +112,48 @@ export class ReadyCheck {
       return;
     }
     this.broadcastReadyCheck();
+    if (
+      this.timing &&
+      this.runtime.now() >= (this.timing.deadline("ready") ?? Infinity)
+    ) {
+      this.expire();
+    }
+  }
+
+  reserve(seat: Seat, receipt: InputReceipt): void {
+    this.timing?.reserve(seat, "ready", receipt);
+  }
+
+  releaseReceipt(seat: Seat, receipt: InputReceipt): void {
+    this.timing?.releaseReservation(seat, receipt);
+    if (this.readyResolve !== null && this.readyTimer === null) {
+      this.scheduleExpiry(
+        Math.max(
+          0,
+          (this.readyDeadline ?? this.runtime.now()) - this.runtime.now()
+        )
+      );
+    }
+  }
+
+  private scheduleExpiry(remainingMs: number): void {
+    this.readyTimer?.cancel();
+    const expiry = this.timing?.deadline("ready");
+    const delay =
+      expiry === undefined || expiry === null
+        ? remainingMs
+        : Math.max(0, expiry - this.runtime.now());
+    this.readyTimer = this.runtime.schedule(() => this.expire(), delay, {
+      unref: true,
+    });
+  }
+
+  private expire(): void {
+    this.readyTimer = null;
+    if (this.port.isPaused() || this.timing?.hasReserved("ready")) {
+      return;
+    }
+    this.finishReadyCheck();
   }
 
   finishReadyCheck(): void {
@@ -121,6 +168,7 @@ export class ReadyCheck {
     this.readyResolve = null;
     this.readyDeadline = null;
     this.readyContinuationKind = null;
+    this.timing?.clear("ready");
 
     for (const seat of this.port.humanSeats()) {
       const send = this.port.sender(seat);
@@ -145,19 +193,50 @@ export class ReadyCheck {
     for (const seat of this.port.humanSeats()) {
       const send = this.port.sender(seat);
       if (send) {
-        send(frame);
+        const window = this.timing?.view(seat);
+        send({
+          ...frame,
+          ...(this.timing
+            ? {
+                clock: this.timing.stamp(),
+                window,
+              }
+            : {}),
+        });
       }
     }
   }
 
   installCheckpointReadyCheck(
     checkpoint: PlayingReadyCheckpoint,
-    restored: boolean
+    restored: boolean,
+    restoredAt = this.runtime.now()
   ): void {
     const continuation = checkpoint.readyContinuation;
     this.readyAcked = [...checkpoint.readyAcked];
-    this.readyDeadline = this.runtime.now() + checkpoint.readyRemainingMs;
+    this.readyDeadline = restoredAt + checkpoint.readyRemainingMs;
     this.readyContinuationKind = continuation;
+    if (this.timing && checkpoint.decisionTiming?.prompts) {
+      this.timing.restore(
+        checkpoint.decisionTiming.prompts,
+        checkpoint.savedAt,
+        restoredAt
+      );
+      const active = this.port.humanSeats().flatMap((seat) => {
+        const window = this.timing?.view(seat);
+        return window && !this.readyAcked[seat] ? [window.baseEndsAt] : [];
+      });
+      if (active.length > 0) {
+        this.readyDeadline = Math.max(...active);
+      }
+    } else if (this.timing) {
+      this.timing.restoreLegacy(
+        "ready",
+        this.port.humanSeats().filter((seat) => !this.readyAcked[seat]),
+        checkpoint.readyRemainingMs,
+        restoredAt
+      );
+    }
     if (restored) {
       this.readyResolve = () => {
         void this.port.resumeReadyContinuation(continuation);
@@ -173,14 +252,6 @@ export class ReadyCheck {
       this.finishReadyCheck();
       return;
     }
-    this.readyTimer = this.runtime.schedule(
-      () => {
-        if (!this.port.isPaused()) {
-          this.finishReadyCheck();
-        }
-      },
-      checkpoint.readyRemainingMs,
-      { unref: true }
-    );
+    this.scheduleExpiry(Math.max(0, this.readyDeadline - this.runtime.now()));
   }
 }

@@ -1,7 +1,7 @@
 import { Text, TextStyle } from "pixi.js";
 import type { MatchView } from "../../store";
 import type { ActionWindowView } from "~/game/protocol/timing";
-import { liveServerNow } from "../../time/liveClock";
+import { synchronizedWindowNow } from "../../time/liveTimingBinding";
 import { playGameCountdownSound } from "../../sound";
 import type { TableRendererPresentation } from "../scene/renderTypes";
 import type { TimerAnchor, TimerHost } from "./hudTypes";
@@ -138,7 +138,9 @@ export class ActionTimer {
       this.lastTimerSeconds = null;
       return;
     }
-    const authorityNow = this.window ? liveServerNow() : null;
+    const authorityNow = this.window
+      ? synchronizedWindowNow(this.window)
+      : null;
     if (this.window && authorityNow === null) {
       timer.text = "Synchronizing clock";
       timer.visible = true;

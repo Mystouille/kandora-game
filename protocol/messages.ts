@@ -12,6 +12,7 @@ import {
   TimingModeSchema,
   LatencyProbeSchema,
   LatencyReplySchema,
+  FIXED_PROMPT_VERSION,
 } from "./timing";
 
 /**
@@ -742,6 +743,14 @@ export const SnapshotStateSchema = z.object({
    * draw panel and public hand reveals survive snapshot hydration.
    */
   lastHandResult: HandEndEvent.optional(),
+  sessionVote: z.object({
+    deadline: z.number().int(),
+    votes: z.tuple([
+      z.enum(["yes", "no"]).nullable(), z.enum(["yes", "no"]).nullable(),
+      z.enum(["yes", "no"]).nullable(), z.enum(["yes", "no"]).nullable(),
+    ]),
+    gameIndex: z.number().int().nonnegative(),
+  }).nullable().optional(),
   /** Dice rolled at the start of the current hand; `null` when
    * unknown (synthetic snapshots / older replays). */
   dice: z
@@ -798,6 +807,7 @@ const SnapshotMsg = z.object({
   clock: ClockStampSchema.optional(),
   actionWindow: ActionWindowViewSchema.nullable().optional(),
   presentation: PresentationContextSchema.optional(),
+  promptWindow: ActionWindowViewSchema.nullable().optional(),
 });
 
 const EventMsg = z.object({
@@ -811,6 +821,7 @@ const EventMsg = z.object({
   clock: ClockStampSchema.optional(),
   actionWindow: ActionWindowViewSchema.nullable().optional(),
   presentation: PresentationContextSchema.optional(),
+  promptWindow: ActionWindowViewSchema.nullable().optional(),
 });
 
 const ErrorMsg = z.object({
@@ -838,6 +849,8 @@ const ReadyCheckMsg = z.object({
   deadline: z.number().int(),
   /** Per-seat ack state, indexed 0..3 absolute seat order. */
   acked: z.tuple([z.boolean(), z.boolean(), z.boolean(), z.boolean()]),
+  clock: ClockStampSchema.optional(),
+  window: ActionWindowViewSchema.nullable().optional(),
 });
 
 /**
@@ -1026,6 +1039,7 @@ const HelloMsg = z.object({
    * player connections and ignored for spectators. */
   clientSessionId: ClientSessionIdSchema.optional(),
   timingCapabilities: z.array(z.literal(TIMING_CAPABILITY)).max(1).optional(),
+  fixedPromptVersion: z.literal(FIXED_PROMPT_VERSION).optional(),
   /** One-shot permission to replace a different client session
    * currently owning this user's seat. */
   takeover: z.boolean().optional(),
@@ -1065,6 +1079,7 @@ const ReadyMsg = z.object({
   type: z.literal("ready"),
   matchId: z.string(),
   windowId: z.string().min(1).max(256).optional(),
+  clockEpoch: z.string().min(1).max(128).optional(),
 });
 
 /**
@@ -1140,6 +1155,7 @@ const VoteContinueMsg = z.object({
   matchId: z.string(),
   vote: z.enum(["yes", "no"]),
   windowId: z.string().min(1).max(256).optional(),
+  clockEpoch: z.string().min(1).max(128).optional(),
 });
 
 export const ClientMessageSchema = z.discriminatedUnion("type", [
