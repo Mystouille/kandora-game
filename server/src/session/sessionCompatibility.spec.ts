@@ -3,10 +3,10 @@ import { MatchProcess, setReadyCheckMs } from "../match";
 import { ephemeralMatchRepository } from "../repository";
 import type { MatchRuntime } from "../runtime";
 
-describe("recorded legacy session contract", () => {
+describe("recorded authoritative session contract", () => {
   afterEach(() => setReadyCheckMs(5_000));
 
-  it("preserves initial event ordering, seat redaction and the legacy budget", async () => {
+  it("preserves initial event ordering, seat redaction and the authoritative budget", async () => {
     let now = 1_000;
     const runtime: MatchRuntime = {
       now: () => now,
@@ -19,7 +19,7 @@ describe("recorded legacy session contract", () => {
       },
     };
     const match = new MatchProcess(
-      "legacy-compatibility",
+      "authoritative-compatibility",
       42,
       [0, 1, 2, 3].map((seat) => ({
         userId: `human-${seat}`,
@@ -40,9 +40,13 @@ describe("recorded legacy session contract", () => {
         .slice(1)
         .every((hand) => hand.every((tile) => tile === null))
     ).toBe(true);
-    expect(snapshot.deadline).toBe(now + 5_000);
+    expect(snapshot.actionWindow).not.toBeNull();
+    expect(snapshot.deadline).toBe(snapshot.actionWindow?.baseEndsAt);
+    expect(
+      (snapshot.actionWindow?.baseEndsAt ?? 0) -
+        (snapshot.actionWindow?.opensAt ?? 0)
+    ).toBe(5_000);
     expect(snapshot.bufferMs).toBe(20_000);
-    expect(snapshot.actionWindow).toBeUndefined();
     expect(match.replayFromBuffer(0).map(({ event }) => event.type)).toEqual(
       expect.arrayContaining(["match_start", "hand_start", "draw"])
     );

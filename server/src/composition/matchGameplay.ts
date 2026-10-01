@@ -18,7 +18,7 @@ import { CallCoordinator } from "../session/callCoordinator";
 import { CallResolution } from "../session/callResolution";
 import type { CommandCoordinator } from "../session/commandCoordinator";
 import { GameplayEffects } from "../session/gameplayEffects";
-import { LegacyDecisions } from "../session/legacyDecisions";
+import { MatchDecisions } from "../session/matchDecisions";
 import type { KernelAction, MatchKernel } from "../session/matchKernel";
 import type { PlayerConnections } from "../session/playerConnections";
 import type { RoomRoster } from "../session/roomRoster";
@@ -62,7 +62,7 @@ export class MatchGameplay {
   readonly callResolution: CallResolution;
   readonly turns: TurnCoordinator;
   readonly actions: ActionExecutor;
-  readonly decisions: LegacyDecisions;
+  readonly decisions: MatchDecisions;
 
   constructor(
     matchId: string,
@@ -84,9 +84,6 @@ export class MatchGameplay {
       history: () => port.history(),
       now: () => runtime.now(),
       isCallOpen: (seat) => this.calls.isOpen(seat),
-      setLegacyLegals: (seat, actions, kind) =>
-        this.decisions.setSeatLegals(seat, actions, kind),
-      consumeLegacyBuffer: (seat) => this.decisions.consumeActionBuffer(seat),
       emitEngineEvent: (event) => port.emitEngineEvent(event),
       emitFuritenChanges: (changes) => port.emitFuritenChanges(changes),
     });
@@ -148,7 +145,7 @@ export class MatchGameplay {
         this.decisions.reportAutomaticAction(seat, action, reason),
       broadcastRoomState: () => port.broadcastRoomState(),
     });
-    this.decisions = new LegacyDecisions(
+    this.decisions = new MatchDecisions(
       matchId,
       runtime,
       windows,

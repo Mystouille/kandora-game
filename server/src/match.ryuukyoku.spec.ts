@@ -219,7 +219,12 @@ describe("native ryuukyoku replay compaction", () => {
         "declare_noten",
         "declare_tenpai",
       ]);
-      expect(prompt.deadline).toBe(now + 5000);
+      expect(prompt.actionWindow).not.toBeNull();
+      expect(prompt.deadline).toBe(prompt.actionWindow?.baseEndsAt);
+      expect(
+        (prompt.actionWindow?.baseEndsAt ?? 0) -
+          (prompt.actionWindow?.opensAt ?? 0)
+      ).toBe(5000);
       expect(prompt.bufferMs).toBeUndefined();
       const checkpoint = match.createCheckpoint();
       expect(checkpoint.status).toBe("playing");
@@ -230,7 +235,13 @@ describe("native ryuukyoku replay compaction", () => {
         throw new Error("expected declaration action checkpoint");
       }
       expect(checkpoint.actionWindow.kind).toBe("ryuukyoku_declaration");
-      expect(checkpoint.actionWindow.visibleRemainingMs).toBe(5000);
+      const capturedWindow = checkpoint.decisionTiming.windows[0];
+      if (capturedWindow === null) {
+        throw new Error("expected a captured declaration window");
+      }
+      expect(checkpoint.actionWindow.visibleRemainingMs).toBe(
+        capturedWindow.baseEndsAt - checkpoint.savedAt
+      );
       const restored = MatchProcess.restoreCheckpoint(checkpoint, {
         repository: ephemeralMatchRepository,
         runtime,

@@ -17,7 +17,7 @@ import {
   type TimerAnchor,
   type TimerHost,
 } from "./hudTypes";
-import { resolveTableHudState } from "./legacyTimerViewModel";
+import { resolveTableHudState } from "./actionTimerViewModel";
 import { NameRenderer } from "./nameRenderer";
 import { renderRoundInfo } from "./roundRenderer";
 import { renderScores } from "./scoreRenderer";

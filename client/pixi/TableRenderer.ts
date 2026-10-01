@@ -157,7 +157,7 @@ export {
   resolveActionTimerState,
   resolveTableHudState,
   actionTimerTickDecision,
-} from "./hud/legacyTimerViewModel";
+} from "./hud/actionTimerViewModel";
 export {
   sortTilesForDisplay,
   ankanTilesForDisplay,

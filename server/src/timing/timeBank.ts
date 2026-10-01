@@ -2,12 +2,7 @@ import type { Seat } from "~/game/protocol/messages";
 
 export type TimeBankSnapshot = [number, number, number, number];
 
-export interface LegacyBankPolicy {
-  readonly baseMs: number;
-  readonly graceMs: number;
-}
-
-/** Owns the per-hand pool; exact-millisecond billing is a separate policy change. */
+/** Owns the per-hand pool and exact-millisecond debits. */
 export class TimeBank {
   private balances: TimeBankSnapshot;
 
@@ -29,19 +24,6 @@ export class TimeBank {
 
   refill(initialMs: number): void {
     this.balances = [initialMs, initialMs, initialMs, initialMs];
-  }
-
-  consumeLegacyElapsed(
-    seat: Seat,
-    elapsedMs: number,
-    policy: LegacyBankPolicy
-  ): void {
-    const overageMs = elapsedMs - policy.baseMs - policy.graceMs;
-    if (overageMs > 0) {
-      const remainingMs = Math.max(0, this.balances[seat] - overageMs);
-      // Preserve legacy HUD-aligned flooring until precise accounting is activated.
-      this.balances[seat] = Math.floor(remainingMs / 1_000) * 1_000;
-    }
   }
 
   debitExact(seat: Seat, overageMs: number): number {

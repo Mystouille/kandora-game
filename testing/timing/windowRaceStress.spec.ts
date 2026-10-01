@@ -38,8 +38,7 @@ function fixture(bankMs = 20_000) {
     "stress-match",
     runtime,
     windows,
-    bank,
-    "windows-v2"
+    bank
   );
   return { runtime, defaults, bank, windows, timing };
 }

@@ -4,7 +4,6 @@ import type { MatchRuntime } from "../runtime";
 import type { AutomaticActionContext } from "../session/sessionTypes";
 import type { AuthorityClock } from "../timing/authorityClock";
 import type { TimingObserver } from "../timing/timingDiagnostics";
-import type { TimingMode } from "~/game/protocol/timing";
 
 export interface MatchProcessDependencies {
   repository: MatchRepository;
@@ -13,7 +12,5 @@ export interface MatchProcessDependencies {
   onAutomaticAction?: (context: AutomaticActionContext) => void;
   runtime?: MatchRuntime;
   authorityClock?: AuthorityClock;
-  timingMode?: TimingMode;
-  timingShadow?: boolean;
   onTimingDiagnostic?: TimingObserver;
 }

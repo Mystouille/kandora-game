@@ -53,7 +53,7 @@ export function actionTimerTickDecision(
   };
 }
 
-export interface LegacyActionTimerFrame {
+export interface ActionTimerFrame {
   readonly text: string;
   readonly baseSeconds: number;
   readonly bufferSeconds: number;
@@ -62,12 +62,12 @@ export interface LegacyActionTimerFrame {
   readonly play: boolean;
 }
 
-export function projectLegacyActionTimer(
+export function projectActionTimer(
   deadline: number,
   bufferMs: number | null,
   now: number,
   previousTotalSeconds: number | null
-): LegacyActionTimerFrame {
+): ActionTimerFrame {
   const baseRemainingMs = Math.max(0, deadline - now);
   const baseElapsedOverflowMs = Math.max(0, now - deadline);
   const bufferRemainingMs = Math.max(

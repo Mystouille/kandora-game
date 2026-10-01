@@ -12,7 +12,7 @@ import { CommandCoordinator } from "../session/commandCoordinator";
 import { MatchEventPublisher } from "../session/eventPublisher";
 import { GameArchive } from "../session/gameArchive";
 import { HandMetadata } from "../session/handMetadata";
-import { legacyTiming } from "../session/legacyPolicy";
+import { gameTiming } from "../session/timingPolicy";
 import { MatchBroadcast } from "../session/matchBroadcast";
 import { MatchKernel } from "../session/matchKernel";
 import { MatchViewDetails } from "../session/matchViewDetails";
@@ -108,7 +108,7 @@ export class MatchComposition {
     this.repository = dependencies.repository;
     const eventJournalStore = dependencies.eventJournalStore ?? null;
     this.kernel = new MatchKernel(mode, config.presetId, this.runtime);
-    this.timeBank = new TimeBank(legacyTiming.INITIAL_BUFFER_MS);
+    this.timeBank = new TimeBank(gameTiming.INITIAL_BUFFER_MS);
     this.actionWindows = new ActionWindowRegistry(
       this.runtime,
       (seat) => {
@@ -122,11 +122,7 @@ export class MatchComposition {
       this.runtime,
       this.actionWindows,
       this.timeBank,
-      dependencies.timingMode ?? "legacy",
-      {
-        shadow: dependencies.timingShadow,
-        observer: dependencies.onTimingDiagnostic,
-      }
+      dependencies.onTimingDiagnostic
     );
     this.commands = new CommandCoordinator(this.actionWindows, {
       sequence: () => this.publisher.nextSequence,

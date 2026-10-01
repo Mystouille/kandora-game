@@ -2,7 +2,7 @@ import type { GameEvent, Seat } from "~/game/protocol/messages";
 import type { SpectatorDelayMs } from "~/game/protocol/spectatorDelay";
 import type { MatchRepository, PersistedMatchEvent } from "../repository";
 import { runtimeCalendarNow, type MatchRuntime } from "../runtime";
-import { legacyTiming } from "../session/legacyPolicy";
+import { gameTiming } from "../session/timingPolicy";
 import type { RoomRoster } from "../session/roomRoster";
 import type { FinalScore } from "../session/sessionTypes";
 import type { SessionSnapshot } from "../session/sessionCoordinator";
@@ -44,7 +44,7 @@ export class RelayMatch {
 
   get spectatorDelayMs(): SpectatorDelayMs {
     return this.enabled
-      ? legacyTiming.TENHOU_RELAY_VIEWER_DELAY_MS
+      ? gameTiming.TENHOU_RELAY_VIEWER_DELAY_MS
       : this.minimumDelayMs;
   }
 

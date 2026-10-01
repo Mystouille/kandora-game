@@ -14,6 +14,10 @@ import {
   ServerMessageSchema,
   type ServerMessage,
 } from "~/game/protocol/messages";
+import {
+  FIXED_PROMPT_VERSION,
+  TIMING_CAPABILITY,
+} from "~/game/protocol/timing";
 import { setReadyCheckMs } from "./match";
 
 vi.mock("dotenv/config", () => ({}));
@@ -143,6 +147,8 @@ describe("game server spectator delay contract", () => {
         token: userId,
         matchId,
         clientSessionId: `session-${userId}`,
+        timingCapabilities: [TIMING_CAPABILITY],
+        fixedPromptVersion: FIXED_PROMPT_VERSION,
         ...(spectate ? { spectate: true, delayMs: 0 } : {}),
       })
     );
@@ -249,11 +255,14 @@ describe("game server spectator delay contract", () => {
   it("serves an immediate baseline for an instant game", async () => {
     const matchId = await startRoom(0);
     const viewer = await connect(matchId, "instant-viewer", true);
-    expect(await waitForFrame(viewer, "spectator_config")).toEqual({
-      type: "spectator_config",
-      matchId,
-      delayMs: 0,
-    });
+    expect(await waitForFrame(viewer, "spectator_config")).toEqual(
+      expect.objectContaining({
+        type: "spectator_config",
+        matchId,
+        delayMs: 0,
+        presentationOffsetMs: 0,
+      })
+    );
     await waitForFrame(viewer, "snapshot");
   });
 
@@ -267,11 +276,14 @@ describe("game server spectator delay contract", () => {
 
     for (const userId of ["direct-viewer", "fifth-player"]) {
       const viewer = await connect(matchId, userId, true);
-      expect(await waitForFrame(viewer, "spectator_config")).toEqual({
-        type: "spectator_config",
-        matchId,
-        delayMs: 300_000,
-      });
+      expect(await waitForFrame(viewer, "spectator_config")).toEqual(
+        expect.objectContaining({
+          type: "spectator_config",
+          matchId,
+          delayMs: 300_000,
+          presentationOffsetMs: 300_000,
+        })
+      );
       viewer.socket.send(
         JSON.stringify({ type: "resync", matchId, lastSeq: 0 })
       );

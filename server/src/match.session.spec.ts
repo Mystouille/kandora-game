@@ -141,7 +141,7 @@ describe("MatchProcess — Buu multi-game session", () => {
     vi.clearAllMocks();
     setNextHandDelayMs(0);
     setDelayAfterDiscardMs(0);
-    setContinueVoteMs(0); // 0 disables the wall-clock timeout
+    setContinueVoteMs(60_000);
     setMatchEndDisplayMs(0); // skip the post-match_end display hold
   });
   afterEach(() => {
@@ -226,7 +226,7 @@ describe("MatchProcess — Buu multi-game session", () => {
       throw new Error("expected a continue-vote checkpoint");
     }
     expect(checkpoint.votes).toEqual([null, "yes", "yes", "yes"]);
-    expect(checkpoint.timeoutArmed).toBe(false);
+    expect(checkpoint.timeoutArmed).toBe(true);
     expect(
       checkpoint.finalScores.find((score) => score.place === 1)?.seat
     ).toBe(0);
@@ -234,6 +234,7 @@ describe("MatchProcess — Buu multi-game session", () => {
       parseMatchCheckpoint({
         ...checkpoint,
         votes: ["no", "yes", "yes", "yes"],
+        timeoutArmed: false,
       })
     ).not.toThrow();
     expect(() =>

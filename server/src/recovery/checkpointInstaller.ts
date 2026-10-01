@@ -19,7 +19,7 @@ export interface CheckpointInstallerPort {
   readonly bank: Pick<TimeBank, "restore">;
   readonly windows: Pick<
     ActionWindowRegistry,
-    "resetForRestore" | "restore" | "cancelTimer"
+    "resetForRestore" | "restoreLegals" | "cancelTimer"
   >;
   readonly ready: Pick<ReadyCheck, "cancelTimer"> & {
     installCheckpointReadyCheck(
@@ -82,10 +82,9 @@ export class CheckpointInstaller {
     if (checkpoint.checkpointKind === "action_window") {
       this.port.bank.restore(checkpoint.bufferMs);
       this.port.windows.resetForRestore();
-      this.port.windows.restore(
+      this.port.windows.restoreLegals(
         checkpoint.actionWindow.seat,
-        checkpoint.actionWindow,
-        restoredAt
+        checkpoint.actionWindow
       );
     } else if (checkpoint.checkpointKind === "call_window") {
       this.port.calls.restore(checkpoint);
@@ -94,11 +93,7 @@ export class CheckpointInstaller {
       for (const seat of [0, 1, 2, 3] as const) {
         const timer = checkpoint.callTimers[seat];
         if (timer !== null) {
-          this.port.windows.restore(
-            seat,
-            { ...timer, kind: "turn" },
-            restoredAt
-          );
+          this.port.windows.restoreLegals(seat, { ...timer, kind: "turn" });
         }
       }
     } else if (checkpoint.checkpointKind === "ready_check") {

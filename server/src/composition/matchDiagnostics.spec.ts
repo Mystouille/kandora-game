@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LegalAction, ServerMessage } from "~/game/protocol/messages";
+import type { LegalAction } from "~/game/protocol/messages";
 import { MatchProcess, type MatchProcessDependencies } from "../match";
 import { ephemeralMatchRepository } from "../repository";
 import type { MatchRuntime } from "../runtime";
@@ -10,10 +10,7 @@ const actions: LegalAction[] = [
 ];
 
 function diagnosticMatch(
-  options: Pick<
-    MatchProcessDependencies,
-    "timingMode" | "timingShadow" | "onTimingDiagnostic"
-  > = {}
+  options: Pick<MatchProcessDependencies, "onTimingDiagnostic"> = {}
 ): MatchProcess {
   const runtime: MatchRuntime = {
     clockEpoch: "diagnostic-epoch",
@@ -45,71 +42,9 @@ function openDiscard(match: MatchProcess): void {
 }
 
 describe("MatchProcess diagnostic composition", () => {
-  it("keeps default matches entirely legacy with shadow disabled", () => {
-    const match = diagnosticMatch();
-    openDiscard(match);
-    expect(match.timingMode).toBe("legacy");
-    expect(match.owners.timing.diagnostics.shadow).toBe(false);
-    expect(match.owners.timing.metadata(0, 0)).toEqual({});
-    expect(match.owners.timing.diagnostics.recent()).toEqual([]);
-    expect(match.owners.actionWindows.timedView(0)).toBeNull();
-    expect(match.owners.actionWindows.view(0).deadline).toBe(6_000);
-    expect(match.owners.timeBank.balance(0)).toBe(20_000);
-  });
-
-  it("passes shadow comparisons to the observer without changing legacy windows or wire poses", () => {
-    const observed: Readonly<TimingDiagnostic>[] = [];
-    const frames: ServerMessage[] = [];
-    const match = diagnosticMatch({
-      timingShadow: true,
-      onTimingDiagnostic: (event) => {
-        observed.push(event);
-      },
-    });
-    match.attachHuman(0, (frame) => {
-      frames.push(frame);
-    });
-    openDiscard(match);
-    expect(observed[0]).toMatchObject({
-      outcome: "shadow",
-      matchId: "diagnostic-match",
-      clockEpoch: "diagnostic-epoch",
-      opensAt: 1_300,
-      legacyOpensAt: 1_000,
-      baseEndsAt: 6_300,
-    });
-    expect(match.owners.actionWindows.timedView(0)).toBeNull();
-    expect(match.owners.actionWindows.view(0).deadline).toBe(6_000);
-    expect(match.owners.timing.metadata(0, 0)).toEqual({
-      clock: { clockEpoch: "diagnostic-epoch", serverNow: 1_000 },
-    });
-    match.owners.broadcast.flushLegalsToSeat(0);
-    const frame = frames.at(-1);
-    expect(frame).toMatchObject({
-      type: "event",
-      clock: { clockEpoch: "diagnostic-epoch", serverNow: 1_000 },
-      events: [],
-      legalActions: actions,
-      deadline: 6_000,
-      bufferMs: 20_000,
-    });
-    expect(frame).not.toHaveProperty("actionWindow");
-    expect(frame).not.toHaveProperty("promptWindow");
-    expect(frame).not.toHaveProperty("presentation");
-    match.reserveAction(0, actions[0].id, { receivedAt: 1_100 });
-    expect(observed.at(-1)).toMatchObject({
-      outcome: "shadow",
-      receivedAt: 1_100,
-    });
-    expect(match.owners.actionWindows.hasReservedInput(0)).toBe(false);
-    expect(match.owners.timeBank.balance(0)).toBe(20_000);
-    expect(JSON.stringify(observed)).not.toContain("1m");
-  });
-
-  it("delivers readonly sanitized new-mode diagnostics with a bounded owner history", () => {
+  it("delivers readonly sanitized diagnostics with a bounded owner history", () => {
     const observed: Readonly<TimingDiagnostic>[] = [];
     const match = diagnosticMatch({
-      timingMode: "windows-v2",
       onTimingDiagnostic: (event) => {
         observed.push(event);
       },

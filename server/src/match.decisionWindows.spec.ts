@@ -19,7 +19,6 @@ function setup(epoch = "timing-test-epoch", initialNow = 1_000) {
   const dependencies = {
     repository: ephemeralMatchRepository,
     runtime,
-    timingMode: "windows-v2" as const,
   };
   const match = new MatchProcess(
     "fair-window",
@@ -92,7 +91,6 @@ describe("integrated authoritative decisions", () => {
     await match.start();
     advanceTo(2_000);
     const checkpoint = match.createCheckpoint();
-    expect(checkpoint.decisionTiming?.mode).toBe("windows-v2");
     const before = match.buildSnapshotForSeat(0).actionWindow;
     const restored = MatchProcess.restoreCheckpoint(
       JSON.parse(JSON.stringify(checkpoint)),

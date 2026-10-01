@@ -99,10 +99,14 @@ describe("MatchProcess — deadline enforcement", () => {
     m.attachHuman(0, s.send);
     await m.start();
     const before = s.events.filter((e) => e.type === "discard").length;
-    // Wait longer than the 15ms timeout; the orchestrator should
+    const window = m.buildSnapshotForSeat(0).actionWindow;
+    if (window === undefined || window === null) {
+      throw new Error("expected an authoritative discard window");
+    }
+    // Wait through presentation readiness, the action budget, and allowance.
     // auto-tsumogiri and the run continues until a bot needs to
     // act. We only need to confirm a discard fired for seat 0.
-    await wait(80);
+    await wait(Math.max(0, window.expiresAt - m.authorityNow()) + 50);
     const discards = s.events.filter(
       (e) => e.type === "discard" && e.seat === 0
     );
@@ -119,14 +123,13 @@ describe("MatchProcess — deadline enforcement", () => {
     );
   });
 
-  it("clears the deadline timer when the human acts in time", async () => {
+  it("does not auto-discard before a long authoritative deadline", async () => {
     const m = makeMatch(11);
     const s = sink();
     m.attachHuman(0, s.send);
-    setActionTimeoutMs(0); // Disable auto-expiry for this sequence.
+    setActionTimeoutMs(60_000);
     await m.start();
-    expect(s.lastDeadline()).toBeNull();
-    // No timer pending: waiting must NOT auto-discard.
+    expect(s.lastDeadline()).not.toBeNull();
     const before = s.events.filter(
       (e) => e.type === "discard" && e.seat === 0
     ).length;

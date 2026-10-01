@@ -10,7 +10,7 @@ import {
   type MatchModeConfig,
 } from "~/game/protocol/matchMode";
 import type { SpectatorDelayMs } from "~/game/protocol/spectatorDelay";
-import type { InputReceipt, TimingMode } from "~/game/protocol/timing";
+import type { InputReceipt } from "~/game/protocol/timing";
 import type { RuleSetOverride } from "~/game/rules";
 import { parseMatchCheckpoint, type MatchCheckpoint } from "./checkpoint";
 import { MatchComposition } from "./composition/matchComposition";
@@ -51,7 +51,7 @@ export {
   setReadyCheckMs,
   remainingWinReactionDelayMs,
   winResultRevealDurationMs,
-} from "./session/legacyPolicy";
+} from "./session/timingPolicy";
 export { waitingRoomSeatPermutation } from "./session/seating";
 export { compactRyuukyokuDeclarationsForReplay } from "./session/replayEvents";
 
@@ -101,10 +101,6 @@ export class MatchProcess {
     return this.owners.relay.spectatorDispatchDelayMs(requestedDelayMs);
   }
 
-  get timingMode(): TimingMode {
-    return this.owners.timing.timingMode;
-  }
-
   get hasPendingFinalization(): boolean {
     return this.owners.lifecycle.session.hasPendingFinalization;
   }
@@ -141,6 +137,12 @@ export class MatchProcess {
     };
   }
 
+  private directActionReceipt(seat: Seat): InputReceipt {
+    const now = this.authorityNow();
+    const opensAt = this.owners.actionWindows.timedView(seat)?.opensAt ?? now;
+    return this.actionReceipt(seat, Math.max(now, opensAt));
+  }
+
   promptReceipt(seat: Seat, receivedAt: number): InputReceipt {
     const window = this.owners.timing.promptTiming?.view(seat);
     return {
@@ -172,10 +174,7 @@ export class MatchProcess {
   }
 
   reserveAction(seat: Seat, actionId: string, receipt: InputReceipt): void {
-    if (
-      this.timingMode !== "legacy" &&
-      (this.isPaused || this.owners.recovery.coordinator.saving !== null)
-    ) {
+    if (this.isPaused || this.owners.recovery.coordinator.saving !== null) {
       throw new DecisionWindowError("The decision is paused for recovery.");
     }
     this.stampReceiptOwner(seat, receipt, (stale) =>
@@ -302,16 +301,12 @@ export class MatchProcess {
     dependencies: MatchProcessDependencies
   ): MatchProcess {
     const checkpoint = parseMatchCheckpoint(input);
-    const restoredDependencies = {
-      ...dependencies,
-      timingMode: checkpoint.decisionTiming?.mode ?? "legacy",
-    };
     const match =
       checkpoint.status === "waiting"
         ? MatchProcess.createWaitingRoom(
             checkpoint.matchId,
             checkpoint.seed,
-            restoredDependencies,
+            dependencies,
             checkpoint.debug,
             checkpoint.ruleSet,
             checkpoint.presetId,
@@ -322,7 +317,7 @@ export class MatchProcess {
             checkpoint.matchId,
             checkpoint.seed,
             checkpoint.seats.map((player) => ({ ...player })),
-            restoredDependencies,
+            dependencies,
             undefined,
             checkpoint.state.ruleSet,
             checkpoint.presetId,
@@ -358,16 +353,12 @@ export class MatchProcess {
   }
 
   async handleReady(seat: Seat, receipt?: InputReceipt): Promise<void> {
-    if (this.timingMode === "legacy") {
-      return this.owners.commands.handleReady(seat);
-    }
-    if (receipt === undefined) {
-      throw new Error("An authoritative ready receipt is required");
-    }
-    this.reservePrompt(seat, "ready", receipt);
+    const acceptedReceipt =
+      receipt ?? this.promptReceipt(seat, this.authorityNow());
+    this.reservePrompt(seat, "ready", acceptedReceipt);
     const fence = this.receiptFence(
       seat,
-      receipt,
+      acceptedReceipt,
       () => this.owners.timing.promptTiming?.view(seat)?.id ?? null,
       (stale) => this.owners.lifecycle.ready.releaseReceipt(seat, stale)
     );
@@ -591,16 +582,11 @@ export class MatchProcess {
     actionId: string,
     receipt?: InputReceipt
   ): Promise<void> {
-    if (this.timingMode === "legacy") {
-      return this.owners.commands.handleAct(seat, actionId);
-    }
-    if (receipt === undefined) {
-      throw new Error("An authoritative action receipt is required");
-    }
-    this.reserveAction(seat, actionId, receipt);
+    const acceptedReceipt = receipt ?? this.directActionReceipt(seat);
+    this.reserveAction(seat, actionId, acceptedReceipt);
     const fence = this.receiptFence(
       seat,
-      receipt,
+      acceptedReceipt,
       () => this.owners.actionWindows.timedView(seat)?.id ?? null,
       (stale) => this.owners.actionWindows.releaseReservation(seat, stale)
     );
@@ -616,16 +602,12 @@ export class MatchProcess {
     vote: "yes" | "no",
     receipt?: InputReceipt
   ): Promise<void> {
-    if (this.timingMode === "legacy") {
-      return this.owners.commands.handleVoteContinue(seat, vote);
-    }
-    if (receipt === undefined) {
-      throw new Error("An authoritative continue-vote receipt is required");
-    }
-    this.reservePrompt(seat, vote, receipt);
+    const acceptedReceipt =
+      receipt ?? this.promptReceipt(seat, this.authorityNow());
+    this.reservePrompt(seat, vote, acceptedReceipt);
     const fence = this.receiptFence(
       seat,
-      receipt,
+      acceptedReceipt,
       () => this.owners.timing.promptTiming?.view(seat)?.id ?? null,
       (stale) => this.owners.lifecycle.votes.releaseReceipt(seat, stale)
     );

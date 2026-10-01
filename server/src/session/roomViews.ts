@@ -112,14 +112,9 @@ export class MatchRoomViews {
     return {
       type: "room_state",
       matchId: this.config.matchId,
-      ...(this.timing.timingMode !== "legacy"
-        ? { timingMode: this.timing.timingMode, clock: this.timing.stamp() }
-        : {}),
+      clock: this.timing.stamp(),
       mode: this.kernel.mode,
       spectatorDelayMs: this.port.spectatorDelayMs(),
-      ...(this.timing.timingMode !== "legacy"
-        ? { timingMode: this.timing.timingMode, clock: this.timing.stamp() }
-        : {}),
       status: this.port.status(),
       mySeat: forSeat,
       hostSeat,

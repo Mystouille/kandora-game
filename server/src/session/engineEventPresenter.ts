@@ -4,7 +4,7 @@ import {
   type FuritenChange,
   type Tile,
 } from "~/game/rules";
-import { legacyTiming, winResultRevealDurationMs } from "./legacyPolicy";
+import { gameTiming, winResultRevealDurationMs } from "./timingPolicy";
 
 import type { MatchStateView } from "./matchKernel";
 import type { HandMetadata } from "./handMetadata";
@@ -70,7 +70,7 @@ export class EngineEventPresenter {
     if (e.type === "hand_end" && e.reason === "exhaustive_draw") {
       await this.port.waitForEventAge(
         "discard",
-        legacyTiming.EXHAUSTIVE_DRAW_DELAY_MS,
+        gameTiming.EXHAUSTIVE_DRAW_DELAY_MS,
         "exhaustive_draw_reaction"
       );
     }
@@ -82,9 +82,9 @@ export class EngineEventPresenter {
     if (
       e.type === "buu_chombo" &&
       this.lastEngineEventType === "win" &&
-      legacyTiming.NEXT_HAND_DELAY_MS > 0
+      gameTiming.NEXT_HAND_DELAY_MS > 0
     ) {
-      await this.port.runReadyCheck(legacyTiming.NEXT_HAND_DELAY_MS);
+      await this.port.runReadyCheck(gameTiming.NEXT_HAND_DELAY_MS);
     }
     // Pause between the `win` event (which makes the client flip
     // the winner's concealed hand face-up at the seat band) and
@@ -94,11 +94,11 @@ export class EngineEventPresenter {
     if (
       e.type === "hand_end" &&
       this.lastEngineEventType === "win" &&
-      legacyTiming.WIN_TO_PANEL_DELAY_MS > 0
+      gameTiming.WIN_TO_PANEL_DELAY_MS > 0
     ) {
       await this.port.runUncheckpointableTransition(
         "win_to_panel",
-        legacyTiming.WIN_TO_PANEL_DELAY_MS
+        gameTiming.WIN_TO_PANEL_DELAY_MS
       );
     }
     this.lastEngineEventType = e.type;
@@ -323,7 +323,7 @@ export class EngineEventPresenter {
     if (e.type === "hand_start") {
       this.port.metadata.resetRiichiTiles();
       // Refill each seat's per-hand think buffer.
-      this.port.bank.refill(legacyTiming.INITIAL_BUFFER_MS);
+      this.port.bank.refill(gameTiming.INITIAL_BUFFER_MS);
       await this.port.emitEvent({
         type: "hand_start",
         round:

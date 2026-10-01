@@ -78,14 +78,11 @@ The 500 ms minimum visual draw-to-discard interval keeps automated turns
 on a 1.2-second cadence without skipping draw animations or landing sounds.
 Manual replay/history navigation retains its immediate timing.
 
-## Authoritative timing (experimental)
+## Authoritative timing
 
-Cloud rooms can opt into explicit decision windows with
-`GAME_TIMING_MODE=windows-v2`. The default remains `legacy` until the full
-rollout gates in the [implementation plan](docs/plans/authoritative-timing/plan.md)
-are complete. Native local/Nearby creation has the corresponding build-time
-`VITE_GAME_TIMING_MODE=windows-v2` opt-in. Online clients negotiate support
-automatically; an incompatible player is rejected explicitly.
+All cloud, local, and Nearby matches use explicit decision windows. Online and
+Nearby clients negotiate support automatically; an incompatible player is
+rejected explicitly.
 
 Turn/call/declaration and fixed ready/continue-vote windows use one authority
 reference, stable identities, clock probes, frozen bounded latency allowance
@@ -93,35 +90,34 @@ and input receipts captured before host queues. Only bank-eligible decisions
 charge the bank, in exact milliseconds. A normal draw's clock opens at its
 canonical landed/readable point.
 Late presentation uses the authoritative schedule instead of restarting a
-full animation at packet arrival. Checkpoint version 6 preserves fixed prompts,
+full animation at packet arrival. Checkpoint version 7 preserves fixed prompts,
 calendar timestamps, exact balances and remaining phase durations. Recovery
 uses one captured reference across owners and never revives a resolved or
-cancelled decision. Readers for versions 1-5 and legacy pending commands remain.
+cancelled decision. Readers for versions 1-6 and legacy pending commands remain;
+older saves are migrated to authoritative windows when loaded.
 
 The match facade is 650 lines and the renderer facade is 485 lines; mutable
 state stays in typed domain owners rather than a copied facade context.
 Web/native ready and vote controls use the shared synchronized countdown.
 Foreground clock refresh, resync and ownership transfer do not issue a fresh
-budget. New-mode players must negotiate both `clock-window-v2` and
-`fixedPromptVersion: 1`; older turn-only clients get an explicit update error.
+budget. Players must negotiate both `clock-window-v2` and
+`fixedPromptVersion: 1`;
+older turn-only clients get an explicit update error.
 
-`GAME_TIMING_SHADOW=true` is a legacy-only diagnostic comparison of proposed
-action readiness and receipts; it does not change legacy enforcement or
-presentation. `GAME_TIMING_DIAGNOSTICS=true` adds structured local timing
+`GAME_TIMING_DIAGNOSTICS=true` adds structured local timing
 records correlated by match, epoch, window, seat and connection generation.
-Both server/client histories are bounded and omit private tile/action contents.
+Server/client histories are bounded and omit private tile/action contents.
 Client observations never authorize or replenish time.
 
 Current-code native lifecycle/radio/storage, iOS and isolated Mongo durability remain release
 gates. The 30 FPS Playwright profile is deferred at the user's request; it is
 not counted as passing fairness evidence and the 100 ms tolerance is unchanged.
-This opt-in is not a claim that every competitive fairness gate has passed.
+This activation is not a claim that every competitive fairness gate has passed.
 Raw private-information delivery is unchanged.
 
-Rollback disables new-mode creation with `GAME_TIMING_MODE=legacy` and the
-native build-time equivalent. Keep version-6-compatible readers until existing
-new-mode games/recoveries are drained; do not convert their outstanding windows
-into fresh legacy budgets or downgrade to a reader that cannot load them.
+Checkpoint migration preserves an outstanding window's remaining values without
+granting a fresh budget. Keep version-7-compatible readers when rolling back
+unrelated releases.
 
 ## Spectator delay
 

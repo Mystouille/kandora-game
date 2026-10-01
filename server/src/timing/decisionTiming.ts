@@ -2,7 +2,6 @@ import type { GameEvent, LegalAction, Seat } from "~/game/protocol/messages";
 import type {
   ClockStamp,
   InputReceipt,
-  TimingMode,
   ActionWindowView,
   PresentationContext,
 } from "~/game/protocol/timing";
@@ -12,19 +11,14 @@ import { ActionWindowRegistry } from "./actionWindows";
 import { TimeBank } from "./timeBank";
 import { latencyAllowanceMs } from "./latencyAllowancePolicy";
 import { PresentationPlanner } from "./presentationPlanner";
-import type {
-  LegacyActionWindowPolicy,
-  ActionWindowKind,
-} from "./actionWindows";
+import type { ActionWindowPolicy, ActionWindowKind } from "./actionWindows";
 import { PromptWindows, type PromptSnapshot } from "./promptWindows";
 import { TimingDiagnostics, type TimingObserver } from "./timingDiagnostics";
 
 export class DecisionTiming {
   private readonly fixedPrompts: PromptWindows;
   readonly diagnostics: TimingDiagnostics;
-  private mode: TimingMode;
   private nextWindow = 1;
-  private readonly shadowWindows = new Map<Seat, ActionWindowView>();
   private readonly planner = new PresentationPlanner();
   private readonly profiles = new Map<
     Seat,
@@ -40,16 +34,9 @@ export class DecisionTiming {
     private readonly runtime: MatchRuntime,
     private readonly windows: ActionWindowRegistry,
     private readonly bank: TimeBank,
-    mode: TimingMode,
-    options: { shadow?: boolean; observer?: TimingObserver } = {}
+    observer?: TimingObserver
   ) {
-    this.mode = mode;
-    this.diagnostics = new TimingDiagnostics(
-      matchId,
-      clockEpoch,
-      options.shadow,
-      options.observer
-    );
+    this.diagnostics = new TimingDiagnostics(matchId, clockEpoch, observer);
     this.fixedPrompts = new PromptWindows(
       matchId,
       clockEpoch,
@@ -65,16 +52,8 @@ export class DecisionTiming {
     );
   }
 
-  get promptTiming(): PromptWindows | undefined {
-    return this.mode === "legacy" ? undefined : this.fixedPrompts;
-  }
-
-  get timingMode(): TimingMode {
-    return this.mode;
-  }
-
-  useMode(mode: TimingMode): void {
-    this.mode = mode;
+  get promptTiming(): PromptWindows {
+    return this.fixedPrompts;
   }
 
   connection(
@@ -90,15 +69,11 @@ export class DecisionTiming {
   }
 
   record(event: GameEvent, seq: number): void {
-    if (this.mode !== "legacy" || this.diagnostics.shadow) {
-      this.planner.record(event, this.runtime.now(), seq);
-    }
+    this.planner.record(event, this.runtime.now(), seq);
   }
 
   restoreEvent(event: GameEvent, seq: number, occurredAt: number): void {
-    if (this.mode !== "legacy") {
-      this.planner.record(event, occurredAt, seq);
-    }
+    this.planner.record(event, occurredAt, seq);
   }
 
   spectatorMetadata(
@@ -107,9 +82,6 @@ export class DecisionTiming {
     offsetMs: number,
     external = false
   ): { clock?: ClockStamp; presentation?: PresentationContext } {
-    if (this.mode === "legacy") {
-      return {};
-    }
     return {
       clock: this.stamp(),
       presentation: {
@@ -124,23 +96,18 @@ export class DecisionTiming {
     seat: Seat,
     actions: LegalAction[],
     kind: ActionWindowKind,
-    policy: LegacyActionWindowPolicy,
+    policy: ActionWindowPolicy,
     disconnected: boolean,
     call = false
   ): boolean {
-    if (
-      (this.mode === "legacy" && !this.diagnostics.shadow) ||
-      actions.length === 0
-    ) {
+    if (actions.length === 0) {
+      this.windows.clear(seat);
       return false;
     }
     const now = this.runtime.now();
     const automated = disconnected && kind !== "ryuukyoku_declaration";
     let baseMs =
       kind === "ryuukyoku_declaration" ? policy.declarationMs : policy.baseMs;
-    if (baseMs <= 0) {
-      return false;
-    }
     const opensAt = automated
       ? Math.min(this.planner.decisionReadyAt(now), now + policy.automatedMs)
       : this.planner.decisionReadyAt(now);
@@ -180,61 +147,32 @@ export class DecisionTiming {
       bankAtOpenMs: bankMs,
       allowanceMs,
     };
-    if (this.mode === "legacy") {
-      const comparison: ActionWindowView = {
-        ...timing,
-        seat,
-        state: "scheduled",
-        generation: 0,
-        legalActionIds: [],
-      };
-      this.shadowWindows.set(seat, comparison);
-      this.diagnostics.record(
-        "shadow",
-        now,
-        comparison,
-        { legacyOpensAt: now },
-        undefined,
-        profile
-      );
-      return false;
-    }
     const opened = this.windows.openTimed(seat, actions, timing);
     this.diagnostics.record("opened", now, opened, {}, undefined, profile);
     return true;
   }
 
   reserve(seat: Seat, actionId: string, receipt: InputReceipt): void {
-    if (this.mode !== "legacy") {
-      const window = this.windows.timedView(seat);
-      try {
-        this.windows.reserve(seat, actionId, receipt);
-      } catch (error) {
-        this.diagnostics.record(
-          "rejected",
-          this.runtime.now(),
-          window,
-          {},
-          receipt
-        );
-        throw error;
-      }
+    const window = this.windows.timedView(seat);
+    try {
+      this.windows.reserve(seat, actionId, receipt);
+    } catch (error) {
       this.diagnostics.record(
-        "reserved",
+        "rejected",
         this.runtime.now(),
         window,
         {},
         receipt
       );
-    } else if (this.diagnostics.shadow) {
-      this.diagnostics.record(
-        "shadow",
-        this.runtime.now(),
-        this.shadowWindows.get(seat),
-        {},
-        receipt
-      );
+      throw error;
     }
+    this.diagnostics.record(
+      "reserved",
+      this.runtime.now(),
+      window,
+      {},
+      receipt
+    );
   }
 
   consume(seat: Seat): boolean {
@@ -268,9 +206,6 @@ export class DecisionTiming {
     presentation?: PresentationContext;
     promptWindow?: ActionWindowView | null;
   } {
-    if (this.mode === "legacy") {
-      return this.diagnostics.shadow ? { clock: this.stamp() } : {};
-    }
     return {
       clock: this.stamp(),
       actionWindow: this.windows.timedView(seat),
@@ -284,7 +219,6 @@ export class DecisionTiming {
   }
 
   capture(): {
-    mode: TimingMode;
     nextWindow: number;
     windows: [
       ActionWindowView | null,
@@ -295,7 +229,6 @@ export class DecisionTiming {
     prompts?: PromptSnapshot;
   } {
     return {
-      mode: this.mode,
       nextWindow: this.nextWindow,
       windows: [
         this.windows.timedView(0),
@@ -312,7 +245,6 @@ export class DecisionTiming {
     savedAt: number,
     restoredAt = this.runtime.now()
   ): void {
-    this.mode = saved.mode;
     this.nextWindow = saved.nextWindow;
     if (saved.prompts) {
       this.fixedPrompts.restore(saved.prompts, savedAt, restoredAt);

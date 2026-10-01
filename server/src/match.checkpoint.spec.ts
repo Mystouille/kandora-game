@@ -119,6 +119,18 @@ function comparableSnapshot(
     bufferMs: snapshot.bufferMs,
   };
 }
+function receiptAtOpen(
+  match: MatchProcess,
+  seat: 0 | 1 | 2 | 3,
+  runtime: ControlledMatchRuntime
+) {
+  const window = match.owners.actionWindows.timedView(seat);
+  if (window === null) {
+    throw new Error("expected an authoritative action window");
+  }
+  runtime.advance(Math.max(0, window.opensAt - runtime.now()));
+  return match.actionReceipt(seat, runtime.now());
+}
 function deferred() {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
@@ -904,14 +916,24 @@ describe("MatchProcess checkpoints", () => {
       throw new Error("expected a captured ready checkpoint");
     }
     expect(match.isPaused).toBe(true);
-    await match.handleReady(0);
+    await expect(match.handleReady(0)).rejects.toThrow(
+      "The decision is paused for recovery."
+    );
     expect(match.createCheckpoint()).toEqual(captured);
     expect(() => runtime.runNextTimer()).toThrow(/no active timer/);
     runtime.advance(30000);
     gate.reject(new Error("ready checkpoint write failed"));
     await expect(saving).rejects.toThrow("ready checkpoint write failed");
     expect(match.isPaused).toBe(false);
-    expect(runtime.scheduledDelays().at(-1)).toBe(captured.readyRemainingMs);
+    const capturedPrompt = captured.decisionTiming.prompts?.windows.find(
+      (window) => window !== null
+    );
+    if (capturedPrompt === undefined || capturedPrompt === null) {
+      throw new Error("expected a captured ready prompt");
+    }
+    expect(runtime.scheduledDelays().at(-1)).toBe(
+      capturedPrompt.expiresAt - captured.savedAt
+    );
     for (const seat of [0, 1, 2, 3] as const) {
       await match.handleReady(seat);
     }
@@ -972,6 +994,36 @@ describe("MatchProcess checkpoints", () => {
     ) {
       throw new Error("expected a playing checkpoint");
     }
+    const migratedWithoutTiming = parseMatchCheckpoint({
+      ...checkpoint,
+      schemaVersion: 6,
+      decisionTiming: undefined,
+    });
+    if (
+      migratedWithoutTiming.status !== "playing" ||
+      migratedWithoutTiming.checkpointKind !== "action_window"
+    ) {
+      throw new Error("expected a migrated action checkpoint");
+    }
+    expect(
+      migratedWithoutTiming.decisionTiming.windows[
+        migratedWithoutTiming.actionWindow.seat
+      ]
+    ).toMatchObject({
+      kind: migratedWithoutTiming.actionWindow.kind,
+      legalActionIds: migratedWithoutTiming.actionWindow.legalActions.map(
+        (action) => action.id
+      ),
+    });
+    const migratedWithMode = parseMatchCheckpoint({
+      ...checkpoint,
+      schemaVersion: 6,
+      decisionTiming: {
+        ...checkpoint.decisionTiming,
+        mode: "obsolete",
+      },
+    });
+    expect(migratedWithMode.decisionTiming).not.toHaveProperty("mode");
     const restoredRuntime = controlledRuntime(500000, 999);
     const restored = MatchProcess.restoreCheckpoint(
       JSON.parse(JSON.stringify(checkpoint)),
@@ -980,8 +1032,17 @@ describe("MatchProcess checkpoints", () => {
         runtime: restoredRuntime,
       }
     );
-    expect(checkpoint.actionWindow.elapsedMs).toBe(2000);
-    expect(checkpoint.actionWindow.visibleRemainingMs).toBe(3000);
+    const capturedWindow =
+      checkpoint.decisionTiming.windows[checkpoint.actionWindow.seat];
+    if (capturedWindow === null) {
+      throw new Error("expected a captured authoritative window");
+    }
+    expect(checkpoint.actionWindow.elapsedMs).toBe(
+      checkpoint.savedAt - capturedWindow.opensAt
+    );
+    expect(checkpoint.actionWindow.visibleRemainingMs).toBe(
+      capturedWindow.baseEndsAt - checkpoint.savedAt
+    );
     expect(restoredRuntime.scheduledDelays().at(-1)).toBe(
       checkpoint.actionWindow.expiryRemainingMs
     );
@@ -1089,8 +1150,16 @@ describe("MatchProcess checkpoints", () => {
     if (!discard) {
       throw new Error("expected a legal discard");
     }
-    await match.handleAct(0, discard.id);
-    await restored.handleAct(0, discard.id);
+    await match.handleAct(
+      0,
+      discard.id,
+      receiptAtOpen(match, 0, originalRuntime)
+    );
+    await restored.handleAct(
+      0,
+      discard.id,
+      receiptAtOpen(restored, 0, restoredRuntime)
+    );
     expect(restored.replayFromBuffer(0, 0)).toEqual(
       match.replayFromBuffer(0, 0)
     );
@@ -1327,8 +1396,7 @@ describe("MatchProcess checkpoints", () => {
       pendingCommand: null,
     });
   });
-  it("serializes a client action behind an automatic default", async () => {
-    const gate = deferred();
+  it("lets a timely reservation fence the automatic default", async () => {
     const runtime = controlledRuntime(45975, 813);
     const match = new MatchProcess(
       "checkpoint-automatic-action-race",
@@ -1365,27 +1433,10 @@ describe("MatchProcess checkpoints", () => {
     const beforeDiscards = match
       .replayFromBuffer(0, 0)
       .filter(({ event }) => event.type === "discard").length;
-    const internals = match;
-    const handleActDirect =
-      internals.owners.gameplay.actions.handleActDirect.bind(
-        internals.owners.gameplay.actions
-      );
-    internals.owners.gameplay.actions.handleActDirect = async (
-      defaultSeat,
-      actionId
-    ) => {
-      await gate.promise;
-      await handleActDirect(defaultSeat, actionId);
-    };
-    runtime.runNextTimer();
-    let clientSettled = false;
-    const clientAction = match.handleAct(seat, safeDefault.id).finally(() => {
-      clientSettled = true;
-    });
-    await Promise.resolve();
-    expect(clientSettled).toBe(false);
-    gate.resolve();
-    await clientAction;
+    const clientReceipt = receiptAtOpen(match, seat, runtime);
+    match.reserveAction(seat, safeDefault.id, clientReceipt);
+    await match.owners.gameplay.decisions.handleDeadlineExpiry(seat);
+    await match.handleAct(seat, safeDefault.id, clientReceipt);
     const afterDiscards = match
       .replayFromBuffer(0, 0)
       .filter(({ event }) => event.type === "discard").length;
@@ -1526,7 +1577,9 @@ describe("MatchProcess checkpoints", () => {
     if (!discard) {
       throw new Error("expected a legal discard");
     }
-    await match.handleAct(captured.actionWindow.seat, discard.id);
+    await expect(
+      match.handleAct(captured.actionWindow.seat, discard.id)
+    ).rejects.toThrow("The decision is paused for recovery.");
     expect(match.replayFromBuffer(0, 0)).toHaveLength(eventCount);
     expect(() => originalRuntime.runNextTimer()).toThrow(/no active timer/);
     gate.resolve();
@@ -1642,7 +1695,11 @@ describe("MatchProcess checkpoints", () => {
       throw new Error("expected a legal discard");
     }
     const beforeEvents = match.replayFromBuffer(0, 0);
-    await match.handleAct(checkpoint.actionWindow.seat, discard.id);
+    await match.handleAct(
+      checkpoint.actionWindow.seat,
+      discard.id,
+      receiptAtOpen(match, checkpoint.actionWindow.seat, runtime)
+    );
     expect(
       match.claimSeat(
         `human-${checkpoint.actionWindow.seat}`,
@@ -1695,7 +1752,11 @@ describe("MatchProcess checkpoints", () => {
       repository: ephemeralMatchRepository,
       runtime: expectedRuntime,
     });
-    await expected.handleAct(checkpoint.actionWindow.seat, discard.id);
+    await expected.handleAct(
+      checkpoint.actionWindow.seat,
+      discard.id,
+      receiptAtOpen(expected, checkpoint.actionWindow.seat, expectedRuntime)
+    );
     const restoredRuntime = controlledRuntime(900000, 226);
     const restored = await MatchProcess.restoreSavedCheckpoint(match.matchId, {
       repository,

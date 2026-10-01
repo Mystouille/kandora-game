@@ -25,10 +25,7 @@ export interface DelayedSpectatorSession {
 export interface SpectatorStreamPort {
   readonly matchId: string;
   readonly runtime: Pick<MatchRuntime, "now" | "schedule">;
-  readonly timing: Pick<
-    DecisionTiming,
-    "timingMode" | "stamp" | "spectatorMetadata"
-  >;
+  readonly timing: Pick<DecisionTiming, "stamp" | "spectatorMetadata">;
   isRelay(): boolean;
   spectatorDelayMs(): SpectatorDelayMs;
   spectatorDispatchDelayMs(requestedDelayMs: number): number;
@@ -89,9 +86,8 @@ export class SpectatorStreams {
       type: "spectator_config",
       matchId: this.port.matchId,
       delayMs: this.port.spectatorDelayMs(),
-      ...(this.port.timing.timingMode !== "legacy"
-        ? { clock: this.port.timing.stamp(), presentationOffsetMs: 0 }
-        : {}),
+      clock: this.port.timing.stamp(),
+      presentationOffsetMs: 0,
     });
     send(this.port.buildRoomState());
     this.port.broadcastViewerState();
@@ -136,12 +132,8 @@ export class SpectatorStreams {
       delayMs: this.port.isRelay()
         ? this.port.spectatorDelayMs()
         : effectiveDelayMs,
-      ...(this.port.timing.timingMode !== "legacy"
-        ? {
-            clock: this.port.timing.stamp(),
-            presentationOffsetMs: this.port.isRelay() ? 0 : effectiveDelayMs,
-          }
-        : {}),
+      clock: this.port.timing.stamp(),
+      presentationOffsetMs: this.port.isRelay() ? 0 : effectiveDelayMs,
     });
     this.dispatchDelayedSpectator(session, true);
     this.port.broadcastViewerState();

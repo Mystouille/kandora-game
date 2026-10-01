@@ -29,7 +29,6 @@ function fixture() {
     {
       repository: ephemeralMatchRepository,
       runtime,
-      timingMode: "windows-v2",
     }
   );
   match.configurePlayerTiming(0, "direct", () => null);

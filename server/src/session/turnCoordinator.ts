@@ -4,7 +4,7 @@ import { MatchKernel } from "./matchKernel";
 
 import type { TurnWorkflowPort } from "./workflowPorts";
 
-import { legacyTiming } from "./legacyPolicy";
+import { gameTiming } from "./timingPolicy";
 
 export class TurnCoordinator {
   constructor(
@@ -34,10 +34,10 @@ export class TurnCoordinator {
 
     this.kernel.prepareDebugDraw();
 
-    if (legacyTiming.DELAY_AFTER_DISCARD_MS > 0) {
+    if (gameTiming.DELAY_AFTER_DISCARD_MS > 0) {
       await this.port.runUncheckpointableTransition(
         "turn_pacing",
-        legacyTiming.DELAY_AFTER_DISCARD_MS
+        gameTiming.DELAY_AFTER_DISCARD_MS
       );
     }
 
@@ -66,10 +66,10 @@ export class TurnCoordinator {
 
   async continueRyuukyokuDeclarations(): Promise<void> {
     if (this.kernel.currentState().phase === "awaiting_ryuukyoku_settlement") {
-      if (legacyTiming.RYUUKYOKU_RESULT_DELAY_MS > 0) {
+      if (gameTiming.RYUUKYOKU_RESULT_DELAY_MS > 0) {
         await this.port.runUncheckpointableTransition(
           "ryuukyoku_result_pacing",
-          legacyTiming.RYUUKYOKU_RESULT_DELAY_MS
+          gameTiming.RYUUKYOKU_RESULT_DELAY_MS
         );
       }
       const completed = await this.port.applyEngineAction({
@@ -100,10 +100,7 @@ export class TurnCoordinator {
       actualTenpai &&
       !this.kernel.currentState().riichiDeclared[seat] &&
       this.port.isHumanSeat(seat);
-    if (
-      requiresHumanChoice &&
-      legacyTiming.RYUUKYOKU_DECLARATION_ACTION_MS > 0
-    ) {
+    if (requiresHumanChoice && gameTiming.RYUUKYOKU_DECLARATION_ACTION_MS > 0) {
       this.port.setSeatLegals(
         seat,
         [
@@ -116,10 +113,10 @@ export class TurnCoordinator {
       return;
     }
 
-    if (legacyTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS > 0) {
+    if (gameTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS > 0) {
       await this.port.runUncheckpointableTransition(
         "ryuukyoku_declaration_pacing",
-        legacyTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS
+        gameTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS
       );
     }
     await this.port.applyEngineAction({
@@ -140,10 +137,10 @@ export class TurnCoordinator {
 
     const seat = this.kernel.currentState().turn;
 
-    if (legacyTiming.DRAW_TO_DISCARD_DELAY_MS > 0) {
+    if (gameTiming.DRAW_TO_DISCARD_DELAY_MS > 0) {
       await this.port.runUncheckpointableTransition(
         "bot_discard_pacing",
-        legacyTiming.DRAW_TO_DISCARD_DELAY_MS
+        gameTiming.DRAW_TO_DISCARD_DELAY_MS
       );
     }
 
@@ -229,10 +226,10 @@ export class TurnCoordinator {
     ) {
       const tile = legals[0].tile;
 
-      if (legacyTiming.DRAW_TO_DISCARD_DELAY_MS > 0) {
+      if (gameTiming.DRAW_TO_DISCARD_DELAY_MS > 0) {
         await this.port.runUncheckpointableTransition(
           "auto_riichi_pacing",
-          legacyTiming.DRAW_TO_DISCARD_DELAY_MS
+          gameTiming.DRAW_TO_DISCARD_DELAY_MS
         );
       }
       await this.port.applyDiscard(seat, tile, legals[0].discardSource);

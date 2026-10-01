@@ -6,9 +6,9 @@ import { playGameCountdownSound } from "../../sound";
 import type { TableRendererPresentation } from "../scene/renderTypes";
 import type { TimerAnchor, TimerHost } from "./hudTypes";
 import {
-  projectLegacyActionTimer,
+  projectActionTimer,
   resolveTableHudState,
-} from "./legacyTimerViewModel";
+} from "./actionTimerViewModel";
 
 function actionTimerStyle(
   presentation: TableRendererPresentation,
@@ -146,7 +146,7 @@ export class ActionTimer {
       timer.visible = true;
       return;
     }
-    const frame = projectLegacyActionTimer(
+    const frame = projectActionTimer(
       this.window?.baseEndsAt ?? deadline,
       this.window?.bankAtOpenMs ?? this.actionBufferMs,
       this.window && authorityNow !== null

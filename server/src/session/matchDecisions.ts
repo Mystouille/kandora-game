@@ -1,9 +1,6 @@
-import type { LegalAction, Seat } from "~/game/protocol/messages";
+import type { Seat } from "~/game/protocol/messages";
 
-import {
-  ActionWindowRegistry,
-  type ActionWindowKind,
-} from "../timing/actionWindows";
+import { ActionWindowRegistry } from "../timing/actionWindows";
 
 import { TimeBank } from "../timing/timeBank";
 
@@ -19,9 +16,9 @@ import type { TransitionKind } from "./transitionBarrier";
 
 import type { AutomaticActionContext } from "./sessionTypes";
 
-import { legacyTiming } from "./legacyPolicy";
+import { gameTiming } from "./timingPolicy";
 
-export interface LegacyDecisionPort {
+export interface MatchDecisionPort {
   state(): MatchStateView;
   isPaused(): boolean;
   isHumanSeat(seat: Seat): boolean;
@@ -36,7 +33,7 @@ export interface LegacyDecisionPort {
   onAutomaticAction?: (context: AutomaticActionContext) => void;
 }
 
-export class LegacyDecisions {
+export class MatchDecisions {
   constructor(
     private readonly matchId: string,
     private readonly runtime: MatchRuntime,
@@ -44,35 +41,8 @@ export class LegacyDecisions {
     private readonly timeBank: TimeBank,
     private readonly connections: PlayerConnections,
     private readonly commands: CommandCoordinator,
-    private readonly port: LegacyDecisionPort
+    private readonly port: MatchDecisionPort
   ) {}
-
-  setSeatLegals(
-    seat: Seat,
-    actions: LegalAction[],
-    kind: ActionWindowKind = "turn"
-  ): void {
-    this.actionWindows.open(
-      seat,
-      actions,
-      kind,
-      {
-        baseMs: legacyTiming.BASE_ACTION_MS,
-        graceMs: legacyTiming.ACTION_GRACE_MS,
-        declarationMs: legacyTiming.RYUUKYOKU_DECLARATION_ACTION_MS,
-        automatedMs: legacyTiming.DRAW_TO_DISCARD_DELAY_MS,
-      },
-      this.timeBank.balance(seat),
-      this.connections.view(seat).disconnected
-    );
-  }
-
-  consumeActionBuffer(seat: Seat): void {
-    this.actionWindows.consumeLegacyBuffer(seat, this.timeBank, {
-      baseMs: legacyTiming.BASE_ACTION_MS,
-      graceMs: legacyTiming.ACTION_GRACE_MS,
-    });
-  }
 
   async handleDeadlineExpiry(
     seat: Seat,
@@ -150,11 +120,11 @@ export class LegacyDecisions {
     await this.commands.runAutomaticDefault(async () => {
       if (
         isRyuukyokuDeclaration &&
-        legacyTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS > 0
+        gameTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS > 0
       ) {
         await this.port.runUncheckpointableTransition(
           "ryuukyoku_declaration_pacing",
-          legacyTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS
+          gameTiming.RYUUKYOKU_AUTOMATIC_DECLARATION_DELAY_MS
         );
       }
       await this.port.handleActDirect(seat, actionId);

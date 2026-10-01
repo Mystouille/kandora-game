@@ -15,7 +15,7 @@ import {
   type PlayingResultTransitionCheckpoint,
   type WaitingRoomCheckpoint,
 } from "../checkpoint";
-import { legacyTiming } from "../session/legacyPolicy";
+import { gameTiming } from "../session/timingPolicy";
 
 import type { MatchKernel } from "../session/matchKernel";
 import type { RoomRoster } from "../session/roomRoster";
@@ -56,11 +56,16 @@ export interface CheckpointFactoryPort {
     "view" | "timedView" | "legals" | "allLegals" | "hasTimers"
   >;
   readonly bank: Pick<TimeBank, "balance" | "snapshot">;
-  readonly timing: Pick<DecisionTiming, "timingMode" | "capture">;
+  readonly timing: Pick<DecisionTiming, "capture">;
   readonly runtime: Pick<MatchRuntime, "now" | "captureRandomState">;
   isRelay(): boolean;
   delayedSpectators(): ReadonlySet<unknown>;
-  history(): readonly { seq: number; event: GameEvent; emittedAt: number; calendarAt?: number }[];
+  history(): readonly {
+    seq: number;
+    event: GameEvent;
+    emittedAt: number;
+    calendarAt?: number;
+  }[];
   nextSequence(): number;
   seatSequences(): readonly [number, number, number, number];
   spectatorSequence(): number;
@@ -92,9 +97,7 @@ export class CheckpointFactory {
 
   createWaitingRoomCheckpoint(): WaitingRoomCheckpoint {
     return WaitingRoomCheckpointSchema.parse({
-      ...(this.port.timing.timingMode !== "legacy"
-        ? { decisionTiming: this.port.timing.capture() }
-        : {}),
+      decisionTiming: this.port.timing.capture(),
       schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
       status: "waiting",
       savedAt: this.port.runtime.now(),
@@ -165,9 +168,7 @@ export class CheckpointFactory {
   playingCheckpointBase(savedAt: number) {
     const startingWall = this.port.handStartWall();
     return {
-      ...(this.port.timing.timingMode !== "legacy"
-        ? { decisionTiming: this.port.timing.capture() }
-        : {}),
+      decisionTiming: this.port.timing.capture(),
       schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
       status: "playing" as const,
       savedAt,
@@ -181,17 +182,26 @@ export class CheckpointFactory {
       state: this.port.kernel.view,
       startedAgoMs: Math.max(
         0,
-        savedAt - (this.port.session.snapshot().startedReferenceAt ??
-          this.port.session.snapshot().startedAt?.getTime() ?? savedAt)
+        savedAt -
+          (this.port.session.snapshot().startedReferenceAt ??
+            this.port.session.snapshot().startedAt?.getTime() ??
+            savedAt)
       ),
       ...(this.port.session.snapshot().startedAt
-        ? { startedCalendarAt: this.port.session.snapshot().startedAt?.getTime() } : {}),
+        ? {
+            startedCalendarAt: this.port.session
+              .snapshot()
+              .startedAt?.getTime(),
+          }
+        : {}),
       randomState: this.port.runtime.captureRandomState(),
       eventLog: this.port.history().map((entry) => ({
         seq: entry.seq,
         event: entry.event,
         emittedAgoMs: Math.max(0, savedAt - entry.emittedAt),
-        ...(entry.calendarAt !== undefined ? { calendarAt: entry.calendarAt } : {}),
+        ...(entry.calendarAt !== undefined
+          ? { calendarAt: entry.calendarAt }
+          : {}),
       })),
       nextSeq: this.port.nextSequence(),
       seatSeq: [...this.port.seatSequences()],
@@ -264,14 +274,15 @@ export class CheckpointFactory {
     const elapsedMs = Math.max(0, savedAt - actionStartedAt);
     const expiryDurationMs =
       windowKind === "ryuukyoku_declaration"
-        ? legacyTiming.RYUUKYOKU_DECLARATION_ACTION_MS
+        ? gameTiming.RYUUKYOKU_DECLARATION_ACTION_MS
         : this.port.connections.view(seat).disconnected
-          ? legacyTiming.DRAW_TO_DISCARD_DELAY_MS
-          : legacyTiming.BASE_ACTION_MS +
+          ? gameTiming.DRAW_TO_DISCARD_DELAY_MS
+          : gameTiming.BASE_ACTION_MS +
             this.port.bank.balance(seat) +
-            legacyTiming.ACTION_GRACE_MS;
+            gameTiming.ACTION_GRACE_MS;
     const timed = this.port.windows.timedView(seat);
-    const expiryRemainingMs = Math.max(0,
+    const expiryRemainingMs = Math.max(
+      0,
       timed ? timed.expiresAt - savedAt : expiryDurationMs - elapsedMs
     );
     return PlayingActionCheckpointSchema.parse({
@@ -326,17 +337,21 @@ export class CheckpointFactory {
         }
         const elapsedMs = Math.max(0, savedAt - startedAt);
         const expiryDurationMs = this.port.connections.view(seat).disconnected
-          ? legacyTiming.DRAW_TO_DISCARD_DELAY_MS
-          : legacyTiming.BASE_ACTION_MS +
+          ? gameTiming.DRAW_TO_DISCARD_DELAY_MS
+          : gameTiming.BASE_ACTION_MS +
             this.port.bank.balance(seat) +
-            legacyTiming.ACTION_GRACE_MS;
+            gameTiming.ACTION_GRACE_MS;
         return {
           legalActions: this.port.windows.legals(seat),
           elapsedMs,
           visibleRemainingMs: Math.max(0, deadline - savedAt),
-          expiryRemainingMs: Math.max(0, this.port.windows.timedView(seat)
-            ? (this.port.windows.timedView(seat)?.expiresAt ?? savedAt) - savedAt
-            : expiryDurationMs - elapsedMs),
+          expiryRemainingMs: Math.max(
+            0,
+            this.port.windows.timedView(seat)
+              ? (this.port.windows.timedView(seat)?.expiresAt ?? savedAt) -
+                  savedAt
+              : expiryDurationMs - elapsedMs
+          ),
         };
       });
     return PlayingCallCheckpointSchema.parse({

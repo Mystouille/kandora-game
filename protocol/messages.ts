@@ -9,7 +9,6 @@ import {
   ClockStampSchema,
   PresentationContextSchema,
   TIMING_CAPABILITY,
-  TimingModeSchema,
   LatencyProbeSchema,
   LatencyReplySchema,
   FIXED_PROMPT_VERSION,
@@ -743,14 +742,19 @@ export const SnapshotStateSchema = z.object({
    * draw panel and public hand reveals survive snapshot hydration.
    */
   lastHandResult: HandEndEvent.optional(),
-  sessionVote: z.object({
-    deadline: z.number().int(),
-    votes: z.tuple([
-      z.enum(["yes", "no"]).nullable(), z.enum(["yes", "no"]).nullable(),
-      z.enum(["yes", "no"]).nullable(), z.enum(["yes", "no"]).nullable(),
-    ]),
-    gameIndex: z.number().int().nonnegative(),
-  }).nullable().optional(),
+  sessionVote: z
+    .object({
+      deadline: z.number().int(),
+      votes: z.tuple([
+        z.enum(["yes", "no"]).nullable(),
+        z.enum(["yes", "no"]).nullable(),
+        z.enum(["yes", "no"]).nullable(),
+        z.enum(["yes", "no"]).nullable(),
+      ]),
+      gameIndex: z.number().int().nonnegative(),
+    })
+    .nullable()
+    .optional(),
   /** Dice rolled at the start of the current hand; `null` when
    * unknown (synthetic snapshots / older replays). */
   dice: z
@@ -924,7 +928,6 @@ const RoomStateMsg = z.object({
   /** Match-driving mode. Absent legacy frames are normal mode. */
   mode: MatchModeConfigSchema.optional(),
   spectatorDelayMs: SpectatorDelayMsSchema.optional(),
-  timingMode: TimingModeSchema.optional(),
   clock: ClockStampSchema.optional(),
   /** Lifecycle: `waiting` = pre-start; `playing` = match running;
    * `finished` = match ended (post-game lobby). */

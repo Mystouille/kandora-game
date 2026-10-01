@@ -238,7 +238,7 @@ describe("MatchProcess — disconnect / AFK", () => {
     }
   });
   it("ignores a stale liveness result after a replacement attaches", async () => {
-    setActionTimeoutMs(0);
+    setActionTimeoutMs(60_000);
     const m = makeMatch(225);
     const first = sink();
     let resolveFirstProbe: ((alive: boolean) => void) | undefined;

@@ -13,14 +13,9 @@ describe("correlated timing diagnostics and rollout configuration", () => {
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
     try {
-      const diagnostics = new TimingDiagnostics(
-        "match-1",
-        "epoch-1",
-        false,
-        () => {
-          throw new Error("Broken log sink");
-        }
-      );
+      const diagnostics = new TimingDiagnostics("match-1", "epoch-1", () => {
+        throw new Error("Broken log sink");
+      });
       expect(() => diagnostics.record("opened", 1_000)).not.toThrow();
       expect(logged).toHaveBeenCalled();
       expect(diagnostics.recent()).toHaveLength(1);
@@ -28,60 +23,9 @@ describe("correlated timing diagnostics and rollout configuration", () => {
       logged.mockRestore();
     }
   });
-  it("compares proposed readiness in shadow mode without changing the legacy budget or pose", () => {
-    const runtime = createControlledRuntime(1_000);
-    const windows = new ActionWindowRegistry(
-      runtime,
-      () => undefined,
-      () => false
-    );
-    const bank = new TimeBank(20_000);
-    const observe = vi.fn();
-    const timing = new DecisionTiming(
-      "epoch-1",
-      "match-1",
-      runtime,
-      windows,
-      bank,
-      "legacy",
-      {
-        shadow: true,
-        observer: observe,
-      }
-    );
-    timing.record({ type: "draw", seat: 0, tile: "1m", wallRemaining: 69 }, 0);
-    expect(
-      timing.open(
-        0,
-        [{ id: "discard:1m", type: "discard", tile: "1m" }],
-        "turn",
-        { baseMs: 5_000, graceMs: 200, declarationMs: 5_000, automatedMs: 700 },
-        false
-      )
-    ).toBe(false);
-    expect(windows.timedView(0)).toBeNull();
-    expect(bank.balance(0)).toBe(20_000);
-    expect(timing.metadata(0, 0)).toEqual({
-      clock: { clockEpoch: "epoch-1", serverNow: 1_000 },
-    });
-    expect(observe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: "shadow",
-        opensAt: 1_300,
-        legacyOpensAt: 1_000,
-        baseEndsAt: 6_300,
-      })
-    );
-  });
-
   it("records only timing metadata, not private actions or client-reported authority", () => {
     const observe = vi.fn();
-    const diagnostics = new TimingDiagnostics(
-      "match-1",
-      "epoch-1",
-      false,
-      observe
-    );
+    const diagnostics = new TimingDiagnostics("match-1", "epoch-1", observe);
     const window = ActionWindowViewSchema.parse({
       id: "window-1",
       clockEpoch: "epoch-1",
@@ -122,26 +66,17 @@ describe("correlated timing diagnostics and rollout configuration", () => {
     );
   });
 
-  it("bounds local history and retains whole-match default and shadow controls", () => {
+  it("bounds local history and validates the diagnostics switch", () => {
     const diagnostics = new TimingDiagnostics("match-1", "epoch-1");
     for (let index = 0; index < 100; index++) {
       diagnostics.record("restored", index);
     }
     expect(diagnostics.recent()).toHaveLength(64);
-    expect(timingConfiguration({})).toEqual({
-      timingMode: "legacy",
-      timingShadow: false,
-    });
-    expect(timingConfiguration({ GAME_TIMING_SHADOW: "true" })).toMatchObject({
-      timingMode: "legacy",
-      timingShadow: true,
-    });
-    expect(() =>
-      timingConfiguration({
-        GAME_TIMING_MODE: "windows-v2",
-        GAME_TIMING_SHADOW: "true",
-      })
-    ).toThrow(/legacy/);
+    expect(timingConfiguration({})).toEqual({});
+    expect(
+      timingConfiguration({ GAME_TIMING_DIAGNOSTICS: "true" })
+        .onTimingDiagnostic
+    ).toBeTypeOf("function");
     expect(() =>
       timingConfiguration({ GAME_TIMING_DIAGNOSTICS: "silently-default" })
     ).toThrow();
@@ -160,8 +95,7 @@ describe("correlated timing diagnostics and rollout configuration", () => {
       "match-1",
       runtime,
       windows,
-      bank,
-      "windows-v2"
+      bank
     );
     timing.open(
       0,

@@ -8,7 +8,7 @@ import type {
 import type { PersistedMatchEvent } from "../repository";
 import type { ActionWindowKind } from "../timing/actionWindows";
 import type { DecisionTiming } from "../timing/decisionTiming";
-import { legacyTiming, remainingWinReactionDelayMs } from "./legacyPolicy";
+import { gameTiming, remainingWinReactionDelayMs } from "./timingPolicy";
 import type { KernelAction, MatchKernel, MatchStateView } from "./matchKernel";
 import type { PlayerConnections } from "./playerConnections";
 import type { TransitionBarrier, TransitionKind } from "./transitionBarrier";
@@ -17,12 +17,6 @@ export interface GameplayEffectsPort {
   history(): readonly PersistedMatchEvent[];
   now(): number;
   isCallOpen(seat: Seat): boolean;
-  setLegacyLegals(
-    seat: Seat,
-    actions: LegalAction[],
-    kind: ActionWindowKind
-  ): void;
-  consumeLegacyBuffer(seat: Seat): void;
   emitEngineEvent(event: EngineEvent): Promise<void>;
   emitFuritenChanges(
     changes: readonly FuritenChange[] | undefined
@@ -66,29 +60,23 @@ export class GameplayEffects {
     actions: LegalAction[],
     kind: ActionWindowKind = "turn"
   ): void {
-    if (
-      !this.timing.open(
-        seat,
-        actions,
-        kind,
-        {
-          baseMs: legacyTiming.BASE_ACTION_MS,
-          graceMs: legacyTiming.ACTION_GRACE_MS,
-          declarationMs: legacyTiming.RYUUKYOKU_DECLARATION_ACTION_MS,
-          automatedMs: legacyTiming.DRAW_TO_DISCARD_DELAY_MS,
-        },
-        this.connections.view(seat).disconnected,
-        this.port.isCallOpen(seat)
-      )
-    ) {
-      this.port.setLegacyLegals(seat, actions, kind);
-    }
+    this.timing.open(
+      seat,
+      actions,
+      kind,
+      {
+        baseMs: gameTiming.BASE_ACTION_MS,
+        graceMs: gameTiming.ACTION_GRACE_MS,
+        declarationMs: gameTiming.RYUUKYOKU_DECLARATION_ACTION_MS,
+        automatedMs: gameTiming.DRAW_TO_DISCARD_DELAY_MS,
+      },
+      this.connections.view(seat).disconnected,
+      this.port.isCallOpen(seat)
+    );
   }
 
   consumeActionBuffer(seat: Seat): void {
-    if (!this.timing.consume(seat)) {
-      this.port.consumeLegacyBuffer(seat);
-    }
+    this.timing.consume(seat);
   }
 
   async waitForWinReaction(
@@ -96,7 +84,7 @@ export class GameplayEffects {
   ): Promise<void> {
     await this.waitForEventAge(
       trigger,
-      legacyTiming.WIN_REACTION_DELAY_MS,
+      gameTiming.WIN_REACTION_DELAY_MS,
       "win_reaction"
     );
   }

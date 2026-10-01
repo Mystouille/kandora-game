@@ -14,7 +14,7 @@ import type { FinalScore } from "./sessionTypes";
 
 import type { ContinueVotePort } from "./lifecyclePorts";
 
-import { legacyTiming } from "./legacyPolicy";
+import { gameTiming } from "./timingPolicy";
 import type { InputReceipt } from "~/game/protocol/timing";
 import type { PromptTimingService } from "../timing/promptWindows";
 
@@ -89,9 +89,9 @@ export class ContinueVote {
         }
       }
       this.continueVoteDeadline =
-        this.runtime.now() + legacyTiming.CONTINUE_VOTE_MS;
+        this.runtime.now() + gameTiming.CONTINUE_VOTE_MS;
       this.continueVoteResolve = resolve;
-      if (legacyTiming.CONTINUE_VOTE_MS > 0) {
+      if (gameTiming.CONTINUE_VOTE_MS > 0) {
         this.timing?.open(
           "session_vote",
           [...this.roster.players()].flatMap(([seat, player]) =>
@@ -99,7 +99,7 @@ export class ContinueVote {
               ? [seat]
               : []
           ),
-          legacyTiming.CONTINUE_VOTE_MS
+          gameTiming.CONTINUE_VOTE_MS
         );
       }
 
@@ -119,8 +119,8 @@ export class ContinueVote {
       if (this.continueVoteResolve === null) {
         return;
       }
-      if (legacyTiming.CONTINUE_VOTE_MS > 0) {
-        this.scheduleExpiry(legacyTiming.CONTINUE_VOTE_MS);
+      if (gameTiming.CONTINUE_VOTE_MS > 0) {
+        this.scheduleExpiry(gameTiming.CONTINUE_VOTE_MS);
       }
     });
     if (this.continueVoteResolve !== null) {

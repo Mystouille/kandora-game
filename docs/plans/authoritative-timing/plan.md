@@ -11,12 +11,12 @@ Implemented and verified:
 - Domain renderer extraction: the public renderer is 485 lines, with scene/assets/geometry, hand/pond/meld/wall, results, interaction/controls and HUD owners.
 - The public match facade is 650 lines, with a 441-line typed composition and cohesive kernel, roster, connection, command, turn/call, hand/session, archive, spectator/relay and recovery owners. Automated gates enforce facade <=800 and new handwritten concern <=500 physical lines.
 - Clock/window/presentation DTOs, monotonic authority/client clocks, quality filtering and correlated clock/latency probes.
-- Opt-in turn/call/declaration and fixed ready/continue-vote windows, readiness at draw landing, bounded frozen allowance, ingress reservations and exact bank accounting.
-- Version-6 recovery retains fixed prompts, partial acknowledgements/votes, calendar timestamps and the same remaining budgets. Every owner uses one captured restoration reference; cancelled/resolved decisions cannot debit or resume again. Versions 1-5 and legacy pending commands remain readable.
+- Turn/call/declaration and fixed ready/continue-vote windows, readiness at draw landing, bounded frozen allowance, ingress reservations and exact bank accounting.
+- Version-7 recovery retains fixed prompts, partial acknowledgements/votes, calendar timestamps and the same remaining budgets. Every owner uses one captured restoration reference; cancelled/resolved decisions cannot debit or resume again. Versions 1-6 and legacy pending commands remain readable.
 - Web/native online/local/Nearby integration and historical spectator presentation timing; raw private-information delivery is unchanged.
 - Web/native fixed-prompt controls and Buu reconnect snapshots use shared countdown/intent helpers. Foreground clock refresh does not reset a budget; local seats explicitly use zero network delay.
 - Queued commands retain receipt/window/connection identity, including equal-millisecond stale-owner cleanup.
-- Bounded sanitized authority/client diagnostics, legacy-only shadow comparisons, strict additive fixed-prompt capability negotiation and match-pinned mode controls.
+- Bounded sanitized authority/client diagnostics and strict additive fixed-prompt capability negotiation.
 - Repeatable canonical tests include real Chromium/Pixi/authority journeys.
 
 Final canonical `npm test` passed **312 Vitest files / 2205 tests** and
@@ -48,10 +48,9 @@ Nearby peers, iOS, isolated Mongo durability and final rollout sign-off. The use
 weaken the <=100 ms threshold, or count normal-frame-rate evidence as 30 FPS
 sign-off. The specification's numeric fairness target remains unchanged.
 
-`GAME_TIMING_MODE` and `VITE_GAME_TIMING_MODE` default to `legacy`; the
-`windows-v2` mode is an experimental opt-in, not production activation.
-Unchecked tasks below remain the source of remaining work; extraction-only
-or foundational progress must not be confused with full fairness acceptance.
+Authoritative windows are the only active timing path. Unchecked tasks below
+remain the source of remaining device and fairness evidence; extraction-only or
+foundational progress must not be confused with full fairness acceptance.
 
 ## Summary
 
@@ -62,7 +61,10 @@ Use this change to split the two large implementations by ownership, not arbitra
 - [Match process](../../../server/src/match.ts): measured 7484 lines in the inspected baseline.
 - [Table renderer](../../../client/pixi/TableRenderer.ts): measured 8558 lines.
 
-Do behavior-preserving extraction first. Then introduce shadow timing metadata and clock synchronization, then new accounting/enforcement, then activate only negotiated new-mode matches. Do not combine mechanical moves and policy changes in one large diff.
+Do behavior-preserving extraction first. Then introduce timing metadata and
+clock synchronization, followed by accounting/enforcement and required client
+capability negotiation. Do not combine mechanical moves and policy changes in
+one large diff.
 
 ## Technical context
 
@@ -99,7 +101,7 @@ The user chose broader extraction over timing-only cleanup, draw landing over fi
 - Preserve public facades and helper exports during extraction. Use narrow typed boundaries, existing formatting/helpers and explicit errors, not private-state casts or service locators.
 - Give each mutable concern one owner; never duplicate bank, timer, roster, legality, sequence or animation authority.
 - Separate structural moves from intentional timer-start, precise-charging and allowance changes. Verify each increment before activation.
-- Add clock/window metadata in shadow mode; pin one timing version for an entire match rather than silently mixing legacy and upgraded players.
+- Require one clock/window contract for an entire match and reject incompatible player clients explicitly.
 - Keep manual replay/external relay timing separate from human windows. A known local zero-network path is not an unusable remote profile.
 - Preserve existing spectator/pacing behavior. Implementation does not authorize committing, pushing, deploying or enabling production timing.
 
@@ -180,9 +182,8 @@ Delayed native spectators use an explicit actual dispatch/presentation offset; e
 
 ### Compatibility and intentional behavior changes
 
-- Shadow metadata is additive and non-authoritative until activation.
-- Pin `timingMode`/contract version per match and negotiate player capabilities.
-- Old clients can use whole-match legacy mode during shadow rollout. A new-mode match rejects incompatible player clients with an explicit update requirement; it does not silently mix clocks.
+- Pin the timing contract version per match and negotiate player capabilities.
+- Reject incompatible player clients with an explicit update requirement; do not silently mix clocks.
 - Preserve legacy `deadline`/`bufferMs` as derived compatibility fields until callers migrate.
 - New precise charging intentionally removes current per-action whole-second flooring.
 - New scheduled starts intentionally replace immediate assignment-time billing. These are not disguised as mechanical refactoring.
@@ -242,7 +243,7 @@ Task paths are relative to the game repository root. `../../...` denotes the par
   - Depends on: T013. Done when result pages, chips, labels and ready-button anchor geometry retain behavior.
 - [x] T017 [Plan:2.3] Extract `client/pixi/interaction/interactionController.ts` and `client/pixi/controls/actionControls.ts` for pointer/drag/click/hit-target/control bindings. [Source: client/pixi/TableRenderer.ts#renderActionButtons,setOnTileClick,setOnActionClick]
   - Depends on: T014, T015. Done when callbacks carry the displayed state intent and no legality is duplicated in rendering.
-- [x] T018 [Plan:2.3] Extract `client/pixi/hud/actionTimer.ts`, score/name/round/debug HUD components and a legacy timer view model, without changing countdown policy yet. [Source: client/pixi/TableRenderer.ts#tickTimer,renderScores,renderPlayerNames,renderRoundInfo]
+- [x] T018 [Plan:2.3] Extract `client/pixi/hud/actionTimer.ts`, score/name/round/debug HUD components and an action timer view model, without changing countdown policy yet. [Source: client/pixi/TableRenderer.ts#tickTimer,renderScores,renderPlayerNames,renderRoundInfo]
   - Depends on: T013, T016. Done when appearance/countdown cues remain unchanged under the legacy clock adapter.
 - [x] T019 [Plan:2.3] Reduce `client/pixi/TableRenderer.ts` to facade/composition/frame orchestration and remove superseded internal state. [Source: client/pixi/TableRenderer.ts]
   - Depends on: T014, T015, T016, T017, T018. Done when all public callers and geometry helpers work without private-state casts or a giant mutable replacement context.
@@ -262,7 +263,7 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 - [x] T024 [Plan:3.1] Add shared timing adapters for host `../../mobile/src/nearby/` and local direct runtime; implement host/guest probes and explicit known-zero-network semantics. [Source: ../../mobile/src/nearby/NearbyMatchController.ts] [Source: ../../mobile/src/local/LocalMatchController.ts]
   - Depends on: T021, T023. Done when no Node/Mongo dependency leaks into the portable timing services.
 
-**3.2 Negotiate the new data contract without changing live legacy budgets.** Requirements: REQ-002, REQ-010. T020/T022/T023 provide the schema/clock foundation; activation remains a later gate.
+**3.2 Negotiate the data contract without changing live budgets.** Requirements: REQ-002, REQ-010. T020/T022/T023 provide the schema/clock foundation; activation remains a later gate.
 
 ### Phase 5 - Scheduled presentation and decision windows
 
@@ -295,7 +296,7 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 
 **5.2 Preserve outstanding decisions across clock epochs and recovery.** Requirements: REQ-002, REQ-008, REQ-009, REQ-012.
 
-- [x] T033 [US3] [Plan:5.2] Evolve `server/src/recovery/` and `server/src/checkpoint.ts` to a new explicit version with window identity, timing mode, frozen policy and relative readiness/base/expiry durations; retain v1-v4 and legacy pending-command readers.
+- [x] T033 [US3] [Plan:5.2] Evolve `server/src/recovery/` and `server/src/checkpoint.ts` to a new explicit version with window identity, contract version, frozen policy and relative readiness/base/expiry durations; retain older checkpoints and legacy pending-command readers.
   - Depends on: T012, T026, T030, T032. Done when every continuation rebases once and expired/bank state is not resurrected.
 - [x] T034 [US3] [Plan:5.2] Update snapshot/resync/ownership transfer and local/Nearby restore adapters to restore the same decision and remaining times, invalidating only connection/clock estimates. [Source: server/src/index.ts#handleClientFrame] [Source: server/src/match.ts#buildSnapshotForSeat,restoreSavedCheckpoint]
   - Depends on: T023, T031, T033. Done when reconnect/transfer does not reissue a base budget or frozen allowance.
@@ -313,8 +314,8 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 
 **6.2 Expose bounded quality and safe activation.** Requirements: REQ-010, REQ-018.
 
-- [x] T038 [US2] [Plan:6.2] Add match-pinned timing mode/capability activation in the cloud/native hello paths, explicit incompatible-client terminal errors, and a shadow/off switch; keep existing authentication/seat ownership intact.
-  - Depends on: T020, T034, T035, T036, T037. Done when legacy and new-mode clients cannot silently share different decision rules.
+- [x] T038 [US2] [Plan:6.2] Add required timing-capability negotiation in the cloud/native hello paths and explicit incompatible-client terminal errors; keep existing authentication/seat ownership intact.
+  - Depends on: T020, T034, T035, T036, T037. Done when incompatible clients cannot silently use different decision rules.
 - [x] T039 [US2] [Plan:6.2] Add `server/src/timing/timingDiagnostics.ts` and client diagnostic hooks for epoch/window/profile/ready/receipt/resolution; surface degraded quality without charging from client render reports.
   - Depends on: T031, T035, T036, T038. Done when logs/metrics explain lateness without storing private tile/hand content or trusting client claims.
 
@@ -332,9 +333,9 @@ Task paths are relative to the game repository root. `../../...` denotes the par
 
 **7.2 Review ownership/readability and activate safely.** Requirements: REQ-010, REQ-014, REQ-020.
 
-- [ ] T043 [Plan:7.2] Review domain ownership/facade/module budgets and public callers; complete shadow comparison, documentation and per-new-match activation in `docs/plans/authoritative-timing/`, `README.md` and host `../../mobile/README.md`.
-  - Depends on: T019, T038, T039, T040, T041, T042. Done when every requirement has evidence, deliberate policy deltas are named, no duplicated authority/private-context cast remains, and rollback cannot reinterpret an active new-mode window as a fresh legacy decision.
-  - Ownership/budgets, software shadow comparisons, pinned negotiation and rollback controls are implemented and tested. Production activation/sign-off remains gated by T042 and isolated durable-adapter evidence; creation still defaults to legacy.
+- [ ] T043 [Plan:7.2] Review domain ownership/facade/module budgets and public callers; complete documentation and activation evidence in `docs/plans/authoritative-timing/`, `README.md` and host `../../mobile/README.md`.
+  - Depends on: T019, T038, T039, T040, T041, T042. Done when every requirement has evidence, deliberate policy deltas are named, no duplicated authority/private-context cast remains, and rollback cannot refresh an active authoritative window.
+  - Ownership/budgets, required negotiation and checkpoint migration are implemented and tested. Final device/sign-off evidence remains gated by T042 and isolated durable-adapter evidence.
 
 ## Proposed project structure
 
@@ -479,22 +480,20 @@ Use deterministic boards/seeds and unique ephemeral match/storage identifiers. C
 
 The reviewer checks spec coverage, extraction fidelity, all host paths, exact accounting, capability/version behavior, native/browser gaps and declared source scope. Build/type/lint success is necessary but not proof of usable think time.
 
-## Rollout and rollback
+## Activation and rollback
 
-1. Land narrow extraction increments with legacy behavior.
-2. Publish clock/window/schedule metadata in shadow mode and compare diagnostic schedules/receipts with existing execution.
-3. Validate all readiness and exact-accounting deltas under the matrix.
-4. Activate only new matches whose player clients negotiate the required timing contract; pin the mode and policy version.
-5. Existing legacy matches keep legacy semantics. Existing checkpoints remain readable and preserve their known remaining values.
-6. A rollback disables creation of new-mode matches; it must not reinterpret an existing explicit window/checkpoint as a fresh legacy budget. Keep compatible readers while such games/recoveries exist.
-7. Remove internal extraction wrappers after caller migration, not old archive/checkpoint readers as incidental cleanup.
+1. Validate all readiness and exact-accounting deltas under the matrix.
+2. Require player clients to negotiate `clock-window-v2` plus the additive
+   `fixedPromptVersion: 1` field.
+3. Preserve existing checkpoints and their known remaining values by migrating
+   versions 1-6 into the version-7 authoritative window format.
+4. A rollback of unrelated releases must not refresh an existing explicit
+   window or drop compatible checkpoint readers.
+5. Remove internal extraction wrappers after caller migration, not old
+   archive/checkpoint readers as incidental cleanup.
 
-Implemented switches are `GAME_TIMING_MODE=legacy|windows-v2`,
-legacy-only `GAME_TIMING_SHADOW=true`, and `GAME_TIMING_DIAGNOSTICS=true`.
-Native creation uses `VITE_GAME_TIMING_MODE`; online rooms follow their pinned
-server mode. New-mode player negotiation requires `clock-window-v2` plus the
-additive `fixedPromptVersion: 1` field. Turning creation back to legacy does
-not authorize dropping version-6 readers or refreshing an outstanding window.
+`GAME_TIMING_DIAGNOSTICS=true` enables bounded structured diagnostics without
+changing enforcement.
 
 ## Requirement mapping
 

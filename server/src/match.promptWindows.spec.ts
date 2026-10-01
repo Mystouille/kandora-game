@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TimingMode } from "~/game/protocol/timing";
 import { MatchProcess } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import type { MatchRuntime } from "./runtime";
 import { DecisionWindowError } from "./timing/actionWindows";
 
-function promptMatch(timingMode: TimingMode = "windows-v2"): MatchProcess {
+function promptMatch(): MatchProcess {
   const runtime: MatchRuntime = {
     clockEpoch: "facade-prompts",
     now: () => 1_000,
@@ -23,7 +22,7 @@ function promptMatch(timingMode: TimingMode = "windows-v2"): MatchProcess {
       displayName: `Player ${seat}`,
       isBot: seat !== 0,
     })),
-    { repository: ephemeralMatchRepository, runtime, timingMode }
+    { repository: ephemeralMatchRepository, runtime }
   );
   match.configurePlayerTiming(0, "direct", () => null);
   return match;
@@ -39,9 +38,8 @@ function openVote(match: MatchProcess): Promise<boolean> {
 }
 
 describe("MatchProcess fixed prompt facade", () => {
-  it("keeps receipt-free legacy ready and vote calls unchanged", async () => {
-    const match = promptMatch("legacy");
-    expect(match.promptReceipt(0, 1_234)).toEqual({ receivedAt: 1_234 });
+  it("uses authoritative prompt receipts for trusted in-process calls", async () => {
+    const match = promptMatch();
     const checking = match.owners.lifecycle.ready.runReadyCheck(5_000);
     await match.handleReady(0);
     await checking;
@@ -49,30 +47,6 @@ describe("MatchProcess fixed prompt facade", () => {
     await match.handleVoteContinue(0, "yes");
     expect(await voting).toBe(true);
     expect(match.owners.timeBank.balance(0)).toBe(20_000);
-  });
-
-  it("requires an authoritative receipt for new-mode ready and vote calls", async () => {
-    const match = promptMatch();
-    const checking = match.owners.lifecycle.ready.runReadyCheck(5_000);
-    try {
-      await expect(match.handleReady(0)).rejects.toThrow(
-        "An authoritative ready receipt is required"
-      );
-      expect(match.owners.lifecycle.ready.snapshot().acked[0]).toBe(false);
-    } finally {
-      match.owners.lifecycle.ready.finishReadyCheck();
-      await checking;
-    }
-    const voting = openVote(match);
-    try {
-      await expect(match.handleVoteContinue(0, "yes")).rejects.toThrow(
-        "An authoritative continue-vote receipt is required"
-      );
-      expect(match.owners.lifecycle.votes.snapshot().votes[0]).toBeNull();
-    } finally {
-      match.owners.lifecycle.votes.finishContinueVote(false);
-      await voting;
-    }
   });
 
   it("checks the pause barrier before routing any prompt reservation", async () => {

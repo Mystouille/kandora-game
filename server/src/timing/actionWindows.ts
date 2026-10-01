@@ -1,6 +1,6 @@
 import type { LegalAction, Seat } from "~/game/protocol/messages";
 import type { MatchRuntime, MatchTimer } from "../runtime";
-import { type LegacyBankPolicy, TimeBank } from "./timeBank";
+import type { TimeBank } from "./timeBank";
 import {
   ActionWindowViewSchema,
   type ActionWindowView,
@@ -16,12 +16,14 @@ export { DecisionWindowError } from "./windowReceipt";
 
 export type ActionWindowKind = "turn" | "ryuukyoku_declaration";
 
-export interface LegacyActionWindowPolicy extends LegacyBankPolicy {
+export interface ActionWindowPolicy {
+  readonly baseMs: number;
+  readonly graceMs: number;
   readonly declarationMs: number;
   readonly automatedMs: number;
 }
 
-export interface LegacyActionWindowView {
+export interface ActionWindowSummary {
   readonly kind: ActionWindowKind | null;
   readonly startedAt: number | null;
   readonly deadline: number | null;
@@ -29,12 +31,9 @@ export interface LegacyActionWindowView {
   readonly generation: number;
 }
 
-export interface RestoredActionWindow {
+export interface StoredActionWindow {
   readonly kind: ActionWindowKind;
   readonly legalActions: readonly LegalAction[];
-  readonly elapsedMs: number;
-  readonly visibleRemainingMs: number;
-  readonly expiryRemainingMs: number;
 }
 
 interface SeatActionWindow {
@@ -72,7 +71,7 @@ function cloneAction(action: LegalAction): LegalAction {
   };
 }
 
-/** Sole owner of the legacy legal/deadline/start/timer generation for each seat. */
+/** Sole owner of legal actions, authoritative windows, and timers for each seat. */
 export class ActionWindowRegistry {
   private readonly windows: [
     SeatActionWindow,
@@ -87,7 +86,7 @@ export class ActionWindowRegistry {
     private readonly isPaused: () => boolean
   ) {}
 
-  view(seat: Seat): LegacyActionWindowView {
+  view(seat: Seat): ActionWindowSummary {
     const window = this.windows[seat];
     return {
       kind: window.kind,
@@ -114,43 +113,17 @@ export class ActionWindowRegistry {
     return this.windows[seat].reservation !== null;
   }
 
-  open(
-    seat: Seat,
-    actions: readonly LegalAction[],
-    kind: ActionWindowKind,
-    policy: LegacyActionWindowPolicy,
-    bankMs: number,
-    disconnected: boolean
-  ): void {
+  clear(seat: Seat): void {
     const window = this.windows[seat];
     this.cancelTimer(seat);
     window.timing = null;
     window.reservation = null;
     window.reservedActionId = null;
     window.debited = false;
-    window.actions = actions.map(cloneAction);
-    window.kind = actions.length > 0 ? kind : null;
-    const visibleDurationMs =
-      kind === "ryuukyoku_declaration" ? policy.declarationMs : policy.baseMs;
-    if (actions.length === 0 || visibleDurationMs <= 0) {
-      window.startedAt = null;
-      window.deadline = null;
-      window.timing = null;
-      window.reservation = null;
-      window.reservedActionId = null;
-      window.debited = false;
-      return;
-    }
-    const now = this.runtime.now();
-    window.startedAt = now;
-    window.deadline = now + visibleDurationMs;
-    const expiryMs =
-      kind === "ryuukyoku_declaration"
-        ? visibleDurationMs
-        : disconnected
-          ? policy.automatedMs
-          : policy.baseMs + bankMs + policy.graceMs;
-    this.schedule(seat, expiryMs);
+    window.actions = [];
+    window.kind = null;
+    window.startedAt = null;
+    window.deadline = null;
   }
 
   cancelTimer(seat: Seat): void {
@@ -181,11 +154,7 @@ export class ActionWindowRegistry {
     }
   }
 
-  restore(
-    seat: Seat,
-    saved: RestoredActionWindow,
-    restoredAt = this.runtime.now()
-  ): void {
+  restoreLegals(seat: Seat, saved: StoredActionWindow): void {
     this.cancelTimer(seat);
     const window = this.windows[seat];
     window.actions = saved.legalActions.map(cloneAction);
@@ -194,31 +163,8 @@ export class ActionWindowRegistry {
     window.reservedActionId = null;
     window.debited = false;
     window.kind = saved.kind;
-    window.startedAt = restoredAt - saved.elapsedMs;
-    window.deadline = restoredAt + saved.visibleRemainingMs;
-    this.schedule(
-      seat,
-      Math.max(0, restoredAt + saved.expiryRemainingMs - this.runtime.now())
-    );
-  }
-
-  consumeLegacyBuffer(
-    seat: Seat,
-    bank: TimeBank,
-    policy: LegacyBankPolicy
-  ): void {
-    const window = this.windows[seat];
-    if (window.startedAt === null) {
-      return;
-    }
-    if (window.kind !== "ryuukyoku_declaration") {
-      bank.consumeLegacyElapsed(
-        seat,
-        this.runtime.now() - window.startedAt,
-        policy
-      );
-    }
     window.startedAt = null;
+    window.deadline = null;
   }
 
   openTimed(

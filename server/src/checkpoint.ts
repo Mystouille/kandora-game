@@ -3,7 +3,6 @@ import { MatchModeConfigSchema } from "~/game/protocol/matchMode";
 import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
 import {
   ActionWindowViewSchema,
-  TimingModeSchema,
   PromptTimingSnapshotSchema,
 } from "~/game/protocol/timing";
 import {
@@ -15,11 +14,10 @@ import {
 import { MatchStateSchema } from "~/game/rules/state";
 import { RuleSetSchema } from "~/game/rules/ruleSet";
 
-export const MATCH_CHECKPOINT_SCHEMA_VERSION = 6 as const;
+export const MATCH_CHECKPOINT_SCHEMA_VERSION = 7 as const;
 
 const DecisionTimingCheckpointSchema = z
   .object({
-    mode: TimingModeSchema,
     nextWindow: z.number().int().positive(),
     prompts: PromptTimingSnapshotSchema.optional(),
     windows: z.tuple([
@@ -35,16 +33,18 @@ const DecisionTimingCheckpointSchema = z
       if (!window) {
         return;
       }
-      if (window.seat !== seat || window.kind === "ready" || window.kind === "session_vote") {
-        context.addIssue({ code: "custom", path: ["windows", seat], message: "Action-window seat or kind is inconsistent" });
-      }
-      if (timing.mode === "legacy") {
-        context.addIssue({ code: "custom", path: ["mode"], message: "Legacy checkpoints cannot activate explicit windows" });
+      if (
+        window.seat !== seat ||
+        window.kind === "ready" ||
+        window.kind === "session_vote"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["windows", seat],
+          message: "Action-window seat or kind is inconsistent",
+        });
       }
     });
-    if (timing.mode === "legacy" && timing.prompts?.windows.some((window) => window !== null)) {
-      context.addIssue({ code: "custom", path: ["prompts"], message: "Legacy checkpoints cannot activate explicit prompts" });
-    }
   });
 
 const CheckpointPlayerSchema = z
@@ -120,7 +120,7 @@ export const WaitingRoomCheckpointSchema = z
     seed: z.number().int(),
     presetId: z.string().min(1),
     spectatorDelayMs: SpectatorDelayMsSchema.default(0),
-    decisionTiming: DecisionTimingCheckpointSchema.optional(),
+    decisionTiming: DecisionTimingCheckpointSchema,
     mode: MatchModeConfigSchema,
     driver: MatchDriverSnapshotSchema,
     ruleSet: RuleSetSchema,
@@ -161,7 +161,7 @@ const PlayingCheckpointBaseShape = {
   seed: z.number().int(),
   presetId: z.string().min(1),
   spectatorDelayMs: SpectatorDelayMsSchema.default(0),
-  decisionTiming: DecisionTimingCheckpointSchema.optional(),
+  decisionTiming: DecisionTimingCheckpointSchema,
   mode: MatchModeConfigSchema,
   driver: MatchDriverSnapshotSchema,
   seats: z.tuple([
@@ -708,6 +708,91 @@ export const PlayingResultTransitionCheckpointSchema = z
 export type PlayingResultTransitionCheckpoint = z.infer<
   typeof PlayingResultTransitionCheckpointSchema
 >;
+function checkpointRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function nonnegativeInteger(value: unknown): number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
+}
+
+function migratedWindow(
+  checkpoint: Record<string, unknown>,
+  seat: number,
+  kind: "turn" | "call" | "ryuukyoku_declaration",
+  stored: Record<string, unknown>
+): unknown {
+  const savedAt = nonnegativeInteger(checkpoint.savedAt);
+  const elapsedMs = nonnegativeInteger(stored.elapsedMs);
+  const visibleRemainingMs = nonnegativeInteger(stored.visibleRemainingMs);
+  const expiryRemainingMs = nonnegativeInteger(stored.expiryRemainingMs);
+  const baseRemainingMs = Math.min(visibleRemainingMs, expiryRemainingMs);
+  const baseEndsAt = savedAt + baseRemainingMs;
+  const expiresAt = savedAt + expiryRemainingMs;
+  const legalActions = Array.isArray(stored.legalActions)
+    ? stored.legalActions
+    : [];
+  const legalActionIds = legalActions.flatMap((action) => {
+    const record = checkpointRecord(action);
+    return typeof record?.id === "string" ? [record.id] : [];
+  });
+  const matchId =
+    typeof checkpoint.matchId === "string" ? checkpoint.matchId : "match";
+  return {
+    id: `${matchId}:${seat}:migrated`,
+    clockEpoch: `checkpoint-${matchId}`,
+    timingVersion: 2,
+    seat,
+    kind,
+    state: "open",
+    infoSentAt: Math.max(0, savedAt - elapsedMs),
+    opensAt: Math.max(0, savedAt - elapsedMs),
+    baseEndsAt,
+    budgetEndsAt: expiresAt,
+    expiresAt,
+    bankAtOpenMs: expiresAt - baseEndsAt,
+    allowanceMs: 0,
+    generation: 0,
+    legalActionIds,
+  };
+}
+
+function migratedDecisionTiming(
+  checkpoint: Record<string, unknown>
+): Record<string, unknown> {
+  const existing = checkpointRecord(checkpoint.decisionTiming);
+  if (existing !== null) {
+    const { mode: _removedMode, ...timing } = existing;
+    return timing;
+  }
+
+  const windows: unknown[] = [null, null, null, null];
+  if (checkpoint.checkpointKind === "action_window") {
+    const actionWindow = checkpointRecord(checkpoint.actionWindow);
+    const seat = nonnegativeInteger(actionWindow?.seat);
+    if (actionWindow !== null && seat < windows.length) {
+      const kind =
+        actionWindow.kind === "ryuukyoku_declaration"
+          ? "ryuukyoku_declaration"
+          : "turn";
+      windows[seat] = migratedWindow(checkpoint, seat, kind, actionWindow);
+    }
+  } else if (
+    checkpoint.checkpointKind === "call_window" &&
+    Array.isArray(checkpoint.callTimers)
+  ) {
+    checkpoint.callTimers.forEach((timer, seat) => {
+      const stored = checkpointRecord(timer);
+      if (stored !== null && seat < windows.length) {
+        windows[seat] = migratedWindow(checkpoint, seat, "call", stored);
+      }
+    });
+  }
+  return { nextWindow: 1, windows };
+}
+
 function migrateLegacyCheckpoint(input: unknown): unknown {
   if (
     typeof input !== "object" ||
@@ -718,24 +803,25 @@ function migrateLegacyCheckpoint(input: unknown): unknown {
     return input;
   }
   if (
-    input.schemaVersion === 2 ||
-    input.schemaVersion === 3 ||
-    input.schemaVersion === 4 ||
-    input.schemaVersion === 5
+    input.schemaVersion !== 1 &&
+    input.schemaVersion !== 2 &&
+    input.schemaVersion !== 3 &&
+    input.schemaVersion !== 4 &&
+    input.schemaVersion !== 5 &&
+    input.schemaVersion !== 6
   ) {
-    return {
-      ...input,
-      schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
-    };
-  }
-  if (input.schemaVersion !== 1) {
     return input;
   }
-  return {
+  const migrated = {
     ...input,
     schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION,
-    mode: { type: "normal" },
-    driver: { type: "normal" },
+    ...(input.schemaVersion === 1
+      ? { mode: { type: "normal" }, driver: { type: "normal" } }
+      : {}),
+  };
+  return {
+    ...migrated,
+    decisionTiming: migratedDecisionTiming(migrated),
   };
 }
 

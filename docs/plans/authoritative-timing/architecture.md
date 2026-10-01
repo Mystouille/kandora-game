@@ -55,12 +55,12 @@ handwritten modules.
 
 - [Kernel](../../../server/src/session/matchKernel.ts), roster/connections, command/default arbitration, gameplay and lifecycle concerns own their actual state.
 - [Action windows](../../../server/src/timing/actionWindows.ts), [fixed prompts](../../../server/src/timing/promptWindows.ts) and [bank](../../../server/src/timing/timeBank.ts) own identities, reservations, timers and accounting. Internal owner generation remains off the wire.
-- [Recovery](../../../server/src/recovery/matchRecovery.ts) and [installer](../../../server/src/recovery/checkpointInstaller.ts) use one captured authority reference across every continuation. Version 6 adds fixed prompts and independent calendar timestamps without changing repository ownership.
+- [Recovery](../../../server/src/recovery/matchRecovery.ts) and [installer](../../../server/src/recovery/checkpointInstaller.ts) use one captured authority reference across every continuation. Version 7 adds single-path authoritative timing and migrates versions 1-6 without changing repository ownership.
 - Web/native controls share clock/window/countdown and intent projection; the native Buu vote overlay restores from snapshots. Foreground refresh affects clock quality, not budget.
-- Sanitized bounded diagnostics correlate epoch/window/seat/connection generation; shadow comparisons never change legacy enforcement. New-mode fixed prompts require additive capability negotiation.
+- Sanitized bounded diagnostics correlate epoch/window/seat/connection generation. Fixed prompts require additive capability negotiation.
 
-Production remains legacy. Normal-frame-rate browser evidence does not replace
-current-code native lifecycle/radio/storage, iOS or isolated Mongo durability sign-off, nor the 30 FPS
+Authoritative timing is active. Normal-frame-rate browser evidence does not
+replace current-code native lifecycle/radio/storage, iOS or isolated Mongo durability sign-off, nor the 30 FPS
 Playwright profile that the user explicitly deferred. Numeric fairness
 tolerances remain unchanged.
 
@@ -105,25 +105,25 @@ The [plan](plan.md#target-ownership-and-readable-logic) chooses the actual owner
 
 ## Compatibility mappings
 
-Keep existing hello/act/ready/resync discriminants, authentication, owner fencing and error behavior while introducing additive negotiated clock/window/presentation metadata in shadow mode.
+Keep existing hello/act/ready/resync discriminants, authentication, owner fencing and error behavior while using negotiated clock/window/presentation metadata.
 
-| Existing value/contract       | Mapping or preservation rule                                                                                                   |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `deadline`                    | Derived compatibility view of the owning window's base-budget end; do not treat it as full expiry                              |
-| `bufferMs`                    | Derived view of exact authoritative bank; legacy mode keeps legacy accounting until activation                                 |
-| `actionId`                    | Retain action meaning while adding window/session/generation identity to fence delayed inputs                                  |
-| Snapshot replay/retry         | Refer to the same window and known remaining budget; never replenish time                                                      |
-| Fixed declarations            | Retain no-bank eligibility and existing defaults                                                                               |
-| Inactive window               | Clear actions and deadline together                                                                                            |
-| Legacy versus upgraded player | Shadow can keep an entire match legacy; new-mode activation requires all player capabilities and a pinned match timing version |
-| Incompatible new-mode client  | Explicit update requirement, not silent fallback or a permanent reconnect loop                                                 |
-| Renderer API                  | Retain mount/render/destroy, options, setters, semantic callbacks and helper re-exports; no game authority moves into Pixi     |
+| Existing value/contract | Mapping or preservation rule                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `deadline`              | Derived compatibility view of the owning window's base-budget end; do not treat it as full expiry                          |
+| `bufferMs`              | Derived compatibility view of the exact authoritative bank                                                                 |
+| `actionId`              | Retain action meaning while adding window/session/generation identity to fence delayed inputs                              |
+| Snapshot replay/retry   | Refer to the same window and known remaining budget; never replenish time                                                  |
+| Fixed declarations      | Retain no-bank eligibility and existing defaults                                                                           |
+| Inactive window         | Clear actions and deadline together                                                                                        |
+| Player capability       | Every player must negotiate the required clock-window and fixed-prompt contract                                            |
+| Incompatible client     | Explicit update requirement, not silent fallback or a permanent reconnect loop                                             |
+| Renderer API            | Retain mount/render/destroy, options, setters, semantic callbacks and helper re-exports; no game authority moves into Pixi |
 
 Timer-start, exact millisecond charging and adaptive allowance are intentional changes. Their tests must be separate from extraction-only fidelity.
 
 ## Recovery mapping and atomicity
 
-The original checkpoint version 4 stored state/driver/PRNG, roster, bank, sequences, connection policy, relative event/start ages and continuation timing. Current [version 6](../../../server/src/checkpoint.ts) adds explicit fixed-prompt state and independent calendar timestamps while retaining readers for versions 1-5. Action continuations hold kind/seat/actions plus elapsed, visible remaining and expiry remaining; call/readiness/vote/result continuations have their own fields.
+The original checkpoint version 4 stored state/driver/PRNG, roster, bank, sequences, connection policy, relative event/start ages and continuation timing. Current [version 7](../../../server/src/checkpoint.ts) uses one authoritative window format while retaining readers for versions 1-6. Action continuations hold kind/seat/actions plus elapsed, visible remaining and expiry remaining; call/readiness/vote/result continuations have their own fields.
 
 [The repository port](../../../server/src/repository.ts) atomically replaces checkpoints, reads legacy pending-command recovery, marks terminal tombstones and archives matches/replays. Mongo and [native SQLite/memory](../../../../../mobile/src/persistence/mobileMatchRepository.ts) implement that port. Native database version 2 is not the game checkpoint version.
 
@@ -131,8 +131,8 @@ When adding explicit-window recovery:
 
 - Preserve repository signatures and tombstone/durable-error semantics; changing payload representation does not justify a storage rewrite.
 - Capture engine, owner modules, windows, bank, sequences and continuations consistently after command/journal barriers.
-- Migrate known elapsed/remaining values and bank exactly. Do not infer fractions already lost by legacy whole-second rounding.
-- Persist window identity, timing mode and frozen allowance; restore into the new clock epoch by rebasing remaining durations once.
+- Migrate known elapsed/remaining values and bank exactly. Do not infer fractions already lost by previous whole-second rounding.
+- Persist window identity, contract version and frozen allowance; restore into the new clock epoch by rebasing remaining durations once.
 - Restore/retry must neither charge twice nor issue a new base budget/allowance. An expired or terminal decision cannot be revived.
 - Retain readers for old versions and pending commands. Handle zero remaining time, concurrent calls and every ready/vote/result continuation explicitly.
 - Invalid/inconsistent recovery is an error, not permission to start a fresh game or use ephemeral success.

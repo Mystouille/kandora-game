@@ -135,7 +135,7 @@ export function setActionTimingMs(opts: {
   }
 }
 
-export const legacyTiming = {
+export const gameTiming = {
   get NEXT_HAND_DELAY_MS(): typeof NEXT_HAND_DELAY_MS {
     return NEXT_HAND_DELAY_MS;
   },

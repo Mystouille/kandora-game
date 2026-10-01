@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TimingMode } from "~/game/protocol/timing";
 import { editMatchState } from "~/game/testing/matchState";
 import { getPreset, presetToRuleSet } from "~/game/rules/presets";
 import { MatchProcess, setReadyCheckMs } from "../match";
@@ -9,7 +8,7 @@ import { DecisionTiming } from "../timing/decisionTiming";
 import { PromptWindows } from "../timing/promptWindows";
 import { CheckpointInstaller } from "./checkpointInstaller";
 
-async function checkpoint(timingMode: TimingMode = "legacy", buuMode = false) {
+async function checkpoint(buuMode = false) {
   let now = 1_000;
   const runtime: MatchRuntime = {
     clockEpoch: "restore-reference-source",
@@ -30,7 +29,7 @@ async function checkpoint(timingMode: TimingMode = "legacy", buuMode = false) {
       displayName: `Player ${seat}`,
       isBot: false,
     })),
-    { repository: ephemeralMatchRepository, runtime, timingMode },
+    { repository: ephemeralMatchRepository, runtime },
     undefined,
     buuMode ? presetToRuleSet(getPreset("buu-east")) : undefined,
     buuMode ? "buu-east" : "tenhou-hanchan"
@@ -50,7 +49,7 @@ describe("owned recovery restore reference", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the event/start reference for legacy window deadlines even when clock reads advance", async () => {
+  it("uses the event/start reference for window deadlines even when clock reads advance", async () => {
     const { saved, runtime } = await checkpoint();
     const reference = 50_000;
     let next = reference;
@@ -74,7 +73,7 @@ describe("owned recovery restore reference", () => {
   });
 
   it("forwards the same captured reference to continuation and decision restore owners", async () => {
-    const { saved, runtime } = await checkpoint("windows-v2");
+    const { saved, runtime } = await checkpoint();
     const install = vi.spyOn(CheckpointInstaller.prototype, "install");
     const timing = vi.spyOn(DecisionTiming.prototype, "restore");
     const reference = 75_000;
@@ -119,10 +118,7 @@ describe("owned recovery restore reference", () => {
   it.each(["ready", "session_vote"] as const)(
     "restores %s prompts once using the event/start reference",
     async (kind) => {
-      const { match, runtime } = await checkpoint(
-        "windows-v2",
-        kind === "session_vote"
-      );
+      const { match, runtime } = await checkpoint(kind === "session_vote");
       match.owners.actionWindows.resetForRestore();
       editMatchState(match, (state) => {
         state.phase = kind === "ready" ? "hand_ended" : "match_ended";

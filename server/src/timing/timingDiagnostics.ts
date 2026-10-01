@@ -9,8 +9,7 @@ export type TimingOutcome =
   | "expired"
   | "cancelled"
   | "restored"
-  | "rejected"
-  | "shadow";
+  | "rejected";
 export interface TimingDiagnostic {
   matchId: string;
   clockEpoch: string;
@@ -26,7 +25,6 @@ export interface TimingDiagnostic {
   receivedAt?: number;
   connectionGeneration?: number;
   debitMs?: number;
-  legacyOpensAt?: number;
   roundTripMs?: number;
   jitterMs?: number;
   samples?: number;
@@ -39,7 +37,6 @@ export class TimingDiagnostics {
   constructor(
     private readonly matchId: string,
     private readonly clockEpoch: string,
-    readonly shadow: boolean = false,
     private readonly observer?: TimingObserver
   ) {}
 
@@ -47,7 +44,7 @@ export class TimingDiagnostics {
     outcome: TimingOutcome,
     at: number,
     window?: ActionWindowView | null,
-    extra: Pick<TimingDiagnostic, "debitMs" | "legacyOpensAt"> = {},
+    extra: Pick<TimingDiagnostic, "debitMs"> = {},
     receipt?: InputReceipt,
     profile?: LatencyProfile | null
   ): void {

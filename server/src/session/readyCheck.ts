@@ -10,7 +10,7 @@ import { CommandCoordinator } from "./commandCoordinator";
 
 import type { ReadyCheckPort } from "./lifecyclePorts";
 
-import { legacyTiming } from "./legacyPolicy";
+import { gameTiming } from "./timingPolicy";
 import type { InputReceipt } from "~/game/protocol/timing";
 import type { PromptTimingService } from "../timing/promptWindows";
 
@@ -68,7 +68,7 @@ export class ReadyCheck {
   }
 
   async runReadyCheck(
-    ms: number = legacyTiming.READY_CHECK_MS,
+    ms: number = gameTiming.READY_CHECK_MS,
     continuation: PlayingReadyCheckpoint["readyContinuation"] | null = null
   ): Promise<void> {
     this.readyContinuationKind = null;

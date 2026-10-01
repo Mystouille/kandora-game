@@ -15,7 +15,7 @@ import type { MatchConfiguration, FinalScore } from "./sessionTypes";
 
 import type { SessionLifecyclePort } from "./lifecyclePorts";
 
-import { legacyTiming } from "./legacyPolicy";
+import { gameTiming } from "./timingPolicy";
 
 import { deterministicShuffle } from "./seating";
 
@@ -179,7 +179,7 @@ export class SessionCoordinator {
     // Pre-match ready check. Bots are pre-acked; if the human
     // is the only seat that hasn't acked we wait up to
     // `READY_CHECK_MS` for their ack before dealing.
-    await this.port.runReadyCheck(legacyTiming.READY_CHECK_MS, "initial_hand");
+    await this.port.runReadyCheck(gameTiming.READY_CHECK_MS, "initial_hand");
 
     await this.port.beginInitialHandAfterReady();
   }
@@ -265,10 +265,10 @@ export class SessionCoordinator {
     await this.port.archiveCurrentGame(finalScores);
 
     if (isBuu && !opts.serverAbort) {
-      if (legacyTiming.MATCH_END_DISPLAY_MS > 0) {
+      if (gameTiming.MATCH_END_DISPLAY_MS > 0) {
         await this.port.runUncheckpointableTransition(
           "match_end_display",
-          legacyTiming.MATCH_END_DISPLAY_MS
+          gameTiming.MATCH_END_DISPLAY_MS
         );
       }
       const cont = await this.port.runContinueVote(finalScores);
@@ -378,7 +378,7 @@ export class SessionCoordinator {
       matchStartEvent(matchPlayers, this.config.presetId, this.kernel.view)
     );
 
-    await this.port.runReadyCheck(legacyTiming.READY_CHECK_MS, "initial_hand");
+    await this.port.runReadyCheck(gameTiming.READY_CHECK_MS, "initial_hand");
 
     await this.port.beginInitialHandAfterReady();
   }

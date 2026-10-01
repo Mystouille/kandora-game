@@ -9,7 +9,7 @@ import { MatchKernel } from "./matchKernel";
 
 import type { HandLifecyclePort } from "./lifecyclePorts";
 
-import { legacyTiming } from "./legacyPolicy";
+import { gameTiming } from "./timingPolicy";
 
 export class HandLifecycle {
   private pendingWinRevealMs = 0;
@@ -68,20 +68,17 @@ export class HandLifecycle {
       this.port.clearLegals(s as Seat);
     }
 
-    if (legacyTiming.NEXT_HAND_DELAY_MS > 0) {
+    if (gameTiming.NEXT_HAND_DELAY_MS > 0) {
       const revealMs = this.pendingWinRevealMs;
       this.pendingWinRevealMs = 0;
       if (revealMs > 0) {
         await this.port.runResultTransition(
           "post_hand_reveal",
           revealMs,
-          legacyTiming.NEXT_HAND_DELAY_MS
+          gameTiming.NEXT_HAND_DELAY_MS
         );
       }
-      await this.port.runReadyCheck(
-        legacyTiming.NEXT_HAND_DELAY_MS,
-        "next_hand"
-      );
+      await this.port.runReadyCheck(gameTiming.NEXT_HAND_DELAY_MS, "next_hand");
     } else {
       this.pendingWinRevealMs = 0;
     }

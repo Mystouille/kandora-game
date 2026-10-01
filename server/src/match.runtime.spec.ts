@@ -242,7 +242,9 @@ describe("MatchProcess runtime", () => {
     const pausing = match.pauseAndSaveCheckpoint();
     await Promise.resolve();
     expect(savedCheckpoints).toHaveLength(0);
-    await match.handleAct(before.actionWindow.seat, discard.id);
+    await expect(
+      match.handleAct(before.actionWindow.seat, discard.id)
+    ).rejects.toThrow("The decision is paused for recovery.");
     expect(commandExecutions).toBe(1);
     releaseCommand();
     await acting;

@@ -1083,9 +1083,8 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     throw error;
   }
   if (
-    match.timingMode === "windows-v2" &&
-    (!hello.timingCapabilities?.includes(TIMING_CAPABILITY) ||
-      hello.fixedPromptVersion !== FIXED_PROMPT_VERSION)
+    !hello.timingCapabilities?.includes(TIMING_CAPABILITY) ||
+    hello.fixedPromptVersion !== FIXED_PROMPT_VERSION
   ) {
     sendError(
       "timing_update_required",

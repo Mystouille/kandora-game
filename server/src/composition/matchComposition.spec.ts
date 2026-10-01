@@ -7,7 +7,6 @@ import {
   type MatchRepository,
 } from "../repository";
 import type { MatchRuntime } from "../runtime";
-import type { TimingMode } from "~/game/protocol/timing";
 
 const concernFiles = [
   "composition/dependencies.ts",
@@ -57,8 +56,7 @@ function clockRuntime(
 function ownedMatch(
   matchId: string,
   runtime: MatchRuntime,
-  repository: MatchRepository = ephemeralMatchRepository,
-  timingMode: TimingMode = "legacy"
+  repository: MatchRepository = ephemeralMatchRepository
 ): MatchProcess {
   return new MatchProcess(
     matchId,
@@ -68,7 +66,7 @@ function ownedMatch(
       displayName: `Player ${seat}`,
       isBot: seat !== 0,
     })),
-    { repository, runtime, timingMode }
+    { repository, runtime }
   );
 }
 
@@ -143,8 +141,7 @@ describe("MatchProcess owned composition", () => {
     const match = ownedMatch(
       "owned-prompts",
       clockRuntime(clock, "prompt-epoch"),
-      ephemeralMatchRepository,
-      "windows-v2"
+      ephemeralMatchRepository
     );
     match.configurePlayerTiming(0, "direct", () => null);
     const ready = match.owners.lifecycle.ready;

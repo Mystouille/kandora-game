@@ -149,11 +149,14 @@ describe("MatchProcess delayed-spectator API", () => {
     const spectator = match.attachDelayedSpectator(sink.send, 0);
 
     expect(spectator.delayMs).toBe(300_000);
-    expect(sink.messages).toContainEqual({
-      type: "spectator_config",
-      matchId: match.matchId,
-      delayMs: 300_000,
-    });
+    expect(sink.messages).toContainEqual(
+      expect.objectContaining({
+        type: "spectator_config",
+        matchId: match.matchId,
+        delayMs: 300_000,
+        presentationOffsetMs: 300_000,
+      })
+    );
     expect(sink.events).toHaveLength(0);
     expect(sink.messages.some((message) => message.type === "snapshot")).toBe(
       false

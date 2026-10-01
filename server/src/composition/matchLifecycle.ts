@@ -10,7 +10,7 @@ import { EngineEventPresenter } from "../session/engineEventPresenter";
 import type { GameplayEffects } from "../session/gameplayEffects";
 import { HandLifecycle } from "../session/handLifecycle";
 import type { HandMetadata } from "../session/handMetadata";
-import { legacyTiming } from "../session/legacyPolicy";
+import { gameTiming } from "../session/timingPolicy";
 import type { MatchKernel } from "../session/matchKernel";
 import type { MatchViewDetails } from "../session/matchViewDetails";
 import type { PlayerConnections } from "../session/playerConnections";
@@ -151,7 +151,7 @@ export class MatchLifecycle {
           port.runTransition(kind, delay),
         resetCallState: () => port.resetCallState(),
         resetRiichiTiles: () => metadata.resetRiichiTiles(),
-        refillBank: () => bank.refill(legacyTiming.INITIAL_BUFFER_MS),
+        refillBank: () => bank.refill(gameTiming.INITIAL_BUFFER_MS),
         clearLegals: (seat) => effects.setSeatLegals(seat, []),
         cancelReadyTimer: () => this.ready.cancelTimer(),
         cancelActionTimers: () => windows.cancelAllTimers(),

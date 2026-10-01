@@ -8,8 +8,6 @@ export const MAX_LATENCY_ALLOWANCE_MS = 500;
 export const FALLBACK_LATENCY_ALLOWANCE_MS = 200;
 
 const TimestampSchema = z.number().int().nonnegative();
-export const TimingModeSchema = z.enum(["legacy", "windows-v2"]);
-export type TimingMode = z.infer<typeof TimingModeSchema>;
 
 export const ClockStampSchema = z.object({
   clockEpoch: z.string().min(1).max(128),
@@ -108,17 +106,32 @@ export const PromptTimingSnapshotSchema = z
       if (!window) {
         return;
       }
-      if (window.seat !== seat || (window.kind !== "ready" && window.kind !== "session_vote")) {
-        context.addIssue({ code: "custom", path: ["windows", seat], message: "Fixed prompt seat or kind is inconsistent" });
+      if (
+        window.seat !== seat ||
+        (window.kind !== "ready" && window.kind !== "session_vote")
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["windows", seat],
+          message: "Fixed prompt seat or kind is inconsistent",
+        });
       }
       if (identities.has(window.id)) {
-        context.addIssue({ code: "custom", path: ["windows", seat, "id"], message: "Fixed prompt identities must be unique" });
+        context.addIssue({
+          code: "custom",
+          path: ["windows", seat, "id"],
+          message: "Fixed prompt identities must be unique",
+        });
       }
       identities.add(window.id);
       kinds.add(window.kind);
     });
     if (kinds.size > 1) {
-      context.addIssue({ code: "custom", path: ["windows"], message: "Ready and vote prompts cannot coexist" });
+      context.addIssue({
+        code: "custom",
+        path: ["windows"],
+        message: "Ready and vote prompts cannot coexist",
+      });
     }
   });
 export type PromptTimingSnapshot = z.infer<typeof PromptTimingSnapshotSchema>;
