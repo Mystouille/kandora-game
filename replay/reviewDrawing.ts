@@ -2,10 +2,9 @@
  * Compact polyline codec for `ReplayReview` freehand drawings.
  *
  * A "drawing" is a list of strokes; each stroke is a list of points
- * in a normalized coordinate space (so the same drawing renders
- * correctly regardless of the actual canvas size).
+ * in either legacy table-normalized space or focused-discard space.
  *
- * Two on-the-wire versions exist:
+ * Three on-the-wire versions exist:
  *
  *   v1 (legacy, decode-only): 8 bits per axis — only 256 distinct
  *   steps across the whole drawing. On a large canvas that grid is
@@ -13,31 +12,48 @@
  *   annotations look "pixelated" once decoded. Still read so existing
  *   reviews keep rendering.
  *
- *   v2 (current, encode + decode): 16 bits per axis (65536 steps),
- *   removing the visible quantization grid. All new drawings encode
- *   as v2.
+ *   v2 (legacy, encode + decode): 16 bits per normalized axis.
+ *   Legacy-only drawings continue to encode as v2.
+ *
+ *   v3: per-stroke space tag, followed by a uint16 point count.
+ *   Tag 0 stores legacy uint16 pairs; tag 1 stores signed float32
+ *   pairs in unscaled focused-discard coordinates. Mixed drawings
+ *   preserve old strokes without inferring or migrating their targets.
  *
  * Binary layout (little-endian):
  *
- *   byte 0:     version (1 or 2)
+ *   byte 0:     version (1, 2 or 3)
  *   byte 1:     stroke count N (max 255)
  *   for each stroke:
+ *     v3 only:  space tag (0=legacy table, 1=focused discard)
  *     bytes 0..1:  point count M (uint16 LE, max 65535)
  *     bytes 2..:   M × coordinate pair
  *                    v1: (uint8  x,      uint8  y)      — 2 bytes/point
  *                    v2: (uint16 x LE,   uint16 y LE)   — 4 bytes/point
+ *                    v3 tag 1: (float32 x, float32 y)  — 8 bytes/point
  *
  * A 50-point v2 stroke costs 2 + 200 = 202 bytes; a typical 5-stroke
  * arrow annotation is still comfortably under 2 KB.
  */
 
 export interface Stroke {
-  /** Normalized [0..1] point coordinates. */
+  /** Absent for legacy table-normalized strokes. */
+  space?: "focused-discard";
+  /** Focused-discard points are signed and may extend outside the pond. */
   points: Array<{ x: number; y: number }>;
 }
 
 export interface Drawing {
   strokes: Stroke[];
+}
+
+export const MAX_DRAWING_BYTES = 64 * 1024;
+
+export class ReviewDrawingError extends Error {
+  constructor(readonly code: "bad-drawing" | "drawing-too-large") {
+    super(code);
+    this.name = "ReviewDrawingError";
+  }
 }
 
 /**
@@ -68,8 +84,9 @@ export function reviewerColor(index: number): string {
 
 /** Legacy 8-bit-per-axis format. Decoded for backward compatibility. */
 const VERSION_V1 = 1;
-/** Current 16-bit-per-axis format. All new drawings encode as v2. */
+/** Legacy 16-bit-per-axis format. */
 const VERSION_V2 = 2;
+const VERSION_V3 = 3;
 /** Max quantized value for the v2 16-bit-per-axis grid. */
 const V2_SCALE = 65535;
 
@@ -84,6 +101,13 @@ const clamp01 = (v: number): number => {
 };
 
 export function encodeDrawing(drawing: Drawing): Uint8Array {
+  if (drawing.strokes.some((stroke) => stroke.space === "focused-discard")) {
+    return encodeV3(drawing);
+  }
+  return encodeV2(drawing);
+}
+
+function encodeV2(drawing: Drawing): Uint8Array {
   const strokes = drawing.strokes.slice(0, 255);
   // Pre-compute the buffer size (v2 stores 4 bytes per point).
   let size = 2;
@@ -112,6 +136,106 @@ export function encodeDrawing(drawing: Drawing): Uint8Array {
     }
   }
   return buf;
+}
+
+function encodeV3(drawing: Drawing): Uint8Array {
+  if (drawing.strokes.length > 255) {
+    throw new ReviewDrawingError("drawing-too-large");
+  }
+  let size = 2;
+  for (const stroke of drawing.strokes) {
+    if (stroke.points.length > 65535) {
+      throw new ReviewDrawingError("drawing-too-large");
+    }
+    size += 3 + stroke.points.length * (stroke.space ? 8 : 4);
+  }
+  if (size > MAX_DRAWING_BYTES) {
+    throw new ReviewDrawingError("drawing-too-large");
+  }
+  const buf = new Uint8Array(size);
+  const view = new DataView(buf.buffer);
+  buf[0] = VERSION_V3;
+  buf[1] = drawing.strokes.length;
+  let offset = 2;
+  for (const stroke of drawing.strokes) {
+    const anchored = stroke.space === "focused-discard";
+    buf[offset] = anchored ? 1 : 0;
+    view.setUint16(offset + 1, stroke.points.length, true);
+    offset += 3;
+    for (const point of stroke.points) {
+      if (
+        !Number.isFinite(Math.fround(point.x)) ||
+        !Number.isFinite(Math.fround(point.y))
+      ) {
+        throw new ReviewDrawingError("bad-drawing");
+      }
+      if (anchored) {
+        view.setFloat32(offset, point.x, true);
+        view.setFloat32(offset + 4, point.y, true);
+        offset += 8;
+      } else {
+        view.setUint16(offset, Math.round(clamp01(point.x) * V2_SCALE), true);
+        view.setUint16(
+          offset + 2,
+          Math.round(clamp01(point.y) * V2_SCALE),
+          true
+        );
+        offset += 4;
+      }
+    }
+  }
+  return buf;
+}
+
+function decodeV3(buf: Uint8Array): Drawing {
+  if (buf.length > MAX_DRAWING_BYTES) {
+    throw new ReviewDrawingError("drawing-too-large");
+  }
+  if (buf.length < 2) {
+    throw new ReviewDrawingError("bad-drawing");
+  }
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const strokes: Stroke[] = [];
+  let offset = 2;
+  for (let s = 0; s < buf[1]; s++) {
+    if (offset + 3 > buf.length) {
+      throw new ReviewDrawingError("bad-drawing");
+    }
+    const tag = buf[offset];
+    const count = view.getUint16(offset + 1, true);
+    offset += 3;
+    if (tag !== 0 && tag !== 1) {
+      throw new ReviewDrawingError("bad-drawing");
+    }
+    const stride = tag === 1 ? 8 : 4;
+    if (offset + count * stride > buf.length) {
+      throw new ReviewDrawingError("bad-drawing");
+    }
+    const stroke: Stroke = { points: [] };
+    if (tag === 1) {
+      stroke.space = "focused-discard";
+    }
+    for (let i = 0; i < count; i++) {
+      const x =
+        tag === 1
+          ? view.getFloat32(offset, true)
+          : view.getUint16(offset, true) / V2_SCALE;
+      const y =
+        tag === 1
+          ? view.getFloat32(offset + 4, true)
+          : view.getUint16(offset + 2, true) / V2_SCALE;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new ReviewDrawingError("bad-drawing");
+      }
+      stroke.points.push({ x, y });
+      offset += stride;
+    }
+    strokes.push(stroke);
+  }
+  if (offset !== buf.length) {
+    throw new ReviewDrawingError("bad-drawing");
+  }
+  return { strokes };
 }
 
 /** Decode the legacy v1 payload (8 bits per axis). */
@@ -171,16 +295,18 @@ function decodeV2(buf: Uint8Array): Drawing {
 }
 
 export function decodeDrawing(buf: Uint8Array): Drawing {
-  if (buf.length < 2) {
-    return { strokes: [] };
-  }
   switch (buf[0]) {
     case VERSION_V1:
-      return decodeV1(buf);
+      return buf.length < 2 ? { strokes: [] } : decodeV1(buf);
     case VERSION_V2:
-      return decodeV2(buf);
+      return buf.length < 2 ? { strokes: [] } : decodeV2(buf);
+    case VERSION_V3:
+      return decodeV3(buf);
     default:
-      return { strokes: [] };
+      if (buf.length === 0) {
+        return { strokes: [] };
+      }
+      throw new ReviewDrawingError("bad-drawing");
   }
 }
 
@@ -212,6 +338,9 @@ function chaikinPass(
 }
 
 function smoothStrokeForDisplay(stroke: Stroke): Stroke {
+  if (stroke.space === "focused-discard") {
+    return stroke;
+  }
   const pts = stroke.points;
   // Dots and single segments carry no curvature to smooth.
   if (pts.length < 3) {

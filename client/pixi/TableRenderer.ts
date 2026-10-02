@@ -24,6 +24,7 @@ import { RyuukyokuDeclarationAnimator } from "./ryuukyokuDeclarationAnimator";
 import { SceneGraph } from "./scene/sceneGraph";
 import { RendererAssets } from "./scene/rendererAssets";
 import { SceneAnchors } from "./scene/sceneAnchors";
+import type { FocusedDiscardDrawingFrame } from "./geometry/reviewDrawingGeometry";
 import type {
   ActionClick,
   HandResult,
@@ -394,6 +395,11 @@ export class TableRenderer {
   ): void {
     this.anchors.setBottomHandBoundsListener(callback);
   }
+  setFocusedDiscardDrawingListener(
+    callback: ((frame: FocusedDiscardDrawingFrame | null) => void) | null
+  ): void {
+    this.anchors.setFocusedDiscardDrawingListener(callback);
+  }
   render(view: MatchView): void {
     if (!this.scene.app || !this.scene.root) {
       return;
@@ -455,7 +461,7 @@ export class TableRenderer {
     });
     this.controls.render(frame, resources, felt);
     this.results.render(frame, resources, drawer);
-    this.anchors.publish(frame);
+    this.anchors.publish(frame, discardOptions);
     this.interaction.finishFrame();
   }
   private shortcutFrame(): CanvasShortcutFrame | null {

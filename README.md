@@ -138,6 +138,32 @@ Open Graph/Discord descriptions reflect it.
 Tenhou relays retain their existing upstream five-minute delay and do not
 add another server-side delay.
 
+## Replay review drawings
+
+New freehand strokes follow the **focused player's discard tiles**, using the
+renderer's actual pond origin and uniform tile scale. Web, compact web, and
+mobile therefore keep a circle or cross on the same focused-player discard.
+The drawing surface still covers the table: overlapping hands or other ponds
+is allowed, but alignment with those other elements is not guaranteed.
+Changing the review perspective retains the existing drawing-hiding policy.
+
+The [drawing codec](replay/reviewDrawing.ts) writes anchored strokes as v3:
+signed float32 coordinate pairs in unscaled focused-discard space. A per-stroke
+tag preserves legacy table-normalized strokes when both kinds are edited
+together. Legacy-only drawings retain their v1/v2 reading and v2 writing
+behavior; no existing records are migrated or repaired. The blob/base64 API
+contract and 64 KiB limit are unchanged. Unsupported or malformed new drawings
+produce an explicit error rather than being silently discarded.
+
+Both web layouts support authoring; mobile remains read-only and needs a
+version containing the v3 reader to display new drawings. Tile stickers are
+not part of this feature.
+
+Geometry/codec regressions are covered by the focused Vitest specs. The host's
+`npm run test:e2e -- drawing.e2e.ts` exercises the actual Pixi renderer and
+overlay at DPR 1 and 2, including layout changes, resize, save/reload, draft
+recovery, cancellation, and reviewer colors.
+
 ## Layout (planned)
 
 ```

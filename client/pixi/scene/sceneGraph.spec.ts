@@ -154,6 +154,31 @@ describe("scene lifecycle and viewport owner", () => {
 });
 
 describe("public renderer composition", () => {
+  it("publishes the actual focused-discard frame on layout and viewport changes", async () => {
+    const renderer = new TableRenderer();
+    const listener = vi.fn();
+    renderer.setFocusedDiscardDrawingListener(listener);
+    expect(listener).toHaveBeenLastCalledWith(null);
+    await renderer.mount(new HTMLElement());
+    const view = createFrame({ mySeat: 0 }).view;
+    renderer.render(view);
+    const standard = listener.mock.lastCall?.[0];
+    expect(standard.scale).toBeGreaterThan(0);
+    listener.mockClear();
+    renderer.render(view);
+    expect(listener).not.toHaveBeenCalled();
+    renderer.setWebTableLayoutMode("compact");
+    renderer.render(view);
+    const compact = listener.mock.lastCall?.[0];
+    expect(compact.origin).not.toEqual(standard.origin);
+    expect(compact.scale).not.toBe(standard.scale);
+    const lateListener = vi.fn();
+    renderer.setFocusedDiscardDrawingListener(lateListener);
+    expect(lateListener).toHaveBeenLastCalledWith(compact);
+    renderer.setFocusedDiscardDrawingListener(null);
+    renderer.destroy();
+  });
+
   it("preserves pre-mount options, helper-facing overlays, host anchors and complete disposal", async () => {
     const renderer = new TableRenderer({
       presentation: "mobile",
