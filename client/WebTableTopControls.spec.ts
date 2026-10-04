@@ -19,6 +19,7 @@ describe("WebTableTopControls", () => {
     expect(html).toContain('aria-checked="false"');
     expect(html).toContain("Compact table");
     expect(html).toContain("Sound");
+    expect(html).not.toContain("Show controls");
     expect(html).toContain('aria-checked="true"');
     expect(html).toContain("left-0.5");
     expect(html).toContain("translate-x-0");
@@ -45,5 +46,30 @@ describe("WebTableTopControls", () => {
     expect(html).toContain('aria-checked="true"');
     expect(html).toContain("left-0.5");
     expect(html).toContain("translate-x-4");
+  });
+
+  it.each([
+    [undefined, true],
+    [true, true],
+    [false, false],
+  ])("reflects viewer control visibility %s as %s", (showControls, checked) => {
+    const html = renderToStaticMarkup(
+      createElement(WebTableTopControls, {
+        compactLayout: false,
+        onCompactLayoutChange: () => undefined,
+        showControls,
+        onShowControlsChange: () => undefined,
+        onQuit: () => undefined,
+        quitLabel: "Quit spectating",
+      })
+    );
+
+    const toggle = html.match(
+      /<button[^>]*aria-label="Show controls"[^>]*>/
+    )?.[0];
+    expect(toggle).toBeDefined();
+    expect(toggle).toContain('role="switch"');
+    expect(toggle).toContain(`aria-checked="${checked}"`);
+    expect(html.match(/role="switch"/g)).toHaveLength(3);
   });
 });

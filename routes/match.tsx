@@ -29,7 +29,6 @@ import {
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
 import { useWebTableUiScale, webTableUiStyle } from "~/game/client/webTableUiScale";
-import { resolveTableHudState } from "~/game/client/pixi/hud/actionTimerViewModel";
 import { ViewerList } from "~/game/components/ViewerList";
 import {
   advancePostHandPeekDiscardCount,
@@ -1423,24 +1422,12 @@ export default function GameMatchRoute({
         className="web-table-ui web-table-ui-live relative flex-1 w-full bg-emerald-900 overflow-hidden"
         style={{ touchAction: "none", ...webTableUiStyle(uiScale) }}
       >
-        {/* Keep metadata outside Pixi so it shares the controls' sizing. */}
         <div className="web-table-ui-header">
-          <div className="web-table-ui-status-stack">
-            <div className="web-table-ui-status-line">
-              <div
-                className="web-table-ui-status truncate font-mono text-[10px] text-emerald-100/70"
-                title={`match ${matchId}`}
-              >
-                match {matchId}
-              </div>
-              <span className="web-table-ui-diagnostics">
-                {resolveTableHudState(view, true).diagnostics}
-              </span>
-              <ClockQualityNotice
-                clockEpoch={view.serverClock?.clockEpoch}
-                inline
-              />
-            </div>
+          <div className="web-table-ui-viewer-stack">
+            <ClockQualityNotice
+              clockEpoch={view.serverClock?.clockEpoch}
+              inline
+            />
             <div className="web-table-ui-viewers">
               <ViewerList
                 viewers={view.viewers}

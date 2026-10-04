@@ -72,12 +72,19 @@ details at least 10px with the default browser font size.
 
 The `web-table-ui` scope adjusts Tailwind spacing/type tokens and explicit
 panel dimensions, not the canvas or drawing coordinates. It includes the
-top-left metadata/connection text, viewer list, side menus, navigation, settings,
-and replay review controls. Viewer lists retain manual collapse and scrolling;
+viewer list, side menus, navigation, settings, and replay review controls.
+The top-left debug/metadata bars are not displayed.
+Viewer lists retain manual collapse and scrolling;
 resizing never changes menu state or selects compact-table mode automatically.
 At the minimum size, very small windows may still have overlapping open panels.
 Shared components outside this scope, including native mobile consumers, keep
 their existing sizes.
+
+Spectate and replay settings include **Show controls**, enabled by default.
+Turning it off hides the right-side seat/round selectors, navigation, and event
+counter without stopping live updates or changing the selected seat/playhead.
+Settings, quit/share, the left menu, and viewers remain accessible. The toggle
+is local to the current viewer page and is not offered during live play.
 
 The host's `npm test -- webTableUiScale.spec.ts` checks the scale policy.
 `npm run test:e2e -- responsive.e2e.ts drawing.e2e.ts` measures the actual

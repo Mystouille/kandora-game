@@ -190,6 +190,7 @@ export default function GameSpectateRoute({
     x: number;
     y: number;
   } | null>(null);
+  const [showControls, setShowControls] = useState(true);
   const [overlays, setOverlays] = useState<ReplayOverlayState>(() => ({
     ...defaultReplayOverlayState,
     compactLayout: readWebTableLayoutMode() === "compact",
@@ -930,37 +931,8 @@ export default function GameSpectateRoute({
       className="web-table-ui fixed inset-0 bg-black"
       style={webTableUiStyle(uiScale)}
     >
-      {/* Top-left status banner */}
       <div className="web-table-ui-header">
-        <div className="web-table-ui-status-stack">
-          <div className="web-table-ui-status flex w-fit items-center gap-2 rounded-md bg-black/60 px-3 py-1 font-mono text-sm text-white">
-            <span
-              className={`inline-block w-2 h-2 rounded-full ${
-                isLive
-                  ? spectatorDelayMs > 0
-                    ? "bg-amber-400"
-                    : "bg-red-500"
-                  : "bg-slate-400"
-              }`}
-            />
-            <span className="shrink-0">
-              {isLive
-                ? tenhouRelay
-                  ? "Pseudo-live (5min delay)"
-                  : spectatorDelayMs > 0
-                    ? `Live (${spectatorDelayMs / 60_000} min delay)`
-                    : "Live"
-                : "Paused"}
-            </span>
-            <span className="opacity-60">·</span>
-            <span
-              className="min-w-0 max-w-[200px] truncate opacity-75"
-              title={matchId}
-            >
-              {matchId}
-            </span>
-            <span className="min-w-0 truncate text-xs opacity-50">{conn}</span>
-          </div>
+        <div className="web-table-ui-viewer-stack">
           <div className="web-table-ui-viewers">
             <ViewerList
               viewers={viewers}
@@ -972,6 +944,8 @@ export default function GameSpectateRoute({
           </div>
         </div>
         <WebTableTopControls
+          showControls={showControls}
+          onShowControlsChange={setShowControls}
           compactLayout={overlays.compactLayout}
           onCompactLayoutChange={(compactLayout) => {
             handleOverlayChange({ ...overlays, compactLayout });
@@ -1007,7 +981,10 @@ export default function GameSpectateRoute({
         </div>
       )}
       {/* Right-side: seat / round selectors + nav buttons. */}
-      <div className="web-table-ui-navigation absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base">
+      <div
+        hidden={!showControls}
+        className="web-table-ui-navigation absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base"
+      >
         {/* Row 1: seat selection, then round selection. */}
         <div className="flex items-center gap-2">
           <select

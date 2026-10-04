@@ -9,6 +9,8 @@ import { isGameSoundEnabled, setGameSoundEnabled } from "./sound";
 interface WebTableTopControlsProps {
   compactLayout: boolean;
   onCompactLayoutChange: (compactLayout: boolean) => void;
+  showControls?: boolean;
+  onShowControlsChange?: (showControls: boolean) => void;
   onQuit: () => void;
   quitLabel: string;
   children?: ReactNode;
@@ -17,9 +19,48 @@ interface WebTableTopControlsProps {
 export const WEB_TABLE_TOP_CONTROL_CLASS =
   "web-table-top-control h-11 inline-flex items-center justify-center rounded border border-transparent bg-black/70 text-emerald-100 text-base font-medium shadow-sm transition-[background-color,color,border-color,box-shadow,transform] duration-150 ease-out hover:border-emerald-400/60 hover:bg-emerald-800 hover:text-white hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-black active:translate-y-px active:scale-[0.96] active:bg-emerald-950 active:text-white active:shadow-inner motion-reduce:transition-none motion-reduce:transform-none";
 
+function SettingsSwitch({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={label}
+      aria-checked={checked}
+      onClick={() => {
+        onChange(!checked);
+      }}
+      className="flex w-full items-center justify-between gap-4 rounded px-3 py-2 text-sm font-medium hover:bg-emerald-900/80"
+    >
+      <span>{label}</span>
+      <span
+        aria-hidden="true"
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+          checked ? "bg-emerald-500" : "bg-slate-600"
+        }`}
+      >
+        <span
+          className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+            checked ? "translate-x-4" : "translate-x-0"
+          }`}
+        />
+      </span>
+    </button>
+  );
+}
+
 export function WebTableTopControls({
   compactLayout,
   onCompactLayoutChange,
+  showControls = true,
+  onShowControlsChange,
   onQuit,
   quitLabel,
   children,
@@ -82,54 +123,26 @@ export function WebTableTopControls({
           role="group"
           aria-label="Settings"
         >
-          <button
-            type="button"
-            role="switch"
-            aria-checked={compactLayout}
-            onClick={() => {
-              onCompactLayoutChange(!compactLayout);
-            }}
-            className="flex w-full items-center justify-between gap-4 rounded px-3 py-2 text-sm font-medium hover:bg-emerald-900/80"
-          >
-            <span>Compact table</span>
-            <span
-              aria-hidden="true"
-              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-                compactLayout ? "bg-emerald-500" : "bg-slate-600"
-              }`}
-            >
-              <span
-                className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                  compactLayout ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </span>
-          </button>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={soundEnabled}
-            onClick={() => {
-              const next = !soundEnabled;
+          {onShowControlsChange && (
+            <SettingsSwitch
+              label="Show controls"
+              checked={showControls}
+              onChange={onShowControlsChange}
+            />
+          )}
+          <SettingsSwitch
+            label="Compact table"
+            checked={compactLayout}
+            onChange={onCompactLayoutChange}
+          />
+          <SettingsSwitch
+            label="Sound"
+            checked={soundEnabled}
+            onChange={(next) => {
               setGameSoundEnabled(next);
               setSoundEnabled(next);
             }}
-            className="flex w-full items-center justify-between gap-4 rounded px-3 py-2 text-sm font-medium hover:bg-emerald-900/80"
-          >
-            <span>Sound</span>
-            <span
-              aria-hidden="true"
-              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-                soundEnabled ? "bg-emerald-500" : "bg-slate-600"
-              }`}
-            >
-              <span
-                className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                  soundEnabled ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </span>
-          </button>
+          />
         </div>
       </div>
       <button
