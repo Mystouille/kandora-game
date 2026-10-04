@@ -1,0 +1,216 @@
+/* Scope Tailwind's sizing tokens without changing the canvas coordinate system. */
+.web-table-ui {
+  --web-ui-unit: calc(1rem * var(--web-table-ui-scale, 1));
+  --web-ui-inset: calc(0.5 * var(--web-ui-unit));
+  --web-ui-detail: max(0.625rem, calc(0.75 * var(--web-ui-unit)));
+  --web-ui-small: max(0.75rem, calc(0.875 * var(--web-ui-unit)));
+  --web-ui-body: max(0.75rem, var(--web-ui-unit));
+  --web-ui-large: max(0.75rem, calc(1.125 * var(--web-ui-unit)));
+  --web-ui-small-line: max(1rem, calc(1.25 * var(--web-ui-unit)));
+  --web-ui-drawer-width: calc(12 * var(--web-ui-unit));
+  --web-ui-left-menu-height: calc(
+    5 * (var(--web-ui-small-line) + var(--web-ui-unit)) + var(--web-ui-unit)
+  );
+  --spacing: calc(0.25 * var(--web-ui-unit));
+  --text-xs: var(--web-ui-detail);
+  --text-sm: var(--web-ui-small);
+  --text-base: var(--web-ui-body);
+  --text-lg: var(--web-ui-large);
+  --text-xl: max(0.75rem, calc(1.25 * var(--web-ui-unit)));
+  --text-2xl: max(0.75rem, calc(1.5 * var(--web-ui-unit)));
+  --text-3xl: max(0.75rem, calc(1.875 * var(--web-ui-unit)));
+  --text-4xl: max(0.75rem, calc(2.25 * var(--web-ui-unit)));
+  font-size: var(--web-ui-body);
+}
+
+.web-table-ui.web-table-ui-live {
+  --web-ui-left-menu-height: calc(21 * var(--web-ui-unit) + 2px);
+}
+
+.web-table-ui .web-table-top-action {
+  min-width: calc(5.5 * var(--web-ui-unit));
+}
+
+.web-table-ui .web-table-settings {
+  top: calc(100% + var(--web-ui-inset));
+  max-width: calc(100vw - 2 * var(--web-ui-inset));
+}
+
+.web-table-ui .web-table-live-menu-letter {
+  flex-shrink: 0;
+}
+
+.web-table-ui .web-table-live-menu-label {
+  white-space: nowrap;
+}
+
+.web-table-ui .web-table-overlay-track[data-open="false"] {
+  translate: calc(-1 * var(--web-ui-drawer-width)) 0;
+}
+
+.web-table-ui .web-table-overlay-body {
+  width: var(--web-ui-drawer-width);
+  max-height: calc(0.8 * var(--web-table-ui-height, 100dvh));
+  overflow-y: auto;
+}
+
+.web-table-ui .web-table-overlay-body button {
+  line-height: var(--web-ui-small-line);
+}
+
+.web-table-ui .web-table-viewer-list {
+  max-width: 100%;
+}
+
+.web-table-ui .web-table-viewer-toggle,
+.web-table-ui .web-table-viewer-row {
+  font-size: max(0.75rem, calc(0.75 * var(--web-ui-unit)));
+  line-height: 1.4;
+}
+
+.web-table-ui .web-table-viewer-list ul {
+  overscroll-behavior: contain;
+}
+
+.web-table-ui .web-table-viewer-delay {
+  flex-shrink: 0;
+  font-size: 0.625rem;
+}
+
+.web-table-ui .web-table-clock-notice {
+  --web-ui-notice-padding: 0 calc(0.25 * var(--web-ui-unit));
+}
+
+.web-table-ui :is(button, select, input) {
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+}
+
+.web-table-ui :is(button, select, input).text-xs {
+  font-size: max(0.75rem, var(--web-ui-detail));
+}
+
+.web-table-ui .web-table-ui-header {
+  position: absolute;
+  inset: var(--web-ui-inset) var(--web-ui-inset) auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--web-ui-inset);
+  z-index: 130;
+  pointer-events: none;
+}
+
+.web-table-ui-header .web-table-top-controls {
+  position: relative;
+  inset: auto;
+  flex-shrink: 0;
+}
+
+.web-table-ui .web-table-ui-status-stack {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  height: max(
+    calc(2.5rem + var(--web-ui-inset)),
+    calc(
+      (var(--web-table-ui-height, 100dvh) - var(--web-ui-left-menu-height)) /
+        2 - 2 * var(--web-ui-inset)
+    )
+  );
+}
+
+.web-table-ui .web-table-ui-status-line {
+  display: flex;
+  align-items: center;
+  gap: var(--web-ui-inset);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.web-table-ui .web-table-ui-status {
+  position: static;
+  max-width: 100%;
+  min-width: 0;
+  pointer-events: auto;
+}
+
+.web-table-ui .web-table-ui-diagnostics {
+  flex-shrink: 0;
+  color: white;
+  font-size: max(0.625rem, calc(0.875 * var(--web-ui-unit)));
+  line-height: 1.4;
+  white-space: pre;
+}
+
+.web-table-ui .web-table-ui-viewers {
+  display: flex;
+  align-items: flex-start;
+  min-height: 0;
+  flex: 1;
+  margin-top: var(--web-ui-inset);
+}
+
+.web-table-ui .web-table-ui-navigation {
+  max-width: min(
+    calc(18 * var(--web-ui-unit)),
+    calc(100% - 2 * var(--web-ui-inset))
+  );
+}
+
+.web-table-ui .web-table-ui-navigation select {
+  min-width: 0;
+  max-width: calc(11 * var(--web-ui-unit));
+  text-overflow: ellipsis;
+}
+
+.web-table-ui .web-table-ui-peek {
+  height: max(1.5rem, calc(2.5 * var(--web-ui-unit)));
+  width: max(1.5rem, calc(2.5 * var(--web-ui-unit)));
+}
+
+.web-table-ui .web-table-ui-dialog {
+  max-width: calc(100% - 2 * var(--web-ui-inset));
+  max-height: calc(
+    var(--web-table-ui-height, 100dvh) - 2 * var(--web-ui-inset)
+  );
+  overflow: auto;
+}
+
+.web-table-ui .web-table-ui-ready {
+  min-width: min(
+    calc(22.5 * var(--web-ui-unit)),
+    calc(100% - 2 * var(--web-ui-inset))
+  );
+  min-height: calc(13.75 * var(--web-ui-unit));
+}
+
+.web-table-ui .web-table-ui-ready-chip {
+  width: calc(1.75 * var(--web-ui-unit));
+  height: calc(1.75 * var(--web-ui-unit));
+}
+
+.web-table-ui .web-table-ui-ready-chips {
+  font-size: max(0.75rem, calc(1.625 * var(--web-ui-unit)));
+}
+
+.web-table-ui .web-table-ui-waiting {
+  width: min(calc(26.25 * var(--web-ui-unit)), 90%);
+}
+
+.web-table-ui .web-table-review-comments {
+  max-width: min(
+    calc(51.25 * var(--web-ui-unit)),
+    calc(100% - 2 * var(--web-ui-inset))
+  );
+}
+
+.web-table-ui .web-table-review-editor {
+  max-height: calc(var(--web-table-ui-height, 100dvh) - 5 * var(--web-ui-unit));
+  overflow-y: auto;
+}
+
+.web-table-ui .web-table-review-editor .ProseMirror {
+  min-height: calc(18.75 * var(--web-ui-unit));
+  padding: calc(0.75 * var(--web-ui-unit));
+}

@@ -61,8 +61,7 @@ export function replayOverlayToggles(
 ): ToggleSpec[] {
   return TOGGLES.filter(
     (toggle) =>
-      toggle.key !== "showWalls" ||
-      (includeWallToggle && !compactLayout)
+      toggle.key !== "showWalls" || (includeWallToggle && !compactLayout)
   );
 }
 
@@ -96,7 +95,7 @@ export function ReplayOverlayPanel({
 
   return (
     <div
-      className="pointer-events-none absolute left-0 top-0 bottom-0 z-20 flex items-center"
+      className="web-table-overlay-panel pointer-events-none absolute left-0 top-0 bottom-0 z-20 flex items-center"
       aria-hidden={false}
     >
       {/* Panel + chevron travel together as a single translated
@@ -107,12 +106,13 @@ export function ReplayOverlayPanel({
        * `open` so collapsed-state clicks fall through to the
        * canvas. */}
       <div
-        className={`flex items-stretch transition-transform duration-150 ease-out ${
+        data-open={open}
+        className={`web-table-overlay-track flex items-stretch transition-transform duration-150 ease-out ${
           open ? "translate-x-0" : "-translate-x-48"
         }`}
       >
         <div
-          className={`${
+          className={`web-table-overlay-body ${
             open ? "pointer-events-auto" : "pointer-events-none"
           } w-48 max-h-[80vh] bg-white text-emerald-950 shadow-2xl border-r border-t border-b border-emerald-900/30`}
           role="group"
@@ -152,7 +152,7 @@ export function ReplayOverlayPanel({
           }}
           aria-expanded={open}
           aria-label={open ? "Close overlay panel" : "Open overlay panel"}
-          className="pointer-events-auto h-32 w-10 bg-emerald-800 hover:bg-emerald-700 text-white text-3xl font-mono rounded-r border-y border-r border-emerald-900/40 flex items-center justify-center shadow-lg"
+          className="web-table-overlay-tab pointer-events-auto h-32 w-10 bg-emerald-800 hover:bg-emerald-700 text-white text-3xl font-mono rounded-r border-y border-r border-emerald-900/40 flex items-center justify-center shadow-lg"
         >
           {open ? "‹" : "›"}
         </button>

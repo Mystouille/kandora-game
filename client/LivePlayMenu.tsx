@@ -152,7 +152,7 @@ export function LivePlayMenu(props: LivePlayMenuProps): React.JSX.Element {
       // Vertically centred on the left edge. `pointer-events-auto`
       // because the outer match container disables touch
       // gestures on the canvas, not on overlay children.
-      className="pointer-events-auto absolute left-2 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-2 rounded-lg border border-emerald-700/60 bg-emerald-950/85 p-3 shadow-xl"
+      className="web-table-live-menu pointer-events-auto absolute left-2 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-2 rounded-lg border border-emerald-700/60 bg-emerald-950/85 p-3 shadow-xl"
     >
       <button
         type="button"
@@ -194,10 +194,12 @@ export function LivePlayMenu(props: LivePlayMenuProps): React.JSX.Element {
                   : "bg-emerald-900/70 text-white hover:bg-emerald-800")
               }
             >
-              <span className="w-14 h-14 flex items-center justify-center font-mono font-bold text-2xl">
+              <span className="web-table-live-menu-letter w-14 h-14 flex items-center justify-center font-mono font-bold text-2xl">
                 {opt.letter}
               </span>
-              <span className="pr-6">{opt.label}</span>
+              <span className="web-table-live-menu-label pr-6">
+                {opt.label}
+              </span>
             </button>
           );
         }

@@ -15,6 +15,7 @@ import {
   writeWebTableLayoutMode,
 } from "~/game/client/webTableLayoutPreference";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
+import { useWebTableUiScale, webTableUiStyle } from "~/game/client/webTableUiScale";
 import { useScreenWakeLock } from "~/game/client/screenWakeLock";
 import { ViewerList } from "~/game/components/ViewerList";
 import { FIVE_MINUTE_SPECTATOR_DELAY_MS } from "~/game/protocol/spectatorDelay";
@@ -152,6 +153,8 @@ export default function GameSpectateRoute({
   const { t } = useLocale();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLElement | null>(null);
+  const uiScale = useWebTableUiScale(viewportRef);
   const rendererRef = useRef<TableRenderer | null>(null);
   const wsRef = useRef<GameWS | null>(null);
   // Latest render args, snapshotted on every dispatch into the
@@ -259,6 +262,7 @@ export default function GameSpectateRoute({
         const renderer = new TableRenderer({
           webTableLayoutMode: overlays.compactLayout ? "compact" : "standard",
         });
+        renderer.setConnectionDiagnosticsVisible(false);
         // Show the full wall (face-down): the relay carries no tile
         // faces, but the draw count is tracked so the wall shrinks
         // correctly. `showWalls` (off here) is what reveals faces.
@@ -921,32 +925,62 @@ export default function GameSpectateRoute({
   }, []);
 
   return (
-    <main className="fixed inset-0 bg-black">
+    <main
+      ref={viewportRef}
+      className="web-table-ui fixed inset-0 bg-black"
+      style={webTableUiStyle(uiScale)}
+    >
       {/* Top-left status banner */}
-      <div className="absolute top-2 left-2 z-30 flex w-fit max-w-[calc(100%-11rem)] items-center gap-2 rounded-md bg-black/60 px-3 py-1 font-mono text-sm text-white">
-        <span
-          className={`inline-block w-2 h-2 rounded-full ${
-            isLive
-              ? spectatorDelayMs > 0
-                ? "bg-amber-400"
-                : "bg-red-500"
-              : "bg-slate-400"
-          }`}
+      <div className="web-table-ui-header">
+        <div className="web-table-ui-status-stack">
+          <div className="web-table-ui-status flex w-fit items-center gap-2 rounded-md bg-black/60 px-3 py-1 font-mono text-sm text-white">
+            <span
+              className={`inline-block w-2 h-2 rounded-full ${
+                isLive
+                  ? spectatorDelayMs > 0
+                    ? "bg-amber-400"
+                    : "bg-red-500"
+                  : "bg-slate-400"
+              }`}
+            />
+            <span className="shrink-0">
+              {isLive
+                ? tenhouRelay
+                  ? "Pseudo-live (5min delay)"
+                  : spectatorDelayMs > 0
+                    ? `Live (${spectatorDelayMs / 60_000} min delay)`
+                    : "Live"
+                : "Paused"}
+            </span>
+            <span className="opacity-60">·</span>
+            <span
+              className="min-w-0 max-w-[200px] truncate opacity-75"
+              title={matchId}
+            >
+              {matchId}
+            </span>
+            <span className="min-w-0 truncate text-xs opacity-50">{conn}</span>
+          </div>
+          <div className="web-table-ui-viewers">
+            <ViewerList
+              viewers={viewers}
+              expanded={showViewerList}
+              onToggle={() => {
+                setShowViewerList((visible) => !visible);
+              }}
+            />
+          </div>
+        </div>
+        <WebTableTopControls
+          compactLayout={overlays.compactLayout}
+          onCompactLayoutChange={(compactLayout) => {
+            handleOverlayChange({ ...overlays, compactLayout });
+          }}
+          onQuit={() => {
+            void navigate("/lobby");
+          }}
+          quitLabel="Quit spectating"
         />
-        <span>
-          {isLive
-            ? tenhouRelay
-              ? "Pseudo-live (5min delay)"
-              : spectatorDelayMs > 0
-                ? `Live (${spectatorDelayMs / 60_000} min delay)`
-                : "Live"
-            : "Paused"}
-        </span>
-        <span className="opacity-60">·</span>
-        <span className="min-w-0 max-w-[200px] truncate opacity-75">
-          {matchId}
-        </span>
-        <span className="min-w-0 truncate text-xs opacity-50">{conn}</span>
       </div>
       {((tenhouRelay && tenhouStreamStatus === "waiting") ||
         (!tenhouRelay && spectatorDelayMs > 0 && baseline === null)) && (
@@ -954,7 +988,7 @@ export default function GameSpectateRoute({
           <section
             role="status"
             aria-live="polite"
-            className="w-[min(26rem,calc(100vw-2rem))] rounded-xl border border-white/25 bg-black/85 px-7 py-6 text-center text-white shadow-2xl"
+            className="web-table-ui-dialog web-table-ui-waiting w-[min(26rem,calc(100vw-2rem))] rounded-xl border border-white/25 bg-black/85 px-7 py-6 text-center text-white shadow-2xl"
           >
             <h2 className="text-xl font-bold">
               {tenhouRelay ? "Waiting for Tenhou" : "Waiting for delayed game"}
@@ -972,31 +1006,8 @@ export default function GameSpectateRoute({
           </section>
         </div>
       )}
-      <WebTableTopControls
-        compactLayout={overlays.compactLayout}
-        onCompactLayoutChange={(compactLayout) => {
-          handleOverlayChange({ ...overlays, compactLayout });
-        }}
-        onQuit={() => {
-          void navigate("/lobby");
-        }}
-        quitLabel="Quit spectating"
-      />
-      <div
-        className="pointer-events-none absolute left-2 top-12 z-30 flex items-start"
-        style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
-      >
-        <ViewerList
-          viewers={viewers}
-          expanded={showViewerList}
-          onToggle={() => {
-            setShowViewerList((visible) => !visible);
-          }}
-        />
-      </div>
-
       {/* Right-side: seat / round selectors + nav buttons. */}
-      <div className="absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base">
+      <div className="web-table-ui-navigation absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col items-stretch gap-3 text-emerald-100 text-base">
         {/* Row 1: seat selection, then round selection. */}
         <div className="flex items-center gap-2">
           <select
@@ -1144,7 +1155,7 @@ export default function GameSpectateRoute({
           onPointerLeave={() => {
             setEyeHeld(false);
           }}
-          className="pointer-events-auto absolute z-40 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
+          className="web-table-ui-peek pointer-events-auto absolute z-40 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
           style={{
             left: pondCenter.x,
             top: pondCenter.y,

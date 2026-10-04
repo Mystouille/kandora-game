@@ -60,6 +60,30 @@ The ESLint `no-restricted-imports` rule scoped to `app/game/**` and
 `game-server/**` enforces these boundaries with severity `error`. Do not
 weaken the rule to land a feature — refactor through the adapter instead.
 
+## Browser control sizing
+
+Live play, live spectating, and the host's replay/review screen use
+[one viewport sizing hook](./client/webTableUiScale.ts) and
+[scoped UI styles](./client/webTableUi.css). They measure the available game
+container and apply `clamp(0.75, min(width / 1280, height / 900), 1)` to the
+surrounding controls. Large windows retain normal sizes; smaller windows stop
+shrinking at 75%. Labels and player names remain at least 12px and secondary
+details at least 10px with the default browser font size.
+
+The `web-table-ui` scope adjusts Tailwind spacing/type tokens and explicit
+panel dimensions, not the canvas or drawing coordinates. It includes the
+top-left metadata/connection text, viewer list, side menus, navigation, settings,
+and replay review controls. Viewer lists retain manual collapse and scrolling;
+resizing never changes menu state or selects compact-table mode automatically.
+At the minimum size, very small windows may still have overlapping open panels.
+Shared components outside this scope, including native mobile consumers, keep
+their existing sizes.
+
+The host's `npm test -- webTableUiScale.spec.ts` checks the scale policy.
+`npm run test:e2e -- responsive.e2e.ts drawing.e2e.ts` measures the actual
+browser controls, exercises resizing/editing/navigation, and checks drawing
+alignment at DPR 1 and 2 using isolated fixtures without external services.
+
 ## Platform adapters
 
 - [Tenhou live spectating](./adapters/tenhou/README.md) describes the upstream

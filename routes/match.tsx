@@ -28,6 +28,8 @@ import {
 } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
+import { useWebTableUiScale, webTableUiStyle } from "~/game/client/webTableUiScale";
+import { resolveTableHudState } from "~/game/client/pixi/hud/actionTimerViewModel";
 import { ViewerList } from "~/game/components/ViewerList";
 import {
   advancePostHandPeekDiscardCount,
@@ -392,7 +394,7 @@ function SessionVoteOverlay({
 
   return (
     <div className="pointer-events-auto absolute inset-0 z-[110] flex items-center justify-center bg-black/55">
-      <div className="relative flex flex-col items-center justify-center gap-5 rounded-xl border border-amber-400/60 bg-black/90 px-10 py-7 shadow-2xl">
+      <div className="web-table-ui-dialog relative flex flex-col items-center justify-center gap-5 rounded-xl border border-amber-400/60 bg-black/90 px-10 py-7 shadow-2xl">
         <div className="text-xs uppercase tracking-widest text-amber-300/80">
           Game {sessionVote.gameIndex + 1} complete
         </div>
@@ -612,10 +614,10 @@ function ReadyCheckOverlay({
             alt=""
             width={28}
             height={28}
-            className="inline-block"
+            className="web-table-ui-ready-chip inline-block"
             style={{ imageRendering: "auto" }}
           />
-          <span className="text-[26px] leading-none">{chips[seat]}</span>
+          <span className="web-table-ui-ready-chips text-[26px] leading-none">{chips[seat]}</span>
         </span>
       ) : null}
     </span>
@@ -624,8 +626,7 @@ function ReadyCheckOverlay({
   return (
     <div className="pointer-events-auto absolute inset-0 z-[100] flex items-center justify-center bg-black/40">
       <div
-        className="relative flex flex-col items-center justify-center gap-4 rounded-xl border border-emerald-500/40 bg-black/85 px-10 py-8 shadow-2xl"
-        style={{ minWidth: 360, minHeight: 220 }}
+        className="web-table-ui-dialog web-table-ui-ready relative flex flex-col items-center justify-center gap-4 rounded-xl border border-emerald-500/40 bg-black/85 px-10 py-8 shadow-2xl"
       >
         <div className="absolute left-1/2 top-2 -translate-x-1/2 text-sm">
           {seatLabel(topSeat)}
@@ -676,6 +677,7 @@ export default function GameMatchRoute({
   useScreenWakeLock();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const uiScale = useWebTableUiScale(containerRef);
   const rendererRef = useRef<TableRenderer | null>(null);
   const wsRef = useRef<GameWS | null>(null);
   const [sessionReplacedMessage, setSessionReplacedMessage] = useState<
@@ -1069,6 +1071,7 @@ export default function GameMatchRoute({
             ? "compact"
             : "standard",
         });
+        renderer.setConnectionDiagnosticsVisible(false);
         renderer.setMinimumDrawToDiscardDelayEnabled(true);
         renderer.setDrawSequencing(true, {
           onDiscardLand: (_seat, isRiichiDeclaration, presentationSeq) => {
@@ -1417,31 +1420,58 @@ export default function GameMatchRoute({
         // `touch-action: none` so the browser doesn't intercept
         // taps / swipes / long-press as scroll or text-selection
         // gestures — critical for tile clicks on touch devices.
-        className="relative flex-1 w-full bg-emerald-900 overflow-hidden"
-        style={{ touchAction: "none" }}
+        className="web-table-ui web-table-ui-live relative flex-1 w-full bg-emerald-900 overflow-hidden"
+        style={{ touchAction: "none", ...webTableUiStyle(uiScale) }}
       >
-        {/* Match id pinned above the Pixi debug HUD (which renders
-            at design-pixel (16,16) inside the canvas). DOM overlay
-            so the value is selectable / copy-pasteable for bug
-            reports. */}
-        <div className="absolute top-0 left-4 z-30 flex h-5 items-center gap-1 font-mono text-[10px] text-emerald-100/70">
-          <span className="pointer-events-none select-text">
-            match {matchId}
-          </span>
-        </div>
-        <div className="pointer-events-none absolute bottom-2 left-4 top-5 z-30 flex items-start">
-          <ViewerList
-            viewers={view.viewers}
-            expanded={showViewerList}
-            onToggle={() => {
-              setShowViewerList((visible) => !visible);
+        {/* Keep metadata outside Pixi so it shares the controls' sizing. */}
+        <div className="web-table-ui-header">
+          <div className="web-table-ui-status-stack">
+            <div className="web-table-ui-status-line">
+              <div
+                className="web-table-ui-status truncate font-mono text-[10px] text-emerald-100/70"
+                title={`match ${matchId}`}
+              >
+                match {matchId}
+              </div>
+              <span className="web-table-ui-diagnostics">
+                {resolveTableHudState(view, true).diagnostics}
+              </span>
+              <ClockQualityNotice
+                clockEpoch={view.serverClock?.clockEpoch}
+                inline
+              />
+            </div>
+            <div className="web-table-ui-viewers">
+              <ViewerList
+                viewers={view.viewers}
+                expanded={showViewerList}
+                onToggle={() => {
+                  setShowViewerList((visible) => !visible);
+                }}
+              />
+            </div>
+          </div>
+          <WebTableTopControls
+            compactLayout={liveMenuFlags.compactLayout}
+            onCompactLayoutChange={(compactLayout) => {
+              handleLiveMenuChange({ ...liveMenuFlags, compactLayout });
             }}
+            onQuit={() => {
+              if (view.roomState?.status === "waiting") {
+                wsRef.current?.leaveSeat();
+              }
+              void navigate("/lobby");
+            }}
+            quitLabel={
+              view.roomState?.status === "waiting"
+                ? "Leave waiting room"
+                : "Quit game"
+            }
           />
         </div>
-        <ClockQualityNotice clockEpoch={view.serverClock?.clockEpoch} />
         {timingError !== null && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80">
-            <div className="max-w-sm rounded-xl bg-emerald-950 px-8 py-6 text-center text-white">
+            <div className="web-table-ui-dialog max-w-sm rounded-xl bg-emerald-950 px-8 py-6 text-center text-white">
               <h2 className="text-lg font-semibold">Client update required</h2>
               <p className="my-4">{timingError}</p>
               <button
@@ -1456,7 +1486,7 @@ export default function GameMatchRoute({
         )}
         {sessionReplacedMessage !== null && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 pointer-events-auto">
-            <div className="flex max-w-sm flex-col items-center gap-4 rounded-xl border border-emerald-400/50 bg-emerald-950 px-8 py-6 text-center shadow-2xl">
+            <div className="web-table-ui-dialog flex max-w-sm flex-col items-center gap-4 rounded-xl border border-emerald-400/50 bg-emerald-950 px-8 py-6 text-center shadow-2xl">
               <div className="text-emerald-200 text-lg font-semibold">
                 Game resumed on another device
               </div>
@@ -1482,7 +1512,7 @@ export default function GameMatchRoute({
             stay defaulted but future ones wait normally again. */}
         {view.mySeat !== null && !ownConnected && !view.matchEnded && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 pointer-events-auto">
-            <div className="flex flex-col items-center gap-4 rounded-xl border border-amber-500/50 bg-emerald-950/95 px-8 py-6 shadow-2xl">
+            <div className="web-table-ui-dialog flex flex-col items-center gap-4 rounded-xl border border-amber-500/50 bg-emerald-950/95 px-8 py-6 shadow-2xl">
               <div className="text-amber-300 text-lg font-semibold">
                 Disconnected
               </div>
@@ -1518,7 +1548,7 @@ export default function GameMatchRoute({
           (view.conn === "reconnecting" || view.conn === "connecting") &&
           view.lastSeq >= 0 && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 pointer-events-auto">
-              <div className="flex flex-col items-center gap-4 rounded-xl border border-amber-500/50 bg-emerald-950/95 px-8 py-6 shadow-2xl">
+              <div className="web-table-ui-dialog flex flex-col items-center gap-4 rounded-xl border border-amber-500/50 bg-emerald-950/95 px-8 py-6 shadow-2xl">
                 <div className="text-amber-300 text-lg font-semibold">
                   Connection lost
                 </div>
@@ -1540,23 +1570,6 @@ export default function GameMatchRoute({
               </div>
             </div>
           )}
-        <WebTableTopControls
-          compactLayout={liveMenuFlags.compactLayout}
-          onCompactLayoutChange={(compactLayout) => {
-            handleLiveMenuChange({ ...liveMenuFlags, compactLayout });
-          }}
-          onQuit={() => {
-            if (view.roomState?.status === "waiting") {
-              wsRef.current?.leaveSeat();
-            }
-            void navigate("/lobby");
-          }}
-          quitLabel={
-            view.roomState?.status === "waiting"
-              ? "Leave waiting room"
-              : "Quit game"
-          }
-        />
         {/* Left-side live-play options menu (semi-collapsible).
             UI only for now; behaviour wiring lands in a
             follow-up. */}
@@ -1633,7 +1646,7 @@ export default function GameMatchRoute({
                 e.preventDefault();
                 setEyeHeld(false);
               }}
-              className="pointer-events-auto absolute z-40 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
+              className="web-table-ui-peek pointer-events-auto absolute z-40 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg cursor-pointer select-none text-lg"
               style={{
                 left: pondCenter.x,
                 top: pondCenter.y,
@@ -1759,7 +1772,7 @@ function WaitingRoomOverlay({
 
   return (
     <div className="pointer-events-auto absolute inset-0 z-[120] flex items-center justify-center bg-black/70">
-      <div className="flex w-[min(420px,90vw)] flex-col gap-4 rounded-xl border border-emerald-500/40 bg-emerald-950 px-6 py-6 shadow-2xl">
+      <div className="web-table-ui-dialog web-table-ui-waiting flex w-[min(420px,90vw)] flex-col gap-4 rounded-xl border border-emerald-500/40 bg-emerald-950 px-6 py-6 shadow-2xl">
         <header>
           <h2 className="text-xl font-bold text-emerald-100">Waiting room</h2>
           <p className="text-sm text-emerald-300/80">

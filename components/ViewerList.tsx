@@ -16,7 +16,7 @@ export function ViewerList({
   const toggleLabel = expanded ? "Hide viewer list" : "Show viewer list";
   return (
     <aside
-      className={`pointer-events-auto z-30 flex max-h-full min-h-0 w-48 flex-col overflow-hidden rounded bg-black/65 text-white shadow-lg backdrop-blur-sm ${className}`}
+      className={`web-table-viewer-list pointer-events-auto z-30 flex max-h-full min-h-0 w-48 flex-col overflow-hidden rounded bg-black/65 text-white shadow-lg backdrop-blur-sm ${className}`}
       aria-label="Current viewers"
     >
       <button
@@ -25,10 +25,8 @@ export function ViewerList({
         aria-expanded={expanded}
         aria-label={toggleLabel}
         title={toggleLabel}
-        className={`flex h-8 w-full shrink-0 items-center gap-2 px-3 text-xs font-semibold transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300/80 ${
-          expanded && spectators.length > 0
-            ? "border-b border-white/10"
-            : ""
+        className={`web-table-viewer-toggle flex h-8 w-full shrink-0 items-center gap-2 px-3 text-xs font-semibold transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300/80 ${
+          expanded && spectators.length > 0 ? "border-b border-white/10" : ""
         }`}
       >
         <EyeOutlined
@@ -50,16 +48,17 @@ export function ViewerList({
             return (
               <li
                 key={viewer.userId}
-                className="flex h-7 shrink-0 items-center gap-2 px-3 text-xs"
+                className="web-table-viewer-row flex h-7 shrink-0 items-center gap-2 px-3 text-xs"
               >
-                <span className="min-w-0 flex-1 truncate">
+                <span
+                  className="min-w-0 flex-1 truncate"
+                  title={viewer.displayName}
+                >
                   {viewer.displayName}
                 </span>
                 <span
-                  className={`text-[10px] uppercase ${
-                    delayMinutes > 0
-                      ? "text-amber-300/70"
-                      : "text-red-300/70"
+                  className={`web-table-viewer-delay text-[10px] uppercase ${
+                    delayMinutes > 0 ? "text-amber-300/70" : "text-red-300/70"
                   }`}
                 >
                   {delayMinutes > 0 ? `${delayMinutes} min delay` : "live"}
