@@ -27,6 +27,40 @@ export interface SnapshotComposerPort {
   readonly timing: Pick<DecisionTiming, "metadata">;
 }
 
+function discardTsumogiriFromHistory(
+  history: readonly { event: GameEvent }[]
+): boolean[][] {
+  let tiles: Tile[][] = [[], [], [], []];
+  let flags: boolean[][] = [[], [], [], []];
+
+  for (const { event } of history) {
+    if (event.type === "match_start" || event.type === "hand_start") {
+      tiles = [[], [], [], []];
+      flags = [[], [], [], []];
+      continue;
+    }
+    if (event.type === "discard") {
+      tiles[event.seat].push(event.tile);
+      flags[event.seat].push(event.tsumogiri);
+      continue;
+    }
+    if (
+      event.type === "call" &&
+      event.meld.from !== null &&
+      event.meld.claimedTile !== null
+    ) {
+      const from = event.meld.from;
+      const index = tiles[from].lastIndexOf(event.meld.claimedTile);
+      if (index >= 0) {
+        tiles[from].splice(index, 1);
+        flags[from].splice(index, 1);
+      }
+    }
+  }
+
+  return flags;
+}
+
 export class SnapshotComposer {
   constructor(private readonly port: SnapshotComposerPort) {}
   ryuukyokuPublicState(): {
@@ -132,6 +166,7 @@ export class SnapshotComposer {
     const ryuukyoku = this.ryuukyokuPublicState();
     const lastHandResult = this.settledRyuukyokuResult();
     const sessionVote = this.port.sessionVote?.();
+    const discardTsumogiri = discardTsumogiriFromHistory(this.port.history());
     return {
       ...this.port.timing.metadata(seat, this.port.seatSequences()[seat] - 1),
       type: "snapshot",
@@ -146,7 +181,8 @@ export class SnapshotComposer {
               : new Array<Tile | null>(h.length).fill(null)
           ),
         discards: this.port.state().discards.map((d) => [...d]),
-        melds: this.port.state().melds.map((mlds) =>
+          discardTsumogiri,
+          melds: this.port.state().melds.map((mlds) =>
           mlds.map((m) => ({
             type: m.type,
             tiles: [...m.tiles],
@@ -248,6 +284,7 @@ export class SnapshotComposer {
     const startingWall = this.port.handStartWall();
     const ryuukyoku = this.ryuukyokuPublicState();
     const lastHandResult = this.settledRyuukyokuResult();
+    const discardTsumogiri = discardTsumogiriFromHistory(this.port.history());
     return {
       type: "snapshot",
       // `spectatorSeq` is the next seq to assign; `seq - 1` is the
@@ -260,6 +297,7 @@ export class SnapshotComposer {
         // visible.
         hands: this.port.state().hands.map((h) => [...h]),
         discards: this.port.state().discards.map((d) => [...d]),
+        discardTsumogiri,
         melds: this.port.state().melds.map((mlds) =>
           mlds.map((m) => ({
             type: m.type,

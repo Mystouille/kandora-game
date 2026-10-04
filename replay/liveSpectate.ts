@@ -28,8 +28,10 @@ export function snapshotToReplayView(snapshot: SnapshotState): ReplayView {
     hands: snapshot.hands.map((hand) => [...hand]),
     melds: snapshot.melds.map((melds) => [...melds]),
     discards: snapshot.discards.map((discards) => [...discards]),
-    discardTsumogiri: snapshot.discards.map((discards) =>
-      discards.map(() => false)
+    discardTsumogiri: snapshot.discards.map((discards, seat) =>
+      discards.map(
+        (_, index) => snapshot.discardTsumogiri?.[seat]?.[index] ?? false
+      )
     ),
     discardSources: snapshot.discards.map((discards) =>
       discards.map(() => null)

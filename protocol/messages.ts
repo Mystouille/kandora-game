@@ -658,6 +658,9 @@ export const SnapshotStateSchema = z.object({
   mySeat: SeatSchema.nullable(),
   hands: z.array(z.array(TileSchema.nullable())).length(4),
   discards: z.array(z.array(TileSchema)).length(4),
+  /** Per-discard tsumogiri flags, parallel to `discards`. Optional for
+   * compatibility with snapshots produced by older game servers. */
+  discardTsumogiri: z.array(z.array(z.boolean())).length(4).optional(),
   melds: z.array(z.array(MeldSchema)).length(4),
   wallRemaining: z.number().int().nonnegative(),
   duplicateWallState: DuplicateWallStateSchema.optional(),

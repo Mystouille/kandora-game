@@ -92,4 +92,25 @@ describe("spectator snapshot baseline", () => {
 
     expect(snapshotToReplayView(snapshot).freshlyDrawnSeat).toBeNull();
   });
+
+  it("preserves snapshot tsumogiri flags with a legacy fallback", () => {
+    const snapshot = snapshotWithFreshGreenDragon();
+    snapshot.discards = [["1m", "2m"], [], [], []];
+    snapshot.discardTsumogiri = [[true, false], [], [], []];
+
+    expect(snapshotToReplayView(snapshot).discardTsumogiri).toEqual([
+      [true, false],
+      [],
+      [],
+      [],
+    ]);
+
+    delete snapshot.discardTsumogiri;
+    expect(snapshotToReplayView(snapshot).discardTsumogiri).toEqual([
+      [false, false],
+      [],
+      [],
+      [],
+    ]);
+  });
 });

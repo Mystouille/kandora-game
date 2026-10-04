@@ -287,6 +287,12 @@ export function parseTenhouReplayElements(
   // from that seat (which becomes the riichi declaration tile).
   // Cleared each INIT and after consumption.
   let pendingRiichiSeat: Seat | null = null;
+  const lastDrawTileIds: [
+    number | null,
+    number | null,
+    number | null,
+    number | null,
+  ] = [null, null, null, null];
 
   // Tenhou logs include a `<SHUFFLE seed="mt19937ar-sha512-n288-base64,..."/>`
   // element which lets us deterministically regenerate every kyoku's
@@ -381,6 +387,7 @@ export function parseTenhouReplayElements(
 
       currentDoras = doraIndicator >= 0 ? [xmlTileToString(doraIndicator)] : [];
       pendingRiichiSeat = null;
+      lastDrawTileIds.fill(null);
 
       const roundWindIdx = Math.floor(round / 4);
       const roundWind: "E" | "S" | "W" | "N" =
@@ -427,7 +434,9 @@ export function parseTenhouReplayElements(
       /^\d+$/.test(el.tag.slice(1))
     ) {
       const seat = "TUVW".indexOf(el.tag[0]) as Seat;
-      const tile = xmlTileToString(Number(el.tag.slice(1)));
+      const tileId = Number(el.tag.slice(1));
+      const tile = xmlTileToString(tileId);
+      lastDrawTileIds[seat] = tileId;
       events.push({
         type: "draw",
         seat,
@@ -450,7 +459,10 @@ export function parseTenhouReplayElements(
       /^\d+$/.test(el.tag.slice(1))
     ) {
       const seat = "DEFG".indexOf(el.tag[0]) as Seat;
-      const tile = xmlTileToString(Number(el.tag.slice(1)));
+      const tileId = Number(el.tag.slice(1));
+      const tile = xmlTileToString(tileId);
+      const tsumogiri = lastDrawTileIds[seat] === tileId;
+      lastDrawTileIds[seat] = null;
       const isRiichi = pendingRiichiSeat === seat;
       if (isRiichi) {
         pendingRiichiSeat = null;
@@ -459,10 +471,8 @@ export function parseTenhouReplayElements(
         type: "discard",
         seat,
         tile,
-        // Tenhou XML doesn't tag tsumogiri explicitly. A future pass
-        // can derive it by comparing with the immediately-preceding
-        // draw's tile id — left for the fidelity matrix.
-        tsumogiri: false,
+        tsumogiri,
+        discardSource: tsumogiri ? "draw" : "hand",
         ...(isRiichi ? { riichi: true } : {}),
       });
       lastDiscardTile = tile;

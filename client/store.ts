@@ -647,13 +647,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
       hands: snap.hands.map((h) => [...h]),
       melds: snap.melds.map((m) => m.map((x) => ({ ...x }))),
       discards: snap.discards.map((d) => [...d]),
-      // Snapshots don't carry per-discard tsumogiri / ordinal
-      // info (they're a fresh "current state" rather than an
-      // event log), so we conservatively reset all flags to
-      // `false`. The tsumogiri darken simply won't appear for
-      // any discards that pre-date the snapshot — acceptable
-      // since the effect is a brief in-the-moment cue.
-      discardTsumogiri: snap.discards.map((d) => d.map(() => false)),
+      discardTsumogiri: snap.discards.map((discards, seat) =>
+        discards.map(
+          (_, index) => snap.discardTsumogiri?.[seat]?.[index] ?? false
+        )
+      ),
       discardSources: snap.discards.map((d) => d.map(() => null)),
       discardOrdinals: snap.discards.map((d) => d.map((_, i) => i)),
       totalDiscards: snap.discards.reduce((acc, d) => acc + d.length, 0),

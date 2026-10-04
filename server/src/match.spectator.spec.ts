@@ -101,6 +101,9 @@ describe("MatchProcess spectator API", () => {
     expect(parsed.data.deadline).toBeUndefined();
     expect(parsed.data.state.furiten).toEqual([false, false, false, false]);
     expect(parsed.data.state.uraDoraEnabled).toBe(false);
+    expect(
+      parsed.data.state.discardTsumogiri?.map((flags) => flags.length)
+    ).toEqual(parsed.data.state.discards.map((discards) => discards.length));
   });
   it("broadcasts deduplicated spectator-only presence and prefers live", () => {
     const match = new MatchProcess(
