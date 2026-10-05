@@ -87,7 +87,12 @@ export class InteractionController {
   constructor(
     private readonly animator: DiscardAnimator,
     private readonly requestRender: () => void
-  ) {}
+  ) {
+    this.handSorter.setOnSortFlagChange((on) => {
+      this.autoSortPreference = on;
+      this.onAutoSortChange?.(on);
+    });
+  }
 
   mount(app: InteractionViewport, root: InteractionRoot): void {
     this.handDragCleanup?.();
@@ -173,9 +178,6 @@ export class InteractionController {
 
   setOnAutoSortChange(callback: ((on: boolean) => void) | null): void {
     this.onAutoSortChange = callback;
-    this.handSorter.setOnSortFlagChange(
-      callback === null ? null : (on) => this.onAutoSortChange?.(on)
-    );
   }
 
   setAutoSort(on: boolean): void {
@@ -407,7 +409,7 @@ export class InteractionController {
   reset(): void {
     this.clearHover(true);
     this.hoverTargets = [];
-    this.handSorter.reset();
+    this.handSorter.reset(this.autoSortPreference);
     this.pendingHandClick = null;
     this.lastView = null;
     this.previousView = null;

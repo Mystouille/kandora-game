@@ -315,6 +315,51 @@ describe("extracted focused-hand interaction owner", () => {
     h.owner.destroy();
   });
 
+  it("keeps drag-disabled auto sort off for the next hand's deal order", () => {
+    const h = harness();
+    const current = view({
+      hands: [["1m", "2m", "3m"], [], [], []],
+      freshlyDrawnSeat: null,
+    });
+    const autoSortChanges = vi.fn();
+    h.owner.setOnAutoSortChange(autoSortChanges);
+    h.owner.beginFrame(current);
+    const sprite = h.bind(current, {
+      tile: "2m",
+      rawIndex: 1,
+      displayIndex: 1,
+      displayHand: current.hands[0],
+      slotX: 50,
+      isFreshlyDrawn: false,
+    });
+    pointerDown(sprite, 85, 450);
+    h.dispatchPointer("pointermove", 150, 450);
+    const metrics = {
+      tile: { w: 50, h: 100, gap: 0 },
+      spriteW: 50,
+      spriteH: 100,
+    };
+    expect(
+      h.owner.focusedDisplayOrder(current.hands[0], false, metrics).rawIndices
+    ).toEqual([0, 2, 1]);
+    h.dispatchPointer("pointerup", 150, 450);
+
+    const nextHand = view({
+      hands: [["9s", "1m", "5p"], [], [], []],
+      totalDiscards: 0,
+      freshlyDrawnSeat: null,
+    });
+    h.owner.beginFrame(nextHand);
+
+    expect(autoSortChanges).toHaveBeenCalledTimes(1);
+    expect(autoSortChanges).toHaveBeenCalledWith(false);
+    expect(h.owner.usesFocusedDisplayOrder()).toBe(true);
+    expect(
+      h.owner.focusedDisplayOrder(nextHand.hands[0], false, metrics).rawIndices
+    ).toEqual([0, 1, 2]);
+    h.owner.destroy();
+  });
+
   it("restores hover before old sprites are destroyed and after rebuilding the strip", () => {
     const h = harness();
     const current = view();
