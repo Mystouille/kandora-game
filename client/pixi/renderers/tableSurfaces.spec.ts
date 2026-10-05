@@ -19,6 +19,7 @@ import {
 import {
   DISCARD_SHADOW_Z_INDEX,
   RIICHI_STICK_Z_INDEX,
+  SHADOW_LAYER_Z,
 } from "../geometry/renderConstants";
 import {
   DiscardRenderer,
@@ -326,6 +327,42 @@ describe("extracted meld and wall passes", () => {
       expect(result.node.children[0].rotation).toBe(-Math.PI / 2);
     }
   );
+
+  it("uses per-tile shadows for a left-seat pon", () => {
+    const h = harness();
+    const drawer = new MeldTileRenderer(h.resources, new Set());
+    const renderer = new MeldRenderer(
+      h.resources,
+      new MeldAnimator(),
+      h.shadows
+    );
+    const hand = handState(h.frame, 3);
+    const meld: Meld = {
+      type: "pon",
+      tiles: ["3m", "3m", "3m"],
+      claimedTile: "3m",
+      from: 0,
+    };
+
+    renderer.render(
+      h.frame,
+      3,
+      { ...hand, displayMelds: [meld] },
+      drawer
+    );
+
+    const strip = h.frame.root.children.find(
+      (child) => child !== hand.handContainer
+    );
+    if (!(strip instanceof Container)) {
+      throw new Error("Missing left-seat meld strip");
+    }
+    const shadowLayer = containerAt(strip, SHADOW_LAYER_Z);
+    expect(shadowLayer.children).toHaveLength(3);
+    expect(
+      shadowLayer.children.some((child) => child instanceof NineSliceSprite)
+    ).toBe(false);
+  });
 
   it("conceals ankan outer copies and retains the shouminkan stack offset and layer", () => {
     const h = harness();

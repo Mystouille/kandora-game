@@ -75,6 +75,7 @@ export class MeldRenderer {
       }>;
       slideOffsetX: number;
       loopIter: number;
+      perTileShadows: boolean;
     }> = [];
     let loopIter = 0;
     for (let i = melds.length - 1; i >= 0; i--) {
@@ -99,6 +100,7 @@ export class MeldRenderer {
         boxes,
         slideOffsetX,
         loopIter,
+        perTileShadows: seat === 3 && melds[i].type === "pon",
       });
       loopIter += 1;
     }
@@ -141,7 +143,7 @@ export class MeldRenderer {
           ay: shadowPoint.y,
           w: box.w,
           h: box.h,
-          isolated: box.isolated,
+          isolated: group.perTileShadows || box.isolated,
         });
       }
       // Z-order between adjacent overlapping melds must match the
@@ -214,14 +216,16 @@ export class MeldRenderer {
       }
     }
     // Upright meld tiles may share a continuous screen-column shadow.
-    // Tilted called tiles must remain isolated: for a left-seat call from
+    // A left-seat pon uses per-tile shadows because a shared shadow for its
+    // upright pair appears detached from the sideways called tile.
+    // Other tilted called tiles remain isolated: for a left-seat call from
     // the right their centre can align with the upright column, causing the
     // sideways shadow to be incorrectly merged into the long strip.
     const shadowLayer = this.shadows.screenShadowLayer(strip, stripRot);
-    this.shadows.placeColumnShadows(
-      shadowLayer,
-      shadowBoxes.filter((box) => !box.isolated)
-    );
+    const sharedShadowBoxes = shadowBoxes.filter((box) => !box.isolated);
+    if (sharedShadowBoxes.length > 0) {
+      this.shadows.placeColumnShadows(shadowLayer, sharedShadowBoxes);
+    }
     for (const box of shadowBoxes.filter((candidate) => candidate.isolated)) {
       this.shadows.placeColumnShadows(shadowLayer, [box]);
     }
