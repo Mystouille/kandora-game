@@ -8,6 +8,8 @@ import {
   listSelectablePresets,
   presetToRuleSet,
 } from "./index";
+import { shouldEndMatch } from "../matchEnd";
+import { createInitialState, type HandResult } from "../state";
 
 describe("rule-set presets", () => {
   it("loads at least the Tenhou-default preset", () => {
@@ -30,12 +32,7 @@ describe("rule-set presets", () => {
     expect(preset.atamahane).toBe(true);
     expect(preset.bustedScore).toBeNull();
     expect(preset.kiriageMangan).toBe(true);
-    expect(Object.values(preset.aborts)).toEqual([
-      false,
-      false,
-      false,
-      false,
-    ]);
+    expect(Object.values(preset.aborts)).toEqual([false, false, false, false]);
   });
 
   it("offers the requested EMA rules", () => {
@@ -46,6 +43,7 @@ describe("rule-set presets", () => {
     expect(preset).toMatchObject({
       displayName: "EMA — Hanchan",
       roundWindCount: 2,
+      startingScore: 30000,
       kuikae: "full",
       unclaimedRiichiDeposits: "highest_score_player",
       nbRedFiveManzu: 0,
@@ -54,8 +52,29 @@ describe("rule-set presets", () => {
       kuitan: true,
       kiriageMangan: true,
       doubleWindPairFu: 2,
+      bustedScore: null,
       agariYame: false,
     });
+  });
+
+  it("starts EMA games at 30,000 and continues below zero", () => {
+    const ruleSet = presetToRuleSet(getPreset("ema"));
+    const state = createInitialState(1, { ruleSet });
+    expect(state.scores).toEqual([30000, 30000, 30000, 30000]);
+
+    state.scores = [42000, 41000, 37000, -1000];
+    const result: HandResult = {
+      reason: "ron",
+      winner: 0,
+      loser: 3,
+      delta: [0, 0, 0, 0],
+      tenpai: null,
+      abortKind: null,
+      winHan: 1,
+      winYakuman: false,
+    };
+
+    expect(shouldEndMatch(state, result, false)).toEqual({ ended: false });
   });
 
   it("offers JPML hanchan without the legacy Tenhou options", () => {
