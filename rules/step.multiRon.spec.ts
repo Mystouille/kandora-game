@@ -124,6 +124,38 @@ describe("step — multi-ron (double ron)", () => {
     expect(handEnd.delta[3]).toBe(1600);
   });
 
+  it("refunds a pending declaration stick before multi-ron settlement", () => {
+    const state = craft({
+      hands: [FILLER, TENPAI_A, FILLER, TENPAI_B],
+      discarder: 0,
+      tile: "7z",
+      riichiSticks: 1,
+    });
+    state.scores = [24000, 25000, 25000, 25000];
+    state.riichiDeclared[0] = true;
+    state.doubleRiichi[0] = true;
+    state.ippatsuEligible[0] = true;
+    state.pendingRiichiSeat = 0;
+
+    const { events, state: next } = step(state, {
+      type: "ron",
+      seat: 1,
+      additionalWinners: [3],
+    });
+    const handEnd = events.find((event) => event.type === "hand_end");
+    if (handEnd?.type !== "hand_end") {
+      throw new Error("expected hand_end");
+    }
+
+    expect(handEnd.delta).toEqual([-2200, 1600, 0, 1600]);
+    expect(next.scores).toEqual([21800, 26600, 25000, 26600]);
+    expect(next.riichiSticks).toBe(0);
+    expect(next.riichiDeclared[0]).toBe(false);
+    expect(next.doubleRiichi[0]).toBe(false);
+    expect(next.ippatsuEligible[0]).toBe(false);
+    expect(next.pendingRiichiSeat).toBeNull();
+  });
+
   it("rejects multi-ron when any winner is the discarder", () => {
     const state = craft({
       hands: [TENPAI_A, FILLER, FILLER, TENPAI_B],

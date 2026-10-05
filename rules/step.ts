@@ -335,6 +335,7 @@ function clone(state: MatchState): MatchState {
       boolean,
       boolean,
     ],
+    pendingRiichiSeat: state.pendingRiichiSeat,
     doubleRiichi: [...state.doubleRiichi] as [
       boolean,
       boolean,
@@ -391,6 +392,18 @@ function clone(state: MatchState): MatchState {
     chips: [...state.chips] as [number, number, number, number],
     dabuken: [...state.dabuken] as [boolean, boolean, boolean, boolean],
   };
+}
+
+function closeDiscardWindow(next: MatchState): void {
+  next.lastDiscard = null;
+  next.pendingRiichiSeat = null;
+}
+
+function rejectPendingRiichi(next: MatchState, seat: Seat): void {
+  next.riichiDeclared[seat] = false;
+  next.doubleRiichi[seat] = false;
+  next.ippatsuEligible[seat] = false;
+  next.pendingRiichiSeat = null;
 }
 
 function noop(state: MatchState): StepResult {
@@ -991,13 +1004,23 @@ function applyWin(
   }
   // Carry over riichi sticks to the winner; reset. Stick value
   // is `ruleSet.riichiBetValue` (1000 standard, 100 Buu).
+  // A declaration discard won by ron never established riichi:
+  // exclude that pending stick from the award and refund its
+  // already-applied deduction through the result delta.
+  const rejectedRiichiSeat =
+    loser !== null && next.pendingRiichiSeat === loser ? loser : null;
   // Snapshot the pre-collection count so the Buu chombo path
   // can restore sticks to the table when the win is invalidated
   // (otherwise the refund loop in `applyBuuWinSideEffects`
   // double-debits and drives `riichiSticks` negative, which
   // crashes the next `hand_end`/`hand_start` schema validation).
   const preWinRiichiSticks = next.riichiSticks;
-  delta[winner] += next.riichiSticks * next.ruleSet.riichiBetValue;
+  const awardedRiichiSticks =
+    preWinRiichiSticks - (rejectedRiichiSeat === null ? 0 : 1);
+  delta[winner] += awardedRiichiSticks * next.ruleSet.riichiBetValue;
+  if (rejectedRiichiSeat !== null) {
+    delta[rejectedRiichiSeat] += next.ruleSet.riichiBetValue;
+  }
   next.riichiSticks = 0;
   // Snapshot winner's pre-win sinking status for Buu legality.
   const winnerPreScore = next.scores[winner];
@@ -1014,6 +1037,7 @@ function applyWin(
     preWinRiichiSticks,
   });
   if (buuOutcome.kind === "chombo") {
+    next.pendingRiichiSeat = null;
     // Emit the would-be `win` event first so the client renders
     // the win-info panel (yaku / han / fu / winning hand) for its
     // normal display duration before the `buu_chombo` event
@@ -1024,6 +1048,11 @@ function applyWin(
       { type: "win", winner, loser, winTile, score, delta },
       ...buuOutcome.events,
     ];
+  }
+  if (rejectedRiichiSeat !== null) {
+    rejectPendingRiichi(next, rejectedRiichiSeat);
+  } else {
+    next.pendingRiichiSeat = null;
   }
   const result: HandResult = {
     reason: loser === null ? "tsumo" : "ron",
@@ -1099,10 +1128,22 @@ function applyMultiRon(
     combined[loser] -= bonus;
     combined[winners[0]] += bonus;
   }
-  // Riichi sticks all go to the head bumper.
-  combined[winners[0]] += next.riichiSticks * next.ruleSet.riichiBetValue;
+  // Riichi sticks all go to the head bumper, except a pending
+  // declaration stick from the winning discard itself.
+  const rejectedRiichiSeat = next.pendingRiichiSeat === loser ? loser : null;
+  const awardedRiichiSticks =
+    next.riichiSticks - (rejectedRiichiSeat === null ? 0 : 1);
+  combined[winners[0]] += awardedRiichiSticks * next.ruleSet.riichiBetValue;
+  if (rejectedRiichiSeat !== null) {
+    combined[rejectedRiichiSeat] += next.ruleSet.riichiBetValue;
+  }
   next.riichiSticks = 0;
   applyDelta(next.scores, combined);
+  if (rejectedRiichiSeat !== null) {
+    rejectPendingRiichi(next, rejectedRiichiSeat);
+  } else {
+    next.pendingRiichiSeat = null;
+  }
   // Pick the dealer-favoring winner so the rotation logic in
   // `start_next_hand` correctly keeps the dealer when they're among
   // the winners.
@@ -1434,6 +1475,17 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       return settleRyuukyoku(next, actualTenpai, nagashi);
     }
     const next = clone(state);
+    if (
+      next.pendingRiichiSeat !== null &&
+      next.ruleSet.aborts.suuchaRiichi &&
+      next.riichiDeclared.every((declared) => declared)
+    ) {
+      closeDiscardWindow(next);
+      return {
+        state: next,
+        events: endAbort(next, "suucha_riichi"),
+      };
+    }
     if (state.lastDiscard !== null) {
       // Compute missed-ron furiten BEFORE drawing — scoreHand
       // expects a 13-tile hand for ron evaluation.
@@ -1456,7 +1508,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.hands[next.turn].push(tile);
     next.lastDrawn[next.turn] = tile;
     next.lastDrawFromDeadWall = false;
-    next.lastDiscard = null; // ron window closes once next seat draws.
+    closeDiscardWindow(next);
     next.phase = "awaiting_discard";
     return {
       state: next,
@@ -1606,11 +1658,14 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.discards[action.seat].push(action.tile);
     next.lastDrawn[action.seat] = null;
     next.lastDiscard = { seat: action.seat, tile: action.tile };
-    // Pay the riichi stick to the table. Stick value is
-    // `ruleSet.riichiBetValue` (1000 standard, 100 Buu).
+    // Tentatively pay the riichi stick to the table. It remains
+    // pending until this discard's ron window closes; a ron on
+    // the declaration tile rejects riichi and refunds the bet.
+    // Stick value is `ruleSet.riichiBetValue` (1000 standard, 100 Buu).
     next.scores[action.seat] -= next.ruleSet.riichiBetValue;
     next.riichiSticks += 1;
     next.riichiDeclared[action.seat] = true;
+    next.pendingRiichiSeat = action.seat;
     if (next.ruleSet.ippatsu) {
       next.ippatsuEligible[action.seat] = true;
     }
@@ -1640,19 +1695,6 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // declarations are themselves a discard — same scoring
     // semantics for any ron on the riichi tile).
     drainPendingKanDora(next, events);
-    // Suucha riichi: hand aborts when all four seats are in riichi.
-    // Standard rule defers the abort until after the 4th declarer's
-    // discard passes safely (no ron); since the engine doesn't yet
-    // resolve a multi-seat ron window between actions, we abort
-    // immediately on the 4th successful declaration.
-    if (
-      next.ruleSet.aborts.suuchaRiichi &&
-      next.riichiDeclared.every((r) => r)
-    ) {
-      const abortEvents = endAbort(next, "suucha_riichi");
-      events.push(...abortEvents);
-      return { state: next, events };
-    }
     return {
       state: next,
       events,
@@ -1888,7 +1930,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     };
     next.melds[action.seat].push(meld);
     next.discards[state.lastDiscard.seat].pop(); // remove called tile
-    next.lastDiscard = null;
+    closeDiscardWindow(next);
     next.lastDrawn = [null, null, null, null];
     next.ippatsuEligible = [false, false, false, false];
     next.turn = action.seat;
@@ -1942,7 +1984,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.melds[action.seat].push(meld);
     detectPao(next, action.seat, state.lastDiscard.seat);
     next.discards[state.lastDiscard.seat].pop();
-    next.lastDiscard = null;
+    closeDiscardWindow(next);
     next.lastDrawn = [null, null, null, null];
     next.ippatsuEligible = [false, false, false, false];
     next.turn = action.seat;
@@ -2085,7 +2127,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       next.melds[action.seat].push(meld);
       detectPao(next, action.seat, state.lastDiscard.seat);
       next.discards[state.lastDiscard.seat].pop();
-      next.lastDiscard = null;
+      closeDiscardWindow(next);
       next.lastDrawn = [null, null, null, null];
       next.ippatsuEligible = [false, false, false, false];
       // Rinshan draw from the front of the dead wall, then reveal a
@@ -2412,6 +2454,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.lastDrawn = [null, null, null, null];
     next.lastDrawFromDeadWall = false;
     next.lastDiscard = null;
+    next.pendingRiichiSeat = null;
     next.dealer = dealer;
     next.roundWind = roundWind;
     next.roundNumber = roundNumber;

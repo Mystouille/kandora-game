@@ -171,6 +171,11 @@ export interface MatchState {
   scores: [number, number, number, number];
   /** Per-seat riichi declaration flag (cleared at hand start). */
   riichiDeclared: [boolean, boolean, boolean, boolean];
+  /**
+   * Declarer whose latest riichi discard is still inside its ron window.
+   * Cleared once the discard survives or the declaration is rejected by ron.
+   */
+  pendingRiichiSeat: Seat | null;
   /** Per-seat double-riichi flag (subset of riichiDeclared). */
   doubleRiichi: [boolean, boolean, boolean, boolean];
   /** Per-seat ippatsu eligibility. True from the riichi discard until
@@ -369,6 +374,7 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
     riichiSticks: z.number().int().nonnegative(),
     scores: NumberTuple4Schema,
     riichiDeclared: BooleanTuple4Schema,
+    pendingRiichiSeat: StateSeatSchema.nullable().default(null),
     doubleRiichi: BooleanTuple4Schema,
     ippatsuEligible: BooleanTuple4Schema,
     furitenLocked: BooleanTuple4Schema,
@@ -436,6 +442,7 @@ export function createInitialState(
       number,
     ],
     riichiDeclared: [false, false, false, false],
+    pendingRiichiSeat: null,
     doubleRiichi: [false, false, false, false],
     ippatsuEligible: [false, false, false, false],
     melds: [[], [], [], []],

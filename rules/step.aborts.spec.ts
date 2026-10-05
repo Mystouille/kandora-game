@@ -201,7 +201,7 @@ describe("step — suufon renda", () => {
 });
 
 describe("step — suucha riichi", () => {
-  it("auto-aborts when the 4th seat's riichi succeeds", () => {
+  it("auto-aborts after the 4th seat's riichi discard survives", () => {
     // Tenpai shape for seat 3: 234m 234p 234s 11z 67m (13 tiles,
     // waits on 58m) + drew 5m → discard 5m to declare riichi.
     const seat3Hand = tiles("234m234p234s11z67m5m");
@@ -219,18 +219,56 @@ describe("step — suucha riichi", () => {
       // declaring; checks own score).
       scores: [24000, 24000, 24000, 25000],
     });
-    const r = step(state, { type: "riichi", seat: 3, tile: "5m" });
-    expect(r.events.map((e) => e.type)).toEqual(["discard", "hand_end"]);
-    expect(r.events[1]).toMatchObject({
+    const declared = step(state, { type: "riichi", seat: 3, tile: "5m" });
+    expect(declared.events.map((e) => e.type)).toEqual(["discard"]);
+    expect(declared.state.phase).toBe("awaiting_draw");
+    expect(declared.state.pendingRiichiSeat).toBe(3);
+
+    const r = step(declared.state, { type: "draw", seat: 0 });
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0]).toMatchObject({
       type: "hand_end",
       reason: "abort",
       abortKind: "suucha_riichi",
     });
     expect(r.state.riichiDeclared).toEqual([true, true, true, true]);
     expect(r.state.phase).toBe("hand_ended");
+    expect(r.state.pendingRiichiSeat).toBeNull();
     // Only seat 3's 1000 stick is paid into the table here (the
     // earlier three sticks aren't tracked by the test fixture).
     expect(r.state.riichiSticks).toBe(1);
+  });
+
+  it("lets ron on the 4th declaration tile take precedence", () => {
+    const winner = tiles("11m22p33s44m55p66s5m");
+    const seat3Hand = tiles("234m234p234s11z67m5m");
+    const state = craft({
+      hands: [winner, FILLER13, FILLER13, seat3Hand],
+      turn: 3,
+      phase: "awaiting_discard",
+      dealer: 0,
+      lastDrawn: "5m",
+      riichiDeclared: [true, true, true, false],
+      scores: [24000, 24000, 24000, 25000],
+    });
+    state.riichiSticks = 3;
+
+    const declared = step(state, { type: "riichi", seat: 3, tile: "5m" });
+    expect(declared.state.riichiSticks).toBe(4);
+    expect(declared.state.pendingRiichiSeat).toBe(3);
+
+    const r = step(declared.state, { type: "ron", seat: 0 });
+    const win = r.events.find((event) => event.type === "win");
+    if (win?.type !== "win") {
+      throw new Error("expected win event");
+    }
+
+    expect(r.state.lastHandResult?.reason).toBe("ron");
+    expect(r.state.scores[0]).toBe(24000 + win.score.ten + 3000);
+    expect(r.state.scores[3]).toBe(25000 - win.score.ten);
+    expect(r.state.riichiSticks).toBe(0);
+    expect(r.state.riichiDeclared[3]).toBe(false);
+    expect(r.state.pendingRiichiSeat).toBeNull();
   });
 
   it("does not abort when only 3 seats are in riichi", () => {

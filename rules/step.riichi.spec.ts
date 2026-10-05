@@ -115,8 +115,15 @@ describe("step — riichi declaration", () => {
     expect(r.state.ippatsuEligible[0]).toBe(true);
     expect(r.state.scores[0]).toBe(24000);
     expect(r.state.riichiSticks).toBe(1);
+    expect(r.state.pendingRiichiSeat).toBe(0);
     expect(r.state.lastDiscard).toEqual({ seat: 0, tile: drawn });
     expect(r.state.turn).toBe(1);
+
+    const confirmed = step(r.state, { type: "draw", seat: 1 });
+    expect(confirmed.state.pendingRiichiSeat).toBeNull();
+    expect(confirmed.state.scores[0]).toBe(24000);
+    expect(confirmed.state.riichiSticks).toBe(1);
+    expect(confirmed.state.riichiDeclared[0]).toBe(true);
   });
 
   it("distinguishes tedashi from tsumogiri when declaring riichi with a duplicate", () => {
@@ -395,6 +402,41 @@ describe("step — ippatsu + ura-dora on riichi win", () => {
 });
 
 describe("step — riichi sticks", () => {
+  it("refunds a riichi bet when the declaration discard deals in", () => {
+    const handTenpai = tiles("11m22p33s44m55p66s7z");
+    const declarationTile: Tile = "7z";
+    const state = craft({
+      hands: [[...handTenpai, declarationTile], handTenpai, FILLER, FILLER],
+      turn: 0,
+      phase: "awaiting_discard",
+      dealer: 0,
+      lastDrawn: declarationTile,
+    });
+
+    const declared = step(state, {
+      type: "riichi",
+      seat: 0,
+      tile: declarationTile,
+    });
+    expect(declared.state.scores).toEqual([24000, 25000, 25000, 25000]);
+    expect(declared.state.riichiSticks).toBe(1);
+    expect(declared.state.pendingRiichiSeat).toBe(0);
+
+    const r = step(declared.state, { type: "ron", seat: 1 });
+    const handEnd = r.events.find((event) => event.type === "hand_end");
+    if (handEnd?.type !== "hand_end") {
+      throw new Error("expected hand_end event");
+    }
+
+    expect(handEnd.delta).toEqual([-600, 1600, 0, 0]);
+    expect(r.state.scores).toEqual([23400, 26600, 25000, 25000]);
+    expect(r.state.riichiSticks).toBe(0);
+    expect(r.state.riichiDeclared[0]).toBe(false);
+    expect(r.state.doubleRiichi[0]).toBe(false);
+    expect(r.state.ippatsuEligible[0]).toBe(false);
+    expect(r.state.pendingRiichiSeat).toBeNull();
+  });
+
   it("riichi stick goes to the winner", () => {
     const handTenpai = tiles("11m22p33s44m55p66s7z");
     const state = craft({
