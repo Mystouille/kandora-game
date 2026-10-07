@@ -91,7 +91,8 @@ replay `finalScore` fields continue to represent raw points.
 EMA uses 30,000/30,000 and +15/+5/-5/-15. M-League uses 25,000/30,000
 and +30/+10/-10/-30, plus the resulting 20-point oka. JPML A uses
 30,000/30,000 and floating UMA; its starting score is intentionally raised
-from the previous 25,000. Other gameplay flags are unchanged. Built-in
+from the previous 25,000. Nagashi mangan and the four-winds, four-riichi,
+and nine-terminals abortive draws are disabled for JPML A. Built-in
 presets keep the previous fixed-length behavior (`minimumScoreToWin: null`).
 
 Legacy serialized rules lacking settlement fields remain readable: no

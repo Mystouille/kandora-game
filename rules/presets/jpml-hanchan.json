@@ -29,12 +29,12 @@
   "kanDora": false,
   "instantlyRevealDoraForMinkan": true,
   "instantlyRevealDoraForAnkan": true,
-  "nagashiMangan": true,
+  "nagashiMangan": false,
   "aborts": {
-    "kyuushuu": true,
-    "suufonRenda": true,
-    "suuchaRiichi": true,
-    "sanchahou": true
+    "kyuushuu": false,
+    "suufonRenda": false,
+    "suuchaRiichi": false,
+    "sanchahou": false
   },
   "atamahane": true,
   "bustedScore": 0,

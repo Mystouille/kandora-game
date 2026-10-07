@@ -88,6 +88,12 @@ describe("rule-set presets", () => {
     expect(preset.ippatsu).toBe(false);
     expect(preset.uraDora).toBe(false);
     expect(preset.kanDora).toBe(false);
+    expect(preset.nagashiMangan).toBe(false);
+    expect(preset.aborts).toMatchObject({
+      kyuushuu: false,
+      suufonRenda: false,
+      suuchaRiichi: false,
+    });
     expect([
       preset.nbRedFiveManzu,
       preset.nbRedFivePinzu,
