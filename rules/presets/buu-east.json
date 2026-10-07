@@ -5,6 +5,17 @@
   "roundWindCount": 1,
   "roundLimit": 4,
   "startingScore": 6000,
+  "returnScore": 6000,
+  "minimumScoreToWin": null,
+  "uma": [
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0]
+  ],
+  "roundFinalScores": false,
+  "splitTiedUma": false,
   "kuikae": "full",
   "unclaimedRiichiDeposits": "highest_score_player",
   "nbRedFiveManzu": 0,

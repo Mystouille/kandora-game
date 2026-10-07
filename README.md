@@ -60,6 +60,46 @@ The ESLint `no-restricted-imports` rule scoped to `app/game/**` and
 `game-server/**` enforces these boundaries with severity `error`. Do not
 weaken the rule to land a feature — refactor through the adapter instead.
 
+## Shared rules and match scoring
+
+The JSON [presets](./rules/presets/) own gameplay and match-settlement rules.
+Platform adapters and tournament standings consume these same definitions;
+tournament formats only determine phase structure and aggregation.
+
+Alongside `startingScore`, [RuleSet](./rules/ruleSet.ts) defines:
+
+- `returnScore`: deducted from each final table score. Four times its
+  difference from `startingScore` is the first-place oka.
+- `uma`: five zero-sum rows of four placement bonuses, in thousands of points.
+  Rows count players **strictly below** `returnScore` (0 through 4); columns
+  are first through fourth place.
+- `roundFinalScores`: round settled match points to integers, halfway away
+  from zero; otherwise retain one decimal.
+- `splitTiedUma`: share the relevant placement bonuses and oka between tied
+  players. When false, seat order breaks ties.
+- `minimumScoreToWin`: `null` preserves the fixed-length match behavior.
+  A value enables an extra wind if nobody reaches that score at the normal
+  end. During extension, reaching the threshold ends the match, including
+  on an exhaustive draw. The extension is capped at one wind (never beyond
+  North); ordinary dealer continuation still applies at its last hand.
+  This is distinct from Buu's immediate `winnerThreshold`.
+
+[calculateMatchPoints](./rules/matchScoring.ts) returns seat-ordered match
+points without mutating raw table scores. Existing native result displays and
+replay `finalScore` fields continue to represent raw points.
+
+EMA uses 30,000/30,000 and +15/+5/-5/-15. M-League uses 25,000/30,000
+and +30/+10/-10/-30, plus the resulting 20-point oka. JPML A uses
+30,000/30,000 and floating UMA; its starting score is intentionally raised
+from the previous 25,000. Other gameplay flags are unchanged. Built-in
+presets keep the previous fixed-length behavior (`minimumScoreToWin: null`).
+
+Legacy serialized rules lacking settlement fields remain readable: no
+extension, return score equal to starting score, zero UMA, no rounding and
+seat-order ties. New presets must specify every settlement field explicitly.
+Use the host's tests with selectors `matchScoring.spec.ts`, `matchEnd.spec.ts`,
+`ruleSet.spec.ts` and `presets.spec.ts` to validate changes.
+
 ## Browser control sizing
 
 Live play, live spectating, and the host's replay/review screen use

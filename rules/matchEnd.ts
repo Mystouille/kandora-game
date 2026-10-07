@@ -14,7 +14,8 @@
  *     final hand of the final round and the rule set opts into
  *     `tenpaiYame`.
  *   - `round_limit`: the configured number of round winds is
- *     exhausted and the dealer is not keeping. Always on.
+ *     exhausted and the dealer is not keeping. An optional minimum score
+ *     permits one additional sudden-death wind, capped at North.
  *
  * Checks are evaluated in the order above; the first match wins.
  * `start_next_hand` in `step.ts` is the sole caller.
@@ -130,11 +131,26 @@ export function shouldEndMatch(
     return { ended: true, reason: "tenpai_yame" };
   }
 
-  // Round-limit: configured rounds exhausted and the dealer isn't
-  // staying. Honba-only continuations on the final hand do not end
-  // the match here.
+  const windIndex = WINDS.indexOf(state.roundWind);
+  const inExtension = windIndex >= rs.roundWindCount;
+  const minimum = rs.minimumScoreToWin;
+  if (inExtension && minimum !== null) {
+    if (state.scores.some((score) => score >= minimum)) {
+      return { ended: true, reason: "winner_threshold" };
+    }
+    if (state.roundNumber === state.roundLimit && !dealerKeeps) {
+      return { ended: true, reason: "round_limit" };
+    }
+  }
+
   if (isFinalHandOfMatch(state) && !dealerKeeps) {
-    return { ended: true, reason: "round_limit" };
+    if (
+      minimum === null ||
+      state.scores.some((score) => score >= minimum) ||
+      windIndex === WINDS.length - 1
+    ) {
+      return { ended: true, reason: "round_limit" };
+    }
   }
 
   return { ended: false };

@@ -22,6 +22,7 @@ import jpmlHanchan from "./jpml-hanchan.json";
 import mLeague from "./m-league.json";
 
 import type { RuleSet } from "../ruleSet";
+import { UmaTableSchema } from "../matchScoring";
 
 /** A preset is a `RuleSet` plus identification metadata. */
 export interface RuleSetPreset extends RuleSet {
@@ -83,7 +84,7 @@ export function getPreset(id: string): RuleSetPreset {
 /** Strip preset metadata, returning the plain `RuleSet`. */
 export function presetToRuleSet(preset: RuleSetPreset): RuleSet {
   const { id: _id, displayName: _dn, description: _desc, ...rest } = preset;
-  return { ...rest, aborts: { ...rest.aborts } };
+  return structuredClone(rest);
 }
 
 // ---- internals -----------------------------------------------------------
@@ -121,6 +122,16 @@ function validatePreset(raw: unknown): RuleSetPreset {
   }
   expectFiniteInt(obj, "roundLimit", ctx, { min: 1 });
   expectFiniteInt(obj, "startingScore", ctx, { min: 0 });
+  expectFiniteInt(obj, "returnScore", ctx, { min: 0 });
+  if (obj.minimumScoreToWin !== null) {
+    expectFiniteInt(obj, "minimumScoreToWin", ctx, { min: 0 });
+  }
+  expectBoolean(obj, "roundFinalScores", ctx);
+  expectBoolean(obj, "splitTiedUma", ctx);
+  const uma = UmaTableSchema.safeParse(obj.uma);
+  if (!uma.success) {
+    throw new Error(`${ctx}uma must contain five zero-sum rows of four placement bonuses`);
+  }
   if (
     obj.kuikae !== "allowed" &&
     obj.kuikae !== "same-tile-only" &&

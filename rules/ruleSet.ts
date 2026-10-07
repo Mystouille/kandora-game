@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import { DEFAULT_PRESET_ID, getPreset, presetToRuleSet } from "./presets";
+import { UmaTableSchema, zeroUma, type Uma } from "./matchScoring";
 
 export type KuikaeRule = "allowed" | "same-tile-only" | "full";
 
@@ -32,6 +33,16 @@ export interface RuleSet {
   roundLimit: number;
   /** Starting score per seat. */
   startingScore: number;
+  /** Points deducted per player at settlement; the difference from the initial stake is oka. */
+  returnScore: number;
+  /** Required leading score at the scheduled end; null disables the extra sudden-death wind. */
+  minimumScoreToWin: number | null;
+  /** Rows 0..4 count players strictly below returnScore; columns are 1st..4th. */
+  uma: Uma[];
+  /** Round settled match points to integers (halfway away from zero). */
+  roundFinalScores: boolean;
+  /** Split the applicable UMA and oka between players tied on raw points. */
+  splitTiedUma: boolean;
   /**
    * Restriction on the discard immediately following chi or pon.
    * `same-tile-only` forbids discarding the called tile value;
@@ -278,6 +289,11 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
     roundWindCount: z.union([z.literal(1), z.literal(2), z.literal(4)]),
     roundLimit: z.number().int().positive(),
     startingScore: z.number().int(),
+    returnScore: z.number().int().optional(),
+    minimumScoreToWin: z.number().int().nullable().default(null),
+    uma: UmaTableSchema.default(zeroUma),
+    roundFinalScores: z.boolean().default(false),
+    splitTiedUma: z.boolean().default(false),
     kuikae: z.enum(["allowed", "same-tile-only", "full"]).default("full"),
     unclaimedRiichiDeposits: z
       .enum(["left_outside_table_score", "highest_score_player"])
@@ -340,7 +356,11 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
     chipChomboPenalty: z.number().int().nullable(),
     startingChips: z.number().int().nonnegative(),
   })
-  .strict();
+  .strict()
+  .transform((rules) => ({
+    ...rules,
+    returnScore: rules.returnScore ?? rules.startingScore,
+  }));
 
 /**
  * Tenhou-default rule set, loaded from `presets/tenhou-hanchan.json`.
@@ -358,16 +378,12 @@ export const TONPUU_RULE_SET: RuleSet = presetToRuleSet(
 /** Resolve a partial override into a complete `RuleSet`. */
 export function resolveRuleSet(partial?: RuleSetOverride): RuleSet {
   if (!partial) {
-    return {
-      ...DEFAULT_RULE_SET,
-      aborts: { ...DEFAULT_RULE_SET.aborts },
-      chipPayouts: { ...DEFAULT_RULE_SET.chipPayouts },
-      illegalVictoryRules: { ...DEFAULT_RULE_SET.illegalVictoryRules },
-    };
+    return structuredClone(DEFAULT_RULE_SET);
   }
   return {
     ...DEFAULT_RULE_SET,
     ...partial,
+    uma: structuredClone(partial.uma ?? DEFAULT_RULE_SET.uma),
     aborts: {
       ...DEFAULT_RULE_SET.aborts,
       ...(partial.aborts ?? {}),
@@ -384,7 +400,9 @@ export function resolveRuleSet(partial?: RuleSetOverride): RuleSet {
 }
 
 /** Deep-partial-style override accepted by `resolveRuleSet`. */
-export type RuleSetOverride = DeepPartial<RuleSet>;
+export type RuleSetOverride = Omit<DeepPartial<RuleSet>, "uma"> & {
+  uma?: Uma[];
+};
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import type { RuleSetOverride } from "./ruleSet";
 import { createInitialState, type HandResult, type MatchState } from "./state";
 import { shouldEndMatch } from "./matchEnd";
+import { step } from "./step";
 
 function makeState(overrides: RuleSetOverride = {}): MatchState {
   return createInitialState(1, { ruleSet: overrides });
@@ -207,6 +208,76 @@ describe("shouldEndMatch — round_limit", () => {
     });
     const d = shouldEndMatch(s, winResult(0, { han: 1 }), false);
     expect(d.ended).toBe(false);
+  });
+});
+
+describe("shouldEndMatch — minimum score and extension", () => {
+  it("enters the next wind when no player reaches the minimum at the normal end", () => {
+    const state = setProgress(makeState({ minimumScoreToWin: 30000 }), {
+      roundWind: "S",
+      roundNumber: 4,
+      dealer: 3,
+      scores: [29900, 25100, 25000, 20000],
+    });
+    state.phase = "hand_ended";
+    state.lastHandResult = winResult(0);
+    expect(shouldEndMatch(state, state.lastHandResult, false)).toEqual({
+      ended: false,
+    });
+    const next = step(state, { type: "start_next_hand" }).state;
+    expect(next.roundWind).toBe("W");
+    expect(next.roundNumber).toBe(1);
+    expect(next.phase).toBe("awaiting_draw");
+  });
+
+  it("ends at exactly the minimum rather than requiring one extra point", () => {
+    const state = setProgress(makeState({ minimumScoreToWin: 30000 }), {
+      roundWind: "S",
+      roundNumber: 4,
+      dealer: 3,
+      scores: [30000, 25000, 25000, 20000],
+    });
+    expect(shouldEndMatch(state, winResult(0), false)).toEqual({
+      ended: true,
+      reason: "round_limit",
+    });
+  });
+
+  it("ends sudden death as soon as the minimum is reached, including on a draw", () => {
+    const state = setProgress(makeState({ minimumScoreToWin: 30000 }), {
+      roundWind: "W",
+      roundNumber: 1,
+      dealer: 0,
+      scores: [30000, 25000, 25000, 20000],
+    });
+    expect(
+      shouldEndMatch(state, drawResult([true, false, false, false]), true)
+    ).toEqual({ ended: true, reason: "winner_threshold" });
+  });
+
+  it("caps extension at one additional wind while allowing dealer continuation", () => {
+    const state = setProgress(makeState({ minimumScoreToWin: 40000 }), {
+      roundWind: "W",
+      roundNumber: 4,
+      dealer: 3,
+      scores: [25000, 25000, 25000, 25000],
+    });
+    expect(shouldEndMatch(state, winResult(3), true)).toEqual({ ended: false });
+    expect(shouldEndMatch(state, winResult(0), false)).toEqual({
+      ended: true,
+      reason: "round_limit",
+    });
+  });
+
+  it("does not advance past North when the configured game already uses four winds", () => {
+    const state = setProgress(
+      makeState({ minimumScoreToWin: 40000, roundWindCount: 4 }),
+      { roundWind: "N", roundNumber: 4, dealer: 3 }
+    );
+    expect(shouldEndMatch(state, winResult(0), false)).toEqual({
+      ended: true,
+      reason: "round_limit",
+    });
   });
 });
 
