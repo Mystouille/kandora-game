@@ -1,4 +1,5 @@
 import { Text, TextStyle } from "pixi.js";
+import { isTableSeatActive } from "../../tableProjection";
 import type { Seat } from "../tableGeometry";
 import type { RenderFrame } from "../scene/renderTypes";
 import type { MeldAnimator } from "../meldAnimator";
@@ -24,6 +25,9 @@ export function renderCallEffects(
     declarationAnimator.getCallEffect(),
   ].filter((effect) => effect !== null);
   for (const effect of effects) {
+    if (!isTableSeatActive(frame.view, effect.seat)) {
+      continue;
+    }
     const anchor = callEffectAnchor(layout, effect.seat as Seat);
     const text = new Text({
       text: effect.label,

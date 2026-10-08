@@ -2,6 +2,12 @@ import type { LegalAction, Seat } from "~/game/protocol/messages";
 import type { MatchRuntime, MatchTimer } from "../runtime";
 import type { TimeBank } from "./timeBank";
 import {
+  activeSeats,
+  seatValues,
+  type PlayerCount,
+  type SeatValues,
+} from "~/game/rules/seats";
+import {
   ActionWindowViewSchema,
   type ActionWindowView,
   type InputReceipt,
@@ -73,18 +79,16 @@ function cloneAction(action: LegalAction): LegalAction {
 
 /** Sole owner of legal actions, authoritative windows, and timers for each seat. */
 export class ActionWindowRegistry {
-  private readonly windows: [
-    SeatActionWindow,
-    SeatActionWindow,
-    SeatActionWindow,
-    SeatActionWindow,
-  ] = [emptyWindow(), emptyWindow(), emptyWindow(), emptyWindow()];
+  private readonly windows: SeatValues<SeatActionWindow>;
 
   constructor(
     private readonly runtime: MatchRuntime,
     private readonly onExpiry: (seat: Seat) => void,
-    private readonly isPaused: () => boolean
-  ) {}
+    private readonly isPaused: () => boolean,
+    readonly playerCount: PlayerCount = 4
+  ) {
+    this.windows = seatValues(playerCount, emptyWindow);
+  }
 
   view(seat: Seat): ActionWindowSummary {
     const window = this.windows[seat];
@@ -134,13 +138,13 @@ export class ActionWindowRegistry {
   }
 
   cancelAllTimers(): void {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       this.cancelTimer(seat);
     }
   }
 
   resetForRestore(): void {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       this.cancelTimer(seat);
       const window = this.windows[seat];
       window.actions = [];

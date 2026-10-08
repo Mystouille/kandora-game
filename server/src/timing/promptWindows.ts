@@ -13,14 +13,16 @@ import {
 } from "./windowReceipt";
 import { latencyAllowanceMs } from "./latencyAllowancePolicy";
 import type { TimingDiagnostics } from "./timingDiagnostics";
+import {
+  activeSeats,
+  mapSeatValues,
+  seatValues,
+  type PlayerCount,
+  type SeatValues,
+} from "~/game/rules/seats";
 
 export type PromptKind = "ready" | "session_vote";
-type PromptTuple = [
-  ActionWindowView | null,
-  ActionWindowView | null,
-  ActionWindowView | null,
-  ActionWindowView | null,
-];
+type PromptTuple = SeatValues<ActionWindowView | null>;
 export interface PromptSnapshot {
   nextWindow: number;
   windows: PromptTuple;
@@ -52,7 +54,7 @@ interface ReservedPrompt {
 }
 
 export class PromptWindows implements PromptTimingService {
-  private windows: PromptTuple = [null, null, null, null];
+  private windows: PromptTuple;
   private nextWindow = 1;
   private readonly reservations = new Map<Seat, ReservedPrompt>();
 
@@ -64,8 +66,11 @@ export class PromptWindows implements PromptTimingService {
       network: "direct" | "remote";
       profile: LatencyProfile | null;
     },
-    private readonly diagnostics?: TimingDiagnostics
-  ) {}
+    private readonly diagnostics?: TimingDiagnostics,
+    private readonly playerCount: PlayerCount = 4
+  ) {
+    this.windows = seatValues(playerCount, () => null);
+  }
 
   stamp() {
     return { clockEpoch: this.clockEpoch, serverNow: this.runtime.now() };
@@ -76,7 +81,7 @@ export class PromptWindows implements PromptTimingService {
       throw new RangeError("Invalid fixed-prompt budget");
     }
 
-    this.windows = [null, null, null, null];
+    this.windows = seatValues(this.playerCount, () => null);
     this.reservations.clear();
     const now = this.runtime.now();
     for (const seat of seats) {
@@ -217,7 +222,7 @@ export class PromptWindows implements PromptTimingService {
   }
 
   clear(kind: PromptKind): void {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       if (this.windows[seat]?.kind === kind) {
         const window = this.windows[seat];
         const now = this.runtime.now();
@@ -242,7 +247,7 @@ export class PromptWindows implements PromptTimingService {
     }
     return {
       nextWindow: this.nextWindow,
-      windows: [this.view(0), this.view(1), this.view(2), this.view(3)],
+      windows: seatValues(this.playerCount, (seat) => this.view(seat)),
     };
   }
 
@@ -251,6 +256,11 @@ export class PromptWindows implements PromptTimingService {
     savedAt: number,
     restoredAt = this.runtime.now()
   ): void {
+    if (saved.windows.length !== this.playerCount) {
+      throw new Error(
+        "PromptWindows: restored participant count does not match"
+      );
+    }
     this.reservations.clear();
     this.nextWindow = saved.nextWindow;
     const shift = restoredAt - savedAt;
@@ -266,12 +276,7 @@ export class PromptWindows implements PromptTimingService {
             budgetEndsAt: window.budgetEndsAt + shift,
             expiresAt: window.expiresAt + shift,
           });
-    this.windows = [
-      rebase(saved.windows[0]),
-      rebase(saved.windows[1]),
-      rebase(saved.windows[2]),
-      rebase(saved.windows[3]),
-    ];
+    this.windows = mapSeatValues(saved.windows, rebase);
     this.diagnostics?.record("restored", restoredAt);
   }
 
@@ -284,7 +289,7 @@ export class PromptWindows implements PromptTimingService {
     if (!Number.isSafeInteger(remainingMs) || remainingMs < 0) {
       throw new RangeError("Invalid legacy prompt remaining time");
     }
-    this.windows = [null, null, null, null];
+    this.windows = seatValues(this.playerCount, () => null);
     this.reservations.clear();
     const now = restoredAt;
     for (const seat of seats) {

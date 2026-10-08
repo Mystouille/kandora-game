@@ -1,3 +1,5 @@
+import { copySeatValues } from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import type { Seat, ServerMessage } from "~/game/protocol/messages";
 
 import type { PlayingReadyCheckpoint } from "../checkpoint";
@@ -13,9 +15,10 @@ import type { ReadyCheckPort } from "./lifecyclePorts";
 import { gameTiming } from "./timingPolicy";
 import type { InputReceipt } from "~/game/protocol/timing";
 import type { PromptTimingService } from "../timing/promptWindows";
+import { seatValues } from "~/game/rules/seats";
 
 export interface ReadyCheckSnapshot {
-  readonly acked: [boolean, boolean, boolean, boolean];
+  readonly acked: SeatValues<boolean>;
   readonly deadline: number | null;
   readonly active: boolean;
   readonly timerPending: boolean;
@@ -23,12 +26,7 @@ export interface ReadyCheckSnapshot {
 }
 
 export class ReadyCheck {
-  private readyAcked: [boolean, boolean, boolean, boolean] = [
-    false,
-    false,
-    false,
-    false,
-  ];
+  private readyAcked: SeatValues<boolean>;
   private readyDeadline: number | null = null;
   private readyTimer: MatchTimer | null = null;
   private readyResolve: (() => void) | null = null;
@@ -41,10 +39,12 @@ export class ReadyCheck {
     private readonly commands: CommandCoordinator,
     private readonly port: ReadyCheckPort,
     private readonly timing?: PromptTimingService
-  ) {}
+  ) {
+    this.readyAcked = seatValues(roster.playerCount, () => false);
+  }
   snapshot(): ReadyCheckSnapshot {
     return {
-      acked: [...this.readyAcked],
+      acked: copySeatValues(this.readyAcked),
       deadline: this.readyDeadline,
       active: this.readyResolve !== null,
       timerPending: this.readyTimer !== null,
@@ -188,7 +188,7 @@ export class ReadyCheck {
     const frame: ServerMessage = {
       type: "ready_check",
       deadline: this.readyDeadline,
-      acked: [...this.readyAcked] as [boolean, boolean, boolean, boolean],
+      acked: copySeatValues(this.readyAcked),
     };
     for (const seat of this.port.humanSeats()) {
       const send = this.port.sender(seat);
@@ -213,7 +213,7 @@ export class ReadyCheck {
     restoredAt = this.runtime.now()
   ): void {
     const continuation = checkpoint.readyContinuation;
-    this.readyAcked = [...checkpoint.readyAcked];
+    this.readyAcked = copySeatValues(checkpoint.readyAcked);
     this.readyDeadline = restoredAt + checkpoint.readyRemainingMs;
     this.readyContinuationKind = continuation;
     if (this.timing && checkpoint.decisionTiming?.prompts) {

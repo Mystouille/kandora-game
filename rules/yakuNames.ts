@@ -62,6 +62,7 @@ export const RIICHI_LIB_YAKU_ROMAJI: Readonly<Record<string, string>> = {
   ドラ: "Dora",
   赤ドラ: "Aka Dora",
   裏ドラ: "Ura Dora",
+  抜きドラ: "Nuki Dora",
 };
 
 interface TenhouYakuDescriptor {
@@ -129,14 +130,13 @@ export const TENHOU_YAKU: Readonly<
   54: { romaji: "Aka Dora", legacyHan: 32 },
 };
 
-export const RIICHI_LIB_YAKU_KANJI_BY_ROMAJI: Readonly<
-  Record<string, string>
-> = Object.fromEntries(
-  Object.entries(RIICHI_LIB_YAKU_ROMAJI).map(([kanji, romaji]) => [
-    romaji,
-    kanji,
-  ])
-);
+export const RIICHI_LIB_YAKU_KANJI_BY_ROMAJI: Readonly<Record<string, string>> =
+  Object.fromEntries(
+    Object.entries(RIICHI_LIB_YAKU_ROMAJI).map(([kanji, romaji]) => [
+      romaji,
+      kanji,
+    ])
+  );
 
 export function tenhouYakuIdToRomaji(id: number): string | undefined {
   return TENHOU_YAKU[id]?.romaji;

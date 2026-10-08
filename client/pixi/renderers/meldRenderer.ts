@@ -48,6 +48,7 @@ export class MeldRenderer {
     // bottom/top butt flush.
     const meldGap = seat === 1 || seat === 3 ? -16 : 0;
     const strip = new Container();
+    strip.label = `meld-seat-${seat}`;
     // Where adjacent melds overlap, the newer meld must render
     // on top of the older one (matching the discard-pond
     // convention that the most recent tile sits on top of its

@@ -25,8 +25,14 @@ export function calculateMatchPoints(
     | "uma"
     | "roundFinalScores"
     | "splitTiedUma"
-  >
+  > &
+    Partial<Pick<RuleSet, "playerCount">>
 ): number[] {
+  if (rules.playerCount === 3) {
+    throw new Error(
+      "Sanma uses raw match scores; tournament UMA settlement is not supported"
+    );
+  }
   if (scores.length > 4 || scores.some((score) => !Number.isFinite(score))) {
     throw new Error("Match scoring requires at most four finite table scores");
   }

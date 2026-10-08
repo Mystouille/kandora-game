@@ -34,11 +34,10 @@ import {
   normalMatchMode,
 } from "~/game/protocol/matchMode";
 import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
-import {
-  getPreset,
-  presetToRuleSet,
-  listPresetIds,
-} from "~/game/rules/presets";
+import { listPresetIds } from "~/game/rules/presets";
+import { GameSetupSchema, gameSetupRules } from "~/game/rules/gameSetup";
+import { buildAllTiles } from "~/game/rules/wall";
+import { SANMA_CAPABILITY } from "~/game/protocol/sanma";
 import {
   ClientMessageSchema,
   MatchDebugSchema,
@@ -399,7 +398,7 @@ async function readJsonBody(
  * `matchId`. The portal calls this on behalf of the user, then
  * navigates the client to `/game/:matchId` to join via WS.
  *
- * Body: `{ token, debug?, preset?, mode?, spectatorDelayMs? }`.
+ * Body: `{ token, debug?, preset?, playerCount?, sanmaType?, mode?, spectatorDelayMs? }`.
  *
  * Splitting creation off the WS upgrade is what makes the URL
  * itself idempotent: visiting `/game/:id` only joins; it never
@@ -425,10 +424,20 @@ async function handleCreateRoom(
     reply(400, { error: "invalid_body" });
     return;
   }
-  const { token, debug, preset, mode, spectatorDelayMs } = body as {
+  const {
+    token,
+    debug,
+    preset,
+    playerCount,
+    sanmaType,
+    mode,
+    spectatorDelayMs,
+  } = body as {
     token?: unknown;
     debug?: unknown;
     preset?: unknown;
+    playerCount?: unknown;
+    sanmaType?: unknown;
     mode?: unknown;
     spectatorDelayMs?: unknown;
   };
@@ -482,13 +491,54 @@ async function handleCreateRoom(
     reply(400, { error: "debug_not_allowed_in_duplicate_mode" });
     return;
   }
-  let presetId = "buu-east";
+  let presetId = playerCount === 3 ? "m-league" : "buu-east";
   if (preset !== undefined) {
     if (typeof preset !== "string" || !listPresetIds().includes(preset)) {
       reply(400, { error: "invalid_preset" });
       return;
     }
     presetId = preset;
+  }
+  const setup = GameSetupSchema.safeParse({
+    preset: presetId,
+    playerCount,
+    sanmaType,
+    mode: parsedMode.data,
+    spectatorDelayMs: parsedSpectatorDelay.data,
+  });
+  if (!setup.success) {
+    reply(400, {
+      error: "invalid_game_setup",
+      message: setup.error.issues[0]?.message,
+    });
+    return;
+  }
+  const rules = gameSetupRules(setup.data);
+  if (rules.playerCount === 3 && parsedDebug !== undefined) {
+    const inventory = new Set(
+      buildAllTiles({
+        playerCount: 3,
+        sanmaType: rules.sanmaType,
+        redFives: {
+          m: rules.nbRedFiveManzu,
+          p: rules.nbRedFivePinzu,
+          s: rules.nbRedFiveSouzu,
+        },
+      })
+    );
+    if (
+      (parsedDebug.leftDiscards?.length ?? 0) > 0 ||
+      [
+        ...(parsedDebug.humanHand ?? []),
+        ...(parsedDebug.humanDraws ?? []),
+      ].some((tile) => !inventory.has(tile))
+    ) {
+      reply(400, {
+        error: "invalid_sanma_debug",
+        message: "Sanma has no left player and requires its reduced tile set.",
+      });
+      return;
+    }
   }
   const matchId = nanoid(12);
   const matchSeed =
@@ -500,7 +550,7 @@ async function handleCreateRoom(
     matchSeed,
     nativeMatchDependencies,
     parsedDebug,
-    presetToRuleSet(getPreset(presetId)),
+    rules,
     presetId,
     parsedMode.data,
     parsedSpectatorDelay.data
@@ -518,6 +568,8 @@ async function handleCreateRoom(
   waitingRoomGraceTimers.set(matchId, graceTimer);
   reply(200, {
     matchId,
+    playerCount: rules.playerCount,
+    sanmaType: rules.sanmaType,
     mode: parsedMode.data,
     spectatorDelayMs: parsedSpectatorDelay.data,
   });
@@ -921,6 +973,19 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
     return;
   }
   if (connectionClosed || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  const targetMatch = matches.get(matchId);
+  if (
+    targetMatch?.owners.roster.playerCount === 3 &&
+    !hello.gameCapabilities?.includes(SANMA_CAPABILITY)
+  ) {
+    sendError(
+      "sanma_update_required",
+      "Update Kandora to play or watch a three-player table."
+    );
+    ws.close(1008, "Sanma support required");
     return;
   }
 

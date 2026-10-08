@@ -1,3 +1,7 @@
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
+import { copySeatValues } from "~/game/rules/seats";
+import { seatValues, type PlayerCount } from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import type { GameEvent } from "~/game/protocol/messages";
 import { MatchEventJournal } from "../eventJournal";
 import type { MatchRuntime } from "../runtime";
@@ -9,6 +13,7 @@ import type {
 } from "../repository";
 import type { DecisionTiming } from "../timing/decisionTiming";
 export interface EventPublisherPort {
+  readonly playerCount?: PlayerCount;
   readonly runtime: Pick<MatchRuntime, "now" | "wallNow">;
   readonly timing: Pick<DecisionTiming, "record">;
   readonly eventJournalStore: MatchEventJournalStore | null;
@@ -22,10 +27,12 @@ export interface EventPublisherPort {
   notifyDelayedSpectators(): void;
 }
 export class MatchEventPublisher {
-  constructor(private readonly port: EventPublisherPort) {}
+  constructor(private readonly port: EventPublisherPort) {
+    this.seatSeq = seatValues(port.playerCount ?? 4, () => 0);
+  }
   private nextSeq = 0;
 
-  private seatSeq: [number, number, number, number] = [0, 0, 0, 0];
+  private seatSeq: SeatValues<number>;
 
   private readonly eventLog: Array<{
     seq: number;
@@ -115,13 +122,11 @@ export class MatchEventPublisher {
   restoreNextSequence(next: number): void {
     this.nextSeq = next;
   }
-  seatSequences(): [number, number, number, number] {
-    return [...this.seatSeq];
+  seatSequences(): SeatValues<number> {
+    return copySeatValues(this.seatSeq);
   }
-  restoreSeatSequences(
-    values: readonly [number, number, number, number]
-  ): void {
-    this.seatSeq = [...values];
+  restoreSeatSequences(values: ReadonlySeatValues<number>): void {
+    this.seatSeq = copySeatValues(values);
   }
   get spectatorSequence(): number {
     return this.spectatorSeq;

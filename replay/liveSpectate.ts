@@ -5,6 +5,8 @@ import type {
   SnapshotState,
 } from "~/game/protocol/messages";
 import { applyReplayEvent, initialView, type ReplayView } from "./player";
+import { copySeatValues, seatValues } from "~/game/rules/seats";
+import { snapshotInitialDeadWall } from "~/game/client/variantState";
 
 export interface LiveSpectateTimeline {
   baseline: ReplayView | null;
@@ -22,7 +24,7 @@ export function createLiveSpectateTimeline(): LiveSpectateTimeline {
 }
 
 export function snapshotToReplayView(snapshot: SnapshotState): ReplayView {
-  const base = initialView();
+  const base = initialView(snapshot);
   return {
     ...base,
     hands: snapshot.hands.map((hand) => [...hand]),
@@ -44,74 +46,52 @@ export function snapshotToReplayView(snapshot: SnapshotState): ReplayView {
       0
     ),
     wallRemaining: snapshot.wallRemaining,
-    drawsTaken: snapshot.drawsTaken ?? 70 - snapshot.wallRemaining,
+    nukiTiles: seatValues(snapshot.playerCount ?? 4, (seat) => [
+      ...(snapshot.nukiTiles?.[seat] ?? []),
+    ]),
+    pendingNuki: snapshot.pendingNuki ? { ...snapshot.pendingNuki } : null,
+    sanmaWall: snapshot.sanmaWall ? { ...snapshot.sanmaWall } : null,
+    turn: snapshot.turn,
+    phase: snapshot.phase,
+    drawsTaken:
+      snapshot.drawsTaken ??
+      (snapshot.playerCount === 3 ? 0 : 70 - snapshot.wallRemaining),
     liveWall: snapshot.liveWall ? [...snapshot.liveWall] : null,
+    deadWall: snapshotInitialDeadWall(snapshot),
     liveDrawsTaken: snapshot.liveDrawsTaken ?? 0,
     duplicateWallState: snapshot.duplicateWallState
       ? cloneDuplicateWallState(snapshot.duplicateWallState)
       : null,
     duplicateDrawQueues: null,
     doraIndicators: [...snapshot.doraIndicators],
-    scores: [
-      snapshot.scores[0],
-      snapshot.scores[1],
-      snapshot.scores[2],
-      snapshot.scores[3],
-    ],
+    scores: copySeatValues(snapshot.scores),
     dealer: snapshot.dealer,
     roundWind: snapshot.roundWind,
     roundNumber: snapshot.roundNumber,
     honba: snapshot.honba,
     riichiSticks: snapshot.riichiSticks,
-    riichiDeclared: [
-      snapshot.riichiDeclared[0],
-      snapshot.riichiDeclared[1],
-      snapshot.riichiDeclared[2],
-      snapshot.riichiDeclared[3],
-    ],
+    riichiDeclared: copySeatValues(snapshot.riichiDeclared),
+    ryuukyokuDeclarations: snapshot.ryuukyokuDeclarations
+      ? copySeatValues(snapshot.ryuukyokuDeclarations)
+      : base.ryuukyokuDeclarations,
+    ryuukyokuTenpaiHands: seatValues(snapshot.playerCount ?? 4, (seat) => {
+      const hand = snapshot.ryuukyokuTenpaiHands?.[seat];
+      return hand ? [...hand] : null;
+    }),
+    lastHandResult: snapshot.lastHandResult
+      ? { ...structuredClone(snapshot.lastHandResult), dealer: snapshot.dealer }
+      : null,
     riichiTileIdx: snapshot.riichiTileIdx
-      ? [
-          snapshot.riichiTileIdx[0],
-          snapshot.riichiTileIdx[1],
-          snapshot.riichiTileIdx[2],
-          snapshot.riichiTileIdx[3],
-        ]
-      : [null, null, null, null],
+      ? copySeatValues(snapshot.riichiTileIdx)
+      : base.riichiTileIdx,
     dice: snapshot.dice ?? null,
-    furiten: snapshot.furiten
-      ? [
-          snapshot.furiten[0],
-          snapshot.furiten[1],
-          snapshot.furiten[2],
-          snapshot.furiten[3],
-        ]
-      : [false, false, false, false],
-    sinking: snapshot.sinking
-      ? [
-          snapshot.sinking[0],
-          snapshot.sinking[1],
-          snapshot.sinking[2],
-          snapshot.sinking[3],
-        ]
-      : [false, false, false, false],
-    chips: snapshot.chips
-      ? [
-          snapshot.chips[0],
-          snapshot.chips[1],
-          snapshot.chips[2],
-          snapshot.chips[3],
-        ]
-      : [0, 0, 0, 0],
-    dabuken: snapshot.dabuken
-      ? [
-          snapshot.dabuken[0],
-          snapshot.dabuken[1],
-          snapshot.dabuken[2],
-          snapshot.dabuken[3],
-        ]
-      : [false, false, false, false],
+    furiten: snapshot.furiten ? copySeatValues(snapshot.furiten) : base.furiten,
+    sinking: snapshot.sinking ? copySeatValues(snapshot.sinking) : base.sinking,
+    chips: snapshot.chips ? copySeatValues(snapshot.chips) : base.chips,
+    dabuken: snapshot.dabuken ? copySeatValues(snapshot.dabuken) : base.dabuken,
     buuMode: snapshot.chips !== undefined,
     scoreCap: snapshot.scoreCap ?? null,
+    riichiBetValue: snapshot.riichiBetValue ?? base.riichiBetValue,
     uraDoraEnabled: snapshot.uraDoraEnabled ?? true,
     freshlyDrawnSeat: snapshot.freshlyDrawnSeat ?? null,
   };
@@ -133,7 +113,11 @@ export function advanceLiveSpectateTimeline(
   }
 
   const startSeq = message.seq - message.events.length + 1;
-  if (current.baseline === null && startSeq === 0 && message.events.length > 1) {
+  if (
+    current.baseline === null &&
+    startSeq === 0 &&
+    message.events.length > 1
+  ) {
     let baseline = initialView();
     for (const event of message.events) {
       baseline = applyReplayEvent(baseline, event);

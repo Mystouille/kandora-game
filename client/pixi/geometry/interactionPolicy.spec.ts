@@ -8,11 +8,32 @@ import {
   isDoubleTapGesture,
   isMobileDoubleTapShortcutTarget,
   isPendingDiscardDisplaySlot,
+  pointerToHandCoordinates,
   riichiSelectionTileTint,
   topmostHandHoverTargetIndex,
 } from "./interactionPolicy";
 
 describe("extracted focused-hand and shortcut policy", () => {
+  it("maps screen scaling and hand offsets without changing drag coordinates", () => {
+    const point = pointerToHandCoordinates({
+      point: { x: 120, y: 240 },
+      viewport: { left: 10, top: 20, width: 200, height: 400 },
+      screen: { width: 400, height: 800 },
+      root: { position: { x: 10, y: 20 }, scale: { x: 2, y: 4 } },
+      origin: { x: 5, y: 6 },
+    });
+    expect(point.x).toBeCloseTo(100, 10);
+    expect(point.y).toBeCloseTo(99, 10);
+    expect(
+      pointerToHandCoordinates({
+        point: { x: 2, y: 3 },
+        viewport: { left: 0, top: 0, width: 0, height: 0 },
+        screen: { width: 10, height: 20 },
+        root: { position: { x: 0, y: 0 }, scale: { x: 1, y: 1 } },
+        origin: { x: 0, y: 0 },
+      })
+    ).toEqual({ x: 20, y: 60 });
+  });
   it("retains replay restrictions, preview ordering, and strict tint ownership", () => {
     expect(canInteractWithFocusedHand({ conn: "replay" })).toBe(false);
     expect(canInteractWithFocusedHand({ conn: "open" })).toBe(true);

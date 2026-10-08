@@ -1,3 +1,4 @@
+import { type SeatValues } from "~/game/protocol/seat";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import type {
@@ -28,7 +29,10 @@ import {
 } from "~/game/client/discardActions";
 import { takeAutoStart, takeMatchDebug } from "~/game/client/debugSeed";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
-import { useWebTableUiScale, webTableUiStyle } from "~/game/client/webTableUiScale";
+import {
+  useWebTableUiScale,
+  webTableUiStyle,
+} from "~/game/client/webTableUiScale";
 import { ViewerList } from "~/game/components/ViewerList";
 import {
   advancePostHandPeekDiscardCount,
@@ -372,7 +376,7 @@ function SessionVoteOverlay({
     gameIndex: number;
   } | null;
   mySeat: number | null;
-  seatNames: [string, string, string, string] | null;
+  seatNames: SeatValues<string> | null;
   onVote: (vote: "yes" | "no", intent?: PromptIntentContext) => void;
   window?: ActionWindowView | null;
 }) {
@@ -382,12 +386,7 @@ function SessionVoteOverlay({
     return null;
   }
 
-  const names: [string, string, string, string] = seatNames ?? [
-    "P1",
-    "P2",
-    "P3",
-    "P4",
-  ];
+  const names: SeatValues<string> = seatNames ?? ["P1", "P2", "P3", "P4"];
   const seconds = Math.ceil(countdown.remainingMs / 1000);
   const myVote = mySeat !== null ? sessionVote.votes[mySeat] : null;
 
@@ -401,7 +400,7 @@ function SessionVoteOverlay({
           Play another East game?
         </div>
         <div className="flex gap-3">
-          {[0, 1, 2, 3].map((s) => {
+          {sessionVote.votes.map((_, s) => {
             const v = sessionVote.votes[s];
             const color =
               v === "yes"
@@ -482,12 +481,12 @@ function ReadyCheckOverlay({
 }: {
   readyCheck: {
     deadline: number;
-    acked: [boolean, boolean, boolean, boolean];
+    acked: SeatValues<boolean>;
     window?: ActionWindowView | null;
   } | null;
   mySeat: number | null;
-  seatNames: [string, string, string, string] | null;
-  chips: [number, number, number, number] | null;
+  seatNames: SeatValues<string> | null;
+  chips: SeatValues<number> | null;
   buuMode: boolean;
   resultPanelBounds: { x: number; y: number; w: number; h: number } | null;
   onReady: (intent?: PromptIntentContext) => void;
@@ -531,12 +530,7 @@ function ReadyCheckOverlay({
     return null;
   }
 
-  const names: [string, string, string, string] = seatNames ?? [
-    "P1",
-    "P2",
-    "P3",
-    "P4",
-  ];
+  const names: SeatValues<string> = seatNames ?? ["P1", "P2", "P3", "P4"];
   // Resolve absolute seats by visible position (bottom = mySeat,
   // right = mySeat+1, etc.). Mirrors the renderer's seat layout.
   const bottomSeat = mySeat as 0 | 1 | 2 | 3;
@@ -594,39 +588,40 @@ function ReadyCheckOverlay({
     );
   }
 
-  const seatLabel = (seat: 0 | 1 | 2 | 3) => (
-    <span
-      className={
-        readyCheck.acked[seat]
-          ? "flex flex-col items-center text-emerald-300 font-semibold"
-          : "flex flex-col items-center text-white/80"
-      }
-    >
-      <span>
-        {names[seat]}
-        {readyCheck.acked[seat] ? " ✓" : ""}
-      </span>
-      {buuMode && chips ? (
-        <span className="mt-1 inline-flex items-center gap-1.5 font-mono font-bold text-amber-300">
-          <img
-            src={chipIconUrl}
-            alt=""
-            width={28}
-            height={28}
-            className="web-table-ui-ready-chip inline-block"
-            style={{ imageRendering: "auto" }}
-          />
-          <span className="web-table-ui-ready-chips text-[26px] leading-none">{chips[seat]}</span>
+  const seatLabel = (seat: 0 | 1 | 2 | 3) =>
+    seat >= readyCheck.acked.length ? null : (
+      <span
+        className={
+          readyCheck.acked[seat]
+            ? "flex flex-col items-center text-emerald-300 font-semibold"
+            : "flex flex-col items-center text-white/80"
+        }
+      >
+        <span>
+          {names[seat]}
+          {readyCheck.acked[seat] ? " ✓" : ""}
         </span>
-      ) : null}
-    </span>
-  );
+        {buuMode && chips ? (
+          <span className="mt-1 inline-flex items-center gap-1.5 font-mono font-bold text-amber-300">
+            <img
+              src={chipIconUrl}
+              alt=""
+              width={28}
+              height={28}
+              className="web-table-ui-ready-chip inline-block"
+              style={{ imageRendering: "auto" }}
+            />
+            <span className="web-table-ui-ready-chips text-[26px] leading-none">
+              {chips[seat]}
+            </span>
+          </span>
+        ) : null}
+      </span>
+    );
 
   return (
     <div className="pointer-events-auto absolute inset-0 z-[100] flex items-center justify-center bg-black/40">
-      <div
-        className="web-table-ui-dialog web-table-ui-ready relative flex flex-col items-center justify-center gap-4 rounded-xl border border-emerald-500/40 bg-black/85 px-10 py-8 shadow-2xl"
-      >
+      <div className="web-table-ui-dialog web-table-ui-ready relative flex flex-col items-center justify-center gap-4 rounded-xl border border-emerald-500/40 bg-black/85 px-10 py-8 shadow-2xl">
         <div className="absolute left-1/2 top-2 -translate-x-1/2 text-sm">
           {seatLabel(topSeat)}
         </div>
@@ -878,7 +873,13 @@ export default function GameMatchRoute({
     const hasAnkan = actions.some(
       (a) => a.type === "kan" && a.kanKind === "ankan"
     );
-    if ((liveMenuFlags.autoDiscard || inRiichi) && !hasWin && !hasAnkan) {
+    const hasNuki = actions.some((action) => action.type === "nuki");
+    if (
+      (liveMenuFlags.autoDiscard || inRiichi) &&
+      !hasWin &&
+      !hasAnkan &&
+      !hasNuki
+    ) {
       if (view.freshlyDrawnSeat !== mySeat) {
         return;
       }
@@ -904,6 +905,7 @@ export default function GameMatchRoute({
           const live = useMatchStore.getState();
           if (
             !isCurrentAutoDiscardWindow(live, expectedWindow) ||
+            live.legalActions.some((action) => action.type === "nuki") ||
             live.pendingDiscard !== null ||
             (!liveMenuFlagsRef.current.autoDiscard &&
               !live.riichiDeclared[mySeat])
@@ -1766,6 +1768,13 @@ function WaitingRoomOverlay({
             Share this URL with friends, then ready up when the table is set.
           </p>
         </header>
+
+        {roomState.playerCount === 3 && (
+          <div className="text-sm text-emerald-100">
+            3 players · {roomState.sanmaType === "kansai" ? "Kansai" : "Online"}{" "}
+            sanma
+          </div>
+        )}
 
         {roomState.mode?.type === "duplicate" && (
           <div className="flex items-center justify-between gap-3 border-y border-cyan-700/60 py-2 text-sm text-cyan-100">

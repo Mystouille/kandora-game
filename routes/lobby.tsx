@@ -3,6 +3,14 @@ import { useCallback, useEffect, useState } from "react";
 import { PlayCircleOutlined } from "@ant-design/icons";
 import { SpectatorDelaySelect } from "~/game/components/SpectatorDelaySelect";
 import {
+  buildGameSetup,
+  GameSetupControls,
+  gameVariantLabel,
+  initialGameSetupSelection,
+  setupPresetId,
+} from "~/game/components/GameSetupControls";
+import type { GameSetup } from "~/game/rules/gameSetup";
+import {
   spectatorDelayLabel,
   type SpectatorDelayMs,
 } from "~/game/protocol/spectatorDelay";
@@ -10,12 +18,7 @@ import { openAppLink } from "~/game/client/appLinkNavigation";
 import { parseTileList, saveAutoStart } from "~/game/client/debugSeed";
 import { ActiveMatchResponseSchema } from "~/game/protocol/activeMatch";
 import type { MatchDebug } from "~/game/protocol/messages";
-import {
-  DUPLICATE_GENERATION_VERSION,
-  MatchModeConfigSchema,
-  normalMatchMode,
-  type MatchModeConfig,
-} from "~/game/protocol/matchMode";
+import type { MatchModeConfig } from "~/game/protocol/matchMode";
 
 /**
  * `/lobby` — entry point for the multi-human walking skeleton.
@@ -50,6 +53,8 @@ export interface LobbyLoaderData {
   gameLogs: Array<{
     gameId: string;
     ruleSet: string;
+    playerCount?: GameSetup["playerCount"];
+    sanmaType?: GameSetup["sanmaType"];
     mode?: MatchModeConfig;
     startedAt: number;
     endedAt: number;
@@ -84,6 +89,8 @@ interface LiveRoom {
   matchId: string;
   status: "waiting" | "playing" | "finished";
   presetId?: string;
+  playerCount?: GameSetup["playerCount"];
+  sanmaType?: GameSetup["sanmaType"];
   mode?: MatchModeConfig;
   buuMode: boolean;
   spectatorDelayMs?: SpectatorDelayMs;
@@ -93,10 +100,11 @@ interface LiveRoom {
 export function liveRoomAction(
   status: LiveRoom["status"],
   matchId: string,
-  activeMatchId: string | null
+  activeMatchId: string | null,
+  hasOpenSeat = true
 ): "join" | "watch" | "reconnect" | null {
   if (status === "waiting") {
-    return activeMatchId === null ? "join" : null;
+    return activeMatchId === null && hasOpenSeat ? "join" : null;
   }
   if (status === "playing") {
     return matchId === activeMatchId ? "reconnect" : "watch";
@@ -118,8 +126,11 @@ export default function LobbyRoute() {
   const [starting, setStarting] = useState(false);
   const [presetId, setPresetId] = useState(DEFAULT_LOBBY_PRESET_ID);
   const [spectatorDelayMs, setSpectatorDelayMs] = useState<SpectatorDelayMs>(0);
-  const [duplicateEnabled, setDuplicateEnabled] = useState(false);
-  const [duplicateSeed, setDuplicateSeed] = useState("");
+  const [setupSelection, setSetupSelection] = useState(
+    initialGameSetupSelection
+  );
+  const { duplicateEnabled } = setupSelection;
+  const selectedPreset = setupPresetId(presetId, setupSelection.playerCount);
   const [showDebug, setShowDebug] = useState(false);
   const [humanHand, setHumanHand] = useState("");
   const [humanDraws, setHumanDraws] = useState("");
@@ -254,26 +265,18 @@ export default function LobbyRoute() {
    * `/game/:matchId` URL is purely a join target and a refresh
    * can never spin up a brand-new game with the same id.
    */
-  function buildMode(): MatchModeConfig | null {
-    const parsed = MatchModeConfigSchema.safeParse(
-      duplicateEnabled
-        ? {
-            type: "duplicate",
-            seed: duplicateSeed,
-            generationVersion: DUPLICATE_GENERATION_VERSION,
-          }
-        : normalMatchMode
-    );
-    if (!parsed.success) {
-      setError("Enter a duplicate seed between 1 and 128 characters.");
+  function buildSetup(): GameSetup | null {
+    try {
+      return buildGameSetup(presetId, setupSelection, spectatorDelayMs);
+    } catch (reason) {
+      setError((reason as Error).message);
       return null;
     }
-    return parsed.data;
   }
 
   async function createRoomOnServer(
     debug: MatchDebug,
-    mode: MatchModeConfig
+    setup: GameSetup
   ): Promise<string | null> {
     try {
       const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -283,9 +286,7 @@ export default function LobbyRoute() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           debug,
-          mode,
-          preset: presetId,
-          spectatorDelayMs,
+          ...setup,
         }),
       });
       if (res.status === 401 || res.status === 403) {
@@ -297,9 +298,22 @@ export default function LobbyRoute() {
         setError(`Failed to create room (${res.status}): ${text || "unknown"}`);
         return null;
       }
-      const data = (await res.json()) as { matchId?: string };
+      const data = (await res.json()) as {
+        matchId?: string;
+        playerCount?: number;
+        sanmaType?: string;
+      };
       if (!data.matchId) {
         setError("Game server returned no matchId.");
+        return null;
+      }
+      if (
+        setup.playerCount === 3 &&
+        (data.playerCount !== 3 || data.sanmaType !== setup.sanmaType)
+      ) {
+        setError(
+          "The game server does not support the selected sanma rules. Update the server before creating this table."
+        );
         return null;
       }
       return data.matchId;
@@ -317,8 +331,8 @@ export default function LobbyRoute() {
       setError("Reconnect to your active game before starting another one.");
       return;
     }
-    const mode = buildMode();
-    if (mode === null) {
+    const setup = buildSetup();
+    if (setup === null) {
       return;
     }
     const { debug, ok } = buildDebug();
@@ -326,7 +340,7 @@ export default function LobbyRoute() {
       return;
     }
     setStarting(true);
-    const matchId = await createRoomOnServer(debug, mode);
+    const matchId = await createRoomOnServer(debug, setup);
     if (!matchId) {
       setStarting(false);
       return;
@@ -341,8 +355,8 @@ export default function LobbyRoute() {
       setError("Reconnect to your active game before creating another room.");
       return;
     }
-    const mode = buildMode();
-    if (mode === null) {
+    const setup = buildSetup();
+    if (setup === null) {
       return;
     }
     const { debug, ok } = buildDebug();
@@ -350,7 +364,7 @@ export default function LobbyRoute() {
       return;
     }
     setStarting(true);
-    const matchId = await createRoomOnServer(debug, mode);
+    const matchId = await createRoomOnServer(debug, setup);
     if (!matchId) {
       setStarting(false);
       return;
@@ -385,11 +399,15 @@ export default function LobbyRoute() {
           Rules
         </span>
         <select
-          value={presetId}
+          value={selectedPreset}
           onChange={(event) => {
             setPresetId(event.target.value);
           }}
-          disabled={starting || activeMatchId !== null}
+          disabled={
+            starting ||
+            activeMatchId !== null ||
+            setupSelection.playerCount === 3
+          }
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 rounded-md focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
         >
           {presets.map((preset) => (
@@ -399,7 +417,7 @@ export default function LobbyRoute() {
           ))}
         </select>
         <span className="block mt-1 text-sm text-gray-500 dark:text-gray-400">
-          {presets.find((preset) => preset.id === presetId)?.description}
+          {presets.find((preset) => preset.id === selectedPreset)?.description}
         </span>
       </label>
 
@@ -419,44 +437,16 @@ export default function LobbyRoute() {
       </label>
 
       <div className="mb-6 border-y border-gray-200 py-4 dark:border-gray-700">
-        <label className="flex items-center justify-between gap-4">
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-            Duplicate mode
-          </span>
-          <input
-            type="checkbox"
-            role="switch"
-            checked={duplicateEnabled}
-            onChange={(event) => {
-              const enabled = event.target.checked;
-              setDuplicateEnabled(enabled);
-              if (enabled) {
-                setShowDebug(false);
-              }
-            }}
-            disabled={starting || activeMatchId !== null}
-            className="h-5 w-5 accent-emerald-600"
-          />
-        </label>
-        {duplicateEnabled && (
-          <label className="mt-4 block">
-            <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
-              Duplicate seed
-            </span>
-            <input
-              type="text"
-              value={duplicateSeed}
-              onChange={(event) => {
-                setDuplicateSeed(event.target.value);
-              }}
-              maxLength={128}
-              autoComplete="off"
-              placeholder="Enter seed"
-              disabled={starting || activeMatchId !== null}
-              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 placeholder-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500"
-            />
-          </label>
-        )}
+        <GameSetupControls
+          value={setupSelection}
+          onChange={(selection) => {
+            setSetupSelection(selection);
+            if (selection.duplicateEnabled) {
+              setShowDebug(false);
+            }
+          }}
+          disabled={starting || activeMatchId !== null}
+        />
       </div>
 
       <div className="flex flex-wrap gap-3 mb-6">
@@ -585,8 +575,18 @@ export default function LobbyRoute() {
               </li>
             ))}
             {rooms?.map((r) => {
-              const action = liveRoomAction(r.status, r.matchId, activeMatchId);
-              const seatLabels = r.seats.map((s, i) => {
+              const capacity = r.playerCount ?? 4;
+              const occupied = r.seats
+                .slice(0, capacity)
+                .filter((seat) => seat != null).length;
+              const action = liveRoomAction(
+                r.status,
+                r.matchId,
+                activeMatchId,
+                occupied < capacity
+              );
+              const seatLabels = Array.from({ length: capacity }, (_, i) => {
+                const s = r.seats[i] ?? null;
                 if (s === null) {
                   return `[${i + 1}] empty`;
                 }
@@ -613,6 +613,11 @@ export default function LobbyRoute() {
                       >
                         {r.status === "playing" ? "playing" : "waiting"}
                       </span>
+                      {gameVariantLabel(r) && (
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {gameVariantLabel(r)}
+                        </span>
+                      )}
                       <span className="font-mono text-sm text-gray-800 dark:text-gray-100">
                         {r.matchId}
                       </span>
@@ -628,7 +633,7 @@ export default function LobbyRoute() {
                       )}
                     </div>
                     <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">
-                      {seatLabels.join(" · ")}
+                      {occupied}/{capacity} · {seatLabels.join(" · ")}
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       Spectators: {spectatorDelayLabel(r.spectatorDelayMs ?? 0)}
@@ -687,6 +692,10 @@ export default function LobbyRoute() {
                       <span className="px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400">
                         Active game in progress
                       </span>
+                    ) : r.status === "waiting" && occupied >= capacity ? (
+                      <span className="px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400">
+                        Room full
+                      </span>
                     ) : null}
                   </div>
                 </li>
@@ -723,6 +732,11 @@ export default function LobbyRoute() {
                       <span className="text-xs text-gray-500 dark:text-gray-400">
                         {presetNameById.get(log.ruleSet) ?? log.ruleSet}
                       </span>
+                      {gameVariantLabel(log) && (
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {gameVariantLabel(log)}
+                        </span>
+                      )}
                       {log.mode?.type === "duplicate" && (
                         <span className="rounded bg-cyan-100 px-2 py-0.5 font-mono text-xs text-cyan-900 dark:bg-cyan-900 dark:text-cyan-100">
                           Duplicate · {log.mode.seed}

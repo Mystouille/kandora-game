@@ -372,8 +372,8 @@ describe("scoreHand — closed-hand wins", () => {
 describe("riichi-lib penchan fu patch", () => {
   // The riichi npm package (v1.2.0) miscomputes fu for penchan
   // completions on either edge: the wait-fu branch compares chii
-  // edge tiles to a boolean instead of the win tile. We patch
-  // `calcFu` at module load — these tests pin the corrected
+  // edge tiles to a boolean instead of the win tile. The adapter
+  // corrects `calcFu` per instance — these tests pin the corrected
   // behaviour for both edges.
 
   it("upper-edge penchan ron (789p won on 7p) gets +2 fu", () => {

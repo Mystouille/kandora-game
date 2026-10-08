@@ -1,3 +1,8 @@
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
+import { copySeatValues } from "~/game/rules/seats";
+import { activeSeats } from "~/game/rules/seats";
+import { seatValues } from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import type { Seat } from "~/game/protocol/messages";
 
 import type { MatchEndReason } from "~/game/rules";
@@ -26,9 +31,9 @@ export interface SessionSnapshot {
   readonly finalized: boolean;
   readonly gameIndex: number;
   readonly gameStartLogIdx: number;
-  readonly sessionChips: [number, number, number, number];
-  readonly gameStartChips: [number, number, number, number];
-  readonly sessionDabuken: [boolean, boolean, boolean, boolean];
+  readonly sessionChips: SeatValues<number>;
+  readonly gameStartChips: SeatValues<number>;
+  readonly sessionDabuken: SeatValues<boolean>;
   readonly sessionFinalized: boolean;
   readonly pendingSessionEndReason:
     "vote_no" | "vote_timeout" | "single_game" | "server_abort" | null;
@@ -41,14 +46,9 @@ export class SessionCoordinator {
   private finalized = false;
   private gameIndex = 0;
   private gameStartLogIdx = 0;
-  private sessionChips: [number, number, number, number] = [0, 0, 0, 0];
-  private gameStartChips: [number, number, number, number] = [0, 0, 0, 0];
-  private sessionDabuken: [boolean, boolean, boolean, boolean] = [
-    false,
-    false,
-    false,
-    false,
-  ];
+  private sessionChips: SeatValues<number>;
+  private gameStartChips: SeatValues<number>;
+  private sessionDabuken: SeatValues<boolean>;
   private sessionFinalized = false;
   private pendingSessionEndReason:
     "vote_no" | "vote_timeout" | "single_game" | "server_abort" | null = null;
@@ -61,7 +61,11 @@ export class SessionCoordinator {
     private readonly kernel: MatchKernel,
     private readonly roster: RoomRoster,
     private readonly port: SessionLifecyclePort
-  ) {}
+  ) {
+    this.sessionChips = seatValues(roster.playerCount, () => 0);
+    this.gameStartChips = seatValues(roster.playerCount, () => 0);
+    this.sessionDabuken = seatValues(roster.playerCount, () => false);
+  }
   snapshot(): SessionSnapshot {
     return {
       status: this.statusValue,
@@ -71,9 +75,9 @@ export class SessionCoordinator {
       finalized: this.finalized,
       gameIndex: this.gameIndex,
       gameStartLogIdx: this.gameStartLogIdx,
-      sessionChips: [...this.sessionChips],
-      gameStartChips: [...this.gameStartChips],
-      sessionDabuken: [...this.sessionDabuken],
+      sessionChips: copySeatValues(this.sessionChips),
+      gameStartChips: copySeatValues(this.gameStartChips),
+      sessionDabuken: copySeatValues(this.sessionDabuken),
       sessionFinalized: this.sessionFinalized,
       pendingSessionEndReason: this.pendingSessionEndReason,
     };
@@ -89,9 +93,9 @@ export class SessionCoordinator {
     this.finalized = snapshot.finalized;
     this.gameIndex = snapshot.gameIndex;
     this.gameStartLogIdx = snapshot.gameStartLogIdx;
-    this.sessionChips = [...snapshot.sessionChips];
-    this.gameStartChips = [...snapshot.gameStartChips];
-    this.sessionDabuken = [...snapshot.sessionDabuken];
+    this.sessionChips = copySeatValues(snapshot.sessionChips);
+    this.gameStartChips = copySeatValues(snapshot.gameStartChips);
+    this.sessionDabuken = copySeatValues(snapshot.sessionDabuken);
     this.sessionFinalized = snapshot.sessionFinalized;
     this.pendingSessionEndReason = snapshot.pendingSessionEndReason;
   }
@@ -136,12 +140,7 @@ export class SessionCoordinator {
     // emit the per-game chip delta (Buu-only display in the
     // end-of-game panel). For non-Buu rule sets the starting
     // chips are zero, so the delta stays zero too.
-    this.gameStartChips = [...this.kernel.currentState().chips] as [
-      number,
-      number,
-      number,
-      number,
-    ];
+    this.gameStartChips = copySeatValues(this.kernel.currentState().chips);
     // Push a fresh `room_state` so clients can dismiss the
     // waiting-room overlay as soon as the match flips to
     // `playing` — otherwise the previously-sent waiting frame
@@ -188,7 +187,7 @@ export class SessionCoordinator {
     reason: "exhaustive_draw" | "ron" | "tsumo" | "abort",
     opts: {
       skipHandEnd?: boolean;
-      finalScores?: [number, number, number, number];
+      finalScores?: SeatValues<number>;
       matchEndReason?: MatchEndReason;
 
       serverAbort?: boolean;
@@ -204,10 +203,10 @@ export class SessionCoordinator {
     if (!opts.skipHandEnd) {
       await this.port.emitEvent({ type: "hand_end", reason });
     }
-    const rawScores: readonly [number, number, number, number] =
+    const rawScores: ReadonlySeatValues<number> =
       opts.finalScores ?? this.kernel.currentState().scores;
 
-    const ordered = [0, 1, 2, 3]
+    const ordered = activeSeats(this.roster.playerCount)
       .map((s) => ({ seat: s as Seat, score: rawScores[s] }))
       .sort((a, b) => {
         if (b.score !== a.score) {
@@ -219,14 +218,14 @@ export class SessionCoordinator {
     for (let i = 0; i < ordered.length; i++) {
       placeBySeat.set(ordered[i].seat, (i + 1) as 1 | 2 | 3 | 4);
     }
-    const finalScores = [0, 1, 2, 3].map((s) => ({
+    const finalScores = activeSeats(this.roster.playerCount).map((s) => ({
       seat: s as Seat,
       score: rawScores[s],
       place: placeBySeat.get(s as Seat) as 1 | 2 | 3 | 4,
     }));
 
     const isBuu = this.kernel.currentState().ruleSet.buuMode;
-    let chipsDelta: [number, number, number, number] | null = null;
+    let chipsDelta: SeatValues<number> | null = null;
     if (isBuu) {
       const settledChips = this.kernel.settleBuuGame();
 
@@ -236,18 +235,8 @@ export class SessionCoordinator {
         settledChips[2],
         settledChips[3],
       ];
-      this.sessionChips = [...this.kernel.currentState().chips] as [
-        number,
-        number,
-        number,
-        number,
-      ];
-      this.sessionDabuken = [...this.kernel.currentState().dabuken] as [
-        boolean,
-        boolean,
-        boolean,
-        boolean,
-      ];
+      this.sessionChips = copySeatValues(this.kernel.currentState().chips);
+      this.sessionDabuken = copySeatValues(this.kernel.currentState().dabuken);
     }
     await this.port.emitEvent({
       type: "match_end",
@@ -305,23 +294,20 @@ export class SessionCoordinator {
       return;
     }
     const winnerOldSeat = winnerEntry.seat;
-    const others = ([0, 1, 2, 3] as Seat[]).filter((s) => s !== winnerOldSeat);
+    const others = activeSeats(this.roster.playerCount).filter(
+      (s) => s !== winnerOldSeat
+    );
     const rngSeed = (this.config.seed + (this.gameIndex + 1) * 0x9e3779b9) | 0;
     const shuffled = deterministicShuffle(others, rngSeed);
-    const perm: [Seat, Seat, Seat, Seat] = [
+    const perm: SeatValues<Seat> = [
       winnerOldSeat,
       shuffled[0],
       shuffled[1],
       shuffled[2],
     ];
 
-    const oldChips = [...this.sessionChips] as [number, number, number, number];
-    const oldDabuken = [...this.sessionDabuken] as [
-      boolean,
-      boolean,
-      boolean,
-      boolean,
-    ];
+    const oldChips = copySeatValues(this.sessionChips);
+    const oldDabuken = copySeatValues(this.sessionDabuken);
     this.roster.permute(perm);
     for (let newSeat = 0; newSeat < 4; newSeat++) {
       const fromSeat = perm[newSeat];
@@ -338,12 +324,7 @@ export class SessionCoordinator {
       { chips: this.sessionChips, dabuken: this.sessionDabuken }
     );
 
-    this.gameStartChips = [...this.kernel.currentState().chips] as [
-      number,
-      number,
-      number,
-      number,
-    ];
+    this.gameStartChips = copySeatValues(this.kernel.currentState().chips);
 
     this.port.resetCallState();
 

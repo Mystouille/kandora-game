@@ -34,6 +34,7 @@ export interface CallWorkflowPort
 
 export interface TurnWorkflowPort
   extends KernelEffectsPort, DecisionEffectsPort {
+  waitForWinReaction(trigger: "draw" | "discard" | "call"): Promise<void>;
   emitEngineEvent(event: import("~/game/rules").EngineEvent): Promise<void>;
   emitFuritenChanges(
     changes: readonly import("~/game/rules").FuritenChange[] | undefined

@@ -1,3 +1,4 @@
+import { activeSeats, seatValues, type SeatValues } from "~/game/rules/seats";
 import type { GameEvent, LegalAction, Seat } from "~/game/protocol/messages";
 import type {
   ClockStamp,
@@ -48,7 +49,8 @@ export class DecisionTiming {
           profile: connection?.profile() ?? null,
         };
       },
-      this.diagnostics
+      this.diagnostics,
+      this.windows.playerCount
     );
   }
 
@@ -220,22 +222,14 @@ export class DecisionTiming {
 
   capture(): {
     nextWindow: number;
-    windows: [
-      ActionWindowView | null,
-      ActionWindowView | null,
-      ActionWindowView | null,
-      ActionWindowView | null,
-    ];
+    windows: SeatValues<ActionWindowView | null>;
     prompts?: PromptSnapshot;
   } {
     return {
       nextWindow: this.nextWindow,
-      windows: [
-        this.windows.timedView(0),
-        this.windows.timedView(1),
-        this.windows.timedView(2),
-        this.windows.timedView(3),
-      ],
+      windows: seatValues(this.windows.playerCount, (seat) =>
+        this.windows.timedView(seat)
+      ),
       prompts: this.fixedPrompts.capture(),
     };
   }
@@ -245,11 +239,16 @@ export class DecisionTiming {
     savedAt: number,
     restoredAt = this.runtime.now()
   ): void {
+    if (saved.windows.length !== this.windows.playerCount) {
+      throw new Error(
+        "DecisionTiming: restored participant count does not match"
+      );
+    }
     this.nextWindow = saved.nextWindow;
     if (saved.prompts) {
       this.fixedPrompts.restore(saved.prompts, savedAt, restoredAt);
     }
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.windows.playerCount)) {
       const window = saved.windows[seat];
       if (window !== null) {
         this.windows.restoreTimed(

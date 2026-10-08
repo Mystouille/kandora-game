@@ -1,4 +1,14 @@
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
+import { type SeatValues } from "~/game/protocol/seat";
 import type { Seat, ServerMessage } from "~/game/protocol/messages";
+import {
+  activeSeats,
+  copySeatValues,
+  isActiveSeat,
+  participantCount,
+  seatValues,
+  type PlayerCount,
+} from "~/game/rules/seats";
 
 export interface MatchPlayerInit {
   userId: string;
@@ -12,7 +22,7 @@ export interface RoomRosterPort {
   hasSender(seat: Seat): boolean;
   send(seat: Seat, message: ServerMessage): void;
   clearConnection(seat: Seat): void;
-  permuteConnections(permutation: readonly [Seat, Seat, Seat, Seat]): void;
+  permuteConnections(permutation: ReadonlySeatValues<Seat>): void;
   onPlayingHumanClaimed(seat: Seat): void;
   broadcastRoom(): void;
   broadcastViewers(): void;
@@ -21,23 +31,18 @@ export interface RoomRosterPort {
 
 /** Sole owner of occupant identity, waiting-room host order and waiting readiness. */
 export class RoomRoster {
+  readonly playerCount: PlayerCount;
   private readonly occupants = new Map<Seat, MatchPlayerInit | null>();
-  private waitingReady: [boolean, boolean, boolean, boolean] = [
-    false,
-    false,
-    false,
-    false,
-  ];
+  private waitingReady: SeatValues<boolean>;
 
   constructor(
     private readonly matchId: string,
     players: readonly MatchPlayerInit[],
     private readonly port: RoomRosterPort
   ) {
-    if (players.length !== 4) {
-      throw new Error("MatchProcess requires exactly 4 players");
-    }
-    for (const seat of [0, 1, 2, 3] as const) {
+    this.playerCount = participantCount(players);
+    this.waitingReady = seatValues(this.playerCount, () => false);
+    for (const seat of activeSeats(this.playerCount)) {
       this.occupants.set(seat, { ...players[seat] });
     }
   }
@@ -56,29 +61,32 @@ export class RoomRoster {
     );
   }
 
-  readySnapshot(): [boolean, boolean, boolean, boolean] {
-    return [...this.waitingReady];
+  readySnapshot(): SeatValues<boolean> {
+    return copySeatValues(this.waitingReady);
   }
 
   empty(): void {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       this.occupants.set(seat, null);
     }
   }
 
   restore(
     players: readonly (MatchPlayerInit | null)[],
-    ready?: readonly [boolean, boolean, boolean, boolean]
+    ready?: ReadonlySeatValues<boolean>
   ): void {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       this.replaceSeat(seat, players[seat]);
     }
     if (ready !== undefined) {
-      this.waitingReady = [...ready];
+      this.waitingReady = copySeatValues(ready);
     }
   }
 
   replaceSeat(seat: Seat, player: MatchPlayerInit | null): void {
+    if (!isActiveSeat(seat, this.playerCount)) {
+      throw new Error(`RoomRoster: seat ${seat} is not active`);
+    }
     this.occupants.set(seat, player === null ? null : { ...player });
   }
 
@@ -148,7 +156,7 @@ export class RoomRoster {
   }
 
   hostSeat(): Seat | null {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       if (this.isHumanSeat(seat)) {
         return seat;
       }
@@ -196,7 +204,7 @@ export class RoomRoster {
 
   async startWaitingRoom(
     requestedBy: Seat,
-    permutation: readonly [Seat, Seat, Seat, Seat]
+    permutation: ReadonlySeatValues<Seat>
   ): Promise<void> {
     this.assertHost(requestedBy, "startWaitingRoom");
     if (!this.canStart(requestedBy)) {
@@ -210,7 +218,7 @@ export class RoomRoster {
   addBot(requestedBy: Seat): Seat {
     this.port.assertNotPaused("addWaitingRoomBot");
     this.assertHost(requestedBy, "addWaitingRoomBot");
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       if (this.occupants.get(seat) === null) {
         const botCount = [...this.occupants.values()].filter(
           (player) => player?.isBot
@@ -258,9 +266,7 @@ export class RoomRoster {
     }
   }
 
-  async fillBotsAndStart(
-    permutation: readonly [Seat, Seat, Seat, Seat]
-  ): Promise<void> {
+  async fillBotsAndStart(permutation: ReadonlySeatValues<Seat>): Promise<void> {
     this.port.assertNotPaused("fillBotsAndStart");
     const status = this.port.status();
     if (status !== "waiting") {
@@ -272,10 +278,17 @@ export class RoomRoster {
     await this.port.start();
   }
 
-  permute(permutation: readonly [Seat, Seat, Seat, Seat]): void {
+  permute(permutation: ReadonlySeatValues<Seat>): void {
+    if (
+      permutation.length !== this.playerCount ||
+      new Set(permutation).size !== this.playerCount ||
+      permutation.some((seat) => !isActiveSeat(seat, this.playerCount))
+    ) {
+      throw new Error("RoomRoster: invalid active-seat permutation");
+    }
     const players = new Map(this.occupants);
     const ready = [...this.waitingReady];
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       const source = permutation[seat];
       this.occupants.set(seat, players.get(source) ?? null);
       this.waitingReady[seat] = ready[source];
@@ -323,7 +336,7 @@ export class RoomRoster {
     const humans: Seat[] = [];
     const bots: Seat[] = [];
     const empty: Seat[] = [];
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       const player = this.occupants.get(seat);
       if (player === null) {
         empty.push(seat);
@@ -334,12 +347,7 @@ export class RoomRoster {
       }
     }
     const permutation = [...humans, ...bots, ...empty];
-    this.permute([
-      permutation[0],
-      permutation[1],
-      permutation[2],
-      permutation[3],
-    ]);
+    this.permute(copySeatValues(permutation));
   }
 
   private nextBot(displayName: string): MatchPlayerInit {

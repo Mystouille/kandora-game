@@ -1,7 +1,11 @@
+import { seatValuesSchema } from "~/game/protocol/seat";
 import { z } from "zod";
 import { MatchModeConfigSchema } from "./matchMode";
 import { SpectatorDelayMsSchema } from "./spectatorDelay";
-import { SeatSchema } from "./seat";
+import { GameVariantMetadata, SeatSchema } from "./seat";
+import { SANMA_CAPABILITY, SanmaWallStateSchema } from "./sanma";
+import { isActiveSeat } from "../rules/seats";
+import type { GameVariant } from "./seat";
 import {
   ActionWindowViewSchema,
   ClockProbeSchema,
@@ -43,24 +47,38 @@ export type Tile = z.infer<typeof TileSchema>;
 
 export type { Seat } from "./seat";
 
-const NonnegativeCountTupleSchema = z.tuple([
-  z.number().int().nonnegative(),
-  z.number().int().nonnegative(),
-  z.number().int().nonnegative(),
-  z.number().int().nonnegative(),
-]);
-const NullableBooleanTupleSchema = z.tuple([
-  z.boolean().nullable(),
-  z.boolean().nullable(),
-  z.boolean().nullable(),
-  z.boolean().nullable(),
-]);
-const NullableHandTupleSchema = z.tuple([
-  z.array(TileSchema).nullable(),
-  z.array(TileSchema).nullable(),
-  z.array(TileSchema).nullable(),
-  z.array(TileSchema).nullable(),
-]);
+function refineParticipantArrays(
+  variant: Partial<GameVariant>,
+  arrays: Record<string, readonly unknown[] | undefined>,
+  context: z.RefinementCtx
+) {
+  const count = variant.playerCount ?? 4;
+  if (count === 3 && variant.sanmaType === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["sanmaType"],
+      message: "Sanma metadata requires its variant",
+    });
+  }
+  for (const [field, values] of Object.entries(arrays)) {
+    if (values !== undefined && values.length !== count) {
+      context.addIssue({
+        code: "custom",
+        path: [field],
+        message: `Expected ${count} active participants`,
+      });
+    }
+  }
+  return count;
+}
+
+const NonnegativeCountTupleSchema = seatValuesSchema(
+  z.number().int().nonnegative()
+);
+const NullableBooleanTupleSchema = seatValuesSchema(z.boolean().nullable());
+const NullableHandTupleSchema = seatValuesSchema(
+  z.array(TileSchema).nullable()
+);
 
 export const DuplicateWallStateSchema = z
   .object({
@@ -76,157 +94,228 @@ export type DuplicateWallState = z.infer<typeof DuplicateWallStateSchema>;
 // Events (server → client, embedded in `snapshot` and `event` messages)
 // ---------------------------------------------------------------------------
 
-const MatchStartEvent = z.object({
-  type: z.literal("match_start"),
-  seats: z.array(
-    z.object({
-      seat: SeatSchema,
-      userId: z.string(),
-      displayName: z.string(),
-    })
-  ),
-  ruleSet: z.string(),
-  /**
-   * Per-seat in-game chip totals at match start. Buu only —
-   * non-Buu matches omit the field. Carries the session chip
-   * ledger (starting chips for the first game; rolling totals
-   * for subsequent games) so the pre-deal player-name boxes
-   * already show the correct count instead of zeros.
-   */
-  chips: z.array(z.number().int()).length(4).optional(),
-  /** Per-seat dabuken token state at match start (Buu only). */
-  dabuken: z.array(z.boolean()).length(4).optional(),
-  /**
-   * Active score-cap tier from the rule set, if any. Mirrors
-   * `RuleSet.scoreCap`. Drives the win-panel label so a hand
-   * whose points have been clamped also reports the tier name
-   * (e.g. "Mangan") instead of the raw "8 han" / "Yakuman" that
-   * would misrepresent the actual payout.
-   */
-  scoreCap: z
-    .enum(["mangan", "haneman", "baiman", "sanbaiman"])
-    .nullable()
-    .optional(),
-  /**
-   * Point value of a single riichi stick (`RuleSet.riichiBetValue`).
-   * Drives the client-side optimistic score deduction when a seat
-   * declares riichi (the authoritative score is re-synced at the
-   * next `hand_start`). Optional for back-compat with replays
-   * archived before the field was added; absent ⇒ assume 1000
-   * (standard riichi).
-   */
-  riichiBetValue: z.number().int().positive().optional(),
-  /** Whether ura dora is enabled by the active rule set. */
-  uraDoraEnabled: z.boolean().optional(),
-});
+const MatchStartEvent = z
+  .object({
+    type: z.literal("match_start"),
+    ...GameVariantMetadata,
+    seats: z.array(
+      z.object({
+        seat: SeatSchema,
+        userId: z.string(),
+        displayName: z.string(),
+      })
+    ),
+    ruleSet: z.string(),
+    /**
+     * Per-seat in-game chip totals at match start. Buu only —
+     * non-Buu matches omit the field. Carries the session chip
+     * ledger (starting chips for the first game; rolling totals
+     * for subsequent games) so the pre-deal player-name boxes
+     * already show the correct count instead of zeros.
+     */
+    chips: z.array(z.number().int()).min(3).max(4).optional(),
+    /** Per-seat dabuken token state at match start (Buu only). */
+    dabuken: z.array(z.boolean()).min(3).max(4).optional(),
+    /**
+     * Active score-cap tier from the rule set, if any. Mirrors
+     * `RuleSet.scoreCap`. Drives the win-panel label so a hand
+     * whose points have been clamped also reports the tier name
+     * (e.g. "Mangan") instead of the raw "8 han" / "Yakuman" that
+     * would misrepresent the actual payout.
+     */
+    scoreCap: z
+      .enum(["mangan", "haneman", "baiman", "sanbaiman"])
+      .nullable()
+      .optional(),
+    /**
+     * Point value of a single riichi stick (`RuleSet.riichiBetValue`).
+     * Drives the client-side optimistic score deduction when a seat
+     * declares riichi (the authoritative score is re-synced at the
+     * next `hand_start`). Optional for back-compat with replays
+     * archived before the field was added; absent ⇒ assume 1000
+     * (standard riichi).
+     */
+    riichiBetValue: z.number().int().positive().optional(),
+    /** Whether ura dora is enabled by the active rule set. */
+    uraDoraEnabled: z.boolean().optional(),
+  })
+  .superRefine((event, context) => {
+    const count = refineParticipantArrays(
+      event,
+      {
+        seats: event.seats,
+        chips: event.chips,
+        dabuken: event.dabuken,
+      },
+      context
+    );
+    if (
+      new Set(event.seats.map((seat) => seat.seat)).size !== count ||
+      event.seats.some(({ seat }) => !isActiveSeat(seat, count))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["seats"],
+        message: "Roster must identify every active seat exactly once",
+      });
+    }
+  });
 
-const HandStartEvent = z.object({
-  type: z.literal("hand_start"),
-  round: z.number().int(),
-  dealer: SeatSchema,
-  /** Round wind (E/S/W/N). */
-  roundWind: z.enum(["E", "S", "W", "N"]).optional(),
-  /** 1-indexed hand within the round wind. */
-  roundNumber: z.number().int().optional(),
-  /** Honba counter (carries from prior repeats / abortive draws). */
-  honba: z.number().int().nonnegative().optional(),
-  /** Riichi sticks on the table at hand start. */
-  riichiSticks: z.number().int().nonnegative().optional(),
-  /** Per-seat scores at hand start. */
-  scores: z.array(z.number().int()).length(4).optional(),
-  /**
-   * Per-seat "sinking" flag at hand start under the active rule
-   * set. A sinking seat has `score <= rs.sinkThreshold`; the
-   * renderer paints its centre-square score in red. Omitted
-   * when the rule set has no notion of sinking (non-Buu); the
-   * client treats absence as `[false, false, false, false]`.
-   */
-  sinking: z.array(z.boolean()).length(4).optional(),
-  /**
-   * Per-seat in-game chip totals at hand start. Buu only — non-Buu
-   * matches omit the field and the client treats absence as
-   * `[0, 0, 0, 0]`. Carries the session-level chip ledger into
-   * each game so the live player-name boxes can display the
-   * current chip count.
-   */
-  chips: z.array(z.number().int()).length(4).optional(),
-  /**
-   * Per-seat dabuken (double-chip token) state at hand start.
-   * Buu only — non-Buu matches omit the field and the client
-   * treats absence as `[false, false, false, false]`.
-   */
-  dabuken: z.array(z.boolean()).length(4).optional(),
-  /** Initial hand tiles for the recipient seat only; redacted for others. */
-  hand: z.array(TileSchema).optional(),
-  /**
-   * Omniscient per-seat starting hands (length 4, each 13 tiles).
-   * Required in the **archived** replay log (every writer —
-   * `archiveReplayLog` in game-server and every platform adapter —
-   * must set it). Optional on the live wire because the projection
-   * layer strips it before sending to each seat: opponents stay
-   * redacted during the match. The reducer in
-   * [app/game/replay/player.ts](../replay/player.ts) trusts the
-   * archived value to render the omniscient post-game view.
-   */
-  startingHands: z.array(z.array(TileSchema)).length(4).optional(),
-  doraIndicators: z.array(TileSchema),
-  /**
-   * The two dice rolled at hand start; together they determine the
-   * wall break point. `null` when the source doesn't record dice
-   * (older replays / synthetic logs). Values are in 1..6.
-   */
-  dice: z
-    .tuple([z.number().int().min(1).max(6), z.number().int().min(1).max(6)])
-    .nullable()
-    .optional(),
-  /**
-   * Omniscient live wall in draw order — the 70 tiles remaining
-   * after the initial 4×13 deal. `liveWall[0]` is the next tile
-   * drawn; `liveWall[69]` is the last drawable tile before
-   * exhaustive draw. Optional on the wire (the projection layer
-   * strips it from live broadcasts so opponents stay blind);
-   * required in the archived replay log so the `showWalls`
-   * overlay can reveal tile faces. Older logs may omit it; the
-   * renderer falls back to the back-of-tile texture when absent.
-   */
-  liveWall: z.array(TileSchema).length(70).optional(),
-  /**
-   * Omniscient dead wall snapshot in Tenhou yama-index order —
-   * the 14 tiles never drawn during normal play (4 rinshan + dora
-   * + ura-dora + 4 kan-dora + 4 ura-kan-dora). Index 5 is the
-   * standard dora indicator, index 4 the standard ura-dora.
-   * Physical mapping in the renderer is
-   * `deadWall[idxFromBreak * 2 + row]` (row 1 = upper / public,
-   * row 0 = lower / hidden). Optional on the player wire so
-   * opponents stay blind during live play. Native archives snapshot
-   * it directly; platform adapters populate it when their source can
-   * reconstruct the wall deterministically. Older logs may omit it.
-   * Drives the `showWalls` overlay's dead-wall reveal.
-   */
-  deadWall: z.array(TileSchema).length(14).optional(),
-  /**
-   * Live-wall draw schedule for the kyoku, in consumption order:
-   * `liveDrawSchedule[i]` is the seat that draws `liveWall[i]`.
-   * Computed post-parse by `annotateWallSchedule` from the kyoku's
-   * recorded draw / kan events (rinshan draws are skipped). Used
-   * by the `showWalls` overlay to highlight every wall tile the
-   * focused seat will eventually draw. Optional — absent on live
-   * broadcasts (the future is unknown) and on older archived logs
-   * that pre-date the annotation pass.
-   */
-  liveDrawSchedule: z.array(SeatSchema).optional(),
-  /** Fixed per-seat draw queues for an archived duplicate hand.
-   * Never sent to live players or spectators. */
-  duplicateDrawQueues: z
-    .tuple([
-      z.array(TileSchema),
-      z.array(TileSchema),
-      z.array(TileSchema),
-      z.array(TileSchema),
-    ])
-    .optional(),
-  duplicateWallState: DuplicateWallStateSchema.optional(),
-});
+const HandStartEvent = z
+  .object({
+    type: z.literal("hand_start"),
+    ...GameVariantMetadata,
+    nukiTiles: z.array(z.array(TileSchema)).min(3).max(4).optional(),
+    sanmaWall: SanmaWallStateSchema.optional(),
+    round: z.number().int(),
+    dealer: SeatSchema,
+    /** Round wind (E/S/W/N). */
+    roundWind: z.enum(["E", "S", "W", "N"]).optional(),
+    /** 1-indexed hand within the round wind. */
+    roundNumber: z.number().int().optional(),
+    /** Honba counter (carries from prior repeats / abortive draws). */
+    honba: z.number().int().nonnegative().optional(),
+    /** Riichi sticks on the table at hand start. */
+    riichiSticks: z.number().int().nonnegative().optional(),
+    /** Per-seat scores at hand start. */
+    scores: z.array(z.number().int()).min(3).max(4).optional(),
+    /**
+     * Per-seat "sinking" flag at hand start under the active rule
+     * set. A sinking seat has `score <= rs.sinkThreshold`; the
+     * renderer paints its centre-square score in red. Omitted
+     * when the rule set has no notion of sinking (non-Buu); the
+     * client treats absence as `[false, false, false, false]`.
+     */
+    sinking: z.array(z.boolean()).min(3).max(4).optional(),
+    /**
+     * Per-seat in-game chip totals at hand start. Buu only — non-Buu
+     * matches omit the field and the client treats absence as
+     * `[0, 0, 0, 0]`. Carries the session-level chip ledger into
+     * each game so the live player-name boxes can display the
+     * current chip count.
+     */
+    chips: z.array(z.number().int()).min(3).max(4).optional(),
+    /**
+     * Per-seat dabuken (double-chip token) state at hand start.
+     * Buu only — non-Buu matches omit the field and the client
+     * treats absence as `[false, false, false, false]`.
+     */
+    dabuken: z.array(z.boolean()).min(3).max(4).optional(),
+    /** Initial hand tiles for the recipient seat only; redacted for others. */
+    hand: z.array(TileSchema).optional(),
+    /**
+     * Omniscient per-seat starting hands (length 4, each 13 tiles).
+     * Required in the **archived** replay log (every writer —
+     * `archiveReplayLog` in game-server and every platform adapter —
+     * must set it). Optional on the live wire because the projection
+     * layer strips it before sending to each seat: opponents stay
+     * redacted during the match. The reducer in
+     * [app/game/replay/player.ts](../replay/player.ts) trusts the
+     * archived value to render the omniscient post-game view.
+     */
+    startingHands: z.array(z.array(TileSchema)).min(3).max(4).optional(),
+    doraIndicators: z.array(TileSchema),
+    /**
+     * The two dice rolled at hand start; together they determine the
+     * wall break point. `null` when the source doesn't record dice
+     * (older replays / synthetic logs). Values are in 1..6.
+     */
+    dice: z
+      .tuple([z.number().int().min(1).max(6), z.number().int().min(1).max(6)])
+      .nullable()
+      .optional(),
+    /**
+     * Omniscient live wall in draw order — the 70 tiles remaining
+     * after the initial 4×13 deal. `liveWall[0]` is the next tile
+     * drawn; `liveWall[69]` is the last drawable tile before
+     * exhaustive draw. Optional on the wire (the projection layer
+     * strips it from live broadcasts so opponents stay blind);
+     * required in the archived replay log so the `showWalls`
+     * overlay can reveal tile faces. Older logs may omit it; the
+     * renderer falls back to the back-of-tile texture when absent.
+     */
+    liveWall: z.array(TileSchema).optional(),
+    /**
+     * Omniscient dead wall snapshot in Tenhou yama-index order —
+     * the 14 tiles never drawn during normal play (4 rinshan + dora
+     * + ura-dora + 4 kan-dora + 4 ura-kan-dora). Index 5 is the
+     * standard dora indicator, index 4 the standard ura-dora.
+     * Physical mapping in the renderer is
+     * `deadWall[idxFromBreak * 2 + row]` (row 1 = upper / public,
+     * row 0 = lower / hidden). Optional on the player wire so
+     * opponents stay blind during live play. Native archives snapshot
+     * it directly; platform adapters populate it when their source can
+     * reconstruct the wall deterministically. Older logs may omit it.
+     * Drives the `showWalls` overlay's dead-wall reveal.
+     */
+    deadWall: z.array(TileSchema).optional(),
+    /**
+     * Live-wall draw schedule for the kyoku, in consumption order:
+     * `liveDrawSchedule[i]` is the seat that draws `liveWall[i]`.
+     * Computed post-parse by `annotateWallSchedule` from the kyoku's
+     * recorded draw / kan events (rinshan draws are skipped). Used
+     * by the `showWalls` overlay to highlight every wall tile the
+     * focused seat will eventually draw. Optional — absent on live
+     * broadcasts (the future is unknown) and on older archived logs
+     * that pre-date the annotation pass.
+     */
+    liveDrawSchedule: z.array(SeatSchema).optional(),
+    /** Fixed per-seat draw queues for an archived duplicate hand.
+     * Never sent to live players or spectators. */
+    duplicateDrawQueues: seatValuesSchema(z.array(TileSchema)).optional(),
+    duplicateWallState: DuplicateWallStateSchema.optional(),
+  })
+  .superRefine((event, context) => {
+    const count = event.playerCount ?? 4;
+    const duplicate =
+      event.duplicateWallState !== undefined ||
+      event.sanmaWall?.mode === "duplicate";
+    const expectedLive =
+      count === 4
+        ? 70
+        : event.sanmaType === "kansai"
+          ? duplicate
+            ? 59
+            : 63
+          : 55;
+    const expectedDead =
+      count === 3 && event.sanmaType === "kansai" && !duplicate ? 10 : 14;
+    for (const [field, expected] of [
+      ["liveWall", expectedLive],
+      ["deadWall", expectedDead],
+    ] as const) {
+      const values = event[field];
+      if (values !== undefined && values.length !== expected) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message: `Expected ${expected} initial wall tiles`,
+        });
+      }
+    }
+    for (const field of [
+      "startingHands",
+      "scores",
+      "nukiTiles",
+      "duplicateDrawQueues",
+    ] as const) {
+      const values = event[field];
+      if (values !== undefined && values.length !== count) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message: `Expected ${count} participants`,
+        });
+      }
+    }
+    if (count === 3 && event.sanmaType === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["sanmaType"],
+        message: "Sanma hand metadata requires its variant",
+      });
+    }
+  });
 
 const DrawEvent = z.object({
   type: z.literal("draw"),
@@ -238,6 +327,22 @@ const DrawEvent = z.object({
    * from the dead wall after a kan), false / absent for live-wall
    * draws. Attached post-parse by `annotateWallSchedule`. */
   fromDeadWall: z.boolean().optional(),
+  replacementKind: z.enum(["kan", "nuki"]).optional(),
+  opening: z.boolean().optional(),
+  sanmaWall: SanmaWallStateSchema.optional(),
+  duplicateWallState: DuplicateWallStateSchema.optional(),
+});
+
+const NukiEvent = z.object({
+  type: z.literal("nuki"),
+  seat: SeatSchema,
+  tile: TileSchema.refine(
+    (tile) => ["4z", "5m", "0m"].includes(tile),
+    "Invalid nuki tile"
+  ),
+  stage: z.enum(["declared", "completed"]),
+  opening: z.boolean().optional(),
+  sanmaWall: SanmaWallStateSchema.optional(),
   duplicateWallState: DuplicateWallStateSchema.optional(),
 });
 
@@ -295,7 +400,7 @@ const WinEvent = z.object({
   winTile: TileSchema.optional(),
   /** Total point delta for this winner (riichi-stick + honba bonuses
    * are folded into the multi-ron `hand_end` summary, not here). */
-  delta: z.array(z.number().int()).length(4).optional(),
+  delta: z.array(z.number().int()).min(3).max(4).optional(),
   /** Han / fu / total points / yakuman count from the score lib. */
   han: z.number().int().optional(),
   fu: z.number().int().optional(),
@@ -344,9 +449,9 @@ const HandEndEvent = z
       .enum(["kyuushuu", "suufon_renda", "suucha_riichi", "sanchahou"])
       .optional(),
     /** Combined per-seat point delta for this hand. */
-    delta: z.array(z.number().int()).length(4).optional(),
+    delta: z.array(z.number().int()).min(3).max(4).optional(),
     /** Per-seat tenpai status at exhaustive draw. */
-    tenpai: z.array(z.boolean()).length(4).optional(),
+    tenpai: z.array(z.boolean()).min(3).max(4).optional(),
     /**
      * Native in-app declaration sequence, ordered East through North.
      * Archived replay logs merge the four transient live declaration
@@ -359,12 +464,13 @@ const HandEndEvent = z
           tenpai: z.boolean(),
         })
       )
-      .length(4)
+      .min(3)
+      .max(4)
       .optional(),
     /** Per-seat nagashi mangan flag at exhaustive draw. */
-    nagashi: z.array(z.boolean()).length(4).optional(),
+    nagashi: z.array(z.boolean()).min(3).max(4).optional(),
     /** Scores after this hand is settled. */
-    scores: z.array(z.number().int()).length(4).optional(),
+    scores: z.array(z.number().int()).min(3).max(4).optional(),
     /** Honba on this hand (the value used in payments). */
     honba: z.number().int().nonnegative().optional(),
     /** Riichi sticks on the table when the hand ended (pre-collection). */
@@ -378,7 +484,7 @@ const HandEndEvent = z
      * melds, furiten, kuikae, etc., as far as the rules engine
      * knows about them).
      */
-    waits: z.array(z.array(TileSchema).nullable()).length(4).optional(),
+    waits: z.array(z.array(TileSchema).nullable()).min(3).max(4).optional(),
     /**
      * Per-seat full concealed hand revealed at hand end (length 4).
      * Populated for every tenpai seat when
@@ -389,12 +495,16 @@ const HandEndEvent = z
      * player's wait shape at a draw, or the ≥9 terminals/honors that
      * justified a kyuushuu abort.
      */
-    tenpaiHands: z.array(z.array(TileSchema).nullable()).length(4).optional(),
+    tenpaiHands: z
+      .array(z.array(TileSchema).nullable())
+      .min(3)
+      .max(4)
+      .optional(),
     /**
      * Buu Mahjong chip delta for this hand (winner gain + sinker
      * losses). Sums to zero. Omitted when `ruleSet.buuMode` is off.
      */
-    chipDelta: z.array(z.number().int()).length(4).optional(),
+    chipDelta: z.array(z.number().int()).min(3).max(4).optional(),
     /** Number of sinking seats (winner excluded) at hand-end. */
     sinkingCount: z.number().int().min(0).max(3).optional(),
     /** True iff this hand consumed the winner's dabuken token. */
@@ -407,14 +517,14 @@ const HandEndEvent = z
      * player-nameplate chip counters immediately on hand_end
      * without recomputing from chipDelta. Omitted for non-Buu.
      */
-    chips: z.array(z.number().int()).length(4).optional(),
+    chips: z.array(z.number().int()).min(3).max(4).optional(),
     /**
      * Buu Mahjong per-seat dabuken token state AFTER this hand's
      * award / clearing has been applied. Lets the client refresh
      * the dabuken token overlay immediately on hand_end. Omitted
      * for non-Buu.
      */
-    dabuken: z.array(z.boolean()).length(4).optional(),
+    dabuken: z.array(z.boolean()).min(3).max(4).optional(),
   })
   .superRefine((event, context) => {
     if (event.declarations === undefined) {
@@ -429,7 +539,12 @@ const HandEndEvent = z
       return;
     }
     const seats = new Set(event.declarations.map(({ seat }) => seat));
-    if (seats.size !== 4) {
+    const count = event.tenpai?.length ?? event.scores?.length ?? 4;
+    if (
+      seats.size !== count ||
+      event.declarations.length !== count ||
+      event.declarations.some(({ seat }) => seat >= count)
+    ) {
       context.addIssue({
         code: "custom",
         path: ["declarations"],
@@ -458,12 +573,12 @@ const BuuChomboEvent = z.object({
     "game_ending_win_not_first",
     "game_ending_chinmai",
   ]),
-  chipDelta: z.array(z.number().int()).length(4),
+  chipDelta: z.array(z.number().int()).min(3).max(4),
   /** In-game chip totals AFTER the penalty has been applied
    * (sums need not equal zero — these are running totals, not a
    * delta). Lets the result panel show each seat's chip stack
    * alongside the chombo penalty. */
-  chips: z.array(z.number().int()).length(4),
+  chips: z.array(z.number().int()).min(3).max(4),
 });
 
 const CallEvent = z.object({
@@ -508,15 +623,15 @@ const MatchEndEvent = z.object({
     })
   ),
   /** Session-level chip totals after this game (Buu only). */
-  chips: z.array(z.number().int()).length(4).optional(),
+  chips: z.array(z.number().int()).min(3).max(4).optional(),
   /** Session-level dabuken state after this game (Buu only). */
-  dabuken: z.array(z.boolean()).length(4).optional(),
+  dabuken: z.array(z.boolean()).min(3).max(4).optional(),
   /**
    * Per-seat chip delta for THIS game only (post-game chip total
    * minus the snapshot taken at game start). Buu-only — shown
    * next to each player's final score in the end-of-game panel.
    */
-  chipsDelta: z.array(z.number().int()).length(4).optional(),
+  chipsDelta: z.array(z.number().int()).min(3).max(4).optional(),
   /** Zero-based index of this game within its session (Buu only). */
   gameIndex: z.number().int().nonnegative().optional(),
 });
@@ -533,24 +648,14 @@ const SessionVoteOpenEvent = z.object({
   /** Unix ms; auto-resolves as "no" for any seat still unset at this time. */
   deadline: z.number().int(),
   /** Per-seat vote state. `null` means undecided. */
-  votes: z.tuple([
-    z.enum(["yes", "no"]).nullable(),
-    z.enum(["yes", "no"]).nullable(),
-    z.enum(["yes", "no"]).nullable(),
-    z.enum(["yes", "no"]).nullable(),
-  ]),
+  votes: seatValuesSchema(z.enum(["yes", "no"]).nullable()),
   /** Zero-based index of the just-finished game. */
   gameIndex: z.number().int().nonnegative(),
 });
 
 const SessionVoteUpdateEvent = z.object({
   type: z.literal("session_vote_update"),
-  votes: z.tuple([
-    z.enum(["yes", "no"]).nullable(),
-    z.enum(["yes", "no"]).nullable(),
-    z.enum(["yes", "no"]).nullable(),
-    z.enum(["yes", "no"]).nullable(),
-  ]),
+  votes: seatValuesSchema(z.enum(["yes", "no"]).nullable()),
 });
 
 /**
@@ -565,7 +670,7 @@ const SessionEndEvent = z.object({
   reason: z.enum(["vote_no", "vote_timeout", "single_game", "server_abort"]),
   gamesPlayed: z.number().int().positive(),
   /** Cumulative chip totals per seat (Buu only; all zero for non-Buu). */
-  chips: z.array(z.number().int()).length(4),
+  chips: z.array(z.number().int()).min(3).max(4),
 });
 
 /**
@@ -578,13 +683,14 @@ const SessionEndEvent = z.object({
  */
 const SinkingUpdateEvent = z.object({
   type: z.literal("sinking_update"),
-  sinking: z.tuple([z.boolean(), z.boolean(), z.boolean(), z.boolean()]),
+  sinking: seatValuesSchema(z.boolean()),
 });
 
 export const GameEventSchema = z.discriminatedUnion("type", [
   MatchStartEvent,
   HandStartEvent,
   DrawEvent,
+  NukiEvent,
   DiscardEvent,
   RyuukyokuDeclarationEvent,
   CallEvent,
@@ -625,6 +731,7 @@ export const LegalActionSchema = z.object({
     "chi",
     "pon",
     "kan",
+    "nuki",
     "ron",
     "tsumo",
     "riichi",
@@ -652,148 +759,194 @@ export type LegalAction = z.infer<typeof LegalActionSchema>;
  * `MatchProcess.buildSnapshotForHuman`. Opponent hand tiles are
  * redacted to `null`; everything else is per-recipient public.
  */
-export const SnapshotStateSchema = z.object({
-  /** Recipient's own seat, or `null` for a spectator view (all
-   * hands hidden, no own-hand re-attach on `hand_start`). */
-  mySeat: SeatSchema.nullable(),
-  hands: z.array(z.array(TileSchema.nullable())).length(4),
-  discards: z.array(z.array(TileSchema)).length(4),
-  /** Per-discard tsumogiri flags, parallel to `discards`. Optional for
-   * compatibility with snapshots produced by older game servers. */
-  discardTsumogiri: z.array(z.array(z.boolean())).length(4).optional(),
-  melds: z.array(z.array(MeldSchema)).length(4),
-  wallRemaining: z.number().int().nonnegative(),
-  duplicateWallState: DuplicateWallStateSchema.optional(),
-  /** Number of post-deal draws this hand, including rinshan draws.
-   * Each kan transfers one live-wall tile into the dead wall, so this
-   * equals `70 - wallRemaining`. Used by the renderer to shrink the
-   * wall and infer how many rinshan tiles were consumed alongside
-   * `liveDrawsTaken`. Optional for back-compat with older snapshots. */
-  drawsTaken: z.number().int().nonnegative().optional(),
-  doraIndicators: z.array(TileSchema),
-  turn: SeatSchema,
-  /** Seat whose rightmost concealed tile is a fresh draw. Null after
-   * chi/pon, even though that caller is also awaiting a discard.
-   * Optional for compatibility with older game servers. */
-  freshlyDrawnSeat: SeatSchema.nullable().optional(),
-  dealer: SeatSchema,
-  roundWind: z.enum(["E", "S", "W", "N"]),
-  roundNumber: z.number().int().positive(),
-  honba: z.number().int().nonnegative(),
-  riichiSticks: z.number().int().nonnegative(),
-  scores: z.array(z.number().int()).length(4),
-  /**
-   * Per-seat "sinking" flag (same semantics as
-   * `HandStartEvent.sinking`). Optional for back-compat with
-   * snapshots captured before this field existed; absent ==
-   * all-false on the client side.
-   */
-  sinking: z.array(z.boolean()).length(4).optional(),
-  /**
-   * Per-seat in-game chip totals (Buu only; absent / treated as
-   * `[0, 0, 0, 0]` outside Buu).
-   */
-  chips: z.array(z.number().int()).length(4).optional(),
-  /**
-   * Per-seat dabuken (double-chip token) state (Buu only; absent
-   * / treated as `[false, false, false, false]` outside Buu).
-   */
-  dabuken: z.array(z.boolean()).length(4).optional(),
-  /**
-   * Active score-cap tier from the rule set, if any. Mirrors
-   * `RuleSet.scoreCap`. Needed on snapshots so a spectator
-   * (or a player reconnecting mid-match) can render capped han
-   * labels without having received the original `match_start`.
-   */
-  scoreCap: z
-    .enum(["mangan", "haneman", "baiman", "sanbaiman"])
-    .nullable()
-    .optional(),
-  /**
-   * Point value of a single riichi stick (`RuleSet.riichiBetValue`).
-   * Needed on snapshots so a reconnecting client or spectator can
-   * apply the optimistic riichi-bet deduction with the correct
-   * amount without having received the original `match_start`.
-   * Optional for back-compat — absent ⇒ assume 1000 (standard
-   * riichi).
-   */
-  riichiBetValue: z.number().int().positive().optional(),
-  /** Whether ura dora is enabled by the active rule set. */
-  uraDoraEnabled: z.boolean().optional(),
-  riichiDeclared: z.array(z.boolean()).length(4),
-  /** Per-seat index into `discards[seat]` of the riichi declaration
-   * tile (null when that seat has not declared riichi). */
-  riichiTileIdx: z
-    .array(z.number().int().nonnegative().nullable())
-    .length(4)
-    .optional(),
-  lastDiscard: z.object({ seat: SeatSchema, tile: TileSchema }).nullable(),
-  phase: z.string(),
-  /**
-   * Public declarations already completed in the current exhaustive-draw
-   * sequence. Optional outside that sequence and for older snapshots.
-   */
-  ryuukyokuDeclarations: NullableBooleanTupleSchema.optional(),
-  /**
-   * Per-seat concealed hands made public by a Tenpai declaration. A Noten or
-   * not-yet-declared seat remains null. Optional for older snapshots.
-   */
-  ryuukyokuTenpaiHands: NullableHandTupleSchema.optional(),
-  /**
-   * Settled exhaustive-draw result for a player reconnecting during the
-   * post-hand ready window. Native declaration matches populate this so the
-   * draw panel and public hand reveals survive snapshot hydration.
-   */
-  lastHandResult: HandEndEvent.optional(),
-  sessionVote: z
-    .object({
-      deadline: z.number().int(),
-      votes: z.tuple([
-        z.enum(["yes", "no"]).nullable(),
-        z.enum(["yes", "no"]).nullable(),
-        z.enum(["yes", "no"]).nullable(),
-        z.enum(["yes", "no"]).nullable(),
-      ]),
-      gameIndex: z.number().int().nonnegative(),
-    })
-    .nullable()
-    .optional(),
-  /** Dice rolled at the start of the current hand; `null` when
-   * unknown (synthetic snapshots / older replays). */
-  dice: z
-    .tuple([z.number().int().min(1).max(6), z.number().int().min(1).max(6)])
-    .nullable()
-    .optional(),
-  /** Per-seat furiten state at snapshot time. Only the recipient's
-   * own slot is truthful; opponent slots are always `false`
-   * because furiten is private (it leaks that an opponent passed
-   * on a ron-wait). Optional for back-compat with snapshots
-   * captured before this field existed. */
-  furiten: z.array(z.boolean()).length(4).optional(),
-  /** Omniscient starting live wall (70 tiles in draw order) for
-   * the current hand. Only present on spectator snapshots, and
-   * only after the first `hand_start` of the match has been
-   * emitted. Powers the renderer's `showWalls` overlay when a
-   * spectator joins mid-hand — without this the wall reveal only
-   * works after the next round starts (because it's normally
-   * threaded in via `hand_start`'s archival fields). */
-  liveWall: z.array(TileSchema).optional(),
-  /** Number of tiles drawn from `liveWall` since the current
-   * hand began (excludes rinshan replacement draws when the
-   * server tracks them separately; in this build the engine
-   * doesn't distinguish, so this is `handStartLiveWall.length −
-   * state.liveWall.length`). Mirrors `MatchView.liveDrawsTaken`;
-   * the renderer uses it to hide positions already taken off
-   * the wall. Optional — only present alongside `liveWall`. */
-  liveDrawsTaken: z.number().int().nonnegative().optional(),
-  /** Display names for each seat in absolute-seat order. Optional
-   * for back-compat with older snapshots / replays — the renderer
-   * falls back to `Player N` placeholders when absent. Populated
-   * by the server so a reconnecting human (or a spectator joining
-   * mid-match) sees the correct player names + HUD chips without
-   * having to wait for a fresh `match_start` event. */
-  seatNames: z.array(z.string()).length(4).optional(),
-});
+export const SnapshotStateSchema = z
+  .object({
+    ...GameVariantMetadata,
+    nukiTiles: z.array(z.array(TileSchema)).min(3).max(4).optional(),
+    sanmaWall: SanmaWallStateSchema.optional(),
+    deadWall: z.array(TileSchema).optional(),
+    pendingNuki: z
+      .object({
+        seat: SeatSchema,
+        tile: TileSchema,
+        opening: z.boolean(),
+      })
+      .nullable()
+      .optional(),
+    /** Recipient's own seat, or `null` for a spectator view (all
+     * hands hidden, no own-hand re-attach on `hand_start`). */
+    mySeat: SeatSchema.nullable(),
+    hands: z.array(z.array(TileSchema.nullable())).min(3).max(4),
+    discards: z.array(z.array(TileSchema)).min(3).max(4),
+    /** Per-discard tsumogiri flags, parallel to `discards`. Optional for
+     * compatibility with snapshots produced by older game servers. */
+    discardTsumogiri: z.array(z.array(z.boolean())).min(3).max(4).optional(),
+    melds: z.array(z.array(MeldSchema)).min(3).max(4),
+    wallRemaining: z.number().int().nonnegative(),
+    duplicateWallState: DuplicateWallStateSchema.optional(),
+    /** Number of post-deal draws this hand, including rinshan draws.
+     * Each kan transfers one live-wall tile into the dead wall, so this
+     * equals `70 - wallRemaining`. Used by the renderer to shrink the
+     * wall and infer how many rinshan tiles were consumed alongside
+     * `liveDrawsTaken`. Optional for back-compat with older snapshots. */
+    drawsTaken: z.number().int().nonnegative().optional(),
+    doraIndicators: z.array(TileSchema),
+    turn: SeatSchema,
+    /** Seat whose rightmost concealed tile is a fresh draw. Null after
+     * chi/pon, even though that caller is also awaiting a discard.
+     * Optional for compatibility with older game servers. */
+    freshlyDrawnSeat: SeatSchema.nullable().optional(),
+    dealer: SeatSchema,
+    roundWind: z.enum(["E", "S", "W", "N"]),
+    roundNumber: z.number().int().positive(),
+    honba: z.number().int().nonnegative(),
+    riichiSticks: z.number().int().nonnegative(),
+    scores: z.array(z.number().int()).min(3).max(4),
+    /**
+     * Per-seat "sinking" flag (same semantics as
+     * `HandStartEvent.sinking`). Optional for back-compat with
+     * snapshots captured before this field existed; absent ==
+     * all-false on the client side.
+     */
+    sinking: z.array(z.boolean()).min(3).max(4).optional(),
+    /**
+     * Per-seat in-game chip totals (Buu only; absent / treated as
+     * `[0, 0, 0, 0]` outside Buu).
+     */
+    chips: z.array(z.number().int()).min(3).max(4).optional(),
+    /**
+     * Per-seat dabuken (double-chip token) state (Buu only; absent
+     * / treated as `[false, false, false, false]` outside Buu).
+     */
+    dabuken: z.array(z.boolean()).min(3).max(4).optional(),
+    /**
+     * Active score-cap tier from the rule set, if any. Mirrors
+     * `RuleSet.scoreCap`. Needed on snapshots so a spectator
+     * (or a player reconnecting mid-match) can render capped han
+     * labels without having received the original `match_start`.
+     */
+    scoreCap: z
+      .enum(["mangan", "haneman", "baiman", "sanbaiman"])
+      .nullable()
+      .optional(),
+    /**
+     * Point value of a single riichi stick (`RuleSet.riichiBetValue`).
+     * Needed on snapshots so a reconnecting client or spectator can
+     * apply the optimistic riichi-bet deduction with the correct
+     * amount without having received the original `match_start`.
+     * Optional for back-compat — absent ⇒ assume 1000 (standard
+     * riichi).
+     */
+    riichiBetValue: z.number().int().positive().optional(),
+    /** Whether ura dora is enabled by the active rule set. */
+    uraDoraEnabled: z.boolean().optional(),
+    riichiDeclared: z.array(z.boolean()).min(3).max(4),
+    /** Per-seat index into `discards[seat]` of the riichi declaration
+     * tile (null when that seat has not declared riichi). */
+    riichiTileIdx: z
+      .array(z.number().int().nonnegative().nullable())
+      .min(3)
+      .max(4)
+      .optional(),
+    lastDiscard: z.object({ seat: SeatSchema, tile: TileSchema }).nullable(),
+    phase: z.string(),
+    /**
+     * Public declarations already completed in the current exhaustive-draw
+     * sequence. Optional outside that sequence and for older snapshots.
+     */
+    ryuukyokuDeclarations: NullableBooleanTupleSchema.optional(),
+    /**
+     * Per-seat concealed hands made public by a Tenpai declaration. A Noten or
+     * not-yet-declared seat remains null. Optional for older snapshots.
+     */
+    ryuukyokuTenpaiHands: NullableHandTupleSchema.optional(),
+    /**
+     * Settled exhaustive-draw result for a player reconnecting during the
+     * post-hand ready window. Native declaration matches populate this so the
+     * draw panel and public hand reveals survive snapshot hydration.
+     */
+    lastHandResult: HandEndEvent.optional(),
+    sessionVote: z
+      .object({
+        deadline: z.number().int(),
+        votes: seatValuesSchema(z.enum(["yes", "no"]).nullable()),
+        gameIndex: z.number().int().nonnegative(),
+      })
+      .nullable()
+      .optional(),
+    /** Dice rolled at the start of the current hand; `null` when
+     * unknown (synthetic snapshots / older replays). */
+    dice: z
+      .tuple([z.number().int().min(1).max(6), z.number().int().min(1).max(6)])
+      .nullable()
+      .optional(),
+    /** Per-seat furiten state at snapshot time. Only the recipient's
+     * own slot is truthful; opponent slots are always `false`
+     * because furiten is private (it leaks that an opponent passed
+     * on a ron-wait). Optional for back-compat with snapshots
+     * captured before this field existed. */
+    furiten: z.array(z.boolean()).min(3).max(4).optional(),
+    /** Omniscient starting live wall (70 tiles in draw order) for
+     * the current hand. Only present on spectator snapshots, and
+     * only after the first `hand_start` of the match has been
+     * emitted. Powers the renderer's `showWalls` overlay when a
+     * spectator joins mid-hand — without this the wall reveal only
+     * works after the next round starts (because it's normally
+     * threaded in via `hand_start`'s archival fields). */
+    liveWall: z.array(TileSchema).optional(),
+    /** Number of tiles drawn from `liveWall` since the current
+     * hand began (excludes rinshan replacement draws when the
+     * server tracks them separately; in this build the engine
+     * doesn't distinguish, so this is `handStartLiveWall.length −
+     * state.liveWall.length`). Mirrors `MatchView.liveDrawsTaken`;
+     * the renderer uses it to hide positions already taken off
+     * the wall. Optional — only present alongside `liveWall`. */
+    liveDrawsTaken: z.number().int().nonnegative().optional(),
+    /** Display names for each seat in absolute-seat order. Optional
+     * for back-compat with older snapshots / replays — the renderer
+     * falls back to `Player N` placeholders when absent. Populated
+     * by the server so a reconnecting human (or a spectator joining
+     * mid-match) sees the correct player names + HUD chips without
+     * having to wait for a fresh `match_start` event. */
+    seatNames: z.array(z.string()).min(3).max(4).optional(),
+  })
+  .superRefine((state, context) => {
+    const count = refineParticipantArrays(
+      state,
+      {
+        hands: state.hands,
+        discards: state.discards,
+        discardTsumogiri: state.discardTsumogiri,
+        melds: state.melds,
+        scores: state.scores,
+        riichiDeclared: state.riichiDeclared,
+        nukiTiles: state.nukiTiles,
+        seatNames: state.seatNames,
+        furiten: state.furiten,
+        chips: state.chips,
+        dabuken: state.dabuken,
+        sinking: state.sinking,
+        riichiTileIdx: state.riichiTileIdx,
+        ryuukyokuDeclarations: state.ryuukyokuDeclarations,
+        ryuukyokuTenpaiHands: state.ryuukyokuTenpaiHands,
+      },
+      context
+    );
+    for (const [field, seat] of [
+      ["mySeat", state.mySeat],
+      ["turn", state.turn],
+      ["dealer", state.dealer],
+      ["pendingNuki", state.pendingNuki?.seat ?? null],
+    ] as const) {
+      if (seat !== null && !isActiveSeat(seat, count)) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message: "Seat is not an active participant",
+        });
+      }
+    }
+  });
 export type SnapshotState = z.infer<typeof SnapshotStateSchema>;
 
 const SnapshotMsg = z.object({
@@ -855,7 +1008,7 @@ const ReadyCheckMsg = z.object({
   /** Unix ms; mirrors `SnapshotMsg.deadline`. */
   deadline: z.number().int(),
   /** Per-seat ack state, indexed 0..3 absolute seat order. */
-  acked: z.tuple([z.boolean(), z.boolean(), z.boolean(), z.boolean()]),
+  acked: seatValuesSchema(z.boolean()),
   clock: ClockStampSchema.optional(),
   window: ActionWindowViewSchema.nullable().optional(),
 });
@@ -925,26 +1078,53 @@ const KeepaliveMsg = z.object({
 });
 export type Keepalive = z.infer<typeof KeepaliveMsg>;
 
-const RoomStateMsg = z.object({
-  type: z.literal("room_state"),
-  matchId: z.string(),
-  /** Match-driving mode. Absent legacy frames are normal mode. */
-  mode: MatchModeConfigSchema.optional(),
-  spectatorDelayMs: SpectatorDelayMsSchema.optional(),
-  clock: ClockStampSchema.optional(),
-  /** Lifecycle: `waiting` = pre-start; `playing` = match running;
-   * `finished` = match ended (post-game lobby). */
-  status: z.enum(["waiting", "playing", "finished"]),
-  /** Recipient's own seat assignment, or `null` for a spectator
-   * (no available seat at attach time). */
-  mySeat: SeatSchema.nullable(),
-  /** First seated human. Only this seat may manage or start the room. */
-  hostSeat: SeatSchema.nullable(),
-  /** True when every seated human is connected and ready. */
-  canStart: z.boolean(),
-  /** All four seat slots, always present, ordered 0..3. */
-  seats: z.array(RoomSeatSchema).length(4),
-});
+const RoomStateMsg = z
+  .object({
+    ...GameVariantMetadata,
+    type: z.literal("room_state"),
+    matchId: z.string(),
+    /** Match-driving mode. Absent legacy frames are normal mode. */
+    mode: MatchModeConfigSchema.optional(),
+    spectatorDelayMs: SpectatorDelayMsSchema.optional(),
+    clock: ClockStampSchema.optional(),
+    /** Lifecycle: `waiting` = pre-start; `playing` = match running;
+     * `finished` = match ended (post-game lobby). */
+    status: z.enum(["waiting", "playing", "finished"]),
+    /** Recipient's own seat assignment, or `null` for a spectator
+     * (no available seat at attach time). */
+    mySeat: SeatSchema.nullable(),
+    /** First seated human. Only this seat may manage or start the room. */
+    hostSeat: SeatSchema.nullable(),
+    /** True when every seated human is connected and ready. */
+    canStart: z.boolean(),
+    /** All four seat slots, always present, ordered 0..3. */
+    seats: z.array(RoomSeatSchema).min(3).max(4),
+  })
+  .superRefine((room, context) => {
+    const count = refineParticipantArrays(room, { seats: room.seats }, context);
+    if (
+      new Set(room.seats.map((seat) => seat.seat)).size !== count ||
+      room.seats.some(({ seat }) => !isActiveSeat(seat, count))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["seats"],
+        message: "Room must identify every active seat exactly once",
+      });
+    }
+    for (const [field, seat] of [
+      ["mySeat", room.mySeat],
+      ["hostSeat", room.hostSeat],
+    ] as const) {
+      if (seat !== null && !isActiveSeat(seat, count)) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message: "Seat is not an active participant",
+        });
+      }
+    }
+  });
 export type RoomState = z.infer<typeof RoomStateMsg>;
 
 /** Tells a removed human client to leave the match route immediately. */
@@ -1046,6 +1226,7 @@ const HelloMsg = z.object({
   clientSessionId: ClientSessionIdSchema.optional(),
   timingCapabilities: z.array(z.literal(TIMING_CAPABILITY)).max(1).optional(),
   fixedPromptVersion: z.literal(FIXED_PROMPT_VERSION).optional(),
+  gameCapabilities: z.array(z.literal(SANMA_CAPABILITY)).max(1).optional(),
   /** One-shot permission to replace a different client session
    * currently owning this user's seat. */
   takeover: z.boolean().optional(),

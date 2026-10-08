@@ -1,3 +1,4 @@
+import { type SeatValues } from "~/game/protocol/seat";
 /**
  * Buu Mahjong hand-end helpers — sinking detection, sankoro /
  * nikoro / chinmai chip distribution, immediate-sankoro-on-yakuman,
@@ -24,7 +25,7 @@ import type { RuleSet } from "./ruleSet";
 import type { Seat } from "./types";
 
 /** Per-seat chip delta. Sums to zero on a balanced sankoro/etc. */
-export type ChipDelta = [number, number, number, number];
+export type ChipDelta = SeatValues<number>;
 
 /** Result of `evaluateBuuHandEnd`. */
 export interface BuuHandEndOutcome {

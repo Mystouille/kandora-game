@@ -1,3 +1,4 @@
+import { copySeatValues } from "~/game/rules/seats";
 import { parseMatchCheckpoint, type MatchCheckpoint } from "../checkpoint";
 import type { MatchProcessDependencies } from "../composition/dependencies";
 import type { MatchEventJournalStore, MatchRepository } from "../repository";
@@ -23,6 +24,8 @@ import type { CheckpointFactory } from "./checkpointFactory";
 import type { CheckpointInstaller } from "./checkpointInstaller";
 
 export interface MatchRecoveryPort {
+  resumeAutomaticNuki(opening: boolean): Promise<void>;
+  reportResumeError(error: unknown): void;
   readonly matchId: string;
   readonly repository: MatchRepository;
   readonly runtime: Pick<
@@ -35,7 +38,7 @@ export interface MatchRecoveryPort {
   readonly installer: CheckpointInstaller;
   readonly kernel: Pick<
     MatchKernel,
-    "restore" | "restoreDriver" | "restoreDebugQueues"
+    "view" | "restore" | "restoreDriver" | "restoreDebugQueues"
   >;
   readonly roster: Pick<RoomRoster, "restore">;
   readonly connections: Pick<PlayerConnections, "restorePolicy">;
@@ -64,6 +67,8 @@ export interface MatchRecoveryPort {
 
 export class MatchRecovery {
   readonly coordinator: RecoveryCoordinator;
+  private pendingNukiOpening: boolean | null = null;
+  private nukiContinuation: Promise<void> | null = null;
 
   constructor(private readonly port: MatchRecoveryPort) {
     this.coordinator = new RecoveryCoordinator({
@@ -117,6 +122,9 @@ export class MatchRecovery {
       ) {
         return this.port.checkpoints.createPlayingCallCheckpoint();
       }
+      if (this.port.kernel.view.phase === "awaiting_nuki_replacement") {
+        return this.port.checkpoints.createPlayingNukiCheckpoint();
+      }
       return this.port.checkpoints.createPlayingActionCheckpoint();
     }
     throw new Error(
@@ -133,7 +141,33 @@ export class MatchRecovery {
     if (checkpoint.status === "playing") {
       this.port.installer.install(checkpoint, restoredContinuation, restoredAt);
       this.restoreDecisionTiming(checkpoint, restoredAt);
+      if (checkpoint.checkpointKind === "nuki_replacement") {
+        this.pendingNukiOpening =
+          checkpoint.state.pendingNuki?.opening ?? false;
+        void this.resumeAutomaticWork().catch((error: unknown) =>
+          this.port.reportResumeError(error)
+        );
+      }
     }
+  }
+
+  resumeAutomaticWork(): Promise<void> {
+    if (this.nukiContinuation !== null) {
+      return this.nukiContinuation;
+    }
+    if (this.pendingNukiOpening === null) {
+      return Promise.resolve();
+    }
+    const opening = this.pendingNukiOpening;
+    this.nukiContinuation = this.port
+      .resumeAutomaticNuki(opening)
+      .then(() => {
+        this.pendingNukiOpening = null;
+      })
+      .finally(() => {
+        this.nukiContinuation = null;
+      });
+    return this.nukiContinuation;
   }
 
   private restoreDecisionTiming(
@@ -183,7 +217,9 @@ export class MatchRecovery {
       );
     }
     this.port.publisher.restoreNextSequence(checkpoint.nextSeq);
-    this.port.publisher.restoreSeatSequences([...checkpoint.seatSeq]);
+    this.port.publisher.restoreSeatSequences(
+      copySeatValues(checkpoint.seatSeq)
+    );
     this.port.publisher.restoreSpectatorSequence(checkpoint.spectatorSeq);
     this.port.archiveEvents.restoreWall(
       checkpoint.handStartLiveWall ? [...checkpoint.handStartLiveWall] : null
@@ -200,15 +236,15 @@ export class MatchRecovery {
       finalized: false,
       gameIndex: checkpoint.gameIndex,
       gameStartLogIdx: checkpoint.gameStartLogIdx,
-      sessionChips: [...checkpoint.sessionChips],
-      gameStartChips: [...checkpoint.gameStartChips],
-      sessionDabuken: [...checkpoint.sessionDabuken],
+      sessionChips: copySeatValues(checkpoint.sessionChips),
+      gameStartChips: copySeatValues(checkpoint.gameStartChips),
+      sessionDabuken: copySeatValues(checkpoint.sessionDabuken),
       sessionFinalized: false,
       pendingSessionEndReason: null,
     });
     this.port.metadata.restore({
       dice: [...checkpoint.dice],
-      riichiTileIdx: [...checkpoint.riichiTileIdx],
+      riichiTileIdx: copySeatValues(checkpoint.riichiTileIdx),
     });
     this.port.kernel.restoreDebugQueues(
       checkpoint.humanDrawQueue,
@@ -219,6 +255,10 @@ export class MatchRecovery {
     this.port.connections.restorePolicy(checkpoint.connectionPolicy);
     this.port.installer.install(checkpoint, true, restoredAt);
     this.restoreDecisionTiming(checkpoint, restoredAt);
+    this.pendingNukiOpening =
+      checkpoint.checkpointKind === "nuki_replacement"
+        ? (checkpoint.state.pendingNuki?.opening ?? false)
+        : null;
   }
 
   async restoreEventJournal(): Promise<void> {
@@ -278,7 +318,10 @@ export class MatchRecovery {
 
 interface RestoredMatch {
   readonly owners: {
-    readonly recovery: Pick<MatchRecovery, "restoreEventJournal">;
+    readonly recovery: Pick<
+      MatchRecovery,
+      "restoreEventJournal" | "resumeAutomaticWork"
+    >;
     readonly commands: Pick<CommandCoordinator, "restorePendingCommand">;
   };
 }
@@ -305,5 +348,6 @@ export async function restoreSavedMatch<Match extends RestoredMatch>(
   if (recovery.pendingCommand !== null) {
     await match.owners.commands.restorePendingCommand(recovery.pendingCommand);
   }
+  await match.owners.recovery.resumeAutomaticWork();
   return match;
 }

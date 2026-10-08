@@ -1,4 +1,5 @@
 import { Graphics } from "pixi.js";
+import { isTableSeatActive } from "../../tableProjection";
 import type { RenderFrame } from "../scene/renderTypes";
 import type { Rect } from "../tableLayout";
 import type { Seat } from "../tableGeometry";
@@ -110,6 +111,9 @@ export class TablePanels {
     }
     const focusedMetrics = focusedHandTileMetrics(layout, frame.presentation);
     for (let seat = 0; seat < 4; seat++) {
+      if (!isTableSeatActive(frame.view, seat)) {
+        continue;
+      }
       const hb = layout.hands[seat];
       const panelRect =
         seat === 0
@@ -130,6 +134,7 @@ export class TablePanels {
         )
         .fill({ color: 0x000000, alpha: HAND_PANEL_ALPHA });
       panel.zIndex = -10;
+      panel.label = `hand-panel-seat-${seat}`;
       frame.root.addChild(panel);
     }
   }
@@ -140,6 +145,9 @@ export class TablePanels {
     }
     const discardPanels = panels;
     for (let seat = 0; seat < 4; seat++) {
+      if (!isTableSeatActive(frame.view, seat)) {
+        continue;
+      }
       const typedSeat = seat as Seat;
       const panelRect = discardPanels[typedSeat];
       const panel = new Graphics()
@@ -152,6 +160,7 @@ export class TablePanels {
         )
         .fill({ color: 0x000000, alpha: HAND_PANEL_ALPHA });
       panel.zIndex = -10;
+      panel.label = `discard-panel-seat-${seat}`;
       frame.root.addChild(panel);
 
       const identityCenter = playerIdentityCenter(discardPanels, typedSeat);
@@ -194,6 +203,7 @@ export class TablePanels {
         )
         .fill({ color: 0x000000, alpha: PLAYER_PANEL_ALPHA });
       playerPanel.zIndex = -10;
+      playerPanel.label = `player-panel-seat-${seat}`;
       frame.root.addChild(playerPanel);
     }
   }

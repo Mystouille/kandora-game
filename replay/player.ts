@@ -1,3 +1,24 @@
+import {
+  activeSeats,
+  copySeatValues,
+  nextSeat,
+  seatValues,
+} from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
+import {
+  applyNukiEvent,
+  emptyParticipantState,
+  initialLiveWallCount,
+  type VariantView,
+} from "~/game/client/variantState";
+import { rotateMatchView } from "~/game/client/tableProjection";
+import { replayVariant } from "./variant";
+import { isPlayableTile } from "~/game/rules/tileAvailability";
+export {
+  rotateHandResult,
+  rotateMatchView,
+  rotateSeatValues,
+} from "~/game/client/tableProjection";
 /**
  * Replay reducer — Phase 4.5, step 2.
  *
@@ -43,7 +64,12 @@ import {
   type DuplicateDrawQueues,
 } from "~/game/duplicate/duplicateWallState";
 
-export interface ReplayView {
+export interface ReplayView extends VariantView {
+  nukiTiles?: Tile[][];
+  pendingNuki?: MatchView["pendingNuki"];
+  sanmaWall?: MatchView["sanmaWall"];
+  turn?: Seat;
+  phase?: string;
   /** Hand-by-seat. `null` = unknown tile (opponent starting tiles
    * before first draw). Real `Tile` strings everywhere else. */
   hands: Array<Array<Tile | null>>;
@@ -75,14 +101,11 @@ export interface ReplayView {
    * source log doesn't carry it. Used by `showWalls` to reveal
    * rinshan, ura-dora, kan-dora etc. */
   deadWall: Tile[] | null;
-  /** Number of live-wall tiles drawn since the current hand
-   * started. Mirrors the live store; reset on every `hand_start`,
-   * incremented on every `draw`. */
+  /** Post-deal draw events, including opening and replacement draws. */
   drawsTaken: number;
-  /** Number of LIVE-wall tiles drawn since the current hand
-   * started (excludes rinshan replacement draws). Reset on every
-   * `hand_start`. Used by the `showWalls` overlay to decide which
-   * `liveWall[i]` positions are still on the wall. */
+  /** Ordinary draws. Sanma replacements are excluded by cause,
+   * including Duplicate draws sourced from personal live queues.
+   * Standard wall rendering uses this to advance its draw end. */
   liveDrawsTaken: number;
   /** Live-wall draw schedule for the current hand:
    * `liveDrawSchedule[i]` is the seat that draws `liveWall[i]`.
@@ -97,37 +120,27 @@ export interface ReplayView {
    * the source log doesn't record dice (older synthetic logs). */
   dice: [number, number] | null;
   doraIndicators: Tile[];
-  scores: [number, number, number, number];
+  scores: SeatValues<number>;
   dealer: Seat;
   roundWind: "E" | "S" | "W" | "N";
   roundNumber: number;
   honba: number;
   riichiSticks: number;
-  riichiDeclared: [boolean, boolean, boolean, boolean];
+  riichiDeclared: SeatValues<boolean>;
   /** Public exhaustive-draw declaration state. */
-  ryuukyokuDeclarations: [
-    boolean | null,
-    boolean | null,
-    boolean | null,
-    boolean | null,
-  ];
+  ryuukyokuDeclarations: SeatValues<boolean | null>;
   /** Concealed hands revealed by Tenpai declarations. */
-  ryuukyokuTenpaiHands: [
-    Tile[] | null,
-    Tile[] | null,
-    Tile[] | null,
-    Tile[] | null,
-  ];
+  ryuukyokuTenpaiHands: SeatValues<Tile[] | null>;
   /** Per-seat: is this seat currently "sinking" in Buu Mahjong
    * (score at or below `ruleSet.sinkThreshold`). Set from
    * `hand_start.sinking` and refreshed by `sinking_update`. Always
    * all-false in non-Buu modes. */
-  sinking: [boolean, boolean, boolean, boolean];
+  sinking: SeatValues<boolean>;
   /** Per-seat in-game chip totals (Buu only; non-Buu sessions
    * keep this at `[0, 0, 0, 0]` throughout). */
-  chips: [number, number, number, number];
+  chips: SeatValues<number>;
   /** Per-seat dabuken (double-chip token) state (Buu only). */
-  dabuken: [boolean, boolean, boolean, boolean];
+  dabuken: SeatValues<boolean>;
   /** True iff this match is a Buu Mahjong session. Latched at
    * `match_start` from the wire `ruleSet` id. */
   buuMode: boolean;
@@ -152,11 +165,11 @@ export interface ReplayView {
    * driven by `furiten` archived events. Drives the "Furiten"
    * indicator on each seat's leftmost tile. Reset on
    * `hand_start`. */
-  furiten: [boolean, boolean, boolean, boolean];
+  furiten: SeatValues<boolean>;
   /** Per-seat: index into `discards[seat]` of the riichi declaration
    * tile (null when the seat hasn't declared). Used to render the
    * tilted tile. */
-  riichiTileIdx: [number | null, number | null, number | null, number | null];
+  riichiTileIdx: SeatValues<number | null>;
   /** Last completed hand's result panel payload (cleared on next
    * `hand_start`). Same shape the live store uses, minus the
    * optimistic-discard concerns. */
@@ -260,16 +273,15 @@ export interface ReplayView {
   freshlyDiscardedSeat: Seat | null;
 }
 
-export function initialView(): ReplayView {
+export function initialView(variant: VariantView = {}): ReplayView {
   return {
-    hands: [[], [], [], []],
-    melds: [[], [], [], []],
-    discards: [[], [], [], []],
-    discardTsumogiri: [[], [], [], []],
-    discardSources: [[], [], [], []],
-    discardOrdinals: [[], [], [], []],
+    ...emptyParticipantState(variant.playerCount ?? 4),
+    sanmaType: variant.sanmaType ?? "online",
+    sanmaWall: null,
+    turn: 0,
+    phase: "awaiting_draw",
     totalDiscards: 0,
-    wallRemaining: 70,
+    wallRemaining: initialLiveWallCount(variant),
     liveWall: null,
     deadWall: null,
     drawsTaken: 0,
@@ -279,28 +291,19 @@ export function initialView(): ReplayView {
     duplicateDrawQueues: null,
     dice: null,
     doraIndicators: [],
-    scores: [25000, 25000, 25000, 25000],
     dealer: 0,
     roundWind: "E",
     roundNumber: 1,
     honba: 0,
     riichiSticks: 0,
-    riichiDeclared: [false, false, false, false],
-    ryuukyokuDeclarations: [null, null, null, null],
-    ryuukyokuTenpaiHands: [null, null, null, null],
-    sinking: [false, false, false, false],
-    chips: [0, 0, 0, 0],
-    dabuken: [false, false, false, false],
     buuMode: false,
     riichiBetValue: 1000,
     scoreCap: null,
     uraDoraEnabled: true,
-    riichiTileIdx: [null, null, null, null],
     lastHandResult: null,
     matchEnded: null,
     freshlyDrawnSeat: null,
     freshlyDiscardedSeat: null,
-    furiten: [false, false, false, false],
   };
 }
 
@@ -316,33 +319,43 @@ export function applyReplayEvent(
 ): ReplayView {
   switch (event.type) {
     case "match_start": {
+      const playerCount = event.playerCount ?? view.playerCount ?? 4;
+      const sanmaType = event.sanmaType ?? view.sanmaType ?? "online";
       return {
         ...view,
+        ...emptyParticipantState(playerCount),
+        sanmaType,
+        sanmaWall: null,
+        dealer: 0,
+        turn: 0,
+        phase: "awaiting_draw",
+        wallRemaining: initialLiveWallCount({ playerCount, sanmaType }),
+        drawsTaken: 0,
+        liveDrawsTaken: 0,
+        liveWall: null,
+        deadWall: null,
+        liveDrawSchedule: null,
+        freshlyDrawnSeat: null,
+        freshlyDiscardedSeat: null,
         buuMode: event.ruleSet === "buu-east",
         riichiBetValue: event.riichiBetValue ?? view.riichiBetValue,
         scoreCap: event.scoreCap ?? null,
         uraDoraEnabled: event.uraDoraEnabled ?? true,
-        chips: (event.chips ? [...event.chips] : view.chips) as [
-          number,
-          number,
-          number,
-          number,
-        ],
-        dabuken: (event.dabuken ? [...event.dabuken] : view.dabuken) as [
-          boolean,
-          boolean,
-          boolean,
-          boolean,
-        ],
+        chips: event.chips
+          ? copySeatValues(event.chips)
+          : seatValues(playerCount, () => 0),
+        dabuken: event.dabuken
+          ? copySeatValues(event.dabuken)
+          : seatValues(playerCount, () => false),
         lastHandResult: null,
         matchEnded: null,
         duplicateWallState: null,
         duplicateDrawQueues: null,
-        ryuukyokuDeclarations: [null, null, null, null],
-        ryuukyokuTenpaiHands: [null, null, null, null],
       };
     }
     case "hand_start": {
+      const playerCount = event.playerCount ?? view.playerCount ?? 4;
+      const sanmaType = event.sanmaType ?? view.sanmaType ?? "online";
       // Archived `hand_start` events always carry the omniscient
       // `startingHands` snapshot (Phase 4.5 step 5 — Option B).
       // Both writers — `archiveReplayLog` in `game-server` and the
@@ -350,19 +363,26 @@ export function applyReplayEvent(
       // this in. An absent value is treated as a writer bug; we
       // degrade to empty hands rather than crash so a malformed
       // log still renders the rest of the match.
-      const src: Tile[][] = event.startingHands ?? [[], [], [], []];
-      const hands: Array<Array<Tile | null>> = src.map((h) => [...h]);
+      const hands = seatValues(playerCount, (seat) => [
+        ...(event.startingHands?.[seat] ?? []),
+      ]);
       return {
         ...view,
+        ...emptyParticipantState(playerCount),
+        sanmaType,
+        sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : null,
+        nukiTiles: seatValues(playerCount, (seat) => [
+          ...(event.nukiTiles?.[seat] ?? []),
+        ]),
         hands,
-        melds: [[], [], [], []],
-        discards: [[], [], [], []],
-        discardTsumogiri: [[], [], [], []],
-        discardSources: [[], [], [], []],
-        discardOrdinals: [[], [], [], []],
         totalDiscards: 0,
         doraIndicators: [...event.doraIndicators],
-        wallRemaining: 70,
+        wallRemaining: initialLiveWallCount(
+          { playerCount, sanmaType },
+          event.sanmaWall?.mode === "duplicate" ||
+            !!event.duplicateWallState ||
+            !!event.duplicateDrawQueues
+        ),
         liveWall: event.liveWall ? [...event.liveWall] : null,
         deadWall: event.deadWall ? [...event.deadWall] : null,
         drawsTaken: 0,
@@ -372,52 +392,39 @@ export function applyReplayEvent(
           : null,
         duplicateWallState: duplicateWallStateAfterEvent(
           view.duplicateWallState,
-          event
+          event,
+          view.dealer
         ),
         duplicateDrawQueues: event.duplicateDrawQueues
           ? cloneDuplicateDrawQueues(event.duplicateDrawQueues)
           : null,
         dice: event.dice ? [event.dice[0], event.dice[1]] : null,
         dealer: event.dealer,
+        turn: event.dealer,
+        phase: "awaiting_draw",
         roundWind: event.roundWind ?? view.roundWind,
         roundNumber: event.roundNumber ?? view.roundNumber,
         honba: event.honba ?? 0,
         riichiSticks: event.riichiSticks ?? 0,
-        scores: (event.scores ?? view.scores) as [
-          number,
-          number,
-          number,
-          number,
-        ],
-        riichiDeclared: [false, false, false, false],
-        ryuukyokuDeclarations: [null, null, null, null],
-        ryuukyokuTenpaiHands: [null, null, null, null],
+        scores: seatValues(
+          playerCount,
+          (seat) => event.scores?.[seat] ?? view.scores[seat] ?? 25000
+        ),
         sinking: (event.sinking
-          ? [...event.sinking]
-          : [false, false, false, false]) as [
-          boolean,
-          boolean,
-          boolean,
-          boolean,
-        ],
-        chips: (event.chips ? [...event.chips] : view.chips) as [
-          number,
-          number,
-          number,
-          number,
-        ],
-        dabuken: (event.dabuken ? [...event.dabuken] : view.dabuken) as [
-          boolean,
-          boolean,
-          boolean,
-          boolean,
-        ],
-        riichiTileIdx: [null, null, null, null],
+          ? copySeatValues(event.sinking)
+          : seatValues(playerCount, () => false)) as SeatValues<boolean>,
+        chips: seatValues(
+          playerCount,
+          (seat) => event.chips?.[seat] ?? view.chips[seat] ?? 0
+        ),
+        dabuken: seatValues(
+          playerCount,
+          (seat) => event.dabuken?.[seat] ?? view.dabuken[seat] ?? false
+        ),
         lastHandResult: null,
         matchEnded: null,
         freshlyDrawnSeat: null,
         freshlyDiscardedSeat: null,
-        furiten: [false, false, false, false],
       };
     }
     case "draw": {
@@ -427,18 +434,44 @@ export function applyReplayEvent(
       hands[event.seat].push(event.tile ?? null);
       return {
         ...view,
+        sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : view.sanmaWall,
+        turn: event.opening ? view.dealer : event.seat,
+        phase: event.opening ? "awaiting_draw" : "awaiting_discard",
+        pendingNuki: event.replacementKind === "nuki" ? null : view.pendingNuki,
         hands,
         wallRemaining: event.wallRemaining,
         drawsTaken: view.drawsTaken + 1,
-        liveDrawsTaken: event.fromDeadWall
-          ? view.liveDrawsTaken
-          : view.liveDrawsTaken + 1,
-        freshlyDrawnSeat: event.seat,
+        liveDrawsTaken:
+          event.fromDeadWall ||
+          (view.playerCount === 3 && event.replacementKind !== undefined)
+            ? view.liveDrawsTaken
+            : view.liveDrawsTaken + 1,
+        freshlyDrawnSeat: event.opening ? view.freshlyDrawnSeat : event.seat,
         freshlyDiscardedSeat: null,
         duplicateWallState: duplicateWallStateAfterEvent(
           view.duplicateWallState,
-          event
+          event,
+          view.dealer
         ),
+      };
+    }
+    case "nuki": {
+      return {
+        ...view,
+        ...applyNukiEvent(view, event),
+        turn: event.opening ? view.dealer : event.seat,
+        phase:
+          event.stage === "declared"
+            ? "awaiting_chankan"
+            : "awaiting_nuki_replacement",
+        sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : view.sanmaWall,
+        duplicateWallState: duplicateWallStateAfterEvent(
+          view.duplicateWallState,
+          event,
+          view.dealer
+        ),
+        freshlyDrawnSeat: event.opening ? view.freshlyDrawnSeat : null,
+        freshlyDiscardedSeat: null,
       };
     }
     case "discard": {
@@ -464,33 +497,23 @@ export function applyReplayEvent(
       // Parallel arrays for the fresh-tsumogiri darken cue.
       const discardTsumogiri = view.discardTsumogiri.map((a) => [...a]);
       discardTsumogiri[event.seat].push(event.tsumogiri);
-      const discardSources = (view.discardSources ?? [[], [], [], []]).map(
-        (sources) => [...sources]
-      );
+      const discardSources = (
+        view.discardSources ?? view.hands.map(() => [])
+      ).map((sources) => [...sources]);
       discardSources[event.seat].push(event.discardSource ?? null);
       const discardOrdinals = view.discardOrdinals.map((a) => [...a]);
       discardOrdinals[event.seat].push(view.totalDiscards);
       const totalDiscards = view.totalDiscards + 1;
       const riichiDeclared = event.riichi
-        ? ((): [boolean, boolean, boolean, boolean] => {
-            const arr = [...view.riichiDeclared] as [
-              boolean,
-              boolean,
-              boolean,
-              boolean,
-            ];
+        ? ((): SeatValues<boolean> => {
+            const arr = copySeatValues(view.riichiDeclared);
             arr[event.seat] = true;
             return arr;
           })()
         : view.riichiDeclared;
       const riichiTileIdx = event.riichi
-        ? ((): [number | null, number | null, number | null, number | null] => {
-            const arr = [...view.riichiTileIdx] as [
-              number | null,
-              number | null,
-              number | null,
-              number | null,
-            ];
+        ? ((): SeatValues<number | null> => {
+            const arr = copySeatValues(view.riichiTileIdx);
             arr[event.seat] = discards[event.seat].length - 1;
             return arr;
           })()
@@ -507,7 +530,7 @@ export function applyReplayEvent(
       let scores = view.scores;
       if (event.riichi) {
         riichiSticks = view.riichiSticks + 1;
-        const next = [...view.scores] as [number, number, number, number];
+        const next = copySeatValues(view.scores);
         next[event.seat] = next[event.seat] - view.riichiBetValue;
         scores = next;
       }
@@ -519,6 +542,8 @@ export function applyReplayEvent(
         discardSources,
         discardOrdinals,
         totalDiscards,
+        turn: nextSeat(event.seat, view.playerCount ?? 4),
+        phase: "awaiting_draw",
         riichiDeclared,
         riichiTileIdx,
         riichiSticks,
@@ -527,14 +552,13 @@ export function applyReplayEvent(
         freshlyDiscardedSeat: event.seat,
         duplicateWallState: duplicateWallStateAfterEvent(
           view.duplicateWallState,
-          event
+          event,
+          view.dealer
         ),
       };
     }
     case "ryuukyoku_declaration": {
-      const ryuukyokuDeclarations = [
-        ...view.ryuukyokuDeclarations,
-      ] as ReplayView["ryuukyokuDeclarations"];
+      const ryuukyokuDeclarations = copySeatValues(view.ryuukyokuDeclarations);
       ryuukyokuDeclarations[event.seat] = event.tenpai;
       const ryuukyokuTenpaiHands = view.ryuukyokuTenpaiHands.map((hand) =>
         hand ? [...hand] : null
@@ -547,8 +571,7 @@ export function applyReplayEvent(
         const hand = view.hands[event.seat].filter(
           (tile): tile is Tile => tile !== null
         );
-        ryuukyokuTenpaiHands[event.seat] =
-          hand.length > 0 ? hand : null;
+        ryuukyokuTenpaiHands[event.seat] = hand.length > 0 ? hand : null;
       }
       return {
         ...view,
@@ -560,9 +583,9 @@ export function applyReplayEvent(
       const hands = view.hands.map((h) => [...h]);
       const discards = view.discards.map((d) => [...d]);
       const discardTsumogiri = view.discardTsumogiri.map((a) => [...a]);
-      const discardSources = (view.discardSources ?? [[], [], [], []]).map(
-        (sources) => [...sources]
-      );
+      const discardSources = (
+        view.discardSources ?? view.hands.map(() => [])
+      ).map((sources) => [...sources]);
       const discardOrdinals = view.discardOrdinals.map((a) => [...a]);
       const caller = event.seat;
       const meld = event.meld;
@@ -653,11 +676,17 @@ export function applyReplayEvent(
         discardTsumogiri,
         discardSources,
         discardOrdinals,
+        turn: event.seat,
+        phase:
+          meld.type === "pon" || meld.type === "chi"
+            ? "awaiting_discard"
+            : "awaiting_chankan",
         freshlyDrawnSeat: null,
         freshlyDiscardedSeat: null,
         duplicateWallState: duplicateWallStateAfterEvent(
           view.duplicateWallState,
-          event
+          event,
+          view.dealer
         ),
       };
     }
@@ -734,6 +763,7 @@ export function applyReplayEvent(
               dealer: view.dealer,
               wins: [win],
             },
+        phase: "hand_end",
       };
     }
     case "hand_end": {
@@ -741,12 +771,12 @@ export function applyReplayEvent(
       const existingBuuChombo = view.lastHandResult?.buuChombo;
       const eventWaits = event.waits;
       const declarationTenpai = event.declarations
-        ? event.declarations.reduce<[boolean, boolean, boolean, boolean]>(
+        ? event.declarations.reduce<SeatValues<boolean>>(
             (tenpai, declaration) => {
               tenpai[declaration.seat] = declaration.tenpai;
               return tenpai;
             },
-            [false, false, false, false]
+            seatValues(view.playerCount ?? 4, () => false)
           )
         : undefined;
       // Replay adapters (Majsoul / Tenhou / Riichi City) don't
@@ -778,7 +808,7 @@ export function applyReplayEvent(
               event.reason === "abort" &&
                 event.abortKind === "kyuushuu" &&
                 view.freshlyDrawnSeat !== null
-              ? ([0, 1, 2, 3] as Seat[]).map((s) => {
+              ? activeSeats(view.playerCount ?? 4).map((s) => {
                   if (s !== view.freshlyDrawnSeat) {
                     return null;
                   }
@@ -793,7 +823,7 @@ export function applyReplayEvent(
               declarations[declaration.seat] = declaration.tenpai;
               return declarations;
             },
-            [...view.ryuukyokuDeclarations] as ReplayView["ryuukyokuDeclarations"]
+            copySeatValues(view.ryuukyokuDeclarations)
           )
         : view.ryuukyokuDeclarations;
       const ryuukyokuTenpaiHands =
@@ -806,12 +836,8 @@ export function applyReplayEvent(
         ...view,
         ryuukyokuDeclarations,
         ryuukyokuTenpaiHands,
-        scores: (event.scores ?? view.scores) as [
-          number,
-          number,
-          number,
-          number,
-        ],
+        phase: "hand_end",
+        scores: (event.scores ?? view.scores) as SeatValues<number>,
         riichiSticks: event.riichiSticks ?? view.riichiSticks,
         lastHandResult: {
           reason: event.reason,
@@ -841,16 +867,19 @@ export function applyReplayEvent(
         },
         duplicateWallState: duplicateWallStateAfterEvent(
           view.duplicateWallState,
-          event
+          event,
+          view.dealer
         ),
       };
     }
     case "match_end": {
       return {
         ...view,
+        phase: "match_end",
         duplicateWallState: duplicateWallStateAfterEvent(
           view.duplicateWallState,
-          event
+          event,
+          view.dealer
         ),
         // Roll the post-game session-level chip / dabuken totals
         // into the top-level view fields so the player-info
@@ -858,22 +887,12 @@ export function applyReplayEvent(
         // the live store handler.
         ...(event.chips
           ? {
-              chips: [
-                event.chips[0],
-                event.chips[1],
-                event.chips[2],
-                event.chips[3],
-              ] as [number, number, number, number],
+              chips: copySeatValues(event.chips),
             }
           : {}),
         ...(event.dabuken
           ? {
-              dabuken: [
-                event.dabuken[0],
-                event.dabuken[1],
-                event.dabuken[2],
-                event.dabuken[3],
-              ] as [boolean, boolean, boolean, boolean],
+              dabuken: copySeatValues(event.dabuken),
             }
           : {}),
         matchEnded: {
@@ -889,19 +908,14 @@ export function applyReplayEvent(
       };
     }
     case "furiten": {
-      const furiten = [...view.furiten] as [boolean, boolean, boolean, boolean];
+      const furiten = copySeatValues(view.furiten);
       furiten[event.seat] = event.active;
       return { ...view, furiten };
     }
     case "sinking_update": {
       return {
         ...view,
-        sinking: [
-          event.sinking[0],
-          event.sinking[1],
-          event.sinking[2],
-          event.sinking[3],
-        ],
+        sinking: copySeatValues(event.sinking),
       };
     }
     case "buu_chombo": {
@@ -914,7 +928,7 @@ export function applyReplayEvent(
       const existing = view.lastHandResult;
       return {
         ...view,
-        chips: [...event.chips] as [number, number, number, number],
+        chips: copySeatValues(event.chips),
         lastHandResult: {
           ...(existing ?? { reason: "abort" as const }),
           dealer: existing?.dealer ?? view.dealer,
@@ -944,7 +958,7 @@ export function applyReplayEvent(
  */
 export function replayReducer(log: ReplayLog, index: number): ReplayView {
   const clamped = Math.max(-1, Math.min(index, log.events.length - 1));
-  let view = initialView();
+  let view = initialView(replayVariant(log));
   for (let i = 0; i <= clamped; i++) {
     view = applyReplayEvent(view, log.events[i]);
   }
@@ -996,7 +1010,7 @@ export function replayViewToMatchView(
     index: number;
     mySeat?: Seat;
     matchId?: string | null;
-    seatNames?: [string, string, string, string] | null;
+    seatNames?: SeatValues<string> | null;
     /** Per-seat wait tiles at this step. Pre-computed server-side
      * by `annotateWaits` so the renderer doesn't run shanten on
      * the client. `null` when no precompute is available. */
@@ -1007,8 +1021,18 @@ export function replayViewToMatchView(
     roomState?: RoomState | null;
   }
 ): MatchView {
-  const focus: Seat = opts.mySeat ?? 0;
+  const focus: Seat =
+    opts.mySeat !== undefined && opts.mySeat < (view.playerCount ?? 4)
+      ? opts.mySeat
+      : 0;
   const base: MatchView = {
+    playerCount: view.playerCount,
+    sanmaType: view.sanmaType,
+    nukiTiles: view.nukiTiles,
+    pendingNuki: view.pendingNuki,
+    sanmaWall: view.sanmaWall,
+    turn: view.turn,
+    phase: view.phase,
     matchId: opts.matchId ?? null,
     mySeat: 0,
     hands: view.hands,
@@ -1036,7 +1060,12 @@ export function replayViewToMatchView(
     actionBufferMs: null,
     readyCheck: null,
     scores: view.scores,
-    seatNames: opts.seatNames ?? null,
+    seatNames: opts.seatNames
+      ? seatValues(
+          view.playerCount ?? 4,
+          (seat) => opts.seatNames?.[seat] ?? ""
+        )
+      : null,
     dealer: view.dealer,
     roundWind: view.roundWind,
     roundNumber: view.roundNumber,
@@ -1055,7 +1084,13 @@ export function replayViewToMatchView(
     uraDoraEnabled: view.uraDoraEnabled,
     lastHandResult: view.lastHandResult,
     matchEnded: view.matchEnded,
-    currentWaits: opts.currentWaits ?? null,
+    currentWaits: opts.currentWaits
+      ? seatValues(view.playerCount ?? 4, (seat) =>
+          (opts.currentWaits?.[seat] ?? []).filter((tile) =>
+            isPlayableTile(tile, { playerCount: view.playerCount ?? 4 })
+          )
+        )
+      : null,
     freshlyDrawnSeat: view.freshlyDrawnSeat,
     freshlyDiscardedSeat: view.freshlyDiscardedSeat,
     furiten: view.furiten,
@@ -1067,189 +1102,8 @@ export function replayViewToMatchView(
     sessionVote: null,
     sessionEnded: null,
   };
-  if (focus === 0) {
+  if (focus === 0 && view.playerCount !== 3) {
     return base;
   }
   return rotateMatchView(base, focus);
-}
-
-/** Rotate an absolute-seat array into the renderer's focused-seat frame. */
-export function rotateSeatValues<T>(
-  values: readonly T[],
-  focus: Seat
-): [T, T, T, T] {
-  return [
-    values[(0 + focus) % 4],
-    values[(1 + focus) % 4],
-    values[(2 + focus) % 4],
-    values[(3 + focus) % 4],
-  ];
-}
-
-/** Rotate a completed hand result into the seat-relative renderer frame. */
-export function rotateHandResult(
-  result: NonNullable<MatchView["lastHandResult"]>,
-  focus: Seat
-): NonNullable<MatchView["lastHandResult"]> {
-  const rot = (seat: Seat): Seat => ((seat - focus + 4) % 4) as Seat;
-  const perm4 = <T>(arr: readonly T[]): [T, T, T, T] => [
-    arr[(0 + focus) % 4],
-    arr[(1 + focus) % 4],
-    arr[(2 + focus) % 4],
-    arr[(3 + focus) % 4],
-  ];
-  return {
-    ...result,
-    dealer: result.dealer != null ? rot(result.dealer) : result.dealer,
-    delta: result.delta ? perm4(result.delta) : result.delta,
-    tenpai: result.tenpai ? perm4(result.tenpai) : result.tenpai,
-    nagashi: result.nagashi ? perm4(result.nagashi) : result.nagashi,
-    scores: result.scores ? perm4(result.scores) : result.scores,
-    waits: result.waits ? perm4(result.waits) : result.waits,
-    tenpaiHands: result.tenpaiHands
-      ? perm4(result.tenpaiHands)
-      : result.tenpaiHands,
-    declarations: result.declarations
-      ? result.declarations.map((declaration) => ({
-          ...declaration,
-          seat: rot(declaration.seat),
-        }))
-      : result.declarations,
-    wins: result.wins
-      ? result.wins.map((win) => ({
-          ...win,
-          seat: rot(win.seat),
-          loser: win.loser != null ? rot(win.loser) : win.loser,
-          melds: win.melds
-            ? win.melds.map((meld) => ({
-                ...meld,
-                from: meld.from != null ? rot(meld.from) : meld.from,
-              }))
-            : win.melds,
-        }))
-      : result.wins,
-    buuChombo: result.buuChombo
-      ? {
-          ...result.buuChombo,
-          seat: rot(result.buuChombo.seat),
-          chipDelta: perm4(result.buuChombo.chipDelta),
-          chips: perm4(result.buuChombo.chips),
-        }
-      : result.buuChombo,
-  };
-}
-
-/**
- * Rotate a `MatchView` so the seat at `focus` is rendered at the
- * bottom (relative seat 0). All per-seat arrays are reindexed and
- * every absolute-seat field (dealer, draw schedule, win/loser) is
- * remapped to the new relative-seat space. The renderer is agnostic
- * to absolute seats — it just paints seat index 0 at the bottom and
- * 1/2/3 CCW around the table — so this transformation is sufficient
- * to rotate the entire viewport (hands, discards, walls, melds,
- * riichi sticks, scores, dealer marker, break-point dice landing).
- */
-export function rotateMatchView(mv: MatchView, focus: Seat): MatchView {
-  const rot = (s: Seat): Seat => ((s - focus + 4) % 4) as Seat;
-  const perm4 = <T>(arr: readonly T[]): [T, T, T, T] => [
-    arr[(0 + focus) % 4],
-    arr[(1 + focus) % 4],
-    arr[(2 + focus) % 4],
-    arr[(3 + focus) % 4],
-  ];
-  const result = mv.lastHandResult;
-  const rotatedResult = result ? rotateHandResult(result, focus) : result;
-  return {
-    ...mv,
-    mySeat: 0,
-    hands: perm4(mv.hands),
-    melds: perm4(mv.melds).map((row) =>
-      // Each meld's `from` is the absolute seat that supplied the
-      // claimed tile; remap it into the rotated frame so the
-      // renderer (which works in relative seats) can position the
-      // tilted tile at the correct slot.
-      row.map((m) => ({
-        ...m,
-        from: m.from != null ? rot(m.from) : m.from,
-      }))
-    ) as [Meld[], Meld[], Meld[], Meld[]],
-    discards: perm4(mv.discards),
-    discardTsumogiri: perm4(mv.discardTsumogiri),
-    discardSources: mv.discardSources
-      ? perm4(mv.discardSources)
-      : mv.discardSources,
-    discardOrdinals: perm4(mv.discardOrdinals),
-    liveDrawSchedule: mv.liveDrawSchedule
-      ? mv.liveDrawSchedule.map((s) => rot(s))
-      : mv.liveDrawSchedule,
-    duplicateWallState: mv.duplicateWallState
-      ? {
-          ...mv.duplicateWallState,
-          initial: perm4(mv.duplicateWallState.initial),
-          remaining: perm4(mv.duplicateWallState.remaining),
-          limitingSeat:
-            mv.duplicateWallState.limitingSeat !== null
-              ? rot(mv.duplicateWallState.limitingSeat)
-              : null,
-        }
-      : null,
-    duplicateDrawQueues: mv.duplicateDrawQueues
-      ? perm4(mv.duplicateDrawQueues).map((queue) => [...queue]) as DuplicateDrawQueues
-      : null,
-    scores: perm4(mv.scores),
-    seatNames: mv.seatNames ? perm4(mv.seatNames) : mv.seatNames,
-    dealer: rot(mv.dealer),
-    riichiDeclared: perm4(mv.riichiDeclared),
-    ryuukyokuDeclarations: perm4(mv.ryuukyokuDeclarations),
-    ryuukyokuTenpaiHands: perm4(mv.ryuukyokuTenpaiHands),
-    riichiTileIdx: perm4(mv.riichiTileIdx),
-    sinking: perm4(mv.sinking),
-    chips: perm4(mv.chips),
-    dabuken: perm4(mv.dabuken),
-    furiten: perm4(mv.furiten),
-    currentWaits: mv.currentWaits ? perm4(mv.currentWaits) : mv.currentWaits,
-    lastHandResult: rotatedResult,
-    freshlyDrawnSeat:
-      mv.freshlyDrawnSeat != null ? rot(mv.freshlyDrawnSeat) : null,
-    freshlyDiscardedSeat:
-      mv.freshlyDiscardedSeat != null ? rot(mv.freshlyDiscardedSeat) : null,
-    pendingDiscard: mv.pendingDiscard
-      ? { ...mv.pendingDiscard, seat: rot(mv.pendingDiscard.seat) }
-      : mv.pendingDiscard,
-    matchEnded: mv.matchEnded
-      ? {
-          ...mv.matchEnded,
-          finalScores: mv.matchEnded.finalScores.map((fs) => ({
-            ...fs,
-            seat: rot(fs.seat),
-          })),
-          ...(mv.matchEnded.chips
-            ? { chips: [...perm4(mv.matchEnded.chips)] }
-            : {}),
-          ...(mv.matchEnded.dabuken
-            ? { dabuken: [...perm4(mv.matchEnded.dabuken)] }
-            : {}),
-          ...(mv.matchEnded.chipsDelta
-            ? { chipsDelta: [...perm4(mv.matchEnded.chipsDelta)] }
-            : {}),
-        }
-      : mv.matchEnded,
-    // Permute room composition so the disconnect badge in the
-    // renderer can read `roomState.seats[seatIdx]` using the
-    // same focused-relative indexing as `seatNames`. The
-    // occupant's nominal `seat` field stays as the absolute seat
-    // value, but the array slot is the rotated index.
-    roomState: mv.roomState
-      ? {
-          ...mv.roomState,
-          mySeat: mv.roomState.mySeat != null ? rot(mv.roomState.mySeat) : null,
-          hostSeat:
-            mv.roomState.hostSeat != null ? rot(mv.roomState.hostSeat) : null,
-          seats: perm4(mv.roomState.seats).map((rs, i) => ({
-            ...rs,
-            seat: i as Seat,
-          })),
-        }
-      : mv.roomState,
-  };
 }

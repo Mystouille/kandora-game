@@ -12,6 +12,7 @@ import type {
   WallTileKind,
   WallTilePlan,
 } from "./wallRenderPlan";
+import { buildSanmaWallPlan } from "./sanmaWallPlan";
 
 export interface NormalWallPlanInput {
   layout: TableLayout;
@@ -29,6 +30,10 @@ export interface NormalWallPlanInput {
     | "deadWall"
     | "liveDrawSchedule"
     | "mySeat"
+    | "playerCount"
+    | "sanmaType"
+    | "sanmaWall"
+    | "tableProjection"
   >;
 }
 
@@ -51,7 +56,9 @@ function wrapGlobalStack(position: number): number {
   return ((position % TOTAL_STACKS) + TOTAL_STACKS) % TOTAL_STACKS;
 }
 
-function normalWallRoles(view: NormalWallPlanInput["view"]): Map<number, WallRole> {
+function normalWallRoles(
+  view: NormalWallPlanInput["view"]
+): Map<number, WallRole> {
   const dice = view.dice ?? [3, 4];
   const diceSum = Math.max(2, Math.min(12, dice[0] + dice[1]));
   const breakSeat = (view.dealer + diceSum - 1) % 4;
@@ -96,6 +103,9 @@ function stackLongOffsets(
 export function buildNormalWallPlan(
   input: NormalWallPlanInput
 ): WallRenderPlan {
+  if (input.view.playerCount === 3) {
+    return buildSanmaWallPlan(input);
+  }
   const { layout, metrics, showWalls, showUndealtWall, view } = input;
   const roles = normalWallRoles(view);
   const initialDealTiles = showUndealtWall ? 0 : INITIAL_DEAL_TILES;
@@ -121,18 +131,15 @@ export function buildNormalWallPlan(
         let sourceIndex: number;
         let livePulledToDead = false;
         if (role.kind === "live") {
-          const tileDrawIndex =
-            role.drawStackIndex * 2 + (row === 1 ? 0 : 1);
+          const tileDrawIndex = role.drawStackIndex * 2 + (row === 1 ? 0 : 1);
           if (tileDrawIndex < drawsTaken) {
             continue;
           }
           sourceIndex = tileDrawIndex - initialDealTiles;
-          livePulledToDead =
-            kanCount > 0 && tileDrawIndex >= 122 - kanCount;
+          livePulledToDead = kanCount > 0 && tileDrawIndex >= 122 - kanCount;
         } else {
           if (role.indexFromBreak <= 1 && kanCount > 0) {
-            const rinshanOrder =
-              role.indexFromBreak * 2 + (row === 1 ? 0 : 1);
+            const rinshanOrder = role.indexFromBreak * 2 + (row === 1 ? 0 : 1);
             if (rinshanOrder < kanCount) {
               continue;
             }

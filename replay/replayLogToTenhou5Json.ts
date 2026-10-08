@@ -51,6 +51,7 @@
  */
 
 import type { GameEvent, ReplayLog } from "~/game/replay/types";
+import { replayVariant } from "./variant";
 import type { Meld, Tile } from "~/game/protocol/messages";
 import { RIICHI_LIB_YAKU_KANJI_BY_ROMAJI } from "~/game/rules";
 
@@ -491,7 +492,21 @@ function buildResult(
 // Top-level convert.
 // ---------------------------------------------------------------------------
 
+export const SANMA_EXTERNAL_EXPORT_ERROR =
+  "Sanma replays cannot be exported to Tenhou/NAGA format. Use native JSON or the replay share link instead.";
+
+export class UnsupportedSanmaExportError extends Error {
+  readonly code = "unsupported_sanma_export";
+  constructor() {
+    super(SANMA_EXTERNAL_EXPORT_ERROR);
+    this.name = "UnsupportedSanmaExportError";
+  }
+}
+
 export function replayLogToTenhou5Json(replay: ReplayLog): Tenhou5Json {
+  if (replayVariant(replay).playerCount === 3) {
+    throw new UnsupportedSanmaExportError();
+  }
   const name: [string, string, string, string] = ["", "", "", ""];
   for (const seat of replay.seats) {
     if (seat.seat >= 0 && seat.seat < 4) {

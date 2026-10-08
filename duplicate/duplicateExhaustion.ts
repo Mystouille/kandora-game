@@ -1,7 +1,10 @@
+import { copySeatValues } from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import type { MatchPhase } from "~/game/rules/state";
 import type { Seat } from "~/game/rules/types";
+import { nextSeat, seatDistance } from "~/game/rules/seats";
 
-export type DuplicateDrawCounts = [number, number, number, number];
+export type DuplicateDrawCounts = SeatValues<number>;
 
 export interface DuplicateExhaustionForecast {
   limitingSeat: Seat;
@@ -13,6 +16,7 @@ export interface DuplicateExhaustionContext {
   phase: MatchPhase;
   turn: Seat;
   pendingReplacementSeat: Seat | null;
+  pendingOpeningReplacement?: boolean;
 }
 
 export function estimateDuplicateExhaustionFromNextDrawer(
@@ -21,10 +25,10 @@ export function estimateDuplicateExhaustionFromNextDrawer(
 ): DuplicateExhaustionForecast {
   let limitingSeat: Seat = nextDrawer;
   let estimatedDrawsRemaining = Number.POSITIVE_INFINITY;
-  for (let seatIndex = 0; seatIndex < 4; seatIndex++) {
+  for (let seatIndex = 0; seatIndex < remaining.length; seatIndex++) {
     const seat = seatIndex as Seat;
-    const offset = (seat - nextDrawer + 4) % 4;
-    const emptyDrawAttempt = remaining[seat] * 4 + offset;
+    const offset = seatDistance(nextDrawer, seat, remaining.length);
+    const emptyDrawAttempt = remaining[seat] * remaining.length + offset;
     if (emptyDrawAttempt < estimatedDrawsRemaining) {
       limitingSeat = seat;
       estimatedDrawsRemaining = emptyDrawAttempt;
@@ -45,7 +49,10 @@ export function estimateDuplicateExhaustion(
   ) {
     return null;
   }
-  if (context.phase === "awaiting_chankan") {
+  if (
+    context.phase === "awaiting_chankan" ||
+    context.phase === "awaiting_nuki_replacement"
+  ) {
     const declarer = context.pendingReplacementSeat;
     if (declarer === null) {
       return null;
@@ -53,11 +60,13 @@ export function estimateDuplicateExhaustion(
     if (remaining[declarer] === 0) {
       return { limitingSeat: declarer, estimatedDrawsRemaining: 0 };
     }
-    const afterReplacement = [...remaining] as DuplicateDrawCounts;
+    const afterReplacement = copySeatValues(remaining);
     afterReplacement[declarer] -= 1;
     const after = estimateDuplicateExhaustionFromNextDrawer(
       afterReplacement,
-      ((declarer + 1) % 4) as Seat
+      context.pendingOpeningReplacement
+        ? context.turn
+        : nextSeat(declarer, remaining.length)
     );
     return {
       limitingSeat: after.limitingSeat,
@@ -67,6 +76,6 @@ export function estimateDuplicateExhaustion(
   const nextDrawer =
     context.phase === "awaiting_draw"
       ? context.turn
-      : (((context.turn + 1) % 4) as Seat);
+      : nextSeat(context.turn, remaining.length);
   return estimateDuplicateExhaustionFromNextDrawer(remaining, nextDrawer);
 }

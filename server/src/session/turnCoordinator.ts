@@ -5,6 +5,7 @@ import { MatchKernel } from "./matchKernel";
 import type { TurnWorkflowPort } from "./workflowPorts";
 
 import { gameTiming } from "./timingPolicy";
+import { settleAutomaticNuki } from "./nukiFlow";
 
 export class TurnCoordinator {
   constructor(
@@ -13,11 +14,26 @@ export class TurnCoordinator {
     private readonly port: TurnWorkflowPort
   ) {}
 
+  async resumeNuki(opening: boolean): Promise<void> {
+    await settleAutomaticNuki(
+      this.kernel,
+      (action) => this.port.applyEngineAction(action),
+      opening
+    );
+    await this.advanceTurn();
+  }
+
   async advanceTurn(): Promise<void> {
     if (
       this.kernel.currentState().phase === "hand_ended" ||
       this.kernel.currentState().phase === "match_ended"
     ) {
+      return;
+    }
+    await settleAutomaticNuki(this.kernel, (action) =>
+      this.port.applyEngineAction(action)
+    );
+    if (this.kernel.currentState().phase === "awaiting_chankan") {
       return;
     }
     if (this.kernel.currentState().phase === "awaiting_discard") {
@@ -46,6 +62,9 @@ export class TurnCoordinator {
       await this.port.emitEngineEvent(e);
     }
     await this.port.emitFuritenChanges(drawRes.furitenChanges);
+    await settleAutomaticNuki(this.kernel, (action) =>
+      this.port.applyEngineAction(action)
+    );
 
     const phase = this.kernel.view.phase;
     if (phase === "hand_ended" || phase === "match_ended") {
@@ -128,6 +147,16 @@ export class TurnCoordinator {
   }
 
   async continueDiscardTurn(): Promise<void> {
+    await settleAutomaticNuki(this.kernel, (action) =>
+      this.port.applyEngineAction(action)
+    );
+    if (
+      this.kernel.currentState().phase === "awaiting_ryuukyoku_declarations" ||
+      this.kernel.currentState().phase === "awaiting_ryuukyoku_settlement"
+    ) {
+      await this.continueRyuukyokuDeclarations();
+      return;
+    }
     if (this.kernel.currentState().phase !== "awaiting_discard") {
       return;
     }
@@ -149,6 +178,26 @@ export class TurnCoordinator {
     }
 
     if (!this.kernel.hasForcedBotDiscard(seat)) {
+      if (this.kernel.currentState().ruleSet.playerCount === 3) {
+        if (this.kernel.canTsumo(seat)) {
+          await this.port.waitForWinReaction("draw");
+          await this.port.applyEngineAction({ type: "tsumo", seat });
+          await this.port.afterHandEnd();
+          return;
+        }
+        const nuki = this.kernel
+          .discardLegals(seat)
+          .find((action) => action.type === "nuki");
+        if (nuki?.tile) {
+          await this.port.applyEngineAction({
+            type: "nuki",
+            seat,
+            tile: nuki.tile,
+          });
+          await this.port.openChankanWindow();
+          return;
+        }
+      }
       const selfKan = this.kernel.botSelfKan(seat);
       if (selfKan !== null) {
         if (selfKan.kind === "ankan") {
@@ -190,6 +239,16 @@ export class TurnCoordinator {
   }
 
   async afterCall(): Promise<void> {
+    await settleAutomaticNuki(this.kernel, (action) =>
+      this.port.applyEngineAction(action)
+    );
+    if (
+      this.kernel.currentState().phase === "awaiting_ryuukyoku_declarations" ||
+      this.kernel.currentState().phase === "awaiting_ryuukyoku_settlement"
+    ) {
+      await this.continueRyuukyokuDeclarations();
+      return;
+    }
     if (
       this.kernel.currentState().phase === "hand_ended" ||
       this.kernel.currentState().phase === "match_ended"

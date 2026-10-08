@@ -2,6 +2,8 @@
   "id": "jpml-hanchan",
   "displayName": "JPML A — Hanchan",
   "description": "JPML A rules - No ippatsu, ura dora, kan dora, or aka dora.",
+  "playerCount": 4,
+  "sanmaType": "online",
   "roundWindCount": 2,
   "roundLimit": 4,
   "startingScore": 30000,

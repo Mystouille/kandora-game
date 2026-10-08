@@ -5,6 +5,7 @@ import type { CallOption } from "~/game/rules";
 import { MatchKernel } from "./matchKernel";
 
 import type { CallResolutionPort } from "./workflowPorts";
+import { seatDistance } from "~/game/rules/seats";
 
 export class CallResolution {
   constructor(
@@ -21,7 +22,11 @@ export class CallResolution {
     await this.port.waitForWinReaction("discard");
     const ordered = candidates
       .slice()
-      .sort((a, b) => ((a - discarder + 3) % 4) - ((b - discarder + 3) % 4));
+      .sort(
+        (a, b) =>
+          seatDistance(discarder, a, this.kernel.playerCount) -
+          seatDistance(discarder, b, this.kernel.playerCount)
+      );
     const head = ordered[0];
 
     if (this.kernel.currentState().ruleSet.atamahane) {
@@ -86,18 +91,24 @@ export class CallResolution {
   }
 
   async dispatchChankanRons(candidates: Seat[]): Promise<void> {
-    const declarer = this.kernel.currentState().pendingShouminkan?.seat;
+    const declarer = this.kernel.pendingRobbery()?.seat;
     if (declarer === undefined || candidates.length === 0) {
-      await this.completeShouminkanAndResume();
+      await this.completeRobberyAndResume();
       return;
     }
     await this.port.waitForWinReaction("call");
 
     const ordered = candidates
       .slice()
-      .sort((a, b) => ((a - declarer + 3) % 4) - ((b - declarer + 3) % 4));
+      .sort(
+        (a, b) =>
+          seatDistance(declarer, a, this.kernel.playerCount) -
+          seatDistance(declarer, b, this.kernel.playerCount)
+      );
     const head = ordered[0];
-    const additional = ordered.slice(1);
+    const additional = this.kernel.currentState().ruleSet.atamahane
+      ? []
+      : ordered.slice(1);
     await this.port.applyEngineAction({
       type: "ron",
       seat: head,
@@ -111,8 +122,13 @@ export class CallResolution {
     }
   }
 
-  async completeShouminkanAndResume(): Promise<void> {
-    await this.port.applyEngineAction({ type: "complete_shouminkan" });
+  async completeRobberyAndResume(): Promise<void> {
+    await this.port.applyEngineAction({
+      type:
+        this.kernel.pendingRobbery()?.kind === "nuki"
+          ? "complete_nuki"
+          : "complete_shouminkan",
+    });
     await this.port.afterCall();
   }
 }

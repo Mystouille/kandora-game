@@ -5,6 +5,7 @@ import type { Rect } from "../tableLayout";
 import { handResultDealerSeat } from "../geometry/resultReveal";
 import { resultScoreBoxLayout } from "../geometry/scoreGeometry";
 import { RESULT_SCORE_BOX_NAME_GAP } from "../geometry/renderConstants";
+import { isTableSeatActive } from "../../tableProjection";
 
 export function renderResultStickInfo(
   result: HandResult,
@@ -62,7 +63,10 @@ interface ScoreBoxPosition {
 }
 
 export function renderResultScoreBoxes(
-  view: Pick<MatchView, "dealer" | "seatNames" | "scores">,
+  view: Pick<
+    MatchView,
+    "dealer" | "seatNames" | "scores" | "playerCount" | "tableProjection"
+  >,
   result: HandResult,
   inner: Rect,
   parent: Container,
@@ -82,6 +86,9 @@ export function renderResultScoreBoxes(
   ];
   const resultDealer = handResultDealerSeat(result, view.dealer);
   for (let seat = 0; seat < 4; seat++) {
+    if (!isTableSeatActive(view, seat)) {
+      continue;
+    }
     const name = view.seatNames?.[seat] || `Player ${seat + 1}`;
     const delta = result.delta[seat] ?? 0;
     const before = (view.scores[seat] ?? 0) - delta;

@@ -3,6 +3,7 @@
  * interaction, asset and HUD concern below owns only its own state.
  */
 import type { MatchView } from "../store";
+import { isTableSeatActive, rotateMatchView } from "../tableProjection";
 import {
   resolveFelt,
   tableLayoutFromConfig,
@@ -37,6 +38,7 @@ import { HandRenderer } from "./renderers/handRenderer";
 import { DiscardRenderer } from "./renderers/discardRenderer";
 import { MeldRenderer } from "./renderers/meldRenderer";
 import { MeldTileRenderer } from "./renderers/meldTiles";
+import { renderNukiTiles } from "./renderers/nukiRenderer";
 import { WallRenderer } from "./renderers/wallRenderer";
 import { TileShadows } from "./renderers/tileShadows";
 import { TablePanels } from "./renderers/tablePanels";
@@ -404,6 +406,25 @@ export class TableRenderer {
     if (!this.scene.app || !this.scene.root) {
       return;
     }
+    if (view.playerCount === 3 && !view.tableProjection) {
+      view = rotateMatchView(view, view.mySeat ?? 0);
+    }
+    if (
+      this.lastView &&
+      (this.lastView.playerCount ?? 4) !== (view.playerCount ?? 4)
+    ) {
+      this.results.setHandResultOverride(null);
+    }
+    if (
+      this.lastView &&
+      (this.lastView.playerCount !== view.playerCount ||
+        this.lastView.tableProjection?.focus !== view.tableProjection?.focus)
+    ) {
+      this.animator.reset();
+      this.meldAnimator.reset();
+      this.declarationAnimator.reset();
+      this.interaction.reset();
+    }
     this.lastView = view;
     this.animator.beginFrame(view);
     this.meldAnimator.beginFrame(view);
@@ -442,6 +463,9 @@ export class TableRenderer {
     const drawer = new MeldTileRenderer(resources, frame.waitTiles);
     const seatPaintOrder: readonly Seat[] = [2, 1, 3, 0];
     for (const seat of seatPaintOrder) {
+      if (!isTableSeatActive(view, seat)) {
+        continue;
+      }
       const hand = this.hands.render(frame, seat, {
         showHands: this.showHands,
         historicalResult: this.results.handResultOverride,
@@ -449,6 +473,7 @@ export class TableRenderer {
       });
       this.melds.render(frame, seat, hand, drawer);
       this.discards.render(frame, seat, hand, discardOptions);
+      renderNukiTiles(frame, resources, seat, discardPanels);
     }
     this.hud.render(frame, resources, discardPanels, policy.indicatorCenter);
     if (policy.perimeterWalls) {

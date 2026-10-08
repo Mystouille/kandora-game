@@ -1,3 +1,4 @@
+import { activeSeats } from "~/game/rules/seats";
 import type {
   GameEvent,
   MatchDebug,
@@ -224,7 +225,11 @@ export class MatchProcess {
   }
 
   async waitUntilConnectionReady(): Promise<boolean> {
-    return this.owners.commands.waitUntilConnectionReady();
+    const ready = await this.owners.commands.waitUntilConnectionReady();
+    if (ready) {
+      await this.owners.recovery.resumeAutomaticWork();
+    }
+    return ready;
   }
 
   static createWaitingRoom(
@@ -237,11 +242,13 @@ export class MatchProcess {
     mode: MatchModeConfig = normalMatchMode,
     spectatorDelayMs: SpectatorDelayMs = 0
   ): MatchProcess {
-    const players = [0, 1, 2, 3].map((seat) => ({
-      userId: `__empty__:${seat}`,
-      displayName: "",
-      isBot: true,
-    }));
+    const players = activeSeats(ruleSetOverride?.playerCount ?? 4).map(
+      (seat) => ({
+        userId: `__empty__:${seat}`,
+        displayName: "",
+        isBot: true,
+      })
+    );
     const match = new MatchProcess(
       matchId,
       seed,
@@ -498,7 +505,7 @@ export class MatchProcess {
   async startWaitingRoom(requestedBy: Seat): Promise<void> {
     await this.owners.roster.startWaitingRoom(
       requestedBy,
-      waitingRoomSeatPermutation(this.seed)
+      waitingRoomSeatPermutation(this.seed, this.owners.roster.playerCount)
     );
   }
 
@@ -516,7 +523,7 @@ export class MatchProcess {
 
   async fillBotsAndStart(): Promise<void> {
     await this.owners.roster.fillBotsAndStart(
-      waitingRoomSeatPermutation(this.seed)
+      waitingRoomSeatPermutation(this.seed, this.owners.roster.playerCount)
     );
   }
 

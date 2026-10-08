@@ -1,3 +1,11 @@
+import { copySeatValues } from "~/game/rules/seats";
+import {
+  activeSeats,
+  isActiveSeat,
+  seatValues,
+  type PlayerCount,
+} from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import type { GameEvent, Seat, ServerMessage } from "~/game/protocol/messages";
 import { type Tile } from "~/game/rules";
 import { projectEvent } from "../projection";
@@ -18,7 +26,7 @@ export interface SnapshotComposerPort {
   spectatorSequence(): number;
   handStartWall(): readonly Tile[] | null;
   duplicateWallEventFields(): { duplicateWallState?: DuplicateWallState };
-  computeSinking(): [boolean, boolean, boolean, boolean];
+  computeSinking(): SeatValues<boolean>;
   sessionVote?(): import("~/game/protocol/messages").SnapshotState["sessionVote"];
   readonly kernel: Pick<MatchKernel, "isFuriten">;
   readonly metadata: Pick<HandMetadata, "snapshot">;
@@ -28,15 +36,16 @@ export interface SnapshotComposerPort {
 }
 
 function discardTsumogiriFromHistory(
-  history: readonly { event: GameEvent }[]
+  history: readonly { event: GameEvent }[],
+  playerCount: PlayerCount
 ): boolean[][] {
-  let tiles: Tile[][] = [[], [], [], []];
-  let flags: boolean[][] = [[], [], [], []];
+  let tiles: Tile[][] = seatValues(playerCount, () => []);
+  let flags: boolean[][] = seatValues(playerCount, () => []);
 
   for (const { event } of history) {
     if (event.type === "match_start" || event.type === "hand_start") {
-      tiles = [[], [], [], []];
-      flags = [[], [], [], []];
+      tiles = seatValues(playerCount, () => []);
+      flags = seatValues(playerCount, () => []);
       continue;
     }
     if (event.type === "discard") {
@@ -63,26 +72,65 @@ function discardTsumogiriFromHistory(
 
 export class SnapshotComposer {
   constructor(private readonly port: SnapshotComposerPort) {}
+
+  private variantFields() {
+    const state = this.port.state();
+    if (state.ruleSet.playerCount === 4) {
+      return {};
+    }
+    return {
+      playerCount: 3 as const,
+      sanmaType: state.ruleSet.sanmaType,
+      nukiTiles: state.nukiTiles.map((tiles) => [...tiles]),
+      sanmaWall: state.sanmaWall ? { ...state.sanmaWall } : undefined,
+      pendingNuki: state.pendingNuki ? { ...state.pendingNuki } : null,
+    };
+  }
+
+  private drawCounters() {
+    const state = this.port.state();
+    if (state.ruleSet.playerCount === 4) {
+      return { drawsTaken: 70 - state.liveWall.length };
+    }
+    let drawsTaken = 0;
+    let liveDrawsTaken = 0;
+    for (const { event } of this.port.history()) {
+      if (event.type === "hand_start") {
+        drawsTaken = 0;
+        liveDrawsTaken = 0;
+      } else if (event.type === "draw") {
+        drawsTaken++;
+        if (!event.fromDeadWall && !event.replacementKind) {
+          liveDrawsTaken++;
+        }
+      }
+    }
+    return { drawsTaken, liveDrawsTaken };
+  }
+
+  private initialSanmaDeadWall(): Tile[] | undefined {
+    if (this.port.state().ruleSet.playerCount !== 3) {
+      return undefined;
+    }
+    const history = this.port.history();
+    for (let index = history.length - 1; index >= 0; index--) {
+      const event = history[index].event;
+      if (event.type === "hand_start" && event.deadWall !== undefined) {
+        return [...event.deadWall];
+      }
+    }
+    return [...this.port.state().deadWall];
+  }
   ryuukyokuPublicState(): {
-    declarations: [
-      boolean | null,
-      boolean | null,
-      boolean | null,
-      boolean | null,
-    ];
-    tenpaiHands: [Tile[] | null, Tile[] | null, Tile[] | null, Tile[] | null];
+    declarations: SeatValues<boolean | null>;
+    tenpaiHands: SeatValues<Tile[] | null>;
   } | null {
     const pending = this.port.state().pendingRyuukyoku;
     if (pending !== null) {
-      const declarations = [...pending.declarations] as [
-        boolean | null,
-        boolean | null,
-        boolean | null,
-        boolean | null,
-      ];
+      const declarations = copySeatValues(pending.declarations);
       const tenpaiHands = declarations.map((declaration, seat) =>
         declaration === true ? [...this.port.state().hands[seat]] : null
-      ) as [Tile[] | null, Tile[] | null, Tile[] | null, Tile[] | null];
+      ) as SeatValues<Tile[] | null>;
       return { declarations, tenpaiHands };
     }
     const settled = this.settledRyuukyokuResult();
@@ -93,17 +141,17 @@ export class SnapshotComposer {
       return null;
     }
     const declarations = settled.declarations.reduce<
-      [boolean | null, boolean | null, boolean | null, boolean | null]
+      SeatValues<boolean | null>
     >(
       (bySeat, declaration) => {
         bySeat[declaration.seat] = declaration.tenpai;
         return bySeat;
       },
-      [null, null, null, null]
+      seatValues(this.port.state().ruleSet.playerCount, () => null)
     );
     const tenpaiHands = settled.tenpaiHands.map((hand) =>
       hand ? [...hand] : null
-    ) as [Tile[] | null, Tile[] | null, Tile[] | null, Tile[] | null];
+    ) as SeatValues<Tile[] | null>;
     return { declarations, tenpaiHands };
   }
 
@@ -137,7 +185,7 @@ export class SnapshotComposer {
       }
     }
     if (
-      declarations.length !== 4 ||
+      declarations.length !== this.port.state().ruleSet.playerCount ||
       handEnd.tenpai === undefined ||
       handEnd.tenpaiHands === undefined
     ) {
@@ -166,12 +214,19 @@ export class SnapshotComposer {
     const ryuukyoku = this.ryuukyokuPublicState();
     const lastHandResult = this.settledRyuukyokuResult();
     const sessionVote = this.port.sessionVote?.();
-    const discardTsumogiri = discardTsumogiriFromHistory(this.port.history());
+    if (!isActiveSeat(seat, this.port.state().ruleSet.playerCount)) {
+      throw new Error(`SnapshotComposer: seat ${seat} is not active`);
+    }
+    const discardTsumogiri = discardTsumogiriFromHistory(
+      this.port.history(),
+      this.port.state().ruleSet.playerCount
+    );
     return {
       ...this.port.timing.metadata(seat, this.port.seatSequences()[seat] - 1),
       type: "snapshot",
       seq: this.port.seatSequences()[seat] - 1,
       state: {
+        ...this.variantFields(),
         mySeat: seat,
         hands: this.port
           .state()
@@ -181,8 +236,8 @@ export class SnapshotComposer {
               : new Array<Tile | null>(h.length).fill(null)
           ),
         discards: this.port.state().discards.map((d) => [...d]),
-          discardTsumogiri,
-          melds: this.port.state().melds.map((mlds) =>
+        discardTsumogiri,
+        melds: this.port.state().melds.map((mlds) =>
           mlds.map((m) => ({
             type: m.type,
             tiles: [...m.tiles],
@@ -195,7 +250,7 @@ export class SnapshotComposer {
         // Number of post-deal draws this hand. A normal draw removes
         // one live-wall tile; a rinshan draw reserves the back tile
         // into the dead wall, so both shrink `liveWall` by one.
-        drawsTaken: 70 - this.port.state().liveWall.length,
+        ...this.drawCounters(),
         doraIndicators: [...this.port.state().doraIndicators],
         turn: this.port.state().turn,
         freshlyDrawnSeat:
@@ -217,18 +272,8 @@ export class SnapshotComposer {
           : {}),
         ...(this.port.state().ruleSet.buuMode
           ? {
-              chips: [...this.port.state().chips] as [
-                number,
-                number,
-                number,
-                number,
-              ],
-              dabuken: [...this.port.state().dabuken] as [
-                boolean,
-                boolean,
-                boolean,
-                boolean,
-              ],
+              chips: copySeatValues(this.port.state().chips),
+              dabuken: copySeatValues(this.port.state().dabuken),
             }
           : {}),
         riichiDeclared: [...this.port.state().riichiDeclared],
@@ -256,14 +301,14 @@ export class SnapshotComposer {
         // recipient's own status. Opponent slots are always
         // `false` from this seat's perspective (their real value
         // is never sent over the wire).
-        furiten: [0, 1, 2, 3].map((s) =>
+        furiten: activeSeats(this.port.state().ruleSet.playerCount).map((s) =>
           s === seat ? this.port.kernel.isFuriten(seat) : false
-        ) as [boolean, boolean, boolean, boolean],
+        ) as SeatValues<boolean>,
         // Per-seat display names so a reconnecting human or a
         // mid-match spectator sees the correct HUD labels without
         // having to wait for the next `match_start` (which only
         // fires once at the very start of the match).
-        seatNames: [0, 1, 2, 3].map(
+        seatNames: activeSeats(this.port.state().ruleSet.playerCount).map(
           (s) => this.port.players().get(s as Seat)?.displayName ?? ""
         ) as [string, string, string, string],
       },
@@ -284,7 +329,10 @@ export class SnapshotComposer {
     const startingWall = this.port.handStartWall();
     const ryuukyoku = this.ryuukyokuPublicState();
     const lastHandResult = this.settledRyuukyokuResult();
-    const discardTsumogiri = discardTsumogiriFromHistory(this.port.history());
+    const discardTsumogiri = discardTsumogiriFromHistory(
+      this.port.history(),
+      this.port.state().ruleSet.playerCount
+    );
     return {
       type: "snapshot",
       // `spectatorSeq` is the next seq to assign; `seq - 1` is the
@@ -292,7 +340,11 @@ export class SnapshotComposer {
       // happened yet (e.g. snapshot taken before `match_start`).
       seq: Math.max(0, this.port.spectatorSequence() - 1),
       state: {
+        ...this.variantFields(),
         mySeat: null,
+        ...(this.port.state().ruleSet.playerCount === 3
+          ? { deadWall: this.initialSanmaDeadWall() }
+          : {}),
         // Spectators are omniscient: every seat's full hand is
         // visible.
         hands: this.port.state().hands.map((h) => [...h]),
@@ -308,7 +360,7 @@ export class SnapshotComposer {
         ),
         wallRemaining: this.port.state().liveWall.length,
         ...this.port.duplicateWallEventFields(),
-        drawsTaken: 70 - this.port.state().liveWall.length,
+        ...this.drawCounters(),
         doraIndicators: [...this.port.state().doraIndicators],
         turn: this.port.state().turn,
         freshlyDrawnSeat:
@@ -330,18 +382,8 @@ export class SnapshotComposer {
           : {}),
         ...(this.port.state().ruleSet.buuMode
           ? {
-              chips: [...this.port.state().chips] as [
-                number,
-                number,
-                number,
-                number,
-              ],
-              dabuken: [...this.port.state().dabuken] as [
-                boolean,
-                boolean,
-                boolean,
-                boolean,
-              ],
+              chips: copySeatValues(this.port.state().chips),
+              dabuken: copySeatValues(this.port.state().dabuken),
             }
           : {}),
         riichiDeclared: [...this.port.state().riichiDeclared],
@@ -366,15 +408,15 @@ export class SnapshotComposer {
         ],
         // Spectators see the live per-seat furiten state (union
         // of permanent / locked + temporary flags).
-        furiten: [0, 1, 2, 3].map(
+        furiten: activeSeats(this.port.state().ruleSet.playerCount).map(
           (s) =>
             this.port.state().furitenLocked[s] ||
             this.port.state().furitenTemp[s]
-        ) as [boolean, boolean, boolean, boolean],
+        ) as SeatValues<boolean>,
         // Per-seat display names so a spectator joining mid-match
         // sees the correct HUD labels without waiting for the
         // next `match_start` (which only fires once per match).
-        seatNames: [0, 1, 2, 3].map(
+        seatNames: activeSeats(this.port.state().ruleSet.playerCount).map(
           (s) => this.port.players().get(s as Seat)?.displayName ?? ""
         ) as [string, string, string, string],
         // Omniscient starting wall for the current hand, plus the
@@ -387,10 +429,13 @@ export class SnapshotComposer {
         ...(startingWall
           ? {
               liveWall: [...startingWall],
-              liveDrawsTaken: Math.max(
-                0,
-                startingWall.length - this.port.state().liveWall.length
-              ),
+              liveDrawsTaken:
+                this.port.state().ruleSet.playerCount === 3
+                  ? this.drawCounters().liveDrawsTaken
+                  : Math.max(
+                      0,
+                      startingWall.length - this.port.state().liveWall.length
+                    ),
             }
           : {}),
       },

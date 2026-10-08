@@ -50,6 +50,9 @@ export class GameArchive {
         startedAt,
         endedAt: new Date(runtimeCalendarNow(this.runtime)),
         ruleSet: this.presetId,
+        ...(this.kernel.view.ruleSet.playerCount === 3
+          ? { ruleSetDetails: { ...this.kernel.view.ruleSet } }
+          : {}),
         mode: this.kernel.mode,
         events: replayEvents,
         seats: finalScores.map((score) => {

@@ -19,7 +19,8 @@ import type {
 
 function scoreSummaryLabel(
   win: ResultWin,
-  scoreCap: MatchView["scoreCap"]
+  scoreCap: MatchView["scoreCap"],
+  hanOnly: boolean
 ): string {
   const han = win.han ?? 0;
   const fu = win.fu ?? 0;
@@ -43,7 +44,7 @@ function scoreSummaryLabel(
       ? ym > 1
         ? `${ym}× Yakuman`
         : "Yakuman"
-      : han >= 5
+      : hanOnly || han >= 5
         ? `${han} han`
         : `${han} han ${fu} fu`;
 }
@@ -91,7 +92,8 @@ export function buildWinResultRows(
   stageReveal: boolean,
   revealElapsedMs: number,
   scoreCap: MatchView["scoreCap"],
-  uraDoraEnabled: boolean
+  uraDoraEnabled: boolean,
+  hanOnly: boolean = false
 ): ResultRowPlan {
   const rows: ResultRow[] = [];
   const total = result.wins.length;
@@ -171,7 +173,7 @@ export function buildWinResultRows(
   appendYakuRows(rows, visibleYaku, revealedYakuCount);
   rows.push({
     kind: "scoreRow",
-    han: scoreSummaryLabel(win, scoreCap),
+    han: scoreSummaryLabel(win, scoreCap, hanOnly),
     pts: typeof win.ten === "number" ? `${win.ten}pts` : null,
     ptsColor: 0xfde68a,
     hidden: !scoreSummaryRevealed,

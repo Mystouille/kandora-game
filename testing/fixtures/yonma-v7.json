@@ -1,0 +1,1136 @@
+{
+  "deals": [
+    {
+      "seed": 0,
+      "digest": "c2751982c4a8f275a7df28205c4e6ae5f4a403ae4c29c3ddfa762564081818b7"
+    },
+    {
+      "seed": 42,
+      "digest": "ba6f27eb3e26c04ce1ed88f330a00ed1e3861bf23036eda1176a5fe49d4872e6"
+    },
+    {
+      "seed": 2026,
+      "digest": "68a18c7b2b39b065fbd1654e2b305ef6f371756bf3c7fbebb41996c2f3917690"
+    },
+    {
+      "seed": 4294967295,
+      "digest": "d41a718443c08fa50fd5bc5255cfc4782071e20ab9a0bc2d7ead1e0063755206"
+    }
+  ],
+  "duplicate": [
+    {
+      "dealer": 0,
+      "digest": "1caa29bac7eb328d4a30e28d870877028a028057e49b69efab01b3ee459e3fd2"
+    },
+    {
+      "dealer": 1,
+      "digest": "c71efb7b1df8a3821a15cbf3a75a4be7ee46d13c83c0ad9f68239a2d7fb78108"
+    },
+    {
+      "dealer": 2,
+      "digest": "ead5b2823df73f899dbee093db6bf9dc024e8696c97cb14aadac1e3547e57a15"
+    },
+    {
+      "dealer": 3,
+      "digest": "1aa073d967608bd62170ce1e5e379cc97bdbf966cd06638bc0252a0f2d897d7e"
+    }
+  ],
+  "hand": [
+    "1m",
+    "1m",
+    "2p",
+    "2p",
+    "3s",
+    "3s",
+    "4m",
+    "4m",
+    "5p",
+    "5p",
+    "6s",
+    "6s",
+    "7z"
+  ],
+  "scores": [
+    {
+      "tsumo": false,
+      "seatWind": "E",
+      "score": {
+        "isAgari": true,
+        "han": 3,
+        "fu": 25,
+        "ten": 4800,
+        "yaku": {
+          "立直": "1飜",
+          "七対子": "2飜"
+        },
+        "doraCount": 0,
+        "akaDoraCount": 0,
+        "uraDoraCount": 0,
+        "isYakuman": false,
+        "yakumanCount": 0,
+        "oya": [
+          4800
+        ],
+        "ko": [
+          3200
+        ],
+        "text": "(東場東家)栄和 25符3飜 4800点",
+        "raw": {
+          "isAgari": true,
+          "yakuman": 0,
+          "yaku": {
+            "七対子": "2飜",
+            "立直": "1飜"
+          },
+          "han": 3,
+          "fu": 25,
+          "ten": 4800,
+          "name": "",
+          "text": "(東場東家)栄和 25符3飜 4800点",
+          "oya": [
+            4800
+          ],
+          "ko": [
+            3200
+          ],
+          "error": false
+        }
+      }
+    },
+    {
+      "tsumo": false,
+      "seatWind": "S",
+      "score": {
+        "isAgari": true,
+        "han": 3,
+        "fu": 25,
+        "ten": 3200,
+        "yaku": {
+          "立直": "1飜",
+          "七対子": "2飜"
+        },
+        "doraCount": 0,
+        "akaDoraCount": 0,
+        "uraDoraCount": 0,
+        "isYakuman": false,
+        "yakumanCount": 0,
+        "oya": [
+          4800
+        ],
+        "ko": [
+          3200
+        ],
+        "text": "(東場南家)栄和 25符3飜 3200点",
+        "raw": {
+          "isAgari": true,
+          "yakuman": 0,
+          "yaku": {
+            "七対子": "2飜",
+            "立直": "1飜"
+          },
+          "han": 3,
+          "fu": 25,
+          "ten": 3200,
+          "name": "",
+          "text": "(東場南家)栄和 25符3飜 3200点",
+          "oya": [
+            4800
+          ],
+          "ko": [
+            3200
+          ],
+          "error": false
+        }
+      }
+    },
+    {
+      "tsumo": true,
+      "seatWind": "E",
+      "score": {
+        "isAgari": true,
+        "han": 4,
+        "fu": 25,
+        "ten": 9600,
+        "yaku": {
+          "立直": "1飜",
+          "門前清自摸和": "1飜",
+          "七対子": "2飜"
+        },
+        "doraCount": 0,
+        "akaDoraCount": 0,
+        "uraDoraCount": 0,
+        "isYakuman": false,
+        "yakumanCount": 0,
+        "oya": [
+          3200,
+          3200,
+          3200
+        ],
+        "ko": [
+          3200,
+          1600,
+          1600
+        ],
+        "text": "(東場東家)自摸 25符4飜 9600点(3200all)",
+        "raw": {
+          "isAgari": true,
+          "yakuman": 0,
+          "yaku": {
+            "七対子": "2飜",
+            "門前清自摸和": "1飜",
+            "立直": "1飜"
+          },
+          "han": 4,
+          "fu": 25,
+          "ten": 9600,
+          "name": "",
+          "text": "(東場東家)自摸 25符4飜 9600点(3200all)",
+          "oya": [
+            3200,
+            3200,
+            3200
+          ],
+          "ko": [
+            3200,
+            1600,
+            1600
+          ],
+          "error": false
+        }
+      }
+    },
+    {
+      "tsumo": true,
+      "seatWind": "S",
+      "score": {
+        "isAgari": true,
+        "han": 4,
+        "fu": 25,
+        "ten": 6400,
+        "yaku": {
+          "立直": "1飜",
+          "門前清自摸和": "1飜",
+          "七対子": "2飜"
+        },
+        "doraCount": 0,
+        "akaDoraCount": 0,
+        "uraDoraCount": 0,
+        "isYakuman": false,
+        "yakumanCount": 0,
+        "oya": [
+          3200,
+          3200,
+          3200
+        ],
+        "ko": [
+          3200,
+          1600,
+          1600
+        ],
+        "text": "(東場南家)自摸 25符4飜 6400点(3200,1600)",
+        "raw": {
+          "isAgari": true,
+          "yakuman": 0,
+          "yaku": {
+            "七対子": "2飜",
+            "門前清自摸和": "1飜",
+            "立直": "1飜"
+          },
+          "han": 4,
+          "fu": 25,
+          "ten": 6400,
+          "name": "",
+          "text": "(東場南家)自摸 25符4飜 6400点(3200,1600)",
+          "oya": [
+            3200,
+            3200,
+            3200
+          ],
+          "ko": [
+            3200,
+            1600,
+            1600
+          ],
+          "error": false
+        }
+      }
+    }
+  ],
+  "checkpoint": {
+    "schemaVersion": 7,
+    "status": "playing",
+    "savedAt": 1500,
+    "matchId": "yonma-v7-baseline",
+    "seed": 42,
+    "presetId": "tenhou-hanchan",
+    "spectatorDelayMs": 0,
+    "decisionTiming": {
+      "nextWindow": 2,
+      "prompts": {
+        "nextWindow": 1,
+        "windows": [
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "windows": [
+        {
+          "id": "yonma-v7-baseline:0:1",
+          "clockEpoch": "yonma-v7-baseline",
+          "timingVersion": 2,
+          "seat": 0,
+          "kind": "turn",
+          "state": "scheduled",
+          "infoSentAt": 1500,
+          "opensAt": 1800,
+          "baseEndsAt": 6800,
+          "budgetEndsAt": 26800,
+          "expiresAt": 27000,
+          "bankAtOpenMs": 20000,
+          "allowanceMs": 200,
+          "generation": 1,
+          "legalActionIds": [
+            "discard:draw:1p",
+            "discard:hand:9p",
+            "discard:hand:2p",
+            "discard:hand:3m",
+            "discard:hand:7z",
+            "discard:hand:4z",
+            "discard:hand:2s",
+            "discard:hand:1s",
+            "discard:hand:7m",
+            "discard:hand:1p",
+            "discard:hand:3z",
+            "discard:hand:4m"
+          ]
+        },
+        null,
+        null,
+        null
+      ]
+    },
+    "mode": {
+      "type": "normal"
+    },
+    "driver": {
+      "type": "normal"
+    },
+    "seats": [
+      {
+        "userId": "baseline-0",
+        "displayName": "Baseline 0",
+        "isBot": false
+      },
+      {
+        "userId": "baseline-1",
+        "displayName": "Baseline 1",
+        "isBot": false
+      },
+      {
+        "userId": "baseline-2",
+        "displayName": "Baseline 2",
+        "isBot": false
+      },
+      {
+        "userId": "baseline-3",
+        "displayName": "Baseline 3",
+        "isBot": false
+      }
+    ],
+    "state": {
+      "seed": 42,
+      "ruleSet": {
+        "roundWindCount": 2,
+        "roundLimit": 4,
+        "startingScore": 25000,
+        "returnScore": 30000,
+        "minimumScoreToWin": null,
+        "uma": [
+          [
+            20,
+            10,
+            -10,
+            -20
+          ],
+          [
+            20,
+            10,
+            -10,
+            -20
+          ],
+          [
+            20,
+            10,
+            -10,
+            -20
+          ],
+          [
+            20,
+            10,
+            -10,
+            -20
+          ],
+          [
+            20,
+            10,
+            -10,
+            -20
+          ]
+        ],
+        "roundFinalScores": false,
+        "splitTiedUma": false,
+        "kuikae": "full",
+        "unclaimedRiichiDeposits": "highest_score_player",
+        "nbRedFiveManzu": 1,
+        "nbRedFivePinzu": 1,
+        "nbRedFiveSouzu": 1,
+        "kuitan": true,
+        "doubleRiichi": true,
+        "renhou": false,
+        "ippatsu": true,
+        "uraDora": true,
+        "kanDora": true,
+        "instantlyRevealDoraForMinkan": true,
+        "instantlyRevealDoraForAnkan": true,
+        "nagashiMangan": true,
+        "aborts": {
+          "kyuushuu": true,
+          "suufonRenda": true,
+          "suuchaRiichi": true,
+          "sanchahou": true
+        },
+        "atamahane": false,
+        "bustedScore": 0,
+        "bustedStrict": true,
+        "agariYame": false,
+        "tenpaiYame": false,
+        "buuMode": false,
+        "riichiBetValue": 1000,
+        "honbaPayments": true,
+        "tenpaiPayments": true,
+        "tenpaiRenchan": true,
+        "kiriageMangan": false,
+        "doubleWindPairFu": 4,
+        "scoreCap": null,
+        "chipPayouts": {
+          "sankoro": 0,
+          "nikoro": 0,
+          "chinmai": 0
+        },
+        "sinkThreshold": 0,
+        "winnerThreshold": null,
+        "immediateSankoroOnYakuman": false,
+        "illegalVictoryRules": {
+          "sinkingWinNotFloating": false,
+          "gameEndingWinNotFirst": false,
+          "gameEndingChinmai": false
+        },
+        "illegalVictoryAllLastOff": true,
+        "chipChomboPenalty": null,
+        "startingChips": 0
+      },
+      "hands": [
+        [
+          "9p",
+          "2p",
+          "3m",
+          "7z",
+          "4z",
+          "2p",
+          "2s",
+          "1s",
+          "7m",
+          "1p",
+          "3z",
+          "7z",
+          "4m",
+          "1p"
+        ],
+        [
+          "3z",
+          "4z",
+          "3z",
+          "0p",
+          "6s",
+          "9s",
+          "8m",
+          "0m",
+          "6s",
+          "1z",
+          "7p",
+          "6p",
+          "2s"
+        ],
+        [
+          "1p",
+          "4p",
+          "8p",
+          "1z",
+          "6m",
+          "8s",
+          "9p",
+          "5z",
+          "6z",
+          "8p",
+          "5p",
+          "7s",
+          "3z"
+        ],
+        [
+          "5z",
+          "4m",
+          "1z",
+          "2m",
+          "4m",
+          "4z",
+          "6s",
+          "2p",
+          "3p",
+          "5s",
+          "2p",
+          "6m",
+          "4m"
+        ]
+      ],
+      "discards": [
+        [],
+        [],
+        [],
+        []
+      ],
+      "liveWall": [
+        "5m",
+        "4s",
+        "8p",
+        "8s",
+        "4s",
+        "2z",
+        "5s",
+        "4z",
+        "6z",
+        "4p",
+        "9m",
+        "3m",
+        "3p",
+        "9s",
+        "9p",
+        "4p",
+        "7s",
+        "7p",
+        "3p",
+        "6z",
+        "7m",
+        "1m",
+        "3m",
+        "3m",
+        "1s",
+        "9m",
+        "1s",
+        "2m",
+        "2s",
+        "8s",
+        "7s",
+        "6p",
+        "5z",
+        "4s",
+        "7m",
+        "9s",
+        "8s",
+        "2s",
+        "2z",
+        "8m",
+        "5m",
+        "7p",
+        "6z",
+        "9s",
+        "5p",
+        "7z",
+        "2z",
+        "3p",
+        "9m",
+        "3s",
+        "4p",
+        "0s",
+        "5m",
+        "1m",
+        "6p",
+        "4s",
+        "6m",
+        "2m",
+        "8m",
+        "1m",
+        "8p",
+        "2m",
+        "7s",
+        "5p",
+        "1m",
+        "1s",
+        "3s",
+        "7z",
+        "7m"
+      ],
+      "deadWall": [
+        "1p",
+        "6s",
+        "5z",
+        "8m",
+        "6p",
+        "1z",
+        "3s",
+        "9m",
+        "9p",
+        "6m",
+        "5s",
+        "2z",
+        "7p",
+        "3s"
+      ],
+      "doraIndicators": [
+        "6p"
+      ],
+      "turn": 0,
+      "lastDrawn": [
+        "1p",
+        null,
+        null,
+        null
+      ],
+      "lastDrawFromDeadWall": false,
+      "lastDiscard": null,
+      "phase": "awaiting_discard",
+      "dealer": 0,
+      "roundWind": "E",
+      "roundNumber": 1,
+      "roundLimit": 4,
+      "honba": 0,
+      "riichiSticks": 0,
+      "scores": [
+        25000,
+        25000,
+        25000,
+        25000
+      ],
+      "riichiDeclared": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "pendingRiichiSeat": null,
+      "doubleRiichi": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "ippatsuEligible": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "furitenLocked": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "furitenTemp": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "paoDaisangen": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "paoDaisuushii": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "melds": [
+        [],
+        [],
+        [],
+        []
+      ],
+      "pendingShouminkan": null,
+      "pendingRyuukyoku": null,
+      "uraDoraIndicators": [
+        "1z"
+      ],
+      "pendingKanDora": [],
+      "pendingKanUraDora": [],
+      "lastHandResult": null,
+      "chips": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dabuken": [
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    "startedAgoMs": 500,
+    "startedCalendarAt": 1000,
+    "randomState": 0,
+    "eventLog": [
+      {
+        "seq": 0,
+        "event": {
+          "type": "match_start",
+          "seats": [
+            {
+              "seat": 0,
+              "userId": "baseline-0",
+              "displayName": "Baseline 0"
+            },
+            {
+              "seat": 1,
+              "userId": "baseline-1",
+              "displayName": "Baseline 1"
+            },
+            {
+              "seat": 2,
+              "userId": "baseline-2",
+              "displayName": "Baseline 2"
+            },
+            {
+              "seat": 3,
+              "userId": "baseline-3",
+              "displayName": "Baseline 3"
+            }
+          ],
+          "ruleSet": "tenhou-hanchan",
+          "riichiBetValue": 1000,
+          "uraDoraEnabled": true
+        },
+        "emittedAgoMs": 500
+      },
+      {
+        "seq": 1,
+        "event": {
+          "type": "hand_start",
+          "round": 0,
+          "dealer": 0,
+          "roundWind": "E",
+          "roundNumber": 1,
+          "honba": 0,
+          "riichiSticks": 0,
+          "scores": [
+            25000,
+            25000,
+            25000,
+            25000
+          ],
+          "sinking": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "startingHands": [
+            [
+              "9p",
+              "2p",
+              "3m",
+              "7z",
+              "4z",
+              "2p",
+              "2s",
+              "1s",
+              "7m",
+              "1p",
+              "3z",
+              "7z",
+              "4m"
+            ],
+            [
+              "3z",
+              "4z",
+              "3z",
+              "0p",
+              "6s",
+              "9s",
+              "8m",
+              "0m",
+              "6s",
+              "1z",
+              "7p",
+              "6p",
+              "2s"
+            ],
+            [
+              "1p",
+              "4p",
+              "8p",
+              "1z",
+              "6m",
+              "8s",
+              "9p",
+              "5z",
+              "6z",
+              "8p",
+              "5p",
+              "7s",
+              "3z"
+            ],
+            [
+              "5z",
+              "4m",
+              "1z",
+              "2m",
+              "4m",
+              "4z",
+              "6s",
+              "2p",
+              "3p",
+              "5s",
+              "2p",
+              "6m",
+              "4m"
+            ]
+          ],
+          "doraIndicators": [
+            "6p"
+          ],
+          "dice": [
+            4,
+            4
+          ],
+          "liveWall": [
+            "1p",
+            "5m",
+            "4s",
+            "8p",
+            "8s",
+            "4s",
+            "2z",
+            "5s",
+            "4z",
+            "6z",
+            "4p",
+            "9m",
+            "3m",
+            "3p",
+            "9s",
+            "9p",
+            "4p",
+            "7s",
+            "7p",
+            "3p",
+            "6z",
+            "7m",
+            "1m",
+            "3m",
+            "3m",
+            "1s",
+            "9m",
+            "1s",
+            "2m",
+            "2s",
+            "8s",
+            "7s",
+            "6p",
+            "5z",
+            "4s",
+            "7m",
+            "9s",
+            "8s",
+            "2s",
+            "2z",
+            "8m",
+            "5m",
+            "7p",
+            "6z",
+            "9s",
+            "5p",
+            "7z",
+            "2z",
+            "3p",
+            "9m",
+            "3s",
+            "4p",
+            "0s",
+            "5m",
+            "1m",
+            "6p",
+            "4s",
+            "6m",
+            "2m",
+            "8m",
+            "1m",
+            "8p",
+            "2m",
+            "7s",
+            "5p",
+            "1m",
+            "1s",
+            "3s",
+            "7z",
+            "7m"
+          ],
+          "deadWall": [
+            "1p",
+            "6s",
+            "5z",
+            "8m",
+            "6p",
+            "1z",
+            "3s",
+            "9m",
+            "9p",
+            "6m",
+            "5s",
+            "2z",
+            "7p",
+            "3s"
+          ]
+        },
+        "emittedAgoMs": 500
+      },
+      {
+        "seq": 2,
+        "event": {
+          "type": "draw",
+          "seat": 0,
+          "tile": "1p",
+          "wallRemaining": 69
+        },
+        "emittedAgoMs": 0
+      }
+    ],
+    "nextSeq": 3,
+    "seatSeq": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "spectatorSeq": 3,
+    "handStartLiveWall": [
+      "1p",
+      "5m",
+      "4s",
+      "8p",
+      "8s",
+      "4s",
+      "2z",
+      "5s",
+      "4z",
+      "6z",
+      "4p",
+      "9m",
+      "3m",
+      "3p",
+      "9s",
+      "9p",
+      "4p",
+      "7s",
+      "7p",
+      "3p",
+      "6z",
+      "7m",
+      "1m",
+      "3m",
+      "3m",
+      "1s",
+      "9m",
+      "1s",
+      "2m",
+      "2s",
+      "8s",
+      "7s",
+      "6p",
+      "5z",
+      "4s",
+      "7m",
+      "9s",
+      "8s",
+      "2s",
+      "2z",
+      "8m",
+      "5m",
+      "7p",
+      "6z",
+      "9s",
+      "5p",
+      "7z",
+      "2z",
+      "3p",
+      "9m",
+      "3s",
+      "4p",
+      "0s",
+      "5m",
+      "1m",
+      "6p",
+      "4s",
+      "6m",
+      "2m",
+      "8m",
+      "1m",
+      "8p",
+      "2m",
+      "7s",
+      "5p",
+      "1m",
+      "1s",
+      "3s",
+      "7z",
+      "7m"
+    ],
+    "gameStartLogIdx": 0,
+    "gameIndex": 0,
+    "sessionChips": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "gameStartChips": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "sessionDabuken": [
+      false,
+      false,
+      false,
+      false
+    ],
+    "dice": [
+      4,
+      4
+    ],
+    "riichiTileIdx": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "humanDrawQueue": [],
+    "leftDiscardQueue": [],
+    "bufferMs": [
+      20000,
+      20000,
+      20000,
+      20000
+    ],
+    "connectionPolicy": {
+      "disconnected": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "afkSelfReported": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "livenessProbeMisses": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "lastEngineEventType": "draw",
+    "checkpointKind": "action_window",
+    "actionWindow": {
+      "kind": "turn",
+      "seat": 0,
+      "legalActions": [
+        {
+          "id": "discard:draw:1p",
+          "type": "discard",
+          "tile": "1p",
+          "discardSource": "draw"
+        },
+        {
+          "id": "discard:hand:9p",
+          "type": "discard",
+          "tile": "9p",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:2p",
+          "type": "discard",
+          "tile": "2p",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:3m",
+          "type": "discard",
+          "tile": "3m",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:7z",
+          "type": "discard",
+          "tile": "7z",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:4z",
+          "type": "discard",
+          "tile": "4z",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:2s",
+          "type": "discard",
+          "tile": "2s",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:1s",
+          "type": "discard",
+          "tile": "1s",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:7m",
+          "type": "discard",
+          "tile": "7m",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:1p",
+          "type": "discard",
+          "tile": "1p",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:3z",
+          "type": "discard",
+          "tile": "3z",
+          "discardSource": "hand"
+        },
+        {
+          "id": "discard:hand:4m",
+          "type": "discard",
+          "tile": "4m",
+          "discardSource": "hand"
+        }
+      ],
+      "elapsedMs": 0,
+      "visibleRemainingMs": 5300,
+      "expiryRemainingMs": 25500
+    }
+  }
+}

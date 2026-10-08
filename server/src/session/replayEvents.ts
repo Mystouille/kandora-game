@@ -1,10 +1,12 @@
 import type { GameEvent, Seat } from "~/game/protocol/messages";
+import type { PlayerCount } from "~/game/protocol/seat";
 
 export function compactRyuukyokuDeclarationsForReplay(
   events: readonly GameEvent[]
 ): GameEvent[] {
   const compacted: GameEvent[] = [];
   let dealer: Seat | null = null;
+  let playerCount: PlayerCount = 4;
   let pending: Array<{ seat: Seat; tenpai: boolean }> = [];
 
   for (const event of events) {
@@ -14,13 +16,17 @@ export function compactRyuukyokuDeclarationsForReplay(
     }
     if (event.type === "hand_end" && event.reason === "exhaustive_draw") {
       if (pending.length > 0) {
-        if (dealer === null || pending.length !== 4 || !event.tenpai) {
+        if (
+          dealer === null ||
+          pending.length !== playerCount ||
+          !event.tenpai
+        ) {
           throw new Error(
             "Cannot compact an incomplete ryuukyoku declaration sequence"
           );
         }
-        for (let index = 0; index < 4; index++) {
-          const expectedSeat = ((dealer + index) % 4) as Seat;
+        for (let index = 0; index < playerCount; index++) {
+          const expectedSeat = ((dealer + index) % playerCount) as Seat;
           const declaration = pending[index];
           if (
             declaration.seat !== expectedSeat ||
@@ -47,7 +53,11 @@ export function compactRyuukyokuDeclarationsForReplay(
       );
     }
     compacted.push(event);
+    if (event.type === "match_start") {
+      playerCount = event.playerCount ?? 4;
+    }
     if (event.type === "hand_start") {
+      playerCount = event.playerCount ?? playerCount;
       dealer = event.dealer;
     }
   }

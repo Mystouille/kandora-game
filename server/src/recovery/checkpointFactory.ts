@@ -1,5 +1,7 @@
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
 import type { Seat } from "~/game/protocol/messages";
 import { resolveRuleSet } from "~/game/rules";
+import { mapSeatValues } from "~/game/rules/seats";
 import {
   MATCH_CHECKPOINT_SCHEMA_VERSION,
   PlayingActionCheckpointSchema,
@@ -7,6 +9,8 @@ import {
   PlayingContinueVoteCheckpointSchema,
   PlayingReadyCheckpointSchema,
   PlayingResultTransitionCheckpointSchema,
+  PlayingNukiCheckpointSchema,
+  type PlayingNukiCheckpoint,
   WaitingRoomCheckpointSchema,
   type PlayingActionCheckpoint,
   type PlayingCallCheckpoint,
@@ -67,7 +71,7 @@ export interface CheckpointFactoryPort {
     calendarAt?: number;
   }[];
   nextSequence(): number;
-  seatSequences(): readonly [number, number, number, number];
+  seatSequences(): ReadonlySeatValues<number>;
   spectatorSequence(): number;
   handStartWall(): readonly Tile[] | null;
   lastEngineType(): import("~/game/rules").EngineEvent["type"] | null;
@@ -75,24 +79,29 @@ export interface CheckpointFactoryPort {
 
 export class CheckpointFactory {
   constructor(private readonly port: CheckpointFactoryPort) {}
-  checkpointPlayers(requireFull: true): PlayingActionCheckpoint["seats"];
 
-  checkpointPlayers(requireFull: false): WaitingRoomCheckpoint["seats"];
-
-  checkpointPlayers(
-    requireFull: boolean
-  ): PlayingActionCheckpoint["seats"] | WaitingRoomCheckpoint["seats"] {
-    const seats = [0, 1, 2, 3].map((seat) => {
-      const player = this.port.roster.players().get(seat as Seat) ?? null;
-      return player === null ? null : { ...player };
+  createPlayingNukiCheckpoint(): PlayingNukiCheckpoint {
+    this.assertCommonPlayingCheckpointState();
+    return PlayingNukiCheckpointSchema.parse({
+      ...this.playingCheckpointBase(this.port.runtime.now()),
+      checkpointKind: "nuki_replacement",
     });
-    if (requireFull && seats.some((player) => player === null)) {
-      throw new Error(
-        "MatchProcess.createCheckpoint: playing match has an empty seat"
-      );
-    }
-    return seats as
-      PlayingActionCheckpoint["seats"] | WaitingRoomCheckpoint["seats"];
+  }
+  private checkpointPlayers(): WaitingRoomCheckpoint["seats"] {
+    return mapSeatValues([...this.port.roster.players().values()], (player) =>
+      player === null ? null : { ...player }
+    );
+  }
+
+  private playingPlayers(): PlayingActionCheckpoint["seats"] {
+    return mapSeatValues(this.checkpointPlayers(), (player) => {
+      if (player === null) {
+        throw new Error(
+          "MatchProcess.createCheckpoint: playing match has an empty seat"
+        );
+      }
+      return player;
+    });
   }
 
   createWaitingRoomCheckpoint(): WaitingRoomCheckpoint {
@@ -121,7 +130,7 @@ export class CheckpointFactory {
               : {}),
           }
         : undefined,
-      seats: this.checkpointPlayers(false),
+      seats: this.checkpointPlayers(),
       ready: [...this.port.roster.readySnapshot()],
     });
   }
@@ -178,7 +187,7 @@ export class CheckpointFactory {
       spectatorDelayMs: this.port.config.spectatorDelayMs,
       mode: this.port.kernel.mode,
       driver: this.port.kernel.driverSnapshot(),
-      seats: this.checkpointPlayers(true),
+      seats: this.playingPlayers(),
       state: this.port.kernel.view,
       startedAgoMs: Math.max(
         0,

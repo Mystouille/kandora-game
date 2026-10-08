@@ -1,4 +1,5 @@
 import type { MatchView } from "../../store";
+import { displayedTilesRemaining } from "../panels/duplicateCounterPlan";
 
 export function resolveActionTimerState(
   view: Pick<MatchView, "readyCheck" | "actionDeadline" | "actionBufferMs">
@@ -21,7 +22,10 @@ export function resolveTableHudState(
     | "readyCheck"
     | "actionDeadline"
     | "actionBufferMs"
-  >,
+  > &
+    Partial<
+      Pick<MatchView, "playerCount" | "wallRemaining" | "duplicateWallState">
+    >,
   showConnectionDiagnostics: boolean
 ): { diagnostics: string; deadline: number | null; bufferMs: number | null } {
   if (view.conn === "replay") {
@@ -30,7 +34,7 @@ export function resolveTableHudState(
   const actionTimer = resolveActionTimerState(view);
   return {
     diagnostics: showConnectionDiagnostics
-      ? `conn: ${view.conn}   wall: ${Math.max(0, 70 - view.drawsTaken)}   seq: ${
+      ? `conn: ${view.conn}   wall: ${displayedTilesRemaining(view)}   seq: ${
           view.lastSeq
         }`
       : "",

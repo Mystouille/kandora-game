@@ -2,9 +2,6 @@
  * Scoring — translates a winning hand into the input format expected
  * by the `riichi` npm package and returns a typed result.
  *
- * Phase 1 step 4: closed-hand wins only. Calls/melds (chi/pon/kan)
- * will be added in Phase 1 step 5 alongside engine support for them.
- *
  * Reference for the riichi string format:
  *   https://github.com/takayama-lily/riichi
  *
@@ -28,115 +25,22 @@
 import type { Tile, Wind } from "./types";
 import { compareTiles } from "./types";
 import type { Meld } from "./state";
-
-import Riichi from "riichi";
+import type { PlayerCount, SanmaType } from "../protocol/seat";
+import { createRiichiScorer, type RiichiRaw } from "./scoring/riichiAdapter";
+import {
+  applySanmaPayments,
+  SCORE_CAP_BASE,
+  type ScoreCap,
+} from "./scoring/sanmaPayments";
 import { sortYakuRecord } from "~/game/protocol/yakuOrder";
 
-// The library exposes no per-instance switch for double-wind pair fu.
-// Track only scorers using EMA's two-fu rule; all others retain four fu.
-const twoFuDoubleWindPairScorers = new WeakSet<object>();
-
-// ---------------------------------------------------------------------------
-// Monkey-patch: correct and parameterize `riichi` npm package fu.
-//
-// The library's `calcFu` mistakenly compares chii edge tiles to a
-// boolean (`hasAgariFu`) instead of the win tile (`this.agari`),
-// so penchan completions on the lower edge (789 won on 7) and
-// upper edge (123 won on 3) miss the +2 wait fu. Kanchan/tanki
-// remain correct because they're matched on `v[1] === this.agari`.
-// It also hardcodes four fu for a pair that is both round and seat
-// wind; the per-instance set above enables EMA's two-fu variant.
-//
-// We replace `calcFu` once at module load with the corrected
-// version. Pinfu / chiitoitsu / yakuman branches are untouched.
-// ---------------------------------------------------------------------------
-{
-  const ceil10 = (n: number): number => Math.ceil(n / 10) * 10;
-  const is19 = (t: unknown): boolean =>
-    typeof t === "string" &&
-    t.length === 2 &&
-    (t.includes("1") || t.includes("9") || t.includes("z"));
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (Riichi.prototype as any).calcFu = function calcFuPatched(this: any): void {
-    let fu = 0;
-    if (this.tmpResult.yaku["七対子"]) {
-      fu = 25;
-    } else if (this.tmpResult.yaku["平和"]) {
-      fu = this.isTsumo ? 20 : 30;
-    } else {
-      fu = 20;
-      let hasAgariFu = false;
-      if (!this.isTsumo && this.isMenzen()) {
-        fu += 10;
-      }
-      for (const v of this.currentPattern) {
-        if (typeof v === "string") {
-          if (v.includes("z")) {
-            const honor = parseInt(v);
-            if (
-              twoFuDoubleWindPairScorers.has(this) &&
-              honor === this.bakaze &&
-              honor === this.jikaze
-            ) {
-              fu += 2;
-            } else {
-              for (const valueHonor of [
-                this.bakaze,
-                this.jikaze,
-                5,
-                6,
-                7,
-              ]) {
-                if (honor === valueHonor) {
-                  fu += 2;
-                }
-              }
-            }
-          }
-          if (this.agari === v) {
-            hasAgariFu = true;
-          }
-        } else {
-          if (v.length === 4) {
-            fu += is19(v[0]) ? 16 : 8;
-          } else if (v.length === 2) {
-            fu += is19(v[0]) ? 32 : 16;
-          } else if (v.length === 1) {
-            fu += is19(v[0]) ? 8 : 4;
-          } else if (v.length === 3 && v[0] === v[1]) {
-            fu += is19(v[0]) ? 4 : 2;
-          } else if (!hasAgariFu) {
-            // Kanchan: win is the middle tile of a chii.
-            if (v[1] === this.agari) {
-              hasAgariFu = true;
-            }
-            // Penchan upper edge: chii 789, win = 7.
-            else if (v[0] === this.agari && parseInt(v[2]) === 9) {
-              hasAgariFu = true;
-            }
-            // Penchan lower edge: chii 123, win = 3.
-            else if (v[2] === this.agari && parseInt(v[0]) === 1) {
-              hasAgariFu = true;
-            }
-          }
-        }
-      }
-      if (hasAgariFu) {
-        fu += 2;
-      }
-      if (this.isTsumo) {
-        fu += 2;
-      }
-      fu = ceil10(fu);
-      if (fu < 30) {
-        fu = 30;
-      }
-    }
-    this.tmpResult.fu = fu;
-  };
-}
-
 export interface ScoreInput {
+  /** Defaults to four-player scoring; sanma options are inactive unless this is 3. */
+  playerCount?: PlayerCount;
+  /** Three-player payment and manzu dora policy. Default: Online. */
+  sanmaType?: SanmaType;
+  /** Successfully extracted tiles, separate from the concealed hand and melds. */
+  nukiTiles?: readonly Tile[];
   /**
    * 13 concealed tiles (the hand before the win tile arrives).
    * Order is irrelevant — we canonicalize internally.
@@ -165,7 +69,7 @@ export interface ScoreInput {
   ippatsu?: boolean;
   /** Haitei (last-tile tsumo) or houtei (last-discard ron). */
   haiteiOrHoutei?: boolean;
-  /** Rinshan kaihou (win on dead-wall draw after kan) or chankan. */
+  /** Rinshan kaihou (kan/nuki replacement win) or chankan (kan/North robbery). */
   rinshanOrChankan?: boolean;
   /** Tenhou / chiihou (dealer/non-dealer first-draw win). */
   blessingOfHeavenOrEarth?: boolean;
@@ -182,7 +86,7 @@ export interface ScoreInput {
    * lib-computed `ten` exceeds it. `null` / omitted leaves the
    * payment untouched. See `RuleSet.scoreCap`.
    */
-  scoreCap?: "mangan" | "haneman" | "baiman" | "sanbaiman" | null;
+  scoreCap?: ScoreCap | null;
   /**
    * Open / concealed melds owned by the winner (chi, pon, kan).
    * The riichi package counts each meld as 3 tiles regardless of
@@ -193,11 +97,11 @@ export interface ScoreInput {
 }
 
 export interface ScoreResult {
-  /** True iff the hand is a valid winning hand under the given context. */
+  /** Winning shape; a legal win also requires positive han or yakumanCount. */
   isAgari: boolean;
   /** Han count (0 for yakuman wins; check `yakumanCount` instead). */
   han: number;
-  /** Fu count. */
+  /** Fu count for hand analysis; not a pricing factor for Kansai. */
   fu: number;
   /**
    * Total points awarded to the winner. For ron this is the lump sum
@@ -206,7 +110,7 @@ export interface ScoreResult {
   ten: number;
   /** Yaku name → han string (e.g. "立直" → "1飜"). */
   yaku: Record<string, string>;
-  /** Regular indicator dora, excluding red fives and ura dora. */
+  /** Regular indicator dora in the hand/melds/nuki, excluding aka and ura. */
   doraCount: number;
   /** Red-five dora. */
   akaDoraCount: number;
@@ -222,10 +126,11 @@ export interface ScoreResult {
    *     (the discarder's payment).
    *   - winner is non-dealer: `ko[0]` is the discarder's payment.
    * For tsumo:
-   *   - dealer winner: `oya[0..2]` are the three non-dealer payments
-   *     (all equal).
-   *   - non-dealer winner: `oya[0]` = dealer payment, `ko[1..2]` =
-   *     each non-dealer payment.
+   *   - dealer winner: `oya` contains the equal opponent payments.
+   *   - non-dealer winner: `ko[0]` is the dealer's payment, followed by
+   *     one payment per other non-dealer. Do not use `oya[0]` here:
+   *     Kansai's dealer-winner and dealer-payer amounts can differ.
+   *   - both arrays have two entries in sanma, three in four-player play.
    */
   oya: readonly number[];
   ko: readonly number[];
@@ -313,7 +218,10 @@ function buildOptionFlags(input: ScoreInput): string {
   if (input.blessingOfHeavenOrEarth) {
     flags += "t";
   }
-  if (input.haiteiOrHoutei) {
+  if (
+    input.haiteiOrHoutei &&
+    !(input.playerCount === 3 && input.rinshanOrChankan)
+  ) {
     flags += "h";
   }
   if (input.rinshanOrChankan) {
@@ -338,13 +246,31 @@ function buildWindDigits(input: ScoreInput): string {
  *   - winds  1z..4z (E,S,W,N): indicator cycles E→S→W→N→E
  *   - dragons 5z..7z (haku,hatsu,chun): indicator cycles 5z→6z→7z→5z
  *   - red five (`0X`) is treated as 5; result is the suited 6.
+ *   - sanma manzu: Online 1↔9; Kansai 1→5→9→1, including red 0m.
  *
  * The riichi npm package's `+d` argument expects the dora itself,
  * not the indicator, so we translate here.
  */
-export function indicatorToDora(indicator: Tile): Tile {
+export function indicatorToDora(indicator: Tile): Tile;
+// eslint-disable-next-line no-redeclare -- Retain the original one-argument callback signature.
+export function indicatorToDora(
+  indicator: Tile,
+  variant: Pick<ScoreInput, "playerCount" | "sanmaType">
+): Tile;
+// eslint-disable-next-line no-redeclare -- Implementation of the overloads above.
+export function indicatorToDora(
+  indicator: Tile,
+  variant: Pick<ScoreInput, "playerCount" | "sanmaType"> = {}
+): Tile {
   const suit = tileSuit(indicator);
   const n = tileNumeric(indicator);
+  if (suit === "m" && variant.playerCount === 3) {
+    const cycle = variant.sanmaType === "kansai" ? [1, 5, 9] : [1, 9];
+    const index = cycle.indexOf(n);
+    if (index >= 0) {
+      return `${cycle[(index + 1) % cycle.length]}m`;
+    }
+  }
   if (suit === "z") {
     if (n >= 1 && n <= 4) {
       return `${(n % 4) + 1}z`;
@@ -361,14 +287,26 @@ function normalizeRedFive(tile: Tile): Tile {
 
 function countIndicatorDora(
   tiles: readonly Tile[],
-  indicators: readonly Tile[]
+  indicators: readonly Tile[],
+  variant: Pick<ScoreInput, "playerCount" | "sanmaType">
 ): number {
   return indicators.reduce((total, indicator) => {
-    const dora = normalizeRedFive(indicatorToDora(indicator));
+    const dora = normalizeRedFive(indicatorToDora(indicator, variant));
     return (
       total + tiles.filter((tile) => normalizeRedFive(tile) === dora).length
     );
   }, 0);
+}
+
+function applicableUraIndicators(input: ScoreInput): readonly Tile[] {
+  if (
+    input.playerCount === 3 &&
+    (!(input.riichi || input.doubleRiichi) ||
+      input.melds?.some((meld) => meld.type !== "ankan"))
+  ) {
+    return [];
+  }
+  return input.uraDoraIndicators ?? [];
 }
 
 /** Public for tests / debugging. */
@@ -405,10 +343,12 @@ export function buildRiichiInput(input: ScoreInput): string {
   // duplicate indicators that point to the same tile.
   const allDoraIndicators = [
     ...(input.doraIndicators ?? []),
-    ...(input.uraDoraIndicators ?? []),
+    ...applicableUraIndicators(input),
   ];
   if (allDoraIndicators.length > 0) {
-    const dora = allDoraIndicators.map(indicatorToDora);
+    const dora = allDoraIndicators.map((indicator) =>
+      indicatorToDora(indicator, input)
+    );
     tail.push(`d${tilesToGroups(sortTiles(dora))}`);
   }
 
@@ -442,57 +382,56 @@ function meldToGroup(meld: Meld): string {
 // Main entry
 // ---------------------------------------------------------------------------
 
-interface RiichiRaw {
-  isAgari: boolean;
-  yakuman: number;
-  yaku: Record<string, string>;
-  han: number;
-  fu: number;
-  ten: number;
-  name: string;
-  text: string;
-  oya: number[];
-  ko: number[];
-  error: boolean;
-}
-
 export function scoreHand(input: ScoreInput): ScoreResult {
   const str = buildRiichiInput(input);
-  const r = new Riichi(str);
-  if (input.doubleWindPairFu === 2) {
-    twoFuDoubleWindPairScorers.add(r);
-  }
-  if (input.noKuitan) {
-    r.disableKuitan();
-  }
-  if (input.noAka) {
-    r.disableAka();
-  }
-  const raw = r.calc() as RiichiRaw;
-
-  if (input.kiriageMangan) {
-    applyKiriageMangan(raw, input.tsumo, input.seatWind === "E");
-  }
-  if (input.scoreCap) {
-    applyScoreCap(raw, input.scoreCap, input.tsumo, input.seatWind === "E");
-  }
-
+  const sanma = input.playerCount === 3;
+  const nukiTiles = sanma ? (input.nukiTiles ?? []) : [];
+  const uraIndicators = applicableUraIndicators(input);
   const winningTiles = [
     ...input.hand,
     input.winTile,
     ...(input.melds?.flatMap((meld) => meld.tiles) ?? []),
+    ...nukiTiles,
   ];
   const doraCount = countIndicatorDora(
     winningTiles,
-    input.doraIndicators ?? []
+    input.doraIndicators ?? [],
+    input
   );
-  const uraDoraCount = countIndicatorDora(
-    winningTiles,
-    input.uraDoraIndicators ?? []
-  );
+  const uraDoraCount = countIndicatorDora(winningTiles, uraIndicators, input);
   const akaDoraCount = input.noAka
     ? 0
     : winningTiles.filter((tile) => tile[0] === "0").length;
+  const scorer = createRiichiScorer(str, {
+    doubleWindPairFu: input.doubleWindPairFu,
+    noKuitan: input.noKuitan,
+    noAka: input.noAka,
+    rinshan: sanma && input.tsumo && input.rinshanOrChankan,
+    nukiDora: nukiTiles.length,
+    nukiIndicatorDora: countIndicatorDora(
+      nukiTiles,
+      [...(input.doraIndicators ?? []), ...uraIndicators],
+      input
+    ),
+    nukiAkaDora: nukiTiles.filter((tile) => tile[0] === "0").length,
+    priceCandidate: sanma
+      ? (candidate) => applySanmaPayments(candidate, input)
+      : undefined,
+  });
+  const raw = scorer.calc();
+  if (!sanma) {
+    // Preserve legacy candidate selection and four-player cap behavior.
+    if (input.kiriageMangan) {
+      applyKiriageMangan(raw, input.tsumo, input.seatWind === "E");
+    }
+    if (input.scoreCap) {
+      applyScoreCap(raw, input.scoreCap, input.tsumo, input.seatWind === "E");
+    }
+  } else if (raw.ten === 0) {
+    raw.oya = input.tsumo ? [0, 0] : [0];
+    raw.ko = input.tsumo ? [0, 0] : [0];
+  }
+
   const yaku = { ...raw.yaku };
   if (Object.hasOwn(yaku, "ドラ")) {
     delete yaku["ドラ"];
@@ -500,7 +439,11 @@ export function scoreHand(input: ScoreInput): ScoreResult {
       yaku["ドラ"] = `${doraCount}飜`;
     }
   }
-  if ((input.uraDoraIndicators?.length ?? 0) > 0 && raw.yakuman === 0) {
+  if (
+    uraIndicators.length > 0 &&
+    raw.yakuman === 0 &&
+    (!sanma || raw.han > 0)
+  ) {
     yaku["裏ドラ"] = `${uraDoraCount}飜`;
   }
 
@@ -521,19 +464,6 @@ export function scoreHand(input: ScoreInput): ScoreResult {
     raw,
   };
 }
-
-/**
- * Base unit per scoring tier (riichi-lib `base` value: ten =
- * `base*6` dealer / `base*4` non-dealer; tsumo splits per
- * `payments.ts`). Used to clamp the lib’s output when a
- * `RuleSet.scoreCap` is in effect.
- */
-const SCORE_CAP_BASE: Record<NonNullable<ScoreInput["scoreCap"]>, number> = {
-  mangan: 2000,
-  haneman: 3000,
-  baiman: 4000,
-  sanbaiman: 6000,
-};
 
 function applyKiriageMangan(
   raw: RiichiRaw,

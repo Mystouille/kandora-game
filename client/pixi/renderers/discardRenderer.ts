@@ -78,6 +78,7 @@ export class DiscardRenderer {
     // SMALL_TILE_W tall) — subsequent tiles in the SAME row shift right
     // by the extra width so they don't overlap.
     const discardContainer = new Container();
+    discardContainer.label = `discard-seat-${seat}`;
     discardContainer.sortableChildren = true;
     discardContainer.zIndex = discardContainerZIndex(seat as Seat);
     const riichiIdx = view.riichiTileIdx[seat];

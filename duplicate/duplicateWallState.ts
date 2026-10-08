@@ -1,3 +1,6 @@
+import { copySeatValues } from "~/game/rules/seats";
+import { mapSeatValues, nextSeat } from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import type {
   DuplicateWallState,
   GameEvent,
@@ -9,14 +12,14 @@ import {
   type DuplicateDrawCounts,
 } from "./duplicateExhaustion";
 
-export type DuplicateDrawQueues = [Tile[], Tile[], Tile[], Tile[]];
+export type DuplicateDrawQueues = SeatValues<Tile[]>;
 
 export function cloneDuplicateWallState(
   state: DuplicateWallState
 ): DuplicateWallState {
   return {
-    initial: [...state.initial],
-    remaining: [...state.remaining],
+    initial: copySeatValues(state.initial),
+    remaining: copySeatValues(state.remaining),
     limitingSeat: state.limitingSeat,
     estimatedDrawsRemaining: state.estimatedDrawsRemaining,
   };
@@ -25,7 +28,7 @@ export function cloneDuplicateWallState(
 export function cloneDuplicateDrawQueues(
   queues: readonly (readonly Tile[])[]
 ): DuplicateDrawQueues {
-  return queues.map((queue) => [...queue]) as DuplicateDrawQueues;
+  return mapSeatValues(queues, (queue) => [...queue]);
 }
 
 function stateFromCounts(
@@ -35,8 +38,8 @@ function stateFromCounts(
 ): DuplicateWallState {
   const forecast = estimateDuplicateExhaustion(remaining, context);
   return {
-    initial: [...initial],
-    remaining: [...remaining],
+    initial: copySeatValues(initial),
+    remaining: copySeatValues(remaining),
     limitingSeat: forecast?.limitingSeat ?? null,
     estimatedDrawsRemaining: forecast?.estimatedDrawsRemaining ?? null,
   };
@@ -46,7 +49,7 @@ export function duplicateWallStateFromQueues(
   queues: DuplicateDrawQueues,
   dealer: Seat
 ): DuplicateWallState {
-  const initial = queues.map((queue) => queue.length) as DuplicateDrawCounts;
+  const initial = mapSeatValues(queues, (queue) => queue.length);
   return stateFromCounts(initial, initial, {
     phase: "awaiting_draw",
     turn: dealer,
@@ -56,7 +59,8 @@ export function duplicateWallStateFromQueues(
 
 export function duplicateWallStateAfterEvent(
   current: DuplicateWallState | null,
-  event: GameEvent
+  event: GameEvent,
+  dealer: Seat = 0
 ): DuplicateWallState | null {
   if ("duplicateWallState" in event && event.duplicateWallState) {
     return cloneDuplicateWallState(event.duplicateWallState);
@@ -85,18 +89,18 @@ export function duplicateWallStateAfterEvent(
     return null;
   }
   if (event.type === "draw") {
-    const remaining = [...current.remaining] as DuplicateDrawCounts;
+    const remaining = copySeatValues(current.remaining);
     remaining[event.seat] = Math.max(0, remaining[event.seat] - 1);
     return stateFromCounts(current.initial, remaining, {
-      phase: "awaiting_discard",
-      turn: event.seat,
+      phase: event.opening ? "awaiting_draw" : "awaiting_discard",
+      turn: event.opening ? dealer : event.seat,
       pendingReplacementSeat: null,
     });
   }
   if (event.type === "discard") {
     return stateFromCounts(current.initial, current.remaining, {
       phase: "awaiting_draw",
-      turn: ((event.seat + 1) % 4) as Seat,
+      turn: nextSeat(event.seat, current.remaining.length),
       pendingReplacementSeat: null,
     });
   }
@@ -109,6 +113,17 @@ export function duplicateWallStateAfterEvent(
       phase: replacementPending ? "awaiting_chankan" : "awaiting_discard",
       turn: event.seat,
       pendingReplacementSeat: replacementPending ? event.seat : null,
+    });
+  }
+  if (event.type === "nuki") {
+    return stateFromCounts(current.initial, current.remaining, {
+      phase:
+        event.stage === "declared"
+          ? "awaiting_chankan"
+          : "awaiting_nuki_replacement",
+      turn: event.opening ? dealer : event.seat,
+      pendingReplacementSeat: event.seat,
+      pendingOpeningReplacement: event.opening,
     });
   }
   return cloneDuplicateWallState(current);

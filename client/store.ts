@@ -1,8 +1,17 @@
+import { copySeatValues, nextSeat, seatValues } from "~/game/rules/seats";
+import type { PlayerCount, SanmaType, SeatValues } from "~/game/protocol/seat";
+import type { TableProjection } from "./tableProjection";
+import {
+  applyNukiEvent,
+  emptyParticipantState,
+  initialLiveWallCount,
+  snapshotInitialDeadWall,
+} from "./variantState";
 /**
  * Zustand store for the in-browser game session.
  *
  * Phase 0.5 keeps the shape minimal: connection status, last applied
- * `seq`, recipient seat, the four hands (own hand has real tile values;
+ * `seq`, recipient seat, the participant hands (own hand has real tile values;
  * opponents are arrays of `null` for redacted tiles), discard piles,
  * legal actions, and a match-end banner state.
  *
@@ -109,6 +118,16 @@ export interface PendingDiscard {
 }
 
 export interface MatchView {
+  /** Omitted only by legacy four-player producers. */
+  playerCount?: PlayerCount;
+  sanmaType?: SanmaType;
+  /** Present only on an explicitly projected render view, never raw store state. */
+  tableProjection?: TableProjection;
+  nukiTiles?: Tile[][];
+  pendingNuki?: { seat: Seat; tile: Tile; opening: boolean } | null;
+  sanmaWall?: SnapshotState["sanmaWall"] | null;
+  turn?: Seat;
+  phase?: string;
   actionWindow?: ActionWindowView | null;
   promptWindow?: ActionWindowView | null;
   serverClock?: ClockStamp | null;
@@ -140,18 +159,11 @@ export interface MatchView {
    * `discard` event. */
   totalDiscards: number;
   wallRemaining: number;
-  /** Omniscient live wall in draw order at the start of the
-   * current hand (70 tiles after the initial 4×13 deal). `null`
-   * in live play — the wire snapshot never carries this field,
-   * and the live event apply path never sets it. Populated only
-   * by the replay reducer (via `replayViewToMatchView`) so the
-   * `showWalls` overlay can reveal tile faces in replays. */
+  /** Initial post-deal live wall in draw order. Available only to
+   * omniscient replay/spectator views; absent in seated player views. */
   liveWall: Tile[] | null;
-  /** Omniscient dead-wall snapshot (14 tiles in Tenhou yama-index
-   * order) at the start of the current hand. `null` in live play
-   * (never broadcast); populated only by the replay reducer.
-   * Drives the `showWalls` overlay's dead-wall reveal
-   * (rinshan / dora / ura / kan-dora positions). */
+  /** Initial reserve in the variant's wall order, never a shifted
+   * current reserve. Null in seated player views. */
   deadWall: Tile[] | null;
   /**
    * Number of post-deal draws since the current hand started,
@@ -161,9 +173,9 @@ export interface MatchView {
    */
   drawsTaken: number;
   /**
-   * Number of live-wall tiles drawn since the current hand
-   * started, excluding rinshan replacements. The difference
-   * `drawsTaken - liveDrawsTaken` is the number of completed kans.
+   * Ordinary draws, excluding sanma replacement causes even when
+   * Duplicate consumes a personal live queue. Sanma reserve/kan
+   * counts come from sanmaWall, not counter subtraction.
    */
   liveDrawsTaken: number;
   /**
@@ -207,7 +219,7 @@ export interface MatchView {
    * event (live) or `ReplayLog.seats` (replay). `null` until the
    * match starts; falls back to the seat wind in the renderer
    * when missing. */
-  seatNames: [string, string, string, string] | null;
+  seatNames: SeatValues<string> | null;
   /** Per-seat current wait tiles, populated by the stored replay
    * loader or derived from an omniscient live spectator view.
    * Length 4; an empty inner array means the seat is not in a
@@ -215,7 +227,7 @@ export interface MatchView {
    * Drives the renderer's red wait-tile tint when `showWaits` is on. */
   currentWaits: Tile[][] | null;
   /** Per-seat current scores (1000-point chips × multiplier). */
-  scores: [number, number, number, number];
+  scores: SeatValues<number>;
   /**
    * Per-seat "sinking" flag. A sinking seat's score is at or
    * below the rule set's `sinkThreshold` and the renderer
@@ -230,7 +242,7 @@ export interface MatchView {
    * Always `[false, false, false, false]` outside Buu sessions;
    * the server simply never emits a positive entry.
    */
-  sinking: [boolean, boolean, boolean, boolean];
+  sinking: SeatValues<boolean>;
   /**
    * Per-seat in-game chip totals. Buu only — non-Buu sessions
    * keep this at `[0, 0, 0, 0]` throughout. Refreshed at every
@@ -238,12 +250,12 @@ export interface MatchView {
    * snapshot state. Drives the live chip count line in each
    * player-name box.
    */
-  chips: [number, number, number, number];
+  chips: SeatValues<number>;
   /**
    * Per-seat dabuken (double-chip token) state. Buu only.
    * Drives the dabuken token visible in each player-name box.
    */
-  dabuken: [boolean, boolean, boolean, boolean];
+  dabuken: SeatValues<boolean>;
   /** True iff this match is a Buu Mahjong session (drives the
    * chip line + dabuken token in each player-name box).
    * Latched at `match_start` from the wire `ruleSet` id. */
@@ -279,33 +291,23 @@ export interface MatchView {
   /** Riichi sticks currently on the table. */
   riichiSticks: number;
   /** Per-seat: has this seat declared riichi this hand. */
-  riichiDeclared: [boolean, boolean, boolean, boolean];
+  riichiDeclared: SeatValues<boolean>;
   /** Public exhaustive-draw declaration state. `null` means the seat
    * has not declared yet; `true` / `false` mean Tenpai / Noten. */
-  ryuukyokuDeclarations: [
-    boolean | null,
-    boolean | null,
-    boolean | null,
-    boolean | null,
-  ];
+  ryuukyokuDeclarations: SeatValues<boolean | null>;
   /** Concealed hands made public by Tenpai declarations. Noten and
    * not-yet-declared seats remain `null`. */
-  ryuukyokuTenpaiHands: [
-    Tile[] | null,
-    Tile[] | null,
-    Tile[] | null,
-    Tile[] | null,
-  ];
+  ryuukyokuTenpaiHands: SeatValues<Tile[] | null>;
   /** Per-seat: is this seat currently in furiten (any flavor —
    * self-discard, riichi-permanent, or temporary missed ron).
    * Mirrors the engine's `isFuritenForRon` predicate and is
    * driven by `furiten` wire events. Drives the "Furiten"
    * indicator on each seat's leftmost tile. Reset on
    * `hand_start`. */
-  furiten: [boolean, boolean, boolean, boolean];
+  furiten: SeatValues<boolean>;
   /** Per-seat: index into `discards[seat]` of the riichi declaration
    * tile (null when not in riichi). Used to render the tilted tile. */
-  riichiTileIdx: [number | null, number | null, number | null, number | null];
+  riichiTileIdx: SeatValues<number | null>;
   /**
    * Most recently completed hand result panel payload. Cleared at
    * the next `hand_start`. Mirrors the wire `HandEndEvent` shape
@@ -448,7 +450,7 @@ export interface MatchView {
    */
   readyCheck: {
     deadline: number;
-    acked: [boolean, boolean, boolean, boolean];
+    acked: SeatValues<boolean>;
     window?: ActionWindowView | null;
   } | null;
 
@@ -476,7 +478,7 @@ interface MatchStore extends MatchView {
   setReadyCheck: (
     rc: {
       deadline: number;
-      acked: [boolean, boolean, boolean, boolean];
+      acked: SeatValues<boolean>;
       window?: ActionWindowView | null;
     } | null
   ) => void;
@@ -496,6 +498,13 @@ const emptyDiscards: Tile[][] = [[], [], [], []];
 const emptyMelds: Meld[][] = [[], [], [], []];
 
 const initialState: MatchView = {
+  playerCount: 4,
+  sanmaType: "online",
+  nukiTiles: [[], [], [], []],
+  pendingNuki: null,
+  sanmaWall: null,
+  turn: 0,
+  phase: "awaiting_draw",
   actionWindow: null,
   promptWindow: null,
   serverClock: null,
@@ -621,12 +630,29 @@ export const useMatchStore = create<MatchStore>((set) => ({
     // would otherwise set `mySeat`).
     set((state) => ({
       ...state,
+      ...(roomState && (roomState.playerCount ?? 4) !== (state.playerCount ?? 4)
+        ? {
+            ...emptyParticipantState(roomState.playerCount ?? 4),
+            dealer: 0 as const,
+            turn: 0 as const,
+            phase: "awaiting_draw",
+          }
+        : {}),
       roomState,
+      playerCount: roomState
+        ? (roomState.playerCount ?? 4)
+        : (state.playerCount ?? 4),
+      sanmaType: roomState
+        ? (roomState.sanmaType ?? "online")
+        : (state.sanmaType ?? "online"),
       mySeat: roomState?.mySeat ?? state.mySeat,
       seatNames: roomState
-        ? (roomState.seats.map(({ occupant }) =>
-            occupant.kind === "empty" ? "" : occupant.displayName
-          ) as [string, string, string, string])
+        ? seatValues(roomState.playerCount ?? 4, (seat) => {
+            const occupant = roomState.seats[seat]?.occupant;
+            return !occupant || occupant.kind === "empty"
+              ? ""
+              : occupant.displayName;
+          })
         : state.seatNames,
     }));
   },
@@ -638,11 +664,30 @@ export const useMatchStore = create<MatchStore>((set) => ({
   hydrateSnapshot: (snap, seq) => {
     set((state) => ({
       ...state,
-      ...(snap.sessionVote !== undefined ? {
-        sessionVote: snap.sessionVote ? {
-          ...snap.sessionVote, votes: [...snap.sessionVote.votes],
-        } : null,
-      } : {}),
+      playerCount: snap.playerCount ?? 4,
+      sanmaType: snap.sanmaType ?? "online",
+      tableProjection: undefined,
+      nukiTiles: seatValues(snap.playerCount ?? 4, (seat) => [
+        ...(snap.nukiTiles?.[seat] ?? []),
+      ]),
+      pendingNuki: snap.pendingNuki ? { ...snap.pendingNuki } : null,
+      sanmaWall: snap.sanmaWall ? { ...snap.sanmaWall } : null,
+      turn: snap.turn,
+      phase: snap.phase,
+      readyCheck:
+        (state.playerCount ?? 4) === (snap.playerCount ?? 4)
+          ? state.readyCheck
+          : null,
+      ...(snap.sessionVote !== undefined
+        ? {
+            sessionVote: snap.sessionVote
+              ? {
+                  ...snap.sessionVote,
+                  votes: [...snap.sessionVote.votes],
+                }
+              : null,
+          }
+        : {}),
       mySeat: snap.mySeat,
       hands: snap.hands.map((h) => [...h]),
       melds: snap.melds.map((m) => m.map((x) => ({ ...x }))),
@@ -660,12 +705,23 @@ export const useMatchStore = create<MatchStore>((set) => ({
       // Prefer the server's exact count when present. Every normal
       // draw removes a live-wall tile, and every rinshan draw reserves
       // one into the dead wall, so the wall-size fallback counts both.
-      drawsTaken: snap.drawsTaken ?? Math.max(0, 70 - snap.wallRemaining),
+      drawsTaken:
+        snap.drawsTaken ??
+        (snap.playerCount === 3 ? 0 : Math.max(0, 70 - snap.wallRemaining)),
       // Live snapshots never carry a draw schedule (it's a
       // replay-only post-process artifact); reset to safe
       // defaults so the renderer falls through to plain wall
       // rendering.
-      liveDrawsTaken: snap.drawsTaken ?? Math.max(0, 70 - snap.wallRemaining),
+      liveDrawsTaken:
+        snap.liveDrawsTaken ??
+        (snap.playerCount === 3
+          ? Math.max(
+              0,
+              (snap.drawsTaken ?? 0) - (snap.sanmaWall?.replacementsTaken ?? 0)
+            )
+          : (snap.drawsTaken ?? Math.max(0, 70 - snap.wallRemaining))),
+      liveWall: snap.liveWall ? [...snap.liveWall] : null,
+      deadWall: snapshotInitialDeadWall(snap),
       liveDrawSchedule: null,
       duplicateWallState: snap.duplicateWallState
         ? cloneDuplicateWallState(snap.duplicateWallState)
@@ -677,66 +733,63 @@ export const useMatchStore = create<MatchStore>((set) => ({
       roundNumber: snap.roundNumber,
       honba: snap.honba,
       riichiSticks: snap.riichiSticks,
-      riichiDeclared: [...snap.riichiDeclared] as [
-        boolean,
-        boolean,
-        boolean,
-        boolean,
-      ],
+      riichiDeclared: copySeatValues(snap.riichiDeclared),
       ryuukyokuDeclarations: (snap.ryuukyokuDeclarations
-        ? [...snap.ryuukyokuDeclarations]
-        : [null, null, null, null]) as [
-        boolean | null,
-        boolean | null,
-        boolean | null,
-        boolean | null,
-      ],
+        ? copySeatValues(snap.ryuukyokuDeclarations)
+        : seatValues(snap.playerCount ?? 4, () => null)) as SeatValues<
+        boolean | null
+      >,
       ryuukyokuTenpaiHands: (snap.ryuukyokuTenpaiHands
         ? snap.ryuukyokuTenpaiHands.map((hand) => (hand ? [...hand] : null))
-        : [null, null, null, null]) as [
-        Tile[] | null,
-        Tile[] | null,
-        Tile[] | null,
-        Tile[] | null,
-      ],
-      riichiTileIdx: (snap.riichiTileIdx
-        ? [...snap.riichiTileIdx]
-        : [null, null, null, null]) as [
-        number | null,
-        number | null,
-        number | null,
-        number | null,
-      ],
-      scores: [...snap.scores] as [number, number, number, number],
+        : seatValues(snap.playerCount ?? 4, () => null)) as SeatValues<
+        Tile[] | null
+      >,
+      riichiTileIdx: snap.riichiTileIdx
+        ? copySeatValues(snap.riichiTileIdx)
+        : seatValues(snap.playerCount ?? 4, () => null),
+      scores: copySeatValues(snap.scores),
       sinking: (snap.sinking
-        ? [...snap.sinking]
-        : [false, false, false, false]) as [boolean, boolean, boolean, boolean],
-      chips: (snap.chips ? [...snap.chips] : [0, 0, 0, 0]) as [
-        number,
-        number,
-        number,
-        number,
-      ],
+        ? copySeatValues(snap.sinking)
+        : seatValues(
+            snap.playerCount ?? 4,
+            () => false
+          )) as SeatValues<boolean>,
+      chips: snap.chips
+        ? copySeatValues(snap.chips)
+        : seatValues(snap.playerCount ?? 4, () => 0),
       dabuken: (snap.dabuken
-        ? [...snap.dabuken]
-        : [false, false, false, false]) as [boolean, boolean, boolean, boolean],
+        ? copySeatValues(snap.dabuken)
+        : seatValues(
+            snap.playerCount ?? 4,
+            () => false
+          )) as SeatValues<boolean>,
       // Snapshot presence of `chips` is a reliable Buu signal
       // (the server only emits the field for Buu rule sets).
-      buuMode: snap.chips !== undefined ? true : state.buuMode,
+      buuMode:
+        snap.playerCount === 3
+          ? false
+          : snap.chips !== undefined
+            ? true
+            : state.buuMode,
       // Point value of a riichi stick from the rule set. Snapshots
       // emit this so a mid-match reconnect / spectator can apply
       // the optimistic riichi deduction with the correct amount.
       // Fall back to the latched value when the server omits the
       // field (older snapshots).
-      riichiBetValue: snap.riichiBetValue ?? state.riichiBetValue,
+      riichiBetValue:
+        snap.riichiBetValue ??
+        (snap.playerCount === 3 ? 1000 : state.riichiBetValue),
       // Score cap from the rule set, if any. Snapshots emit this
       // explicitly so a mid-match reconnect / spectator can cap
       // han labels without having received the original
       // `match_start`. Fall back to the latched value when the
       // server omits the field (older snapshots / non-capped
       // rule sets).
-      scoreCap: snap.scoreCap ?? state.scoreCap,
-      uraDoraEnabled: snap.uraDoraEnabled ?? state.uraDoraEnabled,
+      scoreCap:
+        snap.scoreCap ?? (snap.playerCount === 3 ? null : state.scoreCap),
+      uraDoraEnabled:
+        snap.uraDoraEnabled ??
+        (snap.playerCount === 3 ? true : state.uraDoraEnabled),
       lastSeq: seq,
       // A snapshot is the authoritative current view; clear any
       // optimistic state that may not survive the resync. A settled
@@ -800,20 +853,23 @@ export const useMatchStore = create<MatchStore>((set) => ({
       // pre-furiten snapshots, fall back to all-false and rely on
       // subsequent `furiten` events to repopulate the indicator.
       furiten: (snap.furiten
-        ? [...snap.furiten]
-        : [false, false, false, false]) as [boolean, boolean, boolean, boolean],
+        ? copySeatValues(snap.furiten)
+        : seatValues(
+            snap.playerCount ?? 4,
+            () => false
+          )) as SeatValues<boolean>,
       // Per-seat display names from the snapshot. When absent
       // (older snapshots / replays) keep whatever's already in
       // the store — e.g. seatNames set by an earlier `match_start`
       // — so a no-op snapshot doesn't blank out the HUD.
       seatNames: snap.seatNames
-        ? ([
-            snap.seatNames[0],
-            snap.seatNames[1],
-            snap.seatNames[2],
-            snap.seatNames[3],
-          ] as [string, string, string, string])
-        : state.seatNames,
+        ? copySeatValues(snap.seatNames)
+        : state.seatNames
+          ? seatValues(
+              snap.playerCount ?? 4,
+              (seat) => state.seatNames?.[seat] ?? ""
+            )
+          : null,
     }));
   },
 
@@ -824,39 +880,48 @@ export const useMatchStore = create<MatchStore>((set) => ({
         lastSeq: seq,
         duplicateWallState: duplicateWallStateAfterEvent(
           state.duplicateWallState,
-          event
+          event,
+          state.dealer
         ),
       };
       switch (event.type) {
         case "match_start": {
-          const namesArr = new Array<string>(4).fill("");
+          const playerCount = event.playerCount ?? 4;
+          const sanmaType = event.sanmaType ?? "online";
+          const namesArr = seatValues(playerCount, () => "");
           for (const s of event.seats) {
             namesArr[s.seat] = s.displayName;
           }
           return {
             ...next,
-            seatNames: [namesArr[0], namesArr[1], namesArr[2], namesArr[3]] as [
-              string,
-              string,
-              string,
-              string,
-            ],
+            ...emptyParticipantState(playerCount),
+            sanmaType,
+            sanmaWall: null,
+            dealer: 0,
+            turn: 0,
+            phase: "awaiting_draw",
+            wallRemaining: initialLiveWallCount({ playerCount, sanmaType }),
+            drawsTaken: 0,
+            liveDrawsTaken: 0,
+            liveWall: null,
+            deadWall: null,
+            liveDrawSchedule: null,
+            currentWaits: null,
+            freshlyDrawnSeat: null,
+            freshlyDiscardedSeat: null,
+            pendingDiscard: null,
+            readyCheck: null,
+            seatNames: namesArr,
             buuMode: event.ruleSet === "buu-east",
             riichiBetValue: event.riichiBetValue ?? state.riichiBetValue,
             scoreCap: event.scoreCap ?? null,
             uraDoraEnabled: event.uraDoraEnabled ?? true,
-            chips: (event.chips ? [...event.chips] : state.chips) as [
-              number,
-              number,
-              number,
-              number,
-            ],
-            dabuken: (event.dabuken ? [...event.dabuken] : state.dabuken) as [
-              boolean,
-              boolean,
-              boolean,
-              boolean,
-            ],
+            chips: event.chips
+              ? copySeatValues(event.chips)
+              : seatValues(playerCount, () => 0),
+            dabuken: event.dabuken
+              ? copySeatValues(event.dabuken)
+              : seatValues(playerCount, () => false),
             // A fresh `match_start` mid-session (Buu next game)
             // wipes the lingering post-game / vote state so the
             // table can render cleanly — including any stale
@@ -866,17 +931,19 @@ export const useMatchStore = create<MatchStore>((set) => ({
             matchEnded: null,
             sessionVote: null,
             duplicateDrawQueues: null,
-            ryuukyokuDeclarations: [null, null, null, null],
-            ryuukyokuTenpaiHands: [null, null, null, null],
+            ryuukyokuDeclarations: seatValues(playerCount, () => null),
+            ryuukyokuTenpaiHands: seatValues(playerCount, () => null),
           };
         }
         case "hand_start": {
-          const hands: Array<Array<Tile | null>> = [[], [], [], []];
+          const playerCount = event.playerCount ?? state.playerCount ?? 4;
+          const sanmaType = event.sanmaType ?? state.sanmaType ?? "online";
+          const hands = seatValues(playerCount, () => [] as Array<Tile | null>);
           if (state.mySeat === null && event.startingHands) {
             // Spectator path: server forwards omniscient
             // `startingHands` so the client can render every
             // seat's hand. Populate all four seats from it.
-            for (let s = 0; s < 4; s++) {
+            for (let s = 0; s < playerCount; s++) {
               hands[s] = [...event.startingHands[s]];
             }
           } else {
@@ -884,7 +951,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
               hands[state.mySeat] = [...event.hand];
             }
             // Opponents start with 13 redacted tiles.
-            for (let s = 0; s < 4; s++) {
+            for (let s = 0; s < playerCount; s++) {
               if (s !== state.mySeat) {
                 hands[s] = new Array<Tile | null>(13).fill(null);
               }
@@ -892,15 +959,23 @@ export const useMatchStore = create<MatchStore>((set) => ({
           }
           return {
             ...next,
+            ...emptyParticipantState(playerCount),
+            sanmaType,
+            sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : null,
+            nukiTiles: seatValues(playerCount, (seat) => [
+              ...(event.nukiTiles?.[seat] ?? []),
+            ]),
             hands,
-            melds: [[], [], [], []],
-            discards: [[], [], [], []],
-            discardTsumogiri: [[], [], [], []],
-            discardSources: [[], [], [], []],
-            discardOrdinals: [[], [], [], []],
             totalDiscards: 0,
             doraIndicators: [...event.doraIndicators],
-            wallRemaining: 70,
+            wallRemaining: initialLiveWallCount(
+              { playerCount, sanmaType },
+              event.sanmaWall?.mode === "duplicate" ||
+                !!event.duplicateWallState ||
+                !!event.duplicateDrawQueues
+            ),
+            liveWall: event.liveWall ? [...event.liveWall] : null,
+            deadWall: event.deadWall ? [...event.deadWall] : null,
             drawsTaken: 0,
             liveDrawsTaken: 0,
             liveDrawSchedule: event.liveDrawSchedule
@@ -911,45 +986,31 @@ export const useMatchStore = create<MatchStore>((set) => ({
               : null,
             dice: event.dice ? [event.dice[0], event.dice[1]] : null,
             dealer: event.dealer,
+            turn: event.dealer,
+            phase: "awaiting_draw",
             roundWind: event.roundWind ?? state.roundWind,
             roundNumber: event.roundNumber ?? state.roundNumber,
             honba: event.honba ?? 0,
             riichiSticks: event.riichiSticks ?? 0,
-            scores: (event.scores ?? state.scores) as [
-              number,
-              number,
-              number,
-              number,
-            ],
+            scores: seatValues(
+              playerCount,
+              (seat) => event.scores?.[seat] ?? state.scores[seat] ?? 25000
+            ),
             sinking: (event.sinking
-              ? [...event.sinking]
-              : [false, false, false, false]) as [
-              boolean,
-              boolean,
-              boolean,
-              boolean,
-            ],
-            chips: (event.chips ? [...event.chips] : state.chips) as [
-              number,
-              number,
-              number,
-              number,
-            ],
-            dabuken: (event.dabuken ? [...event.dabuken] : state.dabuken) as [
-              boolean,
-              boolean,
-              boolean,
-              boolean,
-            ],
-            riichiDeclared: [false, false, false, false],
-            ryuukyokuDeclarations: [null, null, null, null],
-            ryuukyokuTenpaiHands: [null, null, null, null],
-            riichiTileIdx: [null, null, null, null],
+              ? copySeatValues(event.sinking)
+              : seatValues(playerCount, () => false)) as SeatValues<boolean>,
+            chips: seatValues(
+              playerCount,
+              (seat) => event.chips?.[seat] ?? state.chips[seat] ?? 0
+            ),
+            dabuken: seatValues(
+              playerCount,
+              (seat) => event.dabuken?.[seat] ?? state.dabuken[seat] ?? false
+            ),
             lastHandResult: null,
             matchEnded: null,
             freshlyDrawnSeat: null,
             freshlyDiscardedSeat: null,
-            furiten: [false, false, false, false],
           };
         }
         case "draw": {
@@ -961,13 +1022,40 @@ export const useMatchStore = create<MatchStore>((set) => ({
           }
           return {
             ...next,
+            sanmaWall: event.sanmaWall
+              ? { ...event.sanmaWall }
+              : state.sanmaWall,
+            turn: event.opening ? state.dealer : event.seat,
+            phase: event.opening ? "awaiting_draw" : "awaiting_discard",
+            pendingNuki:
+              event.replacementKind === "nuki" ? null : state.pendingNuki,
             hands,
             wallRemaining: event.wallRemaining,
             drawsTaken: state.drawsTaken + 1,
-            liveDrawsTaken: event.fromDeadWall
-              ? state.liveDrawsTaken
-              : state.liveDrawsTaken + 1,
-            freshlyDrawnSeat: event.seat,
+            liveDrawsTaken:
+              event.fromDeadWall ||
+              (state.playerCount === 3 && event.replacementKind !== undefined)
+                ? state.liveDrawsTaken
+                : state.liveDrawsTaken + 1,
+            freshlyDrawnSeat: event.opening
+              ? state.freshlyDrawnSeat
+              : event.seat,
+            freshlyDiscardedSeat: null,
+          };
+        }
+        case "nuki": {
+          return {
+            ...next,
+            ...applyNukiEvent(state, event),
+            turn: event.opening ? state.dealer : event.seat,
+            phase:
+              event.stage === "declared"
+                ? "awaiting_chankan"
+                : "awaiting_nuki_replacement",
+            sanmaWall: event.sanmaWall
+              ? { ...event.sanmaWall }
+              : state.sanmaWall,
+            freshlyDrawnSeat: event.opening ? state.freshlyDrawnSeat : null,
             freshlyDiscardedSeat: null,
           };
         }
@@ -1000,9 +1088,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
           // shading after a couple more discards land.
           const discardTsumogiri = state.discardTsumogiri.map((a) => [...a]);
           discardTsumogiri[event.seat].push(event.tsumogiri);
-          const discardSources = (state.discardSources ?? [[], [], [], []]).map(
-            (sources) => [...sources]
-          );
+          const discardSources = (
+            state.discardSources ?? state.hands.map(() => [])
+          ).map((sources) => [...sources]);
           discardSources[event.seat].push(event.discardSource ?? null);
           const discardOrdinals = state.discardOrdinals.map((a) => [...a]);
           discardOrdinals[event.seat].push(state.totalDiscards);
@@ -1012,30 +1100,15 @@ export const useMatchStore = create<MatchStore>((set) => ({
           // server folds the rotation into the same `discard` event
           // via the optional `riichi: true` payload.
           const riichiDeclared = event.riichi
-            ? ((): [boolean, boolean, boolean, boolean] => {
-                const arr = [...state.riichiDeclared] as [
-                  boolean,
-                  boolean,
-                  boolean,
-                  boolean,
-                ];
+            ? ((): SeatValues<boolean> => {
+                const arr = copySeatValues(state.riichiDeclared);
                 arr[event.seat] = true;
                 return arr;
               })()
             : state.riichiDeclared;
           const riichiTileIdx = event.riichi
-            ? ((): [
-                number | null,
-                number | null,
-                number | null,
-                number | null,
-              ] => {
-                const arr = [...state.riichiTileIdx] as [
-                  number | null,
-                  number | null,
-                  number | null,
-                  number | null,
-                ];
+            ? ((): SeatValues<number | null> => {
+                const arr = copySeatValues(state.riichiTileIdx);
                 arr[event.seat] = discards[event.seat].length - 1;
                 return arr;
               })()
@@ -1049,13 +1122,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
           // `match_start`) — hardcoding 1000 here misrepresented
           // the score under non-standard bets (e.g. Buu = 100).
           const scores = event.riichi
-            ? ((): [number, number, number, number] => {
-                const arr = [...state.scores] as [
-                  number,
-                  number,
-                  number,
-                  number,
-                ];
+            ? ((): SeatValues<number> => {
+                const arr = copySeatValues(state.scores);
                 arr[event.seat] = arr[event.seat] - state.riichiBetValue;
                 return arr;
               })()
@@ -1078,6 +1146,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
             discardSources,
             discardOrdinals,
             totalDiscards,
+            turn: nextSeat(event.seat, state.playerCount ?? 4),
+            phase: "awaiting_draw",
             riichiDeclared,
             riichiTileIdx,
             scores,
@@ -1088,9 +1158,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
           };
         }
         case "ryuukyoku_declaration": {
-          const ryuukyokuDeclarations = [
-            ...state.ryuukyokuDeclarations,
-          ] as MatchView["ryuukyokuDeclarations"];
+          const ryuukyokuDeclarations = copySeatValues(
+            state.ryuukyokuDeclarations
+          );
           ryuukyokuDeclarations[event.seat] = event.tenpai;
           const ryuukyokuTenpaiHands = state.ryuukyokuTenpaiHands.map((hand) =>
             hand ? [...hand] : null
@@ -1135,6 +1205,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
           const wins = existing?.wins ? [...existing.wins, win] : [win];
           return {
             ...next,
+            phase: "hand_end",
             lastHandResult: existing
               ? {
                   ...existing,
@@ -1162,7 +1233,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
                   declarations[declaration.seat] = declaration.tenpai;
                   return declarations;
                 },
-                [...state.ryuukyokuDeclarations]
+                copySeatValues(state.ryuukyokuDeclarations)
               )
             : state.ryuukyokuDeclarations;
           const ryuukyokuTenpaiHands =
@@ -1175,12 +1246,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ...next,
             ryuukyokuDeclarations,
             ryuukyokuTenpaiHands,
-            scores: (event.scores ?? state.scores) as [
-              number,
-              number,
-              number,
-              number,
-            ],
+            phase: "hand_end",
+            scores: (event.scores ?? state.scores) as SeatValues<number>,
             riichiSticks: event.riichiSticks ?? state.riichiSticks,
             // Buu: refresh the live chips/dabuken view so the
             // player-nameplate chip counter + dabuken token
@@ -1189,18 +1256,12 @@ export const useMatchStore = create<MatchStore>((set) => ({
             // hand_start / match_start. Non-Buu events omit
             // these fields, in which case we keep the prior
             // values.
-            chips: (event.chips ? [...event.chips] : state.chips) as [
-              number,
-              number,
-              number,
-              number,
-            ],
-            dabuken: (event.dabuken ? [...event.dabuken] : state.dabuken) as [
-              boolean,
-              boolean,
-              boolean,
-              boolean,
-            ],
+            chips: (event.chips
+              ? copySeatValues(event.chips)
+              : state.chips) as SeatValues<number>,
+            dabuken: (event.dabuken
+              ? copySeatValues(event.dabuken)
+              : state.dabuken) as SeatValues<boolean>,
             lastHandResult: {
               reason: event.reason,
               dealer: state.dealer,
@@ -1246,9 +1307,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
           const hands = state.hands.map((h) => [...h]);
           const discards = state.discards.map((d) => [...d]);
           const discardTsumogiri = state.discardTsumogiri.map((a) => [...a]);
-          const discardSources = (state.discardSources ?? [[], [], [], []]).map(
-            (sources) => [...sources]
-          );
+          const discardSources = (
+            state.discardSources ?? state.hands.map(() => [])
+          ).map((sources) => [...sources]);
           const discardOrdinals = state.discardOrdinals.map((a) => [...a]);
           const caller = event.seat;
           const meld = event.meld;
@@ -1354,6 +1415,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
             discardTsumogiri,
             discardSources,
             discardOrdinals,
+            turn: event.seat,
+            phase:
+              meld.type === "pon" || meld.type === "chi"
+                ? "awaiting_discard"
+                : "awaiting_chankan",
             freshlyDrawnSeat: null,
             freshlyDiscardedSeat: null,
           };
@@ -1361,6 +1427,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
         case "match_end": {
           return {
             ...next,
+            phase: "match_end",
             // Post-game session-level chip / dabuken totals (Buu
             // only) need to roll forward to the top-level view
             // fields too — otherwise the player-info squares keep
@@ -1369,22 +1436,12 @@ export const useMatchStore = create<MatchStore>((set) => ({
             // applied. Mirrored in `replay/player.ts`.
             ...(event.chips
               ? {
-                  chips: [
-                    event.chips[0],
-                    event.chips[1],
-                    event.chips[2],
-                    event.chips[3],
-                  ] as [number, number, number, number],
+                  chips: copySeatValues(event.chips),
                 }
               : {}),
             ...(event.dabuken
               ? {
-                  dabuken: [
-                    event.dabuken[0],
-                    event.dabuken[1],
-                    event.dabuken[2],
-                    event.dabuken[3],
-                  ] as [boolean, boolean, boolean, boolean],
+                  dabuken: copySeatValues(event.dabuken),
                 }
               : {}),
             matchEnded: {
@@ -1435,24 +1492,14 @@ export const useMatchStore = create<MatchStore>((set) => ({
           };
         }
         case "furiten": {
-          const furiten = [...state.furiten] as [
-            boolean,
-            boolean,
-            boolean,
-            boolean,
-          ];
+          const furiten = copySeatValues(state.furiten);
           furiten[event.seat] = event.active;
           return { ...next, furiten };
         }
         case "sinking_update": {
           return {
             ...next,
-            sinking: [
-              event.sinking[0],
-              event.sinking[1],
-              event.sinking[2],
-              event.sinking[3],
-            ],
+            sinking: copySeatValues(event.sinking),
           };
         }
         case "buu_chombo": {
@@ -1466,7 +1513,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
           const existing = state.lastHandResult;
           return {
             ...next,
-            chips: [...event.chips] as [number, number, number, number],
+            chips: copySeatValues(event.chips),
             lastHandResult: {
               ...(existing ?? { reason: "abort" as const }),
               dealer: existing?.dealer ?? state.dealer,

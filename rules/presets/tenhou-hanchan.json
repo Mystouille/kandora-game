@@ -2,6 +2,8 @@
   "id": "tenhou-hanchan",
   "displayName": "Tenhou — Hanchan",
   "description": "Tenhou-default hanchan (East + South), 25k start, all common aborts, ippatsu/ura on. Reference baseline.",
+  "playerCount": 4,
+  "sanmaType": "online",
   "roundWindCount": 2,
   "roundLimit": 4,
   "startingScore": 25000,

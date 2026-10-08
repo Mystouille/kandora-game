@@ -2,6 +2,8 @@
   "id": "buu-east",
   "displayName": "Buu Mahjong — East",
   "description": "Buu Mahjong (ぶーマージャン). East-round only with 6000 starting points and a chip-based meta-game. Win-by-floating to 12000+, sinking = strictly below starting (i.e. <6000), busted-out at <=0; per-hand chip payouts of 5/3/1 for sankoro/nikoro/chinmai (counted among non-winners sinking below starting); yakuman is an immediate sankoro that also awards a dabuken (double-chip token) to the winner for their next sankoro.",
+  "playerCount": 4,
+  "sanmaType": "online",
   "roundWindCount": 1,
   "roundLimit": 4,
   "startingScore": 6000,

@@ -1,11 +1,11 @@
 import type { MatchView } from "../store";
+import { copySeatValues } from "~/game/rules/seats";
 import {
   CALL_EFFECT_DURATION_MS,
   callEffectPresentation,
 } from "./meldAnimator";
 
-export const RYUUKYOKU_DECLARATION_EFFECT_DURATION_MS =
-  CALL_EFFECT_DURATION_MS;
+export const RYUUKYOKU_DECLARATION_EFFECT_DURATION_MS = CALL_EFFECT_DURATION_MS;
 
 export interface RyuukyokuDeclarationEffectFrame {
   seat: number;
@@ -32,7 +32,7 @@ type DeclarationView = Pick<
 function snapshotDeclarations(
   view: DeclarationView
 ): MatchView["ryuukyokuDeclarations"] {
-  return [...view.ryuukyokuDeclarations];
+  return copySeatValues(view.ryuukyokuDeclarations);
 }
 
 /**
@@ -88,7 +88,7 @@ export class RyuukyokuDeclarationAnimator {
 
     const additions: Array<{ seat: number; tenpai: boolean }> = [];
     let changedCount = 0;
-    for (let seat = 0; seat < 4; seat++) {
+    for (let seat = 0; seat < current.length; seat++) {
       const currentDeclaration = current[seat];
       if (previous[seat] === currentDeclaration) {
         continue;
@@ -125,8 +125,7 @@ export class RyuukyokuDeclarationAnimator {
       return null;
     }
     const progress =
-      (now - this.effect.startMs) /
-      RYUUKYOKU_DECLARATION_EFFECT_DURATION_MS;
+      (now - this.effect.startMs) / RYUUKYOKU_DECLARATION_EFFECT_DURATION_MS;
     return {
       seat: this.effect.seat,
       label: this.effect.label,
@@ -142,8 +141,7 @@ export class RyuukyokuDeclarationAnimator {
   private dropCompleted(now: number): void {
     if (
       this.effect &&
-      now - this.effect.startMs >=
-        RYUUKYOKU_DECLARATION_EFFECT_DURATION_MS
+      now - this.effect.startMs >= RYUUKYOKU_DECLARATION_EFFECT_DURATION_MS
     ) {
       this.effect = null;
     }

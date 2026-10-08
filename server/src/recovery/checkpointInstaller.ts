@@ -1,4 +1,5 @@
 import type { Seat } from "~/game/protocol/messages";
+import { activeSeats } from "~/game/rules/seats";
 import type {
   MatchCheckpoint,
   PlayingContinueVoteCheckpoint,
@@ -52,6 +53,10 @@ export class CheckpointInstaller {
     if (checkpoint.status !== "playing") {
       return;
     }
+    if (checkpoint.checkpointKind === "nuki_replacement") {
+      this.port.windows.resetForRestore();
+      return;
+    }
     if (checkpoint.checkpointKind === "result_transition") {
       this.port.results.cancelTimer();
     } else if (checkpoint.checkpointKind === "continue_vote") {
@@ -79,6 +84,11 @@ export class CheckpointInstaller {
     if (checkpoint.status !== "playing") {
       return;
     }
+    if (checkpoint.checkpointKind === "nuki_replacement") {
+      this.port.bank.restore(checkpoint.bufferMs);
+      this.port.windows.resetForRestore();
+      return;
+    }
     if (checkpoint.checkpointKind === "action_window") {
       this.port.bank.restore(checkpoint.bufferMs);
       this.port.windows.resetForRestore();
@@ -90,7 +100,7 @@ export class CheckpointInstaller {
       this.port.calls.restore(checkpoint);
       this.port.bank.restore(checkpoint.bufferMs);
       this.port.windows.resetForRestore();
-      for (const seat of [0, 1, 2, 3] as const) {
+      for (const seat of activeSeats(checkpoint.state.ruleSet.playerCount)) {
         const timer = checkpoint.callTimers[seat];
         if (timer !== null) {
           this.port.windows.restoreLegals(seat, { ...timer, kind: "turn" });

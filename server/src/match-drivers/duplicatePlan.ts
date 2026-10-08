@@ -1,3 +1,4 @@
+import { type SeatValues } from "~/game/protocol/seat";
 import type { DuplicateMatchModeConfig } from "~/game/protocol/matchMode";
 import { hashStringToSeed } from "~/game/rules/prng";
 import {
@@ -6,6 +7,7 @@ import {
   type WallOptions,
 } from "~/game/rules/wall";
 import type { Seat, Tile, Wind } from "~/game/rules/types";
+import { seatValues } from "~/game/rules/seats";
 
 export interface DuplicateHandKey {
   gameIndex: number;
@@ -18,7 +20,7 @@ export interface DuplicateHandKey {
 export interface DuplicateHandPlan {
   key: DuplicateHandKey;
   deal: DealtMatch;
-  drawQueues: [Tile[], Tile[], Tile[], Tile[]];
+  drawQueues: SeatValues<Tile[]>;
 }
 
 function domainSeed(parts: readonly (string | number)[]): number {
@@ -36,7 +38,8 @@ export function duplicateMatchSeed(mode: DuplicateMatchModeConfig): number {
 export function duplicateHandSeed(
   mode: DuplicateMatchModeConfig,
   presetId: string,
-  key: DuplicateHandKey
+  key: DuplicateHandKey,
+  wallOptions: WallOptions = {}
 ): number {
   return domainSeed([
     "kandora-duplicate-hand",
@@ -47,6 +50,9 @@ export function duplicateHandSeed(
     key.roundWind,
     key.roundNumber,
     key.honba,
+    ...(wallOptions.playerCount === 3
+      ? ["sanma", wallOptions.sanmaType ?? "online"]
+      : []),
   ]);
 }
 
@@ -56,11 +62,15 @@ export function generateDuplicateHandPlan(
   key: DuplicateHandKey,
   wallOptions: WallOptions
 ): DuplicateHandPlan {
-  const deal = dealMatch(duplicateHandSeed(mode, presetId, key), wallOptions);
-  const drawQueues: [Tile[], Tile[], Tile[], Tile[]] = [[], [], [], []];
+  const playerCount = wallOptions.playerCount ?? 4;
+  const deal = dealMatch(duplicateHandSeed(mode, presetId, key, wallOptions), {
+    ...wallOptions,
+    duplicate: true,
+  });
+  const drawQueues = seatValues<Tile[]>(playerCount, () => []);
 
   deal.liveWall.forEach((tile, index) => {
-    const seat = ((key.dealer + index) % 4) as Seat;
+    const seat = ((key.dealer + index) % playerCount) as Seat;
     drawQueues[seat].push(tile);
   });
 

@@ -60,6 +60,20 @@ The ESLint `no-restricted-imports` rule scoped to `app/game/**` and
 `game-server/**` enforces these boundaries with severity `error`. Do not
 weaken the rule to land a feature — refactor through the adapter instead.
 
+## Three-player mahjong (sanma)
+
+Game setup includes a **3-player** toggle and **Online / Kansai** selector.
+Four-player games remain the default. Sanma uses a fixed M-League-derived
+profile, without head-bump ron, with three hands per wind and no chii.
+Both variants support Duplicate, native web/mobile play, local/Nearby hosting,
+spectating, recovery, and native replay/review.
+
+[Sanma rules and implementation](./docs/sanma.md) documents the exact payment
+table, nuki behavior, wall policies, and the fixed empty position to initial
+East's left. The standard wall policies do not apply to Duplicate's personal
+draw queues. Buu combinations, tournament standings, and new external-platform
+sanma integrations are not supported.
+
 ## Shared rules and match scoring
 
 The JSON [presets](./rules/presets/) own gameplay and match-settlement rules.
@@ -84,9 +98,11 @@ Alongside `startingScore`, [RuleSet](./rules/ruleSet.ts) defines:
   North); ordinary dealer continuation still applies at its last hand.
   This is distinct from Buu's immediate `winnerThreshold`.
 
-[calculateMatchPoints](./rules/matchScoring.ts) returns seat-ordered match
+[calculateMatchPoints](./rules/matchScoring.ts) returns seat-ordered four-player match
 points without mutating raw table scores. Existing native result displays and
 replay `finalScore` fields continue to represent raw points.
+Sanma native results likewise use raw scores; the four-column tournament UMA
+calculator explicitly rejects sanma rather than inventing a fourth placement.
 
 EMA uses 30,000/30,000 and +15/+5/-5/-15. M-League uses 25,000/30,000
 and +30/+10/-10/-30, plus the resulting 20-point oka. JPML A uses
@@ -162,13 +178,15 @@ and input receipts captured before host queues. Only bank-eligible decisions
 charge the bank, in exact milliseconds. A normal draw's clock opens at its
 canonical landed/readable point.
 Late presentation uses the authoritative schedule instead of restarting a
-full animation at packet arrival. Checkpoint version 7 preserves fixed prompts,
-calendar timestamps, exact balances and remaining phase durations. Recovery
+full animation at packet arrival. Checkpoint version 8 preserves fixed prompts,
+calendar timestamps, exact balances, remaining phase durations, and pending
+sanma replacements. Recovery
 uses one captured reference across owners and never revives a resolved or
-cancelled decision. Readers for versions 1-6 and legacy pending commands remain;
+cancelled decision. Readers for versions 1-7 and legacy pending commands remain;
 older saves are migrated to authoritative windows when loaded.
 
-The match facade is 650 lines and the renderer facade is 485 lines; mutable
+The match and renderer facades stay within their 800-line budgets; extracted
+concerns stay within 500 lines. Mutable
 state stays in typed domain owners rather than a copied facade context.
 Web/native ready and vote controls use the shared synchronized countdown.
 Foreground clock refresh, resync and ownership transfer do not issue a fresh

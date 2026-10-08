@@ -14,10 +14,9 @@
  */
 
 import type { MatchState } from "./state";
-import { isAkaDisabled } from "./ruleSet";
+import { handScoringContext } from "./scoringContext";
 import { scoreHand } from "./score";
 import { isWinningShape } from "./shanten";
-import { seatWind } from "./step";
 import type { Seat, Tile } from "./types";
 
 export type CallOption =
@@ -57,7 +56,7 @@ export function enumerateCalls(state: MatchState): SeatCallOptions[] {
   const discarder = state.lastDiscard.seat;
   const claimed = state.lastDiscard.tile;
   const out: SeatCallOptions[] = [];
-  for (let s = 0; s < 4; s++) {
+  for (let s = 0; s < state.ruleSet.playerCount; s++) {
     const seat = s as Seat;
     if (seat === discarder) {
       continue;
@@ -90,7 +89,10 @@ function pushChi(
   out: CallOption[]
 ): void {
   // Chi only legal from the seat immediately to the discarder's left.
-  if (seat !== (discarder + 1) % 4) {
+  if (
+    state.ruleSet.playerCount === 3 ||
+    seat !== (discarder + 1) % state.ruleSet.playerCount
+  ) {
     return;
   }
   const suit = claimed[1];
@@ -162,9 +164,7 @@ function pushPon(
   // value: with 0p,5p,5p the caller may consume either 0p+5p or 5p+5p.
   // Keep red-consuming choices first to preserve the existing default order,
   // while collapsing duplicate physical copies with the same tile string.
-  matches.sort(
-    (a, b) => Number(b[0] === "0") - Number(a[0] === "0")
-  );
+  matches.sort((a, b) => Number(b[0] === "0") - Number(a[0] === "0"));
   const seen = new Set<string>();
   for (let first = 0; first < matches.length - 1; first += 1) {
     for (let second = first + 1; second < matches.length; second += 1) {
@@ -235,23 +235,10 @@ function pushRon(
         continue;
       }
       const probeScore = scoreHand({
+        ...handScoringContext(state, seat),
         hand: state.hands[seat],
         winTile: probe,
         tsumo: false,
-        roundWind: state.roundWind,
-        seatWind: seatWind(seat, state.dealer),
-        doraIndicators: state.doraIndicators,
-        uraDoraIndicators:
-          state.ruleSet.uraDora && state.riichiDeclared[seat]
-            ? state.uraDoraIndicators
-            : undefined,
-        riichi: state.riichiDeclared[seat],
-        doubleRiichi: state.doubleRiichi[seat],
-        ippatsu: state.ippatsuEligible[seat],
-        melds: state.melds[seat],
-        noKuitan: !state.ruleSet.kuitan,
-        noAka: isAkaDisabled(state.ruleSet),
-        doubleWindPairFu: state.ruleSet.doubleWindPairFu,
         haiteiOrHoutei: state.liveWall.length === 0,
       });
       if (
@@ -263,23 +250,10 @@ function pushRon(
     }
   }
   const score = scoreHand({
+    ...handScoringContext(state, seat),
     hand: state.hands[seat],
     winTile: claimed,
     tsumo: false,
-    roundWind: state.roundWind,
-    seatWind: seatWind(seat, state.dealer),
-    doraIndicators: state.doraIndicators,
-    uraDoraIndicators:
-      state.ruleSet.uraDora && state.riichiDeclared[seat]
-        ? state.uraDoraIndicators
-        : undefined,
-    riichi: state.riichiDeclared[seat],
-    doubleRiichi: state.doubleRiichi[seat],
-    ippatsu: state.ippatsuEligible[seat],
-    melds: state.melds[seat],
-    noKuitan: !state.ruleSet.kuitan,
-    noAka: isAkaDisabled(state.ruleSet),
-    doubleWindPairFu: state.ruleSet.doubleWindPairFu,
     haiteiOrHoutei: state.liveWall.length === 0,
   });
   if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {

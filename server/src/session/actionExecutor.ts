@@ -83,6 +83,17 @@ export class ActionExecutor {
       return;
     }
 
+    if (action.type === "nuki" && action.tile) {
+      this.port.setSeatLegals(seat, []);
+      await this.port.applyEngineAction({
+        type: "nuki",
+        seat,
+        tile: action.tile,
+      });
+      await this.port.openChankanWindow();
+      return;
+    }
+
     if (
       action.type === "kan" &&
       action.kanKind === "ankan" &&

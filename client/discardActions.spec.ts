@@ -71,6 +71,15 @@ describe("discard action identity", () => {
 
     expect(isCurrentAutoDiscardWindow(current, expected)).toBe(true);
     expect(
+      isCurrentAutoDiscardWindow(
+        {
+          ...current,
+          legalActions: [...actions, { id: "nuki", type: "nuki", tile: "4z" }],
+        },
+        expected
+      )
+    ).toBe(false);
+    expect(
       isCurrentAutoDiscardWindow({ ...current, lastSeq: 43 }, expected)
     ).toBe(false);
     expect(

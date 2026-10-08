@@ -1,3 +1,8 @@
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
+import { type SeatValues } from "~/game/protocol/seat";
+import { copySeatValues, type PlayerCount } from "~/game/rules/seats";
+import { getPendingRobbery, nextAutomaticNuki } from "~/game/rules/nuki";
+import { waitsForRules } from "~/game/rules/tileAvailability";
 import type { MatchModeConfig } from "~/game/protocol/matchMode";
 import type { LegalAction, MatchDebug, Seat } from "~/game/protocol/messages";
 import {
@@ -5,14 +10,10 @@ import {
   createInitialState,
   enumerateCalls,
   evaluateBuuEndOfGameChips,
-  isAkaDisabled,
   isDiscardForbiddenByKuikae,
   isFuritenForRon,
   resolveRuleSet,
-  scoreHand,
-  seatWind,
   step,
-  waits,
   type CallOption,
   type DiscardSource,
   type EngineEvent,
@@ -32,9 +33,9 @@ import {
 import type { MatchRuntime } from "../runtime";
 import { buildDiscardLegals } from "./legalActionBuilder";
 
-type DeepReadonly<T> = {
-  readonly [Key in keyof T]: DeepReadonly<T[Key]>;
-};
+type DeepReadonly<T> = T extends readonly (infer Item)[]
+  ? ReadonlyArray<DeepReadonly<Item>> & { readonly length: T["length"] }
+  : { readonly [Key in keyof T]: DeepReadonly<T[Key]> };
 
 export type MatchStateView = DeepReadonly<MatchState>;
 export type KernelAction = Parameters<typeof step>[1];
@@ -46,8 +47,8 @@ export interface KernelTransition {
 }
 
 export interface KernelLedgers {
-  readonly chips: readonly [number, number, number, number];
-  readonly dabuken: readonly [boolean, boolean, boolean, boolean];
+  readonly chips: ReadonlySeatValues<number>;
+  readonly dabuken: ReadonlySeatValues<boolean>;
 }
 
 /** Mutates authoritative engine/driver state; callers publish returned effects in order. */
@@ -60,7 +61,8 @@ export class MatchKernel {
   constructor(
     mode: MatchModeConfig,
     private readonly presetId: string,
-    private readonly runtime: MatchRuntime
+    private readonly runtime: MatchRuntime,
+    readonly playerCount: PlayerCount = 4
   ) {
     this.driver = createMatchDriver(mode, presetId);
   }
@@ -104,6 +106,9 @@ export class MatchKernel {
     ledgers?: KernelLedgers
   ): void {
     const ruleSet = resolveRuleSet(override);
+    if (ruleSet.playerCount !== this.playerCount) {
+      throw new Error("MatchKernel: rules and participant count disagree");
+    }
     const deal = this.driver.prepareHand(
       matchHandContext({
         gameIndex,
@@ -116,8 +121,8 @@ export class MatchKernel {
     );
     this.stateValue = createInitialState(seed, { ruleSet, deal });
     if (ledgers !== undefined) {
-      this.stateValue.chips = [...ledgers.chips];
-      this.stateValue.dabuken = [...ledgers.dabuken];
+      this.stateValue.chips = copySeatValues(ledgers.chips);
+      this.stateValue.dabuken = copySeatValues(ledgers.dabuken);
     }
   }
 
@@ -201,19 +206,33 @@ export class MatchKernel {
   applyAction(action: KernelAction): KernelTransition {
     let drivenAction = action;
     let suppliedDraw: { seat: Seat; tile: Tile } | null = null;
-    if (action.type === "kan" && action.kind !== "shouminkan") {
+    if (action.type === "kan" || action.type === "nuki") {
       const directive = this.driver.peekDraw(action.seat);
-      if (directive.kind === "exhaustive") {
+      if (
+        directive.kind === "exhaustive" &&
+        !(
+          action.type === "nuki" &&
+          this.stateValue.ruleSet.sanmaType === "kansai"
+        )
+      ) {
         throw new Error(
           `applyEngineAction: no replacement tile for seat ${action.seat}`
         );
       }
       if (directive.kind === "tile") {
         drivenAction = { ...action, replacementTile: directive.tile };
-        suppliedDraw = { seat: action.seat, tile: directive.tile };
+        if (action.type === "kan" && action.kind !== "shouminkan") {
+          suppliedDraw = { seat: action.seat, tile: directive.tile };
+        }
       }
-    } else if (action.type === "complete_shouminkan") {
-      const seat = this.stateValue.pendingShouminkan?.seat;
+    } else if (
+      action.type === "complete_shouminkan" ||
+      action.type === "complete_nuki"
+    ) {
+      const seat =
+        action.type === "complete_nuki"
+          ? this.stateValue.pendingNuki?.seat
+          : this.stateValue.pendingShouminkan?.seat;
       if (seat === undefined) {
         throw new Error(
           "applyEngineAction: complete_shouminkan has no declarer"
@@ -221,9 +240,16 @@ export class MatchKernel {
       }
       const directive = this.driver.peekDraw(seat);
       if (directive.kind === "exhaustive") {
-        throw new Error(
-          `applyEngineAction: no replacement tile for seat ${seat}`
-        );
+        if (
+          action.type === "complete_nuki" &&
+          this.stateValue.ruleSet.sanmaType === "kansai"
+        ) {
+          drivenAction = { ...action, forceExhaustive: true };
+        } else {
+          throw new Error(
+            `applyEngineAction: no replacement tile for seat ${seat}`
+          );
+        }
       }
       if (directive.kind === "tile") {
         drivenAction = { ...action, replacementTile: directive.tile };
@@ -231,7 +257,7 @@ export class MatchKernel {
       }
     }
     const result = step(this.stateValue, drivenAction);
-    if (result.events.length === 0) {
+    if (result.events.length === 0 && result.state === this.stateValue) {
       throw new Error(
         `applyEngineAction: engine rejected ${action.type} for seat ${
           "seat" in action ? action.seat : "?"
@@ -240,10 +266,7 @@ export class MatchKernel {
     }
     if (suppliedDraw !== null) {
       const emitted = result.events.find(
-        (event) =>
-          event.type === "draw" &&
-          event.seat === suppliedDraw.seat &&
-          event.fromDeadWall === true
+        (event) => event.type === "draw" && event.seat === suppliedDraw.seat
       );
       if (emitted?.type !== "draw" || emitted.tile !== suppliedDraw.tile) {
         throw new Error(
@@ -363,47 +386,40 @@ export class MatchKernel {
   }
 
   handWaits(seat: Seat): Tile[] {
-    return waits(
+    return waitsForRules(
       this.stateValue.hands[seat],
-      this.stateValue.melds[seat].length
+      this.stateValue.melds[seat].length,
+      this.stateValue.ruleSet
     );
   }
 
-  canChankanRon(seat: Seat, winTile: Tile): boolean {
-    const state = this.stateValue;
-    const hand = state.hands[seat];
-    if (hand.length !== 13) {
-      return false;
-    }
-    const score = scoreHand({
-      hand,
-      winTile,
-      tsumo: false,
-      roundWind: state.roundWind,
-      seatWind: seatWind(seat, state.dealer),
-      doraIndicators: state.doraIndicators,
-      uraDoraIndicators:
-        state.ruleSet.uraDora && state.riichiDeclared[seat]
-          ? state.uraDoraIndicators
-          : undefined,
-      riichi: state.riichiDeclared[seat],
-      doubleRiichi: state.doubleRiichi[seat],
-      ippatsu: state.ippatsuEligible[seat],
-      melds: state.melds[seat],
-      noKuitan: !state.ruleSet.kuitan,
-      noAka: isAkaDisabled(state.ruleSet),
-      rinshanOrChankan: true,
-    });
-    return score.isAgari && score.han > 0;
+  pendingRobbery() {
+    return getPendingRobbery(this.stateValue);
   }
 
-  settleBuuGame(): [number, number, number, number] {
+  automaticNuki(opening = false) {
+    return nextAutomaticNuki(this.stateValue, opening);
+  }
+
+  canChankanRon(seat: Seat): boolean {
+    return step(this.stateValue, { type: "ron", seat }).events.some(
+      (event) => event.type === "win"
+    );
+  }
+
+  canTsumo(seat: Seat): boolean {
+    return step(this.stateValue, { type: "tsumo", seat }).events.some(
+      (event) => event.type === "win"
+    );
+  }
+
+  settleBuuGame(): SeatValues<number> {
     const settlement = evaluateBuuEndOfGameChips(this.stateValue);
     applyChipDelta(this.stateValue.chips, settlement.chipDelta);
     this.stateValue.dabuken = [false, false, false, false];
     if (settlement.awardedDabuken) {
       this.stateValue.dabuken[settlement.winner] = true;
     }
-    return [...settlement.chipDelta];
+    return copySeatValues(settlement.chipDelta);
   }
 }

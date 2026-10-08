@@ -74,6 +74,7 @@ export function buildDiscardLegals(
   for (const opt of buildSelfKanLegals(state, driver, seat)) {
     out.push(opt);
   }
+  out.push(...buildNukiLegals(state, driver, seat));
   if (inRiichi) {
     return out;
   }
@@ -113,6 +114,34 @@ export function buildDiscardLegals(
     }
   }
   return out;
+}
+
+export function buildNukiLegals(
+  state: MatchState,
+  driver: MatchDriver,
+  seat: Seat
+): LegalAction[] {
+  if (
+    state.ruleSet.playerCount !== 3 ||
+    state.ruleSet.sanmaType !== "online" ||
+    !driver.canSupplyReplacement(seat)
+  ) {
+    return [];
+  }
+  const replacement = driver.peekDraw(seat);
+  const probe = step(state, {
+    type: "nuki",
+    seat,
+    tile: "4z",
+    ...(replacement.kind === "tile"
+      ? { replacementTile: replacement.tile }
+      : {}),
+  });
+  return probe.events.some(
+    (event) => event.type === "nuki" && event.stage === "declared"
+  )
+    ? [{ id: "nuki:4z", type: "nuki", tile: "4z" }]
+    : [];
 }
 
 export function buildSelfKanLegals(

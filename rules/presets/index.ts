@@ -116,6 +116,10 @@ function validatePreset(raw: unknown): RuleSetPreset {
     expectString(obj, "description", ctx);
   }
 
+  if (obj.playerCount !== 4 || obj.sanmaType !== "online") {
+    throw new Error(`${ctx}base presets must specify four-player defaults`);
+  }
+
   const roundWindCount = obj.roundWindCount;
   if (roundWindCount !== 1 && roundWindCount !== 2 && roundWindCount !== 4) {
     throw new Error(`${ctx}roundWindCount must be 1, 2, or 4`);
@@ -130,7 +134,9 @@ function validatePreset(raw: unknown): RuleSetPreset {
   expectBoolean(obj, "splitTiedUma", ctx);
   const uma = UmaTableSchema.safeParse(obj.uma);
   if (!uma.success) {
-    throw new Error(`${ctx}uma must contain five zero-sum rows of four placement bonuses`);
+    throw new Error(
+      `${ctx}uma must contain five zero-sum rows of four placement bonuses`
+    );
   }
   if (
     obj.kuikae !== "allowed" &&

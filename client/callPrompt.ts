@@ -43,6 +43,7 @@ const CALL_PROMPT_ACTION_TYPES: ReadonlySet<LegalAction["type"]> = new Set([
   "chi",
   "pon",
   "kan",
+  "nuki",
   "ron",
   "tsumo",
 ]);

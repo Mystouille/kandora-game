@@ -17,6 +17,7 @@ import {
   darkenTileTint,
   focusedHandOrderPolicy,
   genericPassOrTsumogiriAction,
+  pointerToHandCoordinates,
   riichiSelectionTileTint,
   topmostHandHoverTargetIndex,
 } from "../geometry/interactionPolicy";
@@ -434,15 +435,13 @@ export class InteractionController {
     if (!app || !root) {
       return { x: 0, y: 0 };
     }
-    const rect = app.canvas.getBoundingClientRect();
-    const screenX =
-      ((clientX - rect.left) / Math.max(1, rect.width)) * app.screen.width;
-    const screenY =
-      ((clientY - rect.top) / Math.max(1, rect.height)) * app.screen.height;
-    return {
-      x: (screenX - root.position.x) / root.scale.x - this.handOriginX,
-      y: (screenY - root.position.y) / root.scale.y - this.handOriginY,
-    };
+    return pointerToHandCoordinates({
+      point: { x: clientX, y: clientY },
+      viewport: app.canvas.getBoundingClientRect(),
+      screen: app.screen,
+      root,
+      origin: { x: this.handOriginX, y: this.handOriginY },
+    });
   }
 
   private updateDragPointer(clientX: number, clientY: number): void {

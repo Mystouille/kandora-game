@@ -14,4 +14,9 @@ describe("web lobby active-match actions", () => {
       "/game/room%20%2F%201?takeover=1"
     );
   });
+
+  it("does not offer a join action when the room has no active place left", () => {
+    expect(liveRoomAction("waiting", "sanma-full", null, false)).toBeNull();
+    expect(liveRoomAction("playing", "sanma-full", null, false)).toBe("watch");
+  });
 });

@@ -29,7 +29,11 @@ export function annotateWallSchedule(events: GameEvent[]): GameEvent[] {
       continue;
     }
     const schedule: Seat[] = [];
-    let nextDrawFromDead = false;
+    const duplicate =
+      ev.sanmaWall?.mode === "duplicate" ||
+      ev.duplicateDrawQueues !== undefined ||
+      ev.duplicateWallState !== undefined;
+    let replacementKind: "kan" | "nuki" | undefined;
     let j = i + 1;
     for (; j < out.length; j++) {
       const e = out[j];
@@ -39,30 +43,40 @@ export function annotateWallSchedule(events: GameEvent[]): GameEvent[] {
       if (e.type === "call") {
         const t = e.meld.type;
         if (t === "ankan" || t === "daiminkan" || t === "shouminkan") {
-          nextDrawFromDead = true;
+          replacementKind = "kan";
         }
         continue;
       }
+      if (e.type === "nuki" && e.stage === "completed") {
+        replacementKind = "nuki";
+        continue;
+      }
       if (e.type === "draw") {
-        const fromDeadWall = nextDrawFromDead;
-        out[j] = { ...e, fromDeadWall };
+        const fromDeadWall =
+          e.fromDeadWall ?? (!duplicate && replacementKind !== undefined);
+        out[j] = {
+          ...e,
+          fromDeadWall,
+          ...(e.replacementKind ||
+          replacementKind === "nuki" ||
+          (ev.playerCount === 3 && replacementKind)
+            ? { replacementKind: e.replacementKind ?? replacementKind }
+            : {}),
+        };
         if (!fromDeadWall) {
           schedule.push(e.seat);
         }
-        nextDrawFromDead = false;
+        replacementKind = undefined;
         continue;
       }
       // Any other event (discard, dora_reveal, …): clear the
       // pending-rinshan flag so a stray non-kan event between a
       // kan and its replacement draw doesn't desync the schedule.
       if (e.type === "discard") {
-        nextDrawFromDead = false;
+        replacementKind = undefined;
       }
     }
-    out[i] =
-      ev.duplicateDrawQueues === undefined
-        ? { ...ev, liveDrawSchedule: schedule }
-        : ev;
+    out[i] = !duplicate ? { ...ev, liveDrawSchedule: schedule } : ev;
     i = j;
   }
   return out;

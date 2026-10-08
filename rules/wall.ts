@@ -1,32 +1,33 @@
 /**
  * Wall building & dealing.
  *
- * Riichi convention:
- *   - 136 tiles total: 4 of each of 34 tile types. Red fives are an
- *     optional cosmetic substitution and live on the wire as `0m/0p/0s`;
- *     the rules engine treats them as 5s for shanten/yaku purposes.
- *   - Dead wall: 14 tiles set aside at the back of the wall.
- *       indices 0-3:  rinshan (kan replacement draws)
- *       indices 4,6,8,10,12: dora indicators (revealed progressively)
- *       indices 5,7,9,11,13: ura indicators (revealed at win for riichi)
- *     Slice convention used here matches the server: `deadWall[4]` is
- *     the first revealed dora indicator. Each rinshan draw removes the
- *     front tile and transfers the back tile of `liveWall` to the end,
- *     keeping the dead wall at 14 tiles.
- *   - Live wall: everything between the dealt hands and the dead wall.
- *     For the standard 4×13-tile deal that's `136 - 52 - 14 = 70` tiles.
- *     A normal draw removes the front tile; a kan reserves the back tile
- *     into the dead wall, so both reduce the number of future draws.
+ * Four-player defaults preserve the original 136-tile shuffle and deal:
+ * four 13-tile hands, 70 live tiles and 14 dead tiles. The dead wall starts
+ * with four replacements followed by five dora/ura pairs (first pair 4/5).
  *
- * Phase 1 step 1 keeps the slice's "no red fives" build. Red-five
- * substitution is a configurable wall option that lands when scoring
- * cares about it (Phase 1 step 4).
+ * Standard sanma starts with eight replacements followed by dora/ura
+ * pairs (first pair 8/9). Online reserves 14 tiles; Kansai reserves 10.
+ * Duplicate instead retains the legacy fixed 14-tile reserve for either
+ * variant. Subsequent sanma reserve movement lives in wallTransitions.ts.
+ *
+ * Red fives substitute for ordinary fives without changing tile counts.
+ * Dealing never extracts nuki tiles; the engine handles opening extraction.
  */
 
+import type { PlayerCount, SanmaType } from "../protocol/seat";
 import { createPRNG } from "./prng";
-import { SUITS, type Seat, type Tile } from "./types";
+import { SUITS, type Tile } from "./types";
+import type { SanmaWallState } from "./wallTransitions";
+
+export type { SanmaWallState } from "./wallTransitions";
 
 export interface WallOptions {
+  /** Omitted player count preserves the original four-player deal. */
+  playerCount?: PlayerCount;
+  /** Active only for three players; defaults to Online. */
+  sanmaType?: SanmaType;
+  /** Sanma Duplicate uses a fixed 14-tile reserve and personal-queue replacements. */
+  duplicate?: boolean;
   /**
    * Number of red-five substitutions per numbered suit (0–4).
    * Each entry replaces that many of the four "5X" copies with a
@@ -40,18 +41,37 @@ export interface DealtMatch {
   hands: Tile[][];
   /** Drawable wall (front of array = next draw). */
   liveWall: Tile[];
-  /** 14-tile dead wall, layout described above. */
+  /** Unconsumed reserve: initially 10 tiles for standard Kansai, otherwise 14. */
   deadWall: Tile[];
   /** Dora indicators currently revealed (slice: just the first). */
   doraIndicators: Tile[];
+  /** Explicit replacement/indicator cursor, emitted only for three-player deals. */
+  sanmaWall?: SanmaWallState;
 }
 
 export function buildAllTiles(opts: WallOptions = {}): Tile[] {
+  const playerCount = opts.playerCount ?? 4;
+  const sanmaType = opts.sanmaType ?? "online";
+  if (playerCount !== 3 && playerCount !== 4) {
+    throw new Error(`A wall requires 3 or 4 players, got ${playerCount}`);
+  }
+  if (playerCount === 3 && sanmaType !== "online" && sanmaType !== "kansai") {
+    throw new Error(`Unknown sanma wall variant: ${sanmaType}`);
+  }
   const tiles: Tile[] = [];
   const redCounts = opts.redFives ?? {};
   for (const suit of SUITS) {
     const redCount = Math.max(0, Math.min(4, redCounts[suit] ?? 0));
     for (let n = 1; n <= 9; n++) {
+      if (
+        playerCount === 3 &&
+        suit === "m" &&
+        n !== 1 &&
+        n !== 9 &&
+        !(sanmaType === "kansai" && n === 5)
+      ) {
+        continue;
+      }
       for (let copy = 0; copy < 4; copy++) {
         // Replace the first `redCount` copies of "5" in this suit
         // with a red five (`0X`).
@@ -71,16 +91,29 @@ export function buildAllTiles(opts: WallOptions = {}): Tile[] {
 export function dealMatch(seed: number, opts: WallOptions = {}): DealtMatch {
   const prng = createPRNG(seed);
   const tiles = prng.shuffle(buildAllTiles(opts));
+  const playerCount = opts.playerCount ?? 4;
+  const sanmaType = opts.sanmaType ?? "online";
+  const standardSanma = playerCount === 3 && !opts.duplicate;
+  const reserveSize = standardSanma && sanmaType === "kansai" ? 10 : 14;
 
-  const hands: Tile[][] = [[], [], [], []];
+  const hands: Tile[][] = [];
   let cursor = 0;
-  for (let s: Seat = 0; s < 4; s = ((s + 1) | 0) as Seat) {
-    hands[s] = tiles.slice(cursor, cursor + 13);
+  for (let seat = 0; seat < playerCount; seat++) {
+    hands.push(tiles.slice(cursor, cursor + 13));
     cursor += 13;
   }
-  const liveWall = tiles.slice(cursor, tiles.length - 14);
-  const deadWall = tiles.slice(tiles.length - 14);
-  const doraIndicators = [deadWall[4]];
+  const liveWall = tiles.slice(cursor, tiles.length - reserveSize);
+  const deadWall = tiles.slice(tiles.length - reserveSize);
+  const doraIndicators = [deadWall[standardSanma ? 8 : 4]];
 
-  return { hands, liveWall, deadWall, doraIndicators };
+  const dealt: DealtMatch = { hands, liveWall, deadWall, doraIndicators };
+  if (playerCount === 3) {
+    dealt.sanmaWall = {
+      sanmaType,
+      mode: opts.duplicate ? "duplicate" : "standard",
+      replacementsTaken: 0,
+      kanCount: 0,
+    };
+  }
+  return dealt;
 }

@@ -114,6 +114,7 @@ export class MatchGameplay {
     this.calls = new CallCoordinator(kernel, callEffects);
     this.callResolution = new CallResolution(kernel, callEffects);
     this.turns = new TurnCoordinator(kernel, windows, {
+      waitForWinReaction: (trigger) => this.effects.waitForWinReaction(trigger),
       ...kernelEffects,
       ...decisionEffects,
       emitEngineEvent: (event) => port.emitEngineEvent(event),

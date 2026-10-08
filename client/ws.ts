@@ -34,6 +34,7 @@ import {
   FIXED_PROMPT_VERSION,
   type ActionIntentContext,
 } from "~/game/protocol/timing";
+import { SANMA_CAPABILITY } from "~/game/protocol/sanma";
 
 export interface GameWSOptions {
   getConnectionDetails: () => Promise<GameWSConnectionDetails>;
@@ -99,6 +100,7 @@ const STALL_THRESHOLD_MS = 60_000;
 const STALL_CHECK_INTERVAL_MS = 5_000;
 export const SESSION_REPLACED_CLOSE_CODE = 4009;
 const TERMINAL_SPECTATOR_ERRORS = new Set([
+  "sanma_update_required",
   "hello_timeout",
   "matchid_mismatch",
   "spectate_unavailable",
@@ -107,6 +109,7 @@ const TERMINAL_SPECTATOR_ERRORS = new Set([
   "user_not_found",
 ]);
 const TERMINAL_PLAYER_ERRORS = new Set([
+  "sanma_update_required",
   "hello_timeout",
   "matchid_mismatch",
   "auth_failed",
@@ -456,6 +459,7 @@ export class GameWS {
         matchId: this.opts.matchId,
         clientSessionId: this.clientSessionId,
         timingCapabilities: [TIMING_CAPABILITY],
+        gameCapabilities: [SANMA_CAPABILITY],
         fixedPromptVersion: FIXED_PROMPT_VERSION,
         ...(takeoverRequested ? { takeover: true } : {}),
         debug: this.opts.debug,

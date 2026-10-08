@@ -11,6 +11,8 @@ import {
   scoreCartridgeTextLayout,
 } from "../geometry/scoreGeometry";
 import { KANJI_FONT_FAMILY, WIND_KANJI } from "../geometry/renderConstants";
+import { isTableSeatActive, tableSeatWind } from "../../tableProjection";
+import type { Seat } from "~/game/protocol/seat";
 
 export function renderScores(
   frame: RenderFrame,
@@ -34,8 +36,12 @@ export function renderScores(
     { x: center.x + inset + chipH / 2, y: cy, rotation: Math.PI / 2 },
   ];
   for (let seat = 0; seat < 4; seat++) {
+    if (!isTableSeatActive(view, seat)) {
+      continue;
+    }
     const position = positions[seat];
     const chip = new Container();
+    chip.label = `score-seat-${seat}`;
     const background = new Graphics()
       .roundRect(-chipW / 2, -chipH / 2, chipW, chipH, 6)
       .fill({ color: 0x000000, alpha: 0.7 });
@@ -55,7 +61,10 @@ export function renderScores(
     const textLayout = scoreCartridgeTextLayout(chipW, chipH, presentation);
     score.anchor.set(1, 0.5);
     score.position.set(textLayout.scoreRightX, 0);
-    const wind = WIND_KANJI[(seat - view.dealer + 4) % 4];
+    const wind =
+      WIND_KANJI[
+        ["E", "S", "W", "N"].indexOf(tableSeatWind(view, seat as Seat) ?? "E")
+      ];
     const windText = new Text({
       text: wind,
       style: new TextStyle({

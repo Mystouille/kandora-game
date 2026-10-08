@@ -1,3 +1,4 @@
+import { type SeatValues } from "~/game/protocol/seat";
 import type { GameEvent, Seat } from "~/game/protocol/messages";
 import { type Tile } from "~/game/rules";
 
@@ -28,12 +29,9 @@ export class ArchiveEventComposer {
       this.handStartLiveWall = duplicateDrawQueues === null ? liveWall : null;
       return {
         ...event,
-        startingHands: this.port.state().hands.map((h) => [...h]) as [
-          Tile[],
-          Tile[],
-          Tile[],
-          Tile[],
-        ],
+        startingHands: this.port.state().hands.map((h) => [...h]) as SeatValues<
+          Tile[]
+        >,
         ...(duplicateDrawQueues === null
           ? {
               // Omniscient live wall in draw order — 70 tiles remaining
@@ -73,12 +71,7 @@ export class ArchiveEventComposer {
         });
       return {
         ...event,
-        waits: seatWaits as [
-          Tile[] | null,
-          Tile[] | null,
-          Tile[] | null,
-          Tile[] | null,
-        ],
+        waits: seatWaits as SeatValues<Tile[] | null>,
       };
     }
     return event;

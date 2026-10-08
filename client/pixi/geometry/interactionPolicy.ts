@@ -10,6 +10,27 @@ export interface TapSample {
   timeMs: number;
 }
 
+export function pointerToHandCoordinates(input: {
+  point: { x: number; y: number };
+  viewport: { left: number; top: number; width: number; height: number };
+  screen: { width: number; height: number };
+  root: {
+    position: { x: number; y: number };
+    scale: { x: number; y: number };
+  };
+  origin: { x: number; y: number };
+}): { x: number; y: number } {
+  const { point, viewport, screen, root, origin } = input;
+  const x =
+    ((point.x - viewport.left) / Math.max(1, viewport.width)) * screen.width;
+  const y =
+    ((point.y - viewport.top) / Math.max(1, viewport.height)) * screen.height;
+  return {
+    x: (x - root.position.x) / root.scale.x - origin.x,
+    y: (y - root.position.y) / root.scale.y - origin.y,
+  };
+}
+
 export function pointInsideRect(
   point: { x: number; y: number },
   rect: { x: number; y: number; w: number; h: number }
@@ -60,6 +81,9 @@ export function genericPassOrTsumogiriAction(
   const pass = view.legalActions.find((action) => action.type === "pass");
   if (pass) {
     return pass;
+  }
+  if (view.legalActions.some((action) => action.type === "nuki")) {
+    return undefined;
   }
   if (view.mySeat === null) {
     return undefined;

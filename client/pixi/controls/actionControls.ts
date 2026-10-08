@@ -117,6 +117,16 @@ export class ActionControls {
       view.legalActions,
       this.noCallEnabled
     ).filter((action) => {
+      if (view.playerCount === 3 && action.type === "chi") {
+        return false;
+      }
+      if (
+        view.playerCount === 3 &&
+        view.sanmaType === "kansai" &&
+        action.type === "nuki"
+      ) {
+        return false;
+      }
       if (action.type === "discard" || action.type === "draw") {
         return false;
       }

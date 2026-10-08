@@ -1,34 +1,20 @@
 /**
- * Payment distribution — translates a `ScoreResult` from the riichi
- * lib (per-payer amounts already computed) into a per-seat delta.
+ * Distribute the scorer's base payments over the actual participants.
+ * Honba, deposits and responsibility transfers remain the engine's concern.
  *
- * Phase 1 step 5a covers basic tsumo and ron payments only.
- * Honba (300/honba) and riichi stick transfer ship with 5b alongside
- * riichi declaration.
- *
- * Riichi lib output (`oya`, `ko`, `ten`) semantics, distilled from
- * `node_modules/riichi/index.js` lines ~310–325:
- *
- *   Tsumo (regardless of who wins):
- *     oya = [base*2, base*2, base*2]
- *     ko  = [base*2, base, base]
- *   Ron:
- *     oya = [base*6]    // (dealer-winner total)
- *     ko  = [base*4]    // (non-dealer-winner total)
- *
- *   When the dealer wins:
- *     - tsumo: each of 3 non-dealers pays `oya[0]`.
- *     - ron: the discarder pays `oya[0]`.
- *   When a non-dealer wins:
- *     - tsumo: the dealer pays `oya[0]`; the two other non-dealers
- *       pay `ko[1]` each (== `ko[2]`).
- *     - ron: the discarder pays `ko[0]`.
+ * `oya` holds dealer-winner payments, `ko` non-dealer-winner payments.
+ * For non-dealer tsumo, ko[0] is paid by the dealer, and ko[1] by each
+ * other opponent. In Kansai ko[0] need not equal oya[0].
  */
 
 import type { ScoreResult } from "./score";
 import type { Seat } from "./types";
+import type { PlayerCount, SeatValues } from "../protocol/seat";
+import { activeSeats, isActiveSeat, seatValues } from "./seats";
 
 export interface DistributeInput {
+  /** Defaults to the legacy four-seat ledger. */
+  playerCount?: PlayerCount;
   /** Computed score for the winning hand. */
   score: ScoreResult;
   /** Seat that won. */
@@ -41,13 +27,30 @@ export interface DistributeInput {
 
 /**
  * Compute the per-seat point delta for a winning hand. Total over the
- * four seats sums to zero (payments balance).
+ * active seats sums to zero (payments balance).
  */
 export function distributePayments(
-  input: DistributeInput
-): [number, number, number, number] {
-  const { score, winner, dealer, loser } = input;
-  const delta: [number, number, number, number] = [0, 0, 0, 0];
+  input: DistributeInput & { playerCount: 3 }
+): [number, number, number];
+// eslint-disable-next-line no-redeclare -- TypeScript overload preserves the legacy tuple return type.
+export function distributePayments(
+  input: DistributeInput & { playerCount?: 4 }
+): [number, number, number, number];
+// eslint-disable-next-line no-redeclare -- TypeScript overload for dynamic participant counts.
+export function distributePayments(input: DistributeInput): SeatValues<number>;
+// eslint-disable-next-line no-redeclare -- Implementation of the overloads above.
+export function distributePayments(input: DistributeInput): SeatValues<number> {
+  const { score, winner, dealer, loser, playerCount = 4 } = input;
+  if (
+    !isActiveSeat(winner, playerCount) ||
+    !isActiveSeat(dealer, playerCount) ||
+    (loser !== null && !isActiveSeat(loser, playerCount))
+  ) {
+    throw new Error(
+      `Payment seats must be active in a ${playerCount}-player match`
+    );
+  }
+  const delta = seatValues<number>(playerCount, () => 0);
   if (!score.isAgari) {
     return delta;
   }
@@ -62,29 +65,12 @@ export function distributePayments(
     return delta;
   }
 
-  // Tsumo.
-  if (winnerIsDealer) {
-    // Each of the three non-dealers pays oya[0].
-    const each = score.oya[0];
-    for (let s = 0; s < 4; s++) {
-      if (s === winner) {
-        continue;
-      }
-      delta[s] -= each;
-      delta[winner] += each;
-    }
-    return delta;
-  }
-
-  // Non-dealer tsumo: dealer pays oya[0], each non-dealer pays ko[1].
-  const fromDealer = score.oya[0];
-  const fromNonDealer = score.ko[1];
-  for (let s = 0; s < 4; s++) {
-    if (s === winner) {
+  const payments = winnerIsDealer ? score.oya : score.ko;
+  for (const seat of activeSeats(playerCount)) {
+    if (seat === winner) {
       continue;
     }
-    const seat = s as Seat;
-    const owed = seat === dealer ? fromDealer : fromNonDealer;
+    const owed = winnerIsDealer || seat === dealer ? payments[0] : payments[1];
     delta[seat] -= owed;
     delta[winner] += owed;
   }

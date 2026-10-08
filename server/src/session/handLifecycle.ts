@@ -1,3 +1,4 @@
+import { copySeatValues } from "~/game/rules/seats";
 import type { Seat } from "~/game/protocol/messages";
 
 import type {
@@ -10,6 +11,7 @@ import { MatchKernel } from "./matchKernel";
 import type { HandLifecyclePort } from "./lifecyclePorts";
 
 import { gameTiming } from "./timingPolicy";
+import { settleAutomaticNuki } from "./nukiFlow";
 
 export class HandLifecycle {
   private pendingWinRevealMs = 0;
@@ -28,18 +30,23 @@ export class HandLifecycle {
   async beginInitialHandAfterReady(): Promise<void> {
     await this.port.emitEvent({
       type: "hand_start",
+      ...(this.kernel.playerCount === 3
+        ? {
+            playerCount: 3 as const,
+            sanmaType: this.kernel.currentState().ruleSet.sanmaType,
+            sanmaWall: this.kernel.currentState().sanmaWall,
+            nukiTiles: this.kernel
+              .currentState()
+              .nukiTiles.map((tiles) => [...tiles]),
+          }
+        : {}),
       round: 0,
       dealer: this.kernel.currentState().dealer,
       roundWind: this.kernel.currentState().roundWind,
       roundNumber: this.kernel.currentState().roundNumber,
       honba: this.kernel.currentState().honba,
       riichiSticks: this.kernel.currentState().riichiSticks,
-      scores: [...this.kernel.currentState().scores] as [
-        number,
-        number,
-        number,
-        number,
-      ],
+      scores: copySeatValues(this.kernel.currentState().scores),
       sinking: this.port.computeSinking(),
       hand: undefined,
       doraIndicators: [...this.kernel.currentState().doraIndicators],
@@ -47,6 +54,11 @@ export class HandLifecycle {
       ...this.port.duplicateWallEventFields(),
     });
 
+    await settleAutomaticNuki(
+      this.kernel,
+      (action) => this.port.applyEngineAction(action),
+      true
+    );
     await this.port.advanceTurn();
   }
 
@@ -64,7 +76,7 @@ export class HandLifecycle {
 
     this.port.resetCallState();
 
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < this.kernel.playerCount; s++) {
       this.port.clearLegals(s as Seat);
     }
 
@@ -101,6 +113,11 @@ export class HandLifecycle {
     ) {
       return;
     }
+    await settleAutomaticNuki(
+      this.kernel,
+      (action) => this.port.applyEngineAction(action),
+      true
+    );
     await this.port.advanceTurn();
   }
 

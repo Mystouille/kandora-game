@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  RIICHI_LIB_YAKU_KANJI_BY_ROMAJI,
   riichiLibYakuToRomaji,
   tenhouYakuIdToLegacyHan,
   tenhouYakuIdToRomaji,
 } from "./yakuNames";
 
 describe("riichiLibYakuToRomaji", () => {
+  it("maps nuki dora in both directions without claiming a Tenhou yaku id", () => {
+    expect(riichiLibYakuToRomaji({ 抜きドラ: "3飜" })).toEqual({
+      "Nuki Dora": "3飜",
+    });
+    expect(RIICHI_LIB_YAKU_KANJI_BY_ROMAJI["Nuki Dora"]).toBe("抜きドラ");
+  });
+
   it("normalizes scorer yaku without changing values or order", () => {
     const normalized = riichiLibYakuToRomaji({
       立直: "1飜",

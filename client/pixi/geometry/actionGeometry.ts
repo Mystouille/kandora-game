@@ -127,6 +127,9 @@ export function labelForAction(action: LegalAction): string {
   if (action.type === "pon") {
     return "Pon";
   }
+  if (action.type === "nuki") {
+    return "Nuki 北";
+  }
   if (action.type === "ron") {
     return "Ron";
   }
@@ -160,6 +163,7 @@ export function actionButtonColor(action: LegalAction): ColorSource {
     chi: 0x4a7fb4,
     pon: 0xb47f3a,
     kan: 0x7a4ab4,
+    nuki: 0x3a8b91,
     ron: 0xc04040,
     tsumo: 0x40a060,
     pass: 0x444444,

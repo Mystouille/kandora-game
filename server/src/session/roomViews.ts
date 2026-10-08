@@ -11,6 +11,8 @@ import type { PlayerConnections } from "./playerConnections";
 import type { RoomRoster } from "./roomRoster";
 import type { MatchConfiguration } from "./sessionTypes";
 import type { SessionSnapshot } from "./sessionCoordinator";
+import { activeSeats, seatValues } from "~/game/rules/seats";
+import type { PlayerCount, SanmaType } from "~/game/protocol/seat";
 
 export interface RoomViewPort {
   status(): SessionSnapshot["status"];
@@ -30,6 +32,8 @@ export class MatchRoomViews {
   ) {}
 
   summary(): {
+    playerCount?: PlayerCount;
+    sanmaType?: SanmaType;
     matchId: string;
     status: SessionSnapshot["status"];
     presetId: string;
@@ -39,13 +43,9 @@ export class MatchRoomViews {
     seats: Array<{ name: string | null; isBot: boolean } | null>;
   } {
     const players = this.roster.players();
-    const seats: Array<{ name: string | null; isBot: boolean } | null> = [
-      null,
-      null,
-      null,
-      null,
-    ];
-    for (const seat of [0, 1, 2, 3] as const) {
+    const seats: Array<{ name: string | null; isBot: boolean } | null> =
+      seatValues(this.roster.playerCount, () => null);
+    for (const seat of activeSeats(this.roster.playerCount)) {
       const player = players.get(seat) ?? null;
       seats[seat] =
         player === null
@@ -57,6 +57,12 @@ export class MatchRoomViews {
         ? (this.config.ruleSetOverride?.buuMode ?? false)
         : (this.kernel.view?.ruleSet.buuMode ?? false);
     return {
+      ...(this.roster.playerCount === 3
+        ? {
+            playerCount: 3 as const,
+            sanmaType: this.config.ruleSetOverride?.sanmaType ?? "online",
+          }
+        : {}),
       matchId: this.config.matchId,
       status: this.port.status(),
       presetId: this.port.isRelay()
@@ -78,7 +84,7 @@ export class MatchRoomViews {
       occupant: RoomSeatOccupant;
       ready: boolean;
     }> = [];
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.roster.playerCount)) {
       const player = players.get(seat) ?? null;
       let occupant: RoomSeatOccupant;
       if (player === null) {
@@ -111,6 +117,12 @@ export class MatchRoomViews {
     const hostSeat = this.roster.hostSeat();
     return {
       type: "room_state",
+      ...(this.roster.playerCount === 3
+        ? {
+            playerCount: 3 as const,
+            sanmaType: this.config.ruleSetOverride?.sanmaType ?? "online",
+          }
+        : {}),
       matchId: this.config.matchId,
       clock: this.timing.stamp(),
       mode: this.kernel.mode,

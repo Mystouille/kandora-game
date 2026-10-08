@@ -121,6 +121,32 @@ export interface KanAction {
   replacementTile?: Tile;
 }
 
+/** Extract a concealed North (Online) or a mandatory 5m/0m (Kansai). */
+export interface NukiAction {
+  type: "nuki";
+  seat: Seat;
+  tile: Tile;
+  /**
+   * Trusted orchestrator-only normalization of a Kansai opening hand.
+   * May address any active seat before the first ordinary draw; its
+   * replacement restores thirteen tiles without starting that seat's turn.
+   */
+  opening?: boolean;
+  /** Trusted Duplicate queue peek for preflight only; declaration never draws it. */
+  replacementTile?: Tile;
+}
+
+/**
+ * Finish an unrobbed North declaration or supply a mandatory Kansai
+ * replacement. Duplicate supplies the acting seat's next personal-queue tile.
+ */
+export interface CompleteNukiAction {
+  type: "complete_nuki";
+  replacementTile?: Tile;
+  /** Trusted Kansai Duplicate queue exhaustion; enter draw declarations. */
+  forceExhaustive?: boolean;
+}
+
 /**
  * Player-initiated abortive draw declaration.
  *
@@ -157,7 +183,7 @@ export interface DeclareRyuukyokuStatusAction {
 }
 
 /**
- * Settle an exhaustive draw after all four status declarations.
+ * Settle an exhaustive draw after all active seats' status declarations.
  * Engine-internal — orchestrator-driven, never issued by clients.
  */
 export interface CompleteRyuukyokuAction {
@@ -198,6 +224,8 @@ export type Action =
   | ChiAction
   | PonAction
   | KanAction
+  | NukiAction
+  | CompleteNukiAction
   | AbortAction
   | DeclareRyuukyokuStatusAction
   | CompleteRyuukyokuAction

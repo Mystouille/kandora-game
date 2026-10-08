@@ -53,7 +53,11 @@ export class PresentationPlanner {
         startsAt,
         readyAt: this.readyAt,
       };
-    } else if (event.type === "call") {
+    } else if (
+      event.type === "call" ||
+      (event.type === "nuki" &&
+        (event.stage === "declared" || event.tile !== "4z"))
+    ) {
       this.readyAt = occurredAt + LIVE_CALL_READY_MS;
       this.latest = {
         seq,

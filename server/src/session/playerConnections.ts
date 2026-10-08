@@ -1,5 +1,14 @@
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
+import { type SeatValues } from "~/game/protocol/seat";
 import type { Seat, ServerMessage } from "~/game/protocol/messages";
 import type { MatchPlayerInit } from "./roomRoster";
+import {
+  activeSeats,
+  isActiveSeat,
+  mapSeatValues,
+  seatValues,
+  type PlayerCount,
+} from "~/game/rules/seats";
 
 export type Send = (message: ServerMessage) => void;
 
@@ -22,9 +31,9 @@ export class HumanSessionTakeoverRequiredError extends Error {
 }
 
 export interface ConnectionPolicySnapshot {
-  disconnected: [boolean, boolean, boolean, boolean];
-  afkSelfReported: [boolean, boolean, boolean, boolean];
-  livenessProbeMisses: [number, number, number, number];
+  disconnected: SeatValues<boolean>;
+  afkSelfReported: SeatValues<boolean>;
+  livenessProbeMisses: SeatValues<number>;
 }
 
 interface SeatConnection {
@@ -59,22 +68,15 @@ function emptyConnection(): SeatConnection {
 
 /** Socket ownership, absence policy and liveness generations move with the occupant. */
 export class PlayerConnections {
-  private seats: [
-    SeatConnection,
-    SeatConnection,
-    SeatConnection,
-    SeatConnection,
-  ] = [
-    emptyConnection(),
-    emptyConnection(),
-    emptyConnection(),
-    emptyConnection(),
-  ];
+  private seats: SeatValues<SeatConnection>;
 
   constructor(
     private readonly player: (seat: Seat) => Readonly<MatchPlayerInit> | null,
-    private readonly onLivenessDisconnect: () => void
-  ) {}
+    private readonly onLivenessDisconnect: () => void,
+    readonly playerCount: PlayerCount = 4
+  ) {
+    this.seats = seatValues(playerCount, emptyConnection);
+  }
 
   view(seat: Seat): PlayerConnectionView {
     const connection = this.seats[seat];
@@ -107,7 +109,7 @@ export class PlayerConnections {
   }
 
   seatFor(send: Send): Seat | null {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.playerCount)) {
       if (this.seats[seat].send === send) {
         return seat;
       }
@@ -240,42 +242,46 @@ export class PlayerConnections {
     this.seats[seat] = { ...emptyConnection(), generation };
   }
 
-  permute(permutation: readonly [Seat, Seat, Seat, Seat]): void {
+  permute(permutation: ReadonlySeatValues<Seat>): void {
+    if (
+      permutation.length !== this.playerCount ||
+      new Set(permutation).size !== this.playerCount ||
+      permutation.some((seat) => !isActiveSeat(seat, this.playerCount))
+    ) {
+      throw new Error("PlayerConnections: invalid active-seat permutation");
+    }
     const previous = this.seats;
-    this.seats = [
-      this.movedConnection(previous[permutation[0]]),
-      this.movedConnection(previous[permutation[1]]),
-      this.movedConnection(previous[permutation[2]]),
-      this.movedConnection(previous[permutation[3]]),
-    ];
+    this.seats = mapSeatValues(permutation, (source) =>
+      this.movedConnection(previous[source])
+    );
   }
 
   policySnapshot(): ConnectionPolicySnapshot {
-    const [a, b, c, d] = this.seats;
     return {
-      disconnected: [
-        a.disconnected,
-        b.disconnected,
-        c.disconnected,
-        d.disconnected,
-      ],
-      afkSelfReported: [
-        a.afkSelfReported,
-        b.afkSelfReported,
-        c.afkSelfReported,
-        d.afkSelfReported,
-      ],
-      livenessProbeMisses: [
-        a.probeMisses,
-        b.probeMisses,
-        c.probeMisses,
-        d.probeMisses,
-      ],
+      disconnected: mapSeatValues(
+        this.seats,
+        (connection) => connection.disconnected
+      ),
+      afkSelfReported: mapSeatValues(
+        this.seats,
+        (connection) => connection.afkSelfReported
+      ),
+      livenessProbeMisses: mapSeatValues(
+        this.seats,
+        (connection) => connection.probeMisses
+      ),
     };
   }
 
   restorePolicy(policy: ConnectionPolicySnapshot): void {
-    for (const seat of [0, 1, 2, 3] as const) {
+    if (
+      Object.values(policy).some((values) => values.length !== this.playerCount)
+    ) {
+      throw new Error(
+        "PlayerConnections: restored participant count does not match"
+      );
+    }
+    for (const seat of activeSeats(this.playerCount)) {
       const connection = this.seats[seat];
       connection.disconnected = policy.disconnected[seat];
       connection.afkSelfReported = policy.afkSelfReported[seat];

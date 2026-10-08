@@ -111,6 +111,7 @@ export class MatchLifecycle {
       promptTiming
     );
     this.hand = new HandLifecycle(kernel, {
+      applyEngineAction: (action) => effects.applyEngineAction(action),
       emitEvent: (event) => port.emitEvent(event),
       emitEngineEvent: (event) => this.engineEvents.emitEngineEvent(event),
       emitFuritenChanges: (changes) =>

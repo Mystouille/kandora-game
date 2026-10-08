@@ -1,3 +1,4 @@
+import { type SeatValues } from "~/game/protocol/seat";
 import type { MatchDebug, Seat } from "~/game/protocol/messages";
 import type { SpectatorDelayMs } from "~/game/protocol/spectatorDelay";
 import type { MatchModeConfig } from "~/game/protocol/matchMode";
@@ -32,7 +33,7 @@ export interface AutomaticActionContext {
 
 export interface EndMatchOptions {
   skipHandEnd?: boolean;
-  finalScores?: [number, number, number, number];
+  finalScores?: SeatValues<number>;
   matchEndReason?: MatchEndReason;
   serverAbort?: boolean;
 }

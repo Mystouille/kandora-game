@@ -21,6 +21,7 @@ import {
   SEAT_CONTAINER_ROT,
 } from "../geometry/renderConstants";
 import type { CenterLabels, DiscardPanelRects } from "./hudTypes";
+import { isTableSeatActive } from "../../tableProjection";
 
 export class NameRenderer {
   private seatEnrichment: (SeatEnrichment | null)[] = [null, null, null, null];
@@ -116,11 +117,16 @@ export class NameRenderer {
     let maxNameH = 0;
     let maxRemainingTextH = 0;
     for (let seat = 0; seat < 4; seat++) {
+      if (!isTableSeatActive(view, seat)) {
+        continue;
+      }
       const name = view.seatNames[seat];
       if (!name) {
         continue;
       }
-      const occupant = view.roomState?.seats[seat]?.occupant;
+      const occupant = view.roomState?.seats.find(
+        (entry) => entry.seat === seat
+      )?.occupant;
       const isDisconnected =
         occupant !== undefined &&
         occupant !== null &&
@@ -221,6 +227,7 @@ export class NameRenderer {
       } = entry;
       const center = playerIdentityCenter(discardPanels, seat);
       const container = new Container();
+      container.label = `name-seat-${seat}`;
       if (entry.teamLogoTex) {
         const size = PLAYER_PANEL_SIZE;
         const mask = new Graphics()

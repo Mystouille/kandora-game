@@ -10,12 +10,17 @@ import type {
 import { useMatchStore, type ConnStatus } from "~/game/client/store";
 import { GameWS, GameWSConnectionDetailsError } from "~/game/client/ws";
 import { mergeSeatNames } from "~/game/client/spectatorNames";
+import type { SeatValues } from "~/game/protocol/seat";
+import { activeSeats, seatValues } from "~/game/rules/seats";
 import {
   readWebTableLayoutMode,
   writeWebTableLayoutMode,
 } from "~/game/client/webTableLayoutPreference";
 import { WebTableTopControls } from "~/game/client/WebTableTopControls";
-import { useWebTableUiScale, webTableUiStyle } from "~/game/client/webTableUiScale";
+import {
+  useWebTableUiScale,
+  webTableUiStyle,
+} from "~/game/client/webTableUiScale";
 import { useScreenWakeLock } from "~/game/client/screenWakeLock";
 import { ViewerList } from "~/game/components/ViewerList";
 import { FIVE_MINUTE_SPECTATOR_DELAY_MS } from "~/game/protocol/spectatorDelay";
@@ -58,16 +63,14 @@ import {
  * event alone — the spectator view falls back to them for any seat
  * a richer source (room_state / host enrichment) hasn't filled.
  */
-function seatNamesFromEvents(
-  events: GameEvent[]
-): [string, string, string, string] | null {
+function seatNamesFromEvents(events: GameEvent[]): SeatValues<string> | null {
   const start = events.find((e) => e.type === "match_start");
   if (!start || start.type !== "match_start") {
     return null;
   }
-  const names: [string, string, string, string] = ["", "", "", ""];
+  const names = seatValues(start.playerCount ?? 4, () => "");
   for (const s of start.seats) {
-    if (s.seat >= 0 && s.seat < 4) {
+    if (s.seat >= 0 && s.seat < names.length) {
       names[s.seat] = s.displayName;
     }
   }
@@ -203,7 +206,7 @@ export default function GameSpectateRoute({
     }
     setOverlays(next);
   };
-  const [seatNames, setSeatNames] = useState<[string, string, string, string]>([
+  const [seatNames, setSeatNames] = useState<SeatValues<string>>([
     "",
     "",
     "",
@@ -409,7 +412,11 @@ export default function GameSpectateRoute({
           lastRelaySeqRef.current = msg.seq;
           if (msg.state.seatNames) {
             setSeatNames((current) =>
-              mergeSeatNames(current, msg.state.seatNames ?? [])
+              mergeSeatNames(
+                current,
+                msg.state.seatNames ?? [],
+                msg.state.playerCount ?? 4
+              )
             );
           }
           setBaseline(snapshotToReplayView(msg.state));
@@ -436,7 +443,9 @@ export default function GameSpectateRoute({
           // more authoritative source.
           const relayNames = seatNamesFromEvents(msg.events);
           if (relayNames) {
-            setSeatNames((current) => mergeSeatNames(current, relayNames));
+            setSeatNames((current) =>
+              mergeSeatNames(current, relayNames, relayNames.length)
+            );
           }
 
           // Relay attach/reconnect sends the complete event history as a
@@ -493,14 +502,16 @@ export default function GameSpectateRoute({
           return;
         }
         if (msg.type === "room_state") {
-          const names: [string, string, string, string] = ["", "", "", ""];
+          const names = seatValues(msg.playerCount ?? 4, () => "");
           for (const s of msg.seats) {
             const occ = s.occupant;
             if (occ.kind !== "empty") {
               names[s.seat] = occ.displayName;
             }
           }
-          setSeatNames((current) => mergeSeatNames(current, names));
+          setSeatNames((current) =>
+            mergeSeatNames(current, names, msg.playerCount ?? 4)
+          );
           // Capture the full room state so the renderer can
           // surface the per-seat `connected` flag (used to
           // paint the "disconnected" badge on nameplates).
@@ -591,6 +602,11 @@ export default function GameSpectateRoute({
     () => (view && overlays.showWaits ? waitsForReplayView(view) : null),
     [view, overlays.showWaits]
   );
+  useEffect(() => {
+    if (focusSeat >= (view?.playerCount ?? 4)) {
+      setFocusSeat(0);
+    }
+  }, [focusSeat, view?.playerCount]);
 
   useEffect(() => {
     if (!eyeHeld) {
@@ -995,14 +1011,16 @@ export default function GameSpectateRoute({
             }}
             className="bg-black/60 border border-emerald-700 rounded px-3 py-2 text-base text-emerald-100"
           >
-            {([0, 1, 2, 3] as const).map((s) => {
-              const name = seatNames[s] || `Seat ${s}`;
-              return (
-                <option key={s} value={String(s)}>
-                  {name}
-                </option>
-              );
-            })}
+            {activeSeats(view?.playerCount ?? roomState?.playerCount ?? 4).map(
+              (s) => {
+                const name = seatNames[s] || `Seat ${s}`;
+                return (
+                  <option key={s} value={String(s)}>
+                    {name}
+                  </option>
+                );
+              }
+            )}
           </select>
           {rounds.length > 0 && (
             <select

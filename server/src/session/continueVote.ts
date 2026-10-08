@@ -17,14 +17,16 @@ import type { ContinueVotePort } from "./lifecyclePorts";
 import { gameTiming } from "./timingPolicy";
 import type { InputReceipt } from "~/game/protocol/timing";
 import type { PromptTimingService } from "../timing/promptWindows";
+import {
+  copySeatValues,
+  seatValues,
+  type SeatValues,
+} from "~/game/rules/seats";
+
+type Vote = "yes" | "no" | null;
 
 export interface ContinueVoteSnapshot {
-  readonly votes: [
-    "yes" | "no" | null,
-    "yes" | "no" | null,
-    "yes" | "no" | null,
-    "yes" | "no" | null,
-  ];
+  readonly votes: SeatValues<Vote>;
   readonly deadline: number | null;
   readonly active: boolean;
   readonly timerPending: boolean;
@@ -33,12 +35,7 @@ export interface ContinueVoteSnapshot {
 }
 
 export class ContinueVote {
-  private continueVote: [
-    "yes" | "no" | null,
-    "yes" | "no" | null,
-    "yes" | "no" | null,
-    "yes" | "no" | null,
-  ] = [null, null, null, null];
+  private continueVote: SeatValues<Vote>;
   private continueVoteDeadline: number | null = null;
   private continueVoteTimer: MatchTimer | null = null;
   private continueVoteResolve: ((cont: boolean) => void) | null = null;
@@ -52,10 +49,12 @@ export class ContinueVote {
     private readonly commands: CommandCoordinator,
     private readonly port: ContinueVotePort,
     private readonly timing?: PromptTimingService
-  ) {}
+  ) {
+    this.continueVote = seatValues(roster.playerCount, () => null);
+  }
   snapshot(): ContinueVoteSnapshot {
     return {
-      votes: [...this.continueVote],
+      votes: copySeatValues(this.continueVote),
       deadline: this.continueVoteDeadline,
       active: this.continueVoteResolve !== null,
       timerPending: this.continueVoteTimer !== null,
@@ -71,16 +70,16 @@ export class ContinueVote {
 
   async runContinueVote(finalScores: FinalScore[]): Promise<boolean> {
     const voting = new Promise<boolean>((resolve) => {
-      this.continueVote = [null, null, null, null];
+      this.continueVote = seatValues(this.roster.playerCount, () => null);
       this.continueVoteFinalScores = finalScores.map((score) => ({ ...score }));
       this.lastVoteReason = null;
-      for (let s = 0; s < 4; s++) {
+      for (let s = 0; s < this.roster.playerCount; s++) {
         const p = this.roster.players().get(s as Seat);
         if (p?.isBot) {
           this.continueVote[s] = "yes";
         }
       }
-      for (let s = 0; s < 4; s++) {
+      for (let s = 0; s < this.roster.playerCount; s++) {
         if (
           this.connections.view(s as Seat).disconnected &&
           this.continueVote[s] === null
@@ -248,7 +247,7 @@ export class ContinueVote {
     restoredAt = this.runtime.now()
   ): void {
     const finalScores = checkpoint.finalScores.map((score) => ({ ...score }));
-    this.continueVote = [...checkpoint.votes];
+    this.continueVote = copySeatValues(checkpoint.votes);
     this.continueVoteDeadline = restoredAt + checkpoint.voteRemainingMs;
     this.continueVoteFinalScores = finalScores;
     if (this.timing && checkpoint.decisionTiming?.prompts) {

@@ -1,4 +1,5 @@
 import type { DuplicateWallState, Seat } from "~/game/protocol/messages";
+import type { PlayerCount } from "~/game/protocol/seat";
 
 export const DUPLICATE_REMAINING_COLOR = 0x9ca3af;
 export const DUPLICATE_LIMITING_COLOR = 0x4ade80;
@@ -16,15 +17,14 @@ export function duplicatePlayerCounterSpecs(
   if (state === null) {
     return [];
   }
-  return ([0, 1, 2, 3] as Seat[]).map((seat) => {
+  return state.remaining.map((remaining, index) => {
+    const seat = index as Seat;
     const limiting = state.limitingSeat === seat;
     return {
       seat,
-      remaining: state.remaining[seat],
+      remaining,
       limiting,
-      color: limiting
-        ? DUPLICATE_LIMITING_COLOR
-        : DUPLICATE_REMAINING_COLOR,
+      color: limiting ? DUPLICATE_LIMITING_COLOR : DUPLICATE_REMAINING_COLOR,
     };
   });
 }
@@ -32,7 +32,13 @@ export function duplicatePlayerCounterSpecs(
 export function displayedTilesRemaining(view: {
   drawsTaken: number;
   duplicateWallState?: DuplicateWallState | null;
+  playerCount?: PlayerCount;
+  wallRemaining?: number;
 }): number {
-  return view.duplicateWallState?.estimatedDrawsRemaining ??
-    Math.max(0, 70 - view.drawsTaken);
+  return (
+    view.duplicateWallState?.estimatedDrawsRemaining ??
+    (view.playerCount === 3
+      ? Math.max(0, view.wallRemaining ?? 0)
+      : Math.max(0, 70 - view.drawsTaken))
+  );
 }

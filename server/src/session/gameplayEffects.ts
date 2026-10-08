@@ -101,7 +101,12 @@ export class GameplayEffects {
     let triggerEmittedAt: number | null = null;
     for (let index = history.length - 1; index >= 0; index--) {
       const entry = history[index];
-      if (entry.event.type === trigger) {
+      if (
+        entry.event.type === trigger ||
+        (trigger === "call" &&
+          entry.event.type === "nuki" &&
+          (entry.event.stage === "declared" || entry.event.tile !== "4z"))
+      ) {
         triggerEmittedAt = entry.emittedAt;
         break;
       }

@@ -1,3 +1,4 @@
+import { activeSeats } from "~/game/rules/seats";
 import type { GameEvent, Seat, ServerMessage } from "~/game/protocol/messages";
 import type { PersistedMatchEvent } from "../repository";
 import type { ActionWindowRegistry } from "../timing/actionWindows";
@@ -73,7 +74,7 @@ export class MatchBroadcast {
   }
 
   broadcastRoomState(): void {
-    for (const seat of [0, 1, 2, 3] as const) {
+    for (const seat of activeSeats(this.connections.playerCount)) {
       const send = this.connections.sender(seat);
       if (send !== null) {
         send(this.port.buildRoomState(seat));

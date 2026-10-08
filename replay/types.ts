@@ -1,5 +1,6 @@
 import type { GameEvent } from "~/game/protocol/messages";
 import type { MatchModeConfig } from "~/game/protocol/matchMode";
+import type { PlayerCount, SanmaType } from "~/game/protocol/seat";
 
 /**
  * Shared `ReplayLog` shape — Phase 4.5, step 1.
@@ -36,7 +37,7 @@ import type { MatchModeConfig } from "~/game/protocol/matchMode";
  * the produced documents. Hydration re-parses logs whose
  * `schemaVersion` is older.
  */
-export const REPLAY_LOG_SCHEMA_VERSION = 9;
+export const REPLAY_LOG_SCHEMA_VERSION = 10;
 
 export type ReplaySource = "ingame" | "majsoul" | "tenhou" | "riichicity";
 
@@ -50,6 +51,9 @@ export interface ReplaySeat {
 }
 
 export interface ReplayLog {
+  /** Missing on legacy four-player archives. */
+  playerCount?: PlayerCount;
+  sanmaType?: SanmaType;
   source: ReplaySource;
   /** Platform's native game id (matchId for in-app, uuid for Majsoul,
    * log id for Tenhou, id for Riichi City). Used as the lookup key

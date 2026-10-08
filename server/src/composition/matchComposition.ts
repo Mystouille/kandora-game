@@ -1,3 +1,4 @@
+import { copySeatValues } from "~/game/rules/seats";
 import { MatchModeConfigSchema } from "~/game/protocol/matchMode";
 import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
 import { CheckpointFactory } from "../recovery/checkpointFactory";
@@ -30,6 +31,7 @@ import { TimeBank } from "../timing/timeBank";
 import type { MatchProcessDependencies } from "./dependencies";
 import { MatchGameplay } from "./matchGameplay";
 import { MatchLifecycle } from "./matchLifecycle";
+import { resolveRuleSet } from "~/game/rules/ruleSet";
 
 /** Readonly owner references, never a replacement bag of match state. */
 export class MatchComposition {
@@ -66,8 +68,9 @@ export class MatchComposition {
     players: MatchPlayerInit[],
     dependencies: MatchProcessDependencies
   ) {
-    if (players.length !== 4) {
-      throw new Error("MatchProcess requires exactly 4 players");
+    const playerCount = resolveRuleSet(config.ruleSetOverride).playerCount;
+    if (players.length !== playerCount) {
+      throw new Error(`MatchProcess requires exactly ${playerCount} players`);
     }
     this.roster = new RoomRoster(config.matchId, players, {
       status: () => this.lifecycle.session.snapshot().status,
@@ -84,7 +87,8 @@ export class MatchComposition {
     });
     this.connections = new PlayerConnections(
       (seat) => this.roster.player(seat),
-      () => this.broadcast.broadcastRoomState()
+      () => this.broadcast.broadcastRoomState(),
+      playerCount
     );
     const mode = MatchModeConfigSchema.parse(config.mode);
     if (mode.type === "duplicate" && config.debug !== undefined) {
@@ -107,14 +111,20 @@ export class MatchComposition {
       createSystemMatchRuntime(config.seed, dependencies.authorityClock);
     this.repository = dependencies.repository;
     const eventJournalStore = dependencies.eventJournalStore ?? null;
-    this.kernel = new MatchKernel(mode, config.presetId, this.runtime);
-    this.timeBank = new TimeBank(gameTiming.INITIAL_BUFFER_MS);
+    this.kernel = new MatchKernel(
+      mode,
+      config.presetId,
+      this.runtime,
+      playerCount
+    );
+    this.timeBank = new TimeBank(gameTiming.INITIAL_BUFFER_MS, playerCount);
     this.actionWindows = new ActionWindowRegistry(
       this.runtime,
       (seat) => {
         void this.gameplay.decisions.handleDeadlineExpiry(seat);
       },
-      () => this.isPaused
+      () => this.isPaused,
+      playerCount
     );
     this.timing = new DecisionTiming(
       this.runtime.clockEpoch ?? `match-${config.matchId}`,
@@ -186,7 +196,7 @@ export class MatchComposition {
       },
     });
     this.barrier = new TransitionBarrier(this.runtime);
-    this.metadata = new HandMetadata(this.runtime);
+    this.metadata = new HandMetadata(this.runtime, playerCount);
     this.details = new MatchViewDetails(this.kernel);
     this.gameplay = new MatchGameplay(
       config.matchId,
@@ -252,6 +262,7 @@ export class MatchComposition {
       kernel: this.kernel,
     });
     this.publisher = new MatchEventPublisher({
+      playerCount,
       runtime: this.runtime,
       timing: this.timing,
       eventJournalStore,
@@ -339,7 +350,7 @@ export class MatchComposition {
         }
         return {
           deadline: snapshot.deadline,
-          votes: [...snapshot.votes],
+          votes: copySeatValues(snapshot.votes),
           gameIndex: this.lifecycle.session.snapshot().gameIndex,
         };
       },
@@ -397,6 +408,18 @@ export class MatchComposition {
       results: this.lifecycle.results,
     });
     this.recovery = new MatchRecovery({
+      resumeAutomaticNuki: (opening) => this.gameplay.turns.resumeNuki(opening),
+      reportResumeError: (error) => {
+        console.error("[game-server] automatic nuki recovery failed", error);
+        for (const seat of this.roster.humanSeats()) {
+          this.connections.sender(seat)?.({
+            type: "error",
+            code: "nuki_recovery_failed",
+            message:
+              "The saved replacement could not be resumed. Reconnect to retry.",
+          });
+        }
+      },
       matchId: config.matchId,
       repository: this.repository,
       runtime: this.runtime,

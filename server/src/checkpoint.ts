@@ -1,3 +1,4 @@
+import { seatValuesSchema } from "~/game/protocol/seat";
 import { z } from "zod";
 import { MatchModeConfigSchema } from "~/game/protocol/matchMode";
 import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
@@ -14,18 +15,13 @@ import {
 import { MatchStateSchema } from "~/game/rules/state";
 import { RuleSetSchema } from "~/game/rules/ruleSet";
 
-export const MATCH_CHECKPOINT_SCHEMA_VERSION = 7 as const;
+export const MATCH_CHECKPOINT_SCHEMA_VERSION = 8 as const;
 
 const DecisionTimingCheckpointSchema = z
   .object({
     nextWindow: z.number().int().positive(),
     prompts: PromptTimingSnapshotSchema.optional(),
-    windows: z.tuple([
-      ActionWindowViewSchema.nullable(),
-      ActionWindowViewSchema.nullable(),
-      ActionWindowViewSchema.nullable(),
-      ActionWindowViewSchema.nullable(),
-    ]),
+    windows: seatValuesSchema(ActionWindowViewSchema.nullable()),
   })
   .strict()
   .superRefine((timing, context) => {
@@ -55,24 +51,11 @@ const CheckpointPlayerSchema = z
   })
   .strict();
 
-const NumberTuple4Schema = z.tuple([
-  z.number().int(),
-  z.number().int(),
-  z.number().int(),
-  z.number().int(),
-]);
-const NonnegativeNumberTuple4Schema = z.tuple([
-  z.number().int().nonnegative(),
-  z.number().int().nonnegative(),
-  z.number().int().nonnegative(),
-  z.number().int().nonnegative(),
-]);
-const BooleanTuple4Schema = z.tuple([
-  z.boolean(),
-  z.boolean(),
-  z.boolean(),
-  z.boolean(),
-]);
+const NumberTuple4Schema = seatValuesSchema(z.number().int());
+const NonnegativeNumberTuple4Schema = seatValuesSchema(
+  z.number().int().nonnegative()
+);
+const BooleanTuple4Schema = seatValuesSchema(z.boolean());
 const SeatSchema = z.union([
   z.literal(0),
   z.literal(1),
@@ -98,12 +81,7 @@ export const MatchDriverSnapshotSchema = z.discriminatedUnion("type", [
       activeHand: z
         .object({
           key: DuplicateHandKeySchema,
-          cursors: z.tuple([
-            z.number().int().nonnegative(),
-            z.number().int().nonnegative(),
-            z.number().int().nonnegative(),
-            z.number().int().nonnegative(),
-          ]),
+          cursors: seatValuesSchema(z.number().int().nonnegative()),
         })
         .strict()
         .nullable(),
@@ -125,16 +103,14 @@ export const WaitingRoomCheckpointSchema = z
     driver: MatchDriverSnapshotSchema,
     ruleSet: RuleSetSchema,
     debug: MatchDebugSchema,
-    seats: z.tuple([
-      CheckpointPlayerSchema.nullable(),
-      CheckpointPlayerSchema.nullable(),
-      CheckpointPlayerSchema.nullable(),
-      CheckpointPlayerSchema.nullable(),
-    ]),
+    seats: seatValuesSchema(CheckpointPlayerSchema.nullable()),
     ready: BooleanTuple4Schema.default([false, false, false, false]),
   })
   .strict()
   .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
     const humanIds = new Set<string>();
     for (const [seat, player] of checkpoint.seats.entries()) {
       if (player === null || player.isBot) {
@@ -164,12 +140,7 @@ const PlayingCheckpointBaseShape = {
   decisionTiming: DecisionTimingCheckpointSchema,
   mode: MatchModeConfigSchema,
   driver: MatchDriverSnapshotSchema,
-  seats: z.tuple([
-    CheckpointPlayerSchema,
-    CheckpointPlayerSchema,
-    CheckpointPlayerSchema,
-    CheckpointPlayerSchema,
-  ]),
+  seats: seatValuesSchema(CheckpointPlayerSchema),
   state: MatchStateSchema,
   startedAgoMs: z.number().int().nonnegative(),
   startedCalendarAt: z.number().int().nonnegative().optional(),
@@ -197,12 +168,7 @@ const PlayingCheckpointBaseShape = {
     z.number().int().min(1).max(6),
     z.number().int().min(1).max(6),
   ]),
-  riichiTileIdx: z.tuple([
-    z.number().int().nonnegative().nullable(),
-    z.number().int().nonnegative().nullable(),
-    z.number().int().nonnegative().nullable(),
-    z.number().int().nonnegative().nullable(),
-  ]),
+  riichiTileIdx: seatValuesSchema(z.number().int().nonnegative().nullable()),
   humanDrawQueue: z.array(TileSchema),
   leftDiscardQueue: z.array(TileSchema),
   bufferMs: NonnegativeNumberTuple4Schema,
@@ -216,6 +182,7 @@ const PlayingCheckpointBaseShape = {
   lastEngineEventType: z
     .enum([
       "draw",
+      "nuki",
       "discard",
       "ryuukyoku_declaration",
       "win",
@@ -252,6 +219,39 @@ const CallOptionSchema = z.discriminatedUnion("kind", [
 ]);
 
 const CallOptionsSlotSchema = z.array(CallOptionSchema).min(1).nullable();
+
+export const PlayingNukiCheckpointSchema = z
+  .object({
+    ...PlayingCheckpointBaseShape,
+    checkpointKind: z.literal("nuki_replacement"),
+  })
+  .strict()
+  .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
+    if (
+      checkpoint.state.phase !== "awaiting_nuki_replacement" ||
+      checkpoint.state.pendingNuki === null ||
+      checkpoint.state.ruleSet.playerCount !== 3 ||
+      checkpoint.state.ruleSet.sanmaType !== "kansai"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["state"],
+        message: "Nuki recovery requires a pending mandatory replacement",
+      });
+    }
+    if (checkpoint.nextSeq !== checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextSeq"],
+        message: "Next sequence must match the event log",
+      });
+    }
+  });
+
+export type PlayingNukiCheckpoint = z.infer<typeof PlayingNukiCheckpointSchema>;
 const CallTimerSlotSchema = z
   .object({
     legalActions: z.array(LegalActionSchema).min(1),
@@ -279,6 +279,9 @@ export const PlayingActionCheckpointSchema = z
   })
   .strict()
   .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
     const { kind, seat, legalActions } = checkpoint.actionWindow;
     const expectedPhase =
       kind === "ryuukyoku_declaration"
@@ -360,32 +363,20 @@ export const PlayingCallCheckpointSchema = z
   .object({
     ...PlayingCheckpointBaseShape,
     checkpointKind: z.literal("call_window"),
-    callWindows: z.tuple([
-      CallOptionsSlotSchema,
-      CallOptionsSlotSchema,
-      CallOptionsSlotSchema,
-      CallOptionsSlotSchema,
-    ]),
-    pendingHumanCallActions: z.tuple([
-      LegalActionSchema.nullable(),
-      LegalActionSchema.nullable(),
-      LegalActionSchema.nullable(),
-      LegalActionSchema.nullable(),
-    ]),
+    callWindows: seatValuesSchema(CallOptionsSlotSchema),
+    pendingHumanCallActions: seatValuesSchema(LegalActionSchema.nullable()),
     pendingBotRons: z.array(SeatSchema),
     pendingBotCalls: z.array(
       z.object({ seat: SeatSchema, option: CallOptionSchema }).strict()
     ),
     pendingChankanBotRons: z.array(SeatSchema),
-    callTimers: z.tuple([
-      CallTimerSlotSchema,
-      CallTimerSlotSchema,
-      CallTimerSlotSchema,
-      CallTimerSlotSchema,
-    ]),
+    callTimers: seatValuesSchema(CallTimerSlotSchema),
   })
   .strict()
   .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
     if (
       checkpoint.state.phase !== "awaiting_draw" &&
       checkpoint.state.phase !== "awaiting_chankan"
@@ -408,12 +399,14 @@ export const PlayingCallCheckpointSchema = z
     }
     if (
       checkpoint.state.phase === "awaiting_chankan" &&
-      checkpoint.state.pendingShouminkan === null
+      checkpoint.state.pendingShouminkan === null &&
+      checkpoint.state.pendingNuki === null
     ) {
       context.addIssue({
         code: "custom",
         path: ["state", "pendingShouminkan"],
-        message: "Chankan window requires a pending shouminkan",
+        message:
+          "Chankan window requires a pending added kan or North extraction",
       });
     }
     if (
@@ -438,7 +431,7 @@ export const PlayingCallCheckpointSchema = z
       });
     }
     let openCount = 0;
-    for (let seat = 0; seat < 4; seat++) {
+    for (let seat = 0; seat < checkpoint.state.ruleSet.playerCount; seat++) {
       const options = checkpoint.callWindows[seat];
       const timer = checkpoint.callTimers[seat];
       const pending = checkpoint.pendingHumanCallActions[seat];
@@ -525,6 +518,9 @@ export const PlayingReadyCheckpointSchema = z
   })
   .strict()
   .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
     const expectedPhase =
       checkpoint.readyContinuation === "initial_hand"
         ? "awaiting_draw"
@@ -586,23 +582,16 @@ export const PlayingContinueVoteCheckpointSchema = z
   .object({
     ...PlayingCheckpointBaseShape,
     checkpointKind: z.literal("continue_vote"),
-    votes: z.tuple([
-      z.enum(["yes", "no"]).nullable(),
-      z.enum(["yes", "no"]).nullable(),
-      z.enum(["yes", "no"]).nullable(),
-      z.enum(["yes", "no"]).nullable(),
-    ]),
+    votes: seatValuesSchema(z.enum(["yes", "no"]).nullable()),
     voteRemainingMs: z.number().int().nonnegative(),
     timeoutArmed: z.boolean(),
-    finalScores: z.tuple([
-      FinalScoreSchema,
-      FinalScoreSchema,
-      FinalScoreSchema,
-      FinalScoreSchema,
-    ]),
+    finalScores: seatValuesSchema(FinalScoreSchema),
   })
   .strict()
   .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
     if (!checkpoint.state.ruleSet.buuMode) {
       context.addIssue({
         code: "custom",
@@ -675,6 +664,9 @@ export const PlayingResultTransitionCheckpointSchema = z
   })
   .strict()
   .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
     if (checkpoint.state.phase !== "hand_ended") {
       context.addIssue({
         code: "custom",
@@ -712,6 +704,98 @@ function checkpointRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function validateParticipantCollections(
+  input: unknown,
+  context: z.RefinementCtx
+): boolean {
+  const checkpoint = checkpointRecord(input);
+  const state = checkpointRecord(checkpoint?.state);
+  const rules = checkpointRecord(
+    checkpoint?.status === "waiting" ? checkpoint.ruleSet : state?.ruleSet
+  );
+  const count = rules?.playerCount;
+  if (checkpoint === null || (count !== 3 && count !== 4)) {
+    context.addIssue({
+      code: "custom",
+      message: "Checkpoint requires a valid participant count",
+    });
+    return false;
+  }
+  let valid = true;
+  const check = (values: unknown, path: (string | number)[]): void => {
+    if (!Array.isArray(values) || values.length !== count) {
+      context.addIssue({
+        code: "custom",
+        path,
+        message: `Expected ${count} active participants`,
+      });
+      valid = false;
+    }
+  };
+  const fields =
+    checkpoint.status === "waiting"
+      ? ["seats", "ready"]
+      : [
+          "seats",
+          "seatSeq",
+          "sessionChips",
+          "gameStartChips",
+          "sessionDabuken",
+          "riichiTileIdx",
+          "bufferMs",
+        ];
+  for (const field of fields) {
+    check(checkpoint[field], [field]);
+  }
+  for (const field of [
+    "callWindows",
+    "callTimers",
+    "pendingHumanCallActions",
+    "readyAcked",
+    "votes",
+  ]) {
+    if (checkpoint[field] !== undefined) {
+      check(checkpoint[field], [field]);
+    }
+  }
+  const timing = checkpointRecord(checkpoint.decisionTiming);
+  check(timing?.windows, ["decisionTiming", "windows"]);
+  const prompts = checkpointRecord(timing?.prompts);
+  if (prompts !== null) {
+    check(prompts.windows, ["decisionTiming", "prompts", "windows"]);
+  }
+  const policy = checkpointRecord(checkpoint.connectionPolicy);
+  if (policy !== null) {
+    for (const field of [
+      "disconnected",
+      "afkSelfReported",
+      "livenessProbeMisses",
+    ]) {
+      check(policy[field], ["connectionPolicy", field]);
+    }
+  }
+  const actionWindow = checkpointRecord(checkpoint.actionWindow);
+  if (
+    actionWindow !== null &&
+    (typeof actionWindow.seat !== "number" ||
+      actionWindow.seat < 0 ||
+      actionWindow.seat >= count)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["actionWindow", "seat"],
+      message: "Action seat is not active",
+    });
+    valid = false;
+  }
+  const driver = checkpointRecord(checkpoint.driver);
+  const activeHand = checkpointRecord(driver?.activeHand);
+  if (activeHand !== null) {
+    check(activeHand.cursors, ["driver", "activeHand", "cursors"]);
+  }
+  return valid;
 }
 
 function nonnegativeInteger(value: unknown): number {
@@ -802,6 +886,9 @@ function migrateLegacyCheckpoint(input: unknown): unknown {
   ) {
     return input;
   }
+  if (input.schemaVersion === 7) {
+    return { ...input, schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION };
+  }
   if (
     input.schemaVersion !== 1 &&
     input.schemaVersion !== 2 &&
@@ -834,6 +921,7 @@ export const MatchCheckpointSchema = z.preprocess(
     PlayingReadyCheckpointSchema,
     PlayingContinueVoteCheckpointSchema,
     PlayingResultTransitionCheckpointSchema,
+    PlayingNukiCheckpointSchema,
   ])
 );
 export type MatchCheckpoint = z.infer<typeof MatchCheckpointSchema>;

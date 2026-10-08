@@ -27,6 +27,9 @@ export function matchStartEvent(
 ): Extract<GameEvent, { type: "match_start" }> {
   return {
     type: "match_start",
+    ...(state.ruleSet.playerCount === 3
+      ? { playerCount: 3 as const, sanmaType: state.ruleSet.sanmaType }
+      : {}),
     seats: players.map(({ seat, userId, displayName }) => ({
       seat,
       userId,

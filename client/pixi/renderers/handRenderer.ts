@@ -135,6 +135,7 @@ export class HandRenderer {
         handGap;
     }
     const handContainer = new Container();
+    handContainer.label = `hand-seat-${seat}`;
     const isDrawing = isFreshlyDrawn && this.animator.isDrawing(seat);
     const paint: HandStripPaint = {
       handContainer,

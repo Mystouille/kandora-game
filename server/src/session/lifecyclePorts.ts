@@ -1,3 +1,4 @@
+import { type SeatValues } from "~/game/protocol/seat";
 import type {
   DuplicateWallState,
   GameEvent,
@@ -29,6 +30,9 @@ export interface ResultTransitionPort {
 }
 
 export interface HandLifecyclePort {
+  applyEngineAction(
+    action: import("./matchKernel").KernelAction
+  ): Promise<import("./matchKernel").MatchStateView>;
   emitEvent(event: GameEvent): Promise<void>;
   emitEngineEvent(event: EngineEvent): Promise<void>;
   emitFuritenChanges(
@@ -52,7 +56,7 @@ export interface HandLifecyclePort {
     delayMs: number,
     nextReadyMs: number
   ): Promise<void>;
-  computeSinking(): [boolean, boolean, boolean, boolean];
+  computeSinking(): SeatValues<boolean>;
   rollDice(): [number, number];
   duplicateWallEventFields(): { duplicateWallState?: DuplicateWallState };
 }

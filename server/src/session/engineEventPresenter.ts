@@ -1,3 +1,6 @@
+import { copySeatValues } from "~/game/rules/seats";
+import { activeSeats } from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import {
   riichiLibYakuToRomaji,
   type EngineEvent,
@@ -33,7 +36,7 @@ export interface EngineEventPort {
     delay: number
   ): Promise<void>;
   duplicateWallEventFields(): { duplicateWallState?: DuplicateWallState };
-  computeSinking(): [boolean, boolean, boolean, boolean];
+  computeSinking(): SeatValues<boolean>;
   rollDice(): [number, number];
   endMatch(
     reason: "exhaustive_draw" | "ron" | "tsumo" | "abort",
@@ -42,6 +45,10 @@ export interface EngineEventPort {
 }
 
 export class EngineEventPresenter {
+  private wallFields() {
+    const wall = this.port.state().sanmaWall;
+    return wall ? { sanmaWall: { ...wall } } : {};
+  }
   private lastEngineEventType: EngineEvent["type"] | null = null;
   get lastType(): EngineEvent["type"] | null {
     return this.lastEngineEventType;
@@ -108,7 +115,24 @@ export class EngineEventPresenter {
         seat: e.seat,
         tile: e.tile,
         wallRemaining: e.wallRemaining,
-        ...(e.fromDeadWall ? { fromDeadWall: true as const } : {}),
+        ...(e.fromDeadWall !== undefined
+          ? { fromDeadWall: e.fromDeadWall }
+          : {}),
+        ...(e.replacementKind ? { replacementKind: e.replacementKind } : {}),
+        ...(e.opening ? { opening: true } : {}),
+        ...this.wallFields(),
+        ...this.port.duplicateWallEventFields(),
+      });
+      return;
+    }
+    if (e.type === "nuki") {
+      await this.port.emitEvent({
+        type: "nuki",
+        seat: e.seat,
+        tile: e.tile,
+        stage: e.stage,
+        ...(this.port.state().pendingNuki?.opening ? { opening: true } : {}),
+        ...this.wallFields(),
         ...this.port.duplicateWallEventFields(),
       });
       return;
@@ -236,7 +260,7 @@ export class EngineEventPresenter {
               t ? [...this.port.state().hands[s]] : null
             ) as (Tile[] | null)[])
           : e.reason === "abort" && e.abortKind === "kyuushuu"
-            ? ([0, 1, 2, 3].map((s) =>
+            ? (activeSeats(this.port.state().ruleSet.playerCount).map((s) =>
                 s === this.port.state().turn
                   ? [...this.port.state().hands[s]]
                   : null
@@ -249,12 +273,7 @@ export class EngineEventPresenter {
         delta: e.delta,
         ...(r?.tenpai ? { tenpai: [...r.tenpai] } : {}),
         ...(r?.nagashi ? { nagashi: [...r.nagashi] } : {}),
-        scores: [...this.port.state().scores] as [
-          number,
-          number,
-          number,
-          number,
-        ],
+        scores: copySeatValues(this.port.state().scores),
         honba: this.port.state().honba,
         riichiSticks: this.port.state().riichiSticks,
         ...(tenpaiHands ? { tenpaiHands } : {}),
@@ -275,18 +294,8 @@ export class EngineEventPresenter {
         // hand_start / match_start. Skipped for non-Buu rule sets.
         ...(this.port.state().ruleSet.buuMode
           ? {
-              chips: [...this.port.state().chips] as [
-                number,
-                number,
-                number,
-                number,
-              ],
-              dabuken: [...this.port.state().dabuken] as [
-                boolean,
-                boolean,
-                boolean,
-                boolean,
-              ],
+              chips: copySeatValues(this.port.state().chips),
+              dabuken: copySeatValues(this.port.state().dabuken),
             }
           : {}),
       });
@@ -326,6 +335,14 @@ export class EngineEventPresenter {
       this.port.bank.refill(gameTiming.INITIAL_BUFFER_MS);
       await this.port.emitEvent({
         type: "hand_start",
+        ...(this.port.state().ruleSet.playerCount === 3
+          ? {
+              playerCount: 3 as const,
+              sanmaType: this.port.state().ruleSet.sanmaType,
+              sanmaWall: this.port.state().sanmaWall,
+              nukiTiles: this.port.state().nukiTiles.map((tiles) => [...tiles]),
+            }
+          : {}),
         round:
           (e.roundWind === "E"
             ? 0
@@ -334,34 +351,19 @@ export class EngineEventPresenter {
               : e.roundWind === "W"
                 ? 2
                 : 3) *
-            4 +
+            this.port.state().ruleSet.playerCount +
           (e.roundNumber - 1),
         dealer: e.dealer,
         roundWind: e.roundWind,
         roundNumber: e.roundNumber,
         honba: e.honba,
         riichiSticks: this.port.state().riichiSticks,
-        scores: [...this.port.state().scores] as [
-          number,
-          number,
-          number,
-          number,
-        ],
+        scores: copySeatValues(this.port.state().scores),
         sinking: this.port.computeSinking(),
         ...(this.port.state().ruleSet.buuMode
           ? {
-              chips: [...this.port.state().chips] as [
-                number,
-                number,
-                number,
-                number,
-              ],
-              dabuken: [...this.port.state().dabuken] as [
-                boolean,
-                boolean,
-                boolean,
-                boolean,
-              ],
+              chips: copySeatValues(this.port.state().chips),
+              dabuken: copySeatValues(this.port.state().dabuken),
             }
           : {}),
         doraIndicators: [...e.doraIndicators],

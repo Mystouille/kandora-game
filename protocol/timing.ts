@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SeatSchema } from "./seat";
+import { SeatSchema, seatValuesSchema } from "./seat";
 
 export const TIMING_CAPABILITY = "clock-window-v2" as const;
 export const TIMING_VERSION = 2 as const;
@@ -91,12 +91,7 @@ export type ActionWindowView = z.infer<typeof ActionWindowViewSchema>;
 export const PromptTimingSnapshotSchema = z
   .object({
     nextWindow: z.number().int().positive(),
-    windows: z.tuple([
-      ActionWindowViewSchema.nullable(),
-      ActionWindowViewSchema.nullable(),
-      ActionWindowViewSchema.nullable(),
-      ActionWindowViewSchema.nullable(),
-    ]),
+    windows: seatValuesSchema(ActionWindowViewSchema.nullable()),
   })
   .strict()
   .superRefine((snapshot, context) => {

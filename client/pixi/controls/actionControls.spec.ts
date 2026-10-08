@@ -81,6 +81,34 @@ afterEach(() => {
 });
 
 describe("action control owner", () => {
+  it.each([false, true])(
+    "keeps native sanma North voluntary, dispatches its server id and never renders Chii (mobile=%s)",
+    (mobile) => {
+      const nuki: LegalAction = {
+        id: "native-north-id",
+        type: "nuki",
+        tile: "4z",
+      };
+      const h = harness([nuki, ...CHI], mobile);
+      h.frame.view.playerCount = 3;
+      h.controls.setNoCallEnabled(true);
+      h.render();
+      expect(
+        allText(h.frame.root).some((text) => text.text.startsWith("Chi"))
+      ).toBe(false);
+      click(button(h.frame.root, "Nuki 北"));
+      expect(h.actionClick).toHaveBeenCalledWith(
+        expect.objectContaining({ action: nuki })
+      );
+    }
+  );
+  it("never offers a voluntary action for automatic Kansai fives", () => {
+    const h = harness([{ id: "automatic", type: "nuki", tile: "0m" }]);
+    h.frame.view.playerCount = 3;
+    h.frame.view.sanmaType = "kansai";
+    h.render();
+    expect(h.controls.bounds).toHaveLength(0);
+  });
   it("keeps tile-driven actions out of controls and owns riichi selection without changing legality", () => {
     const h = harness([
       { id: "discard:2m", type: "discard", tile: "2m" },

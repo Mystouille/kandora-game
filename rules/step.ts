@@ -1,3 +1,4 @@
+import { type SeatValues } from "~/game/protocol/seat";
 /**
  * Pure step-function reducer for the rules engine.
  *
@@ -16,17 +17,41 @@
  */
 
 import type { Action, DiscardSource } from "./actions";
+import {
+  isActiveSeat,
+  mapSeatValues,
+  nextSeat,
+  participantCount,
+  seatDistance,
+  seatValues,
+  windForSeat,
+  type PlayerCount,
+} from "./seats";
+import { handScoringContext } from "./scoringContext";
+import {
+  canDeclareNuki,
+  getPendingRobbery,
+  hasNukiInterruption,
+  isNukiTile,
+} from "./nuki";
+import { waitsForRules } from "./tileAvailability";
 import { dealMatch } from "./wall";
+import {
+  canTakeSanmaReplacement,
+  getSanmaIndicatorPair,
+  takeSanmaReplacement,
+  type SanmaIndicatorPair,
+  type SanmaReplacementKind,
+} from "./wallTransitions";
 import type { HandResult, MatchState, Meld } from "./state";
 import { distributePayments } from "./payments";
-import { isAkaDisabled } from "./ruleSet";
 import {
   shouldEndMatch,
   isFinalHandOfMatch,
   type MatchEndReason,
 } from "./matchEnd";
 import { scoreHand, type ScoreResult } from "./score";
-import { isWinningShape, waits } from "./shanten";
+import { isWinningShape } from "./shanten";
 import { isAnkanLegalDuringRiichi } from "./riichiKan";
 import { type Seat, type Tile, type Wind } from "./types";
 import {
@@ -42,13 +67,19 @@ export type EngineEvent =
       seat: Seat;
       tile: Tile;
       wallRemaining: number;
-      /** True when this draw is a rinshan replacement (the tile
-       * came off the dead wall rather than the live wall). The kan
-       * still reduces `wallRemaining` because the back live-wall
-       * tile is transferred into the dead wall. Consumed by the
-       * server to populate the wire event's same-named field, which
-       * drives the client's dead-wall depletion rendering. */
+      /** Dead-wall rendering marker. Sanma Duplicate emits false because its
+       * replacement comes from a personal queue; scoring follows the cause. */
       fromDeadWall?: boolean;
+      /** Replacement cause is independent of Duplicate's physical tile source. */
+      replacementKind?: "kan" | "nuki";
+      /** Opening-hand normalization restores thirteen tiles, not a playable turn. */
+      opening?: boolean;
+    }
+  | {
+      type: "nuki";
+      seat: Seat;
+      tile: Tile;
+      stage: "declared" | "completed";
     }
   | {
       type: "discard";
@@ -64,12 +95,12 @@ export type EngineEvent =
       loser: Seat | null;
       winTile: Tile;
       score: ScoreResult;
-      delta: [number, number, number, number];
+      delta: SeatValues<number>;
     }
   | {
       type: "hand_end";
       reason: "exhaustive_draw" | "tsumo" | "ron" | "abort";
-      delta: [number, number, number, number];
+      delta: SeatValues<number>;
       abortKind?: "kyuushuu" | "suufon_renda" | "suucha_riichi" | "sanchahou";
       /** Buu chip delta (winner gain, sinkers loss). Omitted when `buuMode` off. */
       chipDelta?: ChipDelta;
@@ -115,7 +146,7 @@ export type EngineEvent =
   | {
       type: "match_end";
       reason: MatchEndReason;
-      finalScores: [number, number, number, number];
+      finalScores: SeatValues<number>;
     };
 
 /**
@@ -200,14 +231,29 @@ export function isDiscardForbiddenByKuikae(
 }
 
 /**
- * Draw a rinshan tile and replenish the dead wall from the back of
- * the live wall. The dead wall stays at 14 tiles while the number of
- * future normal draws decreases by one, as required after every kan.
+ * Draw a replacement through the explicit sanma policy, or the unchanged
+ * four-player reserve path. Replacement cause is independent of tile source.
  */
 function drawRinshan(
   next: MatchState,
-  replacementTile?: Tile
-): { tile: Tile; fixedDeadWall: boolean } | undefined {
+  replacementTile?: Tile,
+  kind: SanmaReplacementKind = "kan"
+):
+  | { tile: Tile; fixedDeadWall: boolean; indicators?: SanmaIndicatorPair }
+  | undefined {
+  if (next.ruleSet.playerCount === 3) {
+    if (next.sanmaWall?.sanmaType !== next.ruleSet.sanmaType) {
+      return undefined;
+    }
+    const replacement = takeSanmaReplacement(next, kind, replacementTile);
+    if (!replacement) {
+      return undefined;
+    }
+    return {
+      ...replacement,
+      fixedDeadWall: next.sanmaWall.mode === "duplicate",
+    };
+  }
   if (next.deadWall.length === 0 || next.liveWall.length === 0) {
     return undefined;
   }
@@ -238,7 +284,9 @@ function drawRinshan(
  *   - minkan (daiminkan / shouminkan) → `instantlyRevealDoraForMinkan`
  *   - ankan                            → `instantlyRevealDoraForAnkan`
  *
- * Slot index uses `doraIndicators.length + pendingKanDora.length`
+ * Sanma uses the pair reserved by this replacement, independently of
+ * nuki draws and reveal timing. The four-player slot calculation retains
+ * `doraIndicators.length + pendingKanDora.length`
  * so consecutive deferred kans pick correct successive indicators
  * (the dead wall has shifted once per kan; the indicator tile is
  * captured at kan time so its identity is stable even if more
@@ -251,7 +299,8 @@ function captureKanDora(
   next: MatchState,
   kind: "minkan" | "ankan",
   events: EngineEvent[],
-  fixedDeadWall = false
+  fixedDeadWall = false,
+  reservedIndicators?: SanmaIndicatorPair
 ): void {
   if (!next.ruleSet.kanDora) {
     return;
@@ -261,11 +310,17 @@ function captureKanDora(
     return;
   }
   const nextIdx = (fixedDeadWall ? 4 : 3) + totalRevealed * 2;
-  const indicator = next.deadWall[nextIdx];
+  const indicator =
+    next.ruleSet.playerCount === 3
+      ? reservedIndicators?.dora
+      : next.deadWall[nextIdx];
   if (indicator === undefined) {
     return;
   }
-  const uraIndicator = next.deadWall[nextIdx + 1];
+  const uraIndicator =
+    next.ruleSet.playerCount === 3
+      ? reservedIndicators?.ura
+      : next.deadWall[nextIdx + 1];
   const instant =
     kind === "minkan"
       ? next.ruleSet.instantlyRevealDoraForMinkan
@@ -314,8 +369,10 @@ function clone(state: MatchState): MatchState {
     ruleSet: state.ruleSet,
     hands: state.hands.map((h) => [...h]),
     discards: state.discards.map((d) => [...d]),
+    nukiTiles: state.nukiTiles.map((tiles) => [...tiles]),
     liveWall: [...state.liveWall],
     deadWall: [...state.deadWall],
+    ...(state.sanmaWall ? { sanmaWall: { ...state.sanmaWall } } : {}),
     doraIndicators: [...state.doraIndicators],
     turn: state.turn,
     lastDrawn: [...state.lastDrawn],
@@ -328,69 +385,39 @@ function clone(state: MatchState): MatchState {
     roundLimit: state.roundLimit,
     honba: state.honba,
     riichiSticks: state.riichiSticks,
-    scores: [...state.scores] as [number, number, number, number],
-    riichiDeclared: [...state.riichiDeclared] as [
-      boolean,
-      boolean,
-      boolean,
-      boolean,
-    ],
+    scores: [...state.scores] as SeatValues<number>,
+    riichiDeclared: [...state.riichiDeclared] as SeatValues<boolean>,
     pendingRiichiSeat: state.pendingRiichiSeat,
-    doubleRiichi: [...state.doubleRiichi] as [
-      boolean,
-      boolean,
-      boolean,
-      boolean,
-    ],
-    ippatsuEligible: [...state.ippatsuEligible] as [
-      boolean,
-      boolean,
-      boolean,
-      boolean,
-    ],
+    doubleRiichi: [...state.doubleRiichi] as SeatValues<boolean>,
+    ippatsuEligible: [...state.ippatsuEligible] as SeatValues<boolean>,
     melds: state.melds.map((seatMelds) =>
       seatMelds.map((m) => ({ ...m, tiles: [...m.tiles] }))
     ),
     pendingShouminkan: state.pendingShouminkan
       ? { ...state.pendingShouminkan }
       : null,
+    pendingNuki: state.pendingNuki ? { ...state.pendingNuki } : null,
     pendingRyuukyoku: state.pendingRyuukyoku
       ? {
-          actualTenpai: [...state.pendingRyuukyoku.actualTenpai] as [
-            boolean,
-            boolean,
-            boolean,
-            boolean,
-          ],
-          declarations: [...state.pendingRyuukyoku.declarations] as [
-            boolean | null,
-            boolean | null,
-            boolean | null,
-            boolean | null,
-          ],
-          nagashi: [...state.pendingRyuukyoku.nagashi] as [
-            boolean,
-            boolean,
-            boolean,
-            boolean,
-          ],
+          actualTenpai: [
+            ...state.pendingRyuukyoku.actualTenpai,
+          ] as SeatValues<boolean>,
+          declarations: [...state.pendingRyuukyoku.declarations] as SeatValues<
+            boolean | null
+          >,
+          nagashi: [...state.pendingRyuukyoku.nagashi] as SeatValues<boolean>,
         }
       : null,
     uraDoraIndicators: [...state.uraDoraIndicators],
     pendingKanDora: [...state.pendingKanDora],
     pendingKanUraDora: [...state.pendingKanUraDora],
     lastHandResult: state.lastHandResult,
-    furitenLocked: [...state.furitenLocked] as [
-      boolean,
-      boolean,
-      boolean,
-      boolean,
-    ],
-    furitenTemp: [...state.furitenTemp] as [boolean, boolean, boolean, boolean],
+    furitenLocked: [...state.furitenLocked] as SeatValues<boolean>,
+    furitenTemp: [...state.furitenTemp] as SeatValues<boolean>,
     paoDaisangen: [...state.paoDaisangen],
     paoDaisuushii: [...state.paoDaisuushii],
-    chips: [...state.chips] as [number, number, number, number],
-    dabuken: [...state.dabuken] as [boolean, boolean, boolean, boolean],
+    chips: [...state.chips] as SeatValues<number>,
+    dabuken: [...state.dabuken] as SeatValues<boolean>,
   };
 }
 
@@ -411,10 +438,6 @@ function noop(state: MatchState): StepResult {
 }
 
 /** Seat wind for `seat` given current `dealer`. */
-function seatWindFor(seat: Seat, dealer: Seat): Wind {
-  return WINDS[(seat - dealer + 4) % 4];
-}
-
 /**
  * True if `seat` is winning on the first uninterrupted go-around:
  * no calls (open or closed melds) anywhere, and discards prior to
@@ -430,6 +453,9 @@ function isFirstUninterruptedGoAround(
   state: MatchState,
   winner: Seat
 ): boolean {
+  if (hasNukiInterruption(state)) {
+    return false;
+  }
   // No calls anywhere — any meld (chi/pon/kan/ankan/shouminkan)
   // disqualifies the entire hand for tenhou/chiihou/renhou.
   for (const seatMelds of state.melds) {
@@ -443,9 +469,13 @@ function isFirstUninterruptedGoAround(
   // Each seat must have at most one discard (their first), and
   // only the seats strictly between dealer and winner (inclusive of
   // dealer, exclusive of winner) in the rotation may have it.
-  const distance = (winner - state.dealer + 4) % 4;
-  for (let i = 0; i < 4; i++) {
-    const s = ((state.dealer + i) % 4) as Seat;
+  const distance = seatDistance(
+    state.dealer,
+    winner,
+    state.ruleSet.playerCount
+  );
+  for (let i = 0; i < state.ruleSet.playerCount; i++) {
+    const s = ((state.dealer + i) % state.ruleSet.playerCount) as Seat;
     const expected = i < distance ? 1 : 0;
     if (state.discards[s].length !== expected) {
       return false;
@@ -556,25 +586,13 @@ export function isFuritenForRon(state: MatchState, seat: Seat): boolean {
       continue;
     }
     const score = scoreHand({
+      ...handScoringContext(state, seat),
       hand: state.hands[seat],
       winTile: probe,
       tsumo: false,
-      roundWind: state.roundWind,
-      seatWind: seatWindFor(seat, state.dealer),
-      doraIndicators: state.doraIndicators,
-      uraDoraIndicators:
-        state.ruleSet.uraDora && state.riichiDeclared[seat]
-          ? state.uraDoraIndicators
-          : undefined,
-      riichi: state.riichiDeclared[seat],
-      doubleRiichi: state.doubleRiichi[seat],
-      ippatsu: state.ippatsuEligible[seat],
-      melds: state.melds[seat],
-      noKuitan: !state.ruleSet.kuitan,
-      noAka: isAkaDisabled(state.ruleSet),
-      doubleWindPairFu: state.ruleSet.doubleWindPairFu,
       haiteiOrHoutei:
         state.phase === "awaiting_draw" && state.liveWall.length === 0,
+      rinshanOrChankan: getPendingRobbery(state) !== null,
     });
     if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {
       return true;
@@ -607,9 +625,10 @@ export function isFuritenForRon(state: MatchState, seat: Seat): boolean {
 function lockMissedRonFuriten(
   next: MatchState,
   discardTile: Tile,
-  discarder: Seat
+  discarder: Seat,
+  chankan = false
 ): void {
-  for (let s = 0; s < 4; s++) {
+  for (let s = 0; s < next.ruleSet.playerCount; s++) {
     if (s === discarder) {
       continue;
     }
@@ -642,21 +661,11 @@ function lockMissedRonFuriten(
       continue;
     }
     const score = scoreHand({
+      ...handScoringContext(next, seat),
       hand: next.hands[seat],
       winTile: discardTile,
       tsumo: false,
-      roundWind: next.roundWind,
-      seatWind: seatWindFor(seat, next.dealer),
-      doraIndicators: next.doraIndicators,
-      uraDoraIndicators:
-        next.ruleSet.uraDora && isRiichi ? next.uraDoraIndicators : undefined,
-      riichi: isRiichi,
-      doubleRiichi: next.doubleRiichi[seat],
-      ippatsu: next.ippatsuEligible[seat],
-      melds: next.melds[seat],
-      noKuitan: !next.ruleSet.kuitan,
-      noAka: isAkaDisabled(next.ruleSet),
-      doubleWindPairFu: next.ruleSet.doubleWindPairFu,
+      rinshanOrChankan: chankan,
     });
     if (score.isAgari && (score.han > 0 || score.yakumanCount > 0)) {
       if (isRiichi) {
@@ -678,7 +687,10 @@ function endAbort(
   next: MatchState,
   kind: "kyuushuu" | "suufon_renda" | "suucha_riichi" | "sanchahou"
 ): EngineEvent[] {
-  const delta: [number, number, number, number] = [0, 0, 0, 0];
+  const delta: SeatValues<number> = seatValues(
+    next.ruleSet.playerCount,
+    () => 0
+  );
   next.phase = "hand_ended";
   next.lastHandResult = {
     reason: "abort",
@@ -695,10 +707,10 @@ function endAbort(
 
 /** Apply a delta vector into `scores` (mutates `scores` in place). */
 function applyDelta(
-  scores: [number, number, number, number],
+  scores: SeatValues<number>,
   delta: readonly number[]
 ): void {
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < scores.length; i++) {
     scores[i] += delta[i];
   }
 }
@@ -744,13 +756,8 @@ function applyPaoOverride(
   winner: Seat,
   loser: Seat | null,
   payer: Seat
-): [number, number, number, number] {
-  const out: [number, number, number, number] = [
-    delta[0],
-    delta[1],
-    delta[2],
-    delta[3],
-  ];
+): SeatValues<number> {
+  const out = mapSeatValues(delta, (value) => value);
   if (loser !== null) {
     if (loser === payer) {
       return out;
@@ -761,7 +768,7 @@ function applyPaoOverride(
     return out;
   }
   // Tsumo: shift every non-winner's negative share to the payer.
-  for (let s = 0; s < 4; s++) {
+  for (let s = 0; s < delta.length; s++) {
     if (s === winner || s === payer) {
       continue;
     }
@@ -793,7 +800,7 @@ function applyBuuWinSideEffects(
   next: MatchState,
   args: {
     winner: Seat;
-    delta: [number, number, number, number];
+    delta: SeatValues<number>;
     winnerPreScore: number;
     score: ScoreResult;
     /**
@@ -818,7 +825,7 @@ function applyBuuWinSideEffects(
   if (!rs.buuMode) {
     return {
       kind: "ok",
-      chipDelta: [0, 0, 0, 0],
+      chipDelta: seatValues(next.ruleSet.playerCount, () => 0),
       sinkingCount: 0,
       consumedDabuken: false,
       awardedDabuken: false,
@@ -855,7 +862,7 @@ function applyBuuWinSideEffects(
 
   if (!legality.legal) {
     // Chombo: revert the point delta we just applied.
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < next.ruleSet.playerCount; s++) {
       next.scores[s] -= args.delta[s];
     }
     // `applyWin` already collected every stick on the table
@@ -877,9 +884,12 @@ function applyBuuWinSideEffects(
     // the next winner. The score refund is reflected in the
     // `hand_end` delta so renderers (and stored replays) show
     // the per-seat point change.
-    const riichiRefundDelta: [number, number, number, number] = [0, 0, 0, 0];
+    const riichiRefundDelta: SeatValues<number> = seatValues(
+      next.ruleSet.playerCount,
+      () => 0
+    );
     const refundValue = rs.riichiBetValue;
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < next.ruleSet.playerCount; s++) {
       if (next.riichiDeclared[s]) {
         next.scores[s] += refundValue;
         next.riichiSticks -= 1;
@@ -889,9 +899,12 @@ function applyBuuWinSideEffects(
     // Apply chip chombo penalty: `chipChomboPenalty` from the
     // offender to every other seat.
     const penalty = rs.chipChomboPenalty;
-    const chipPenalty: ChipDelta = [0, 0, 0, 0];
+    const chipPenalty: ChipDelta = seatValues(
+      next.ruleSet.playerCount,
+      () => 0
+    );
     if (penalty !== null && penalty > 0) {
-      for (let s = 0; s < 4; s++) {
+      for (let s = 0; s < next.ruleSet.playerCount; s++) {
         if (s === args.winner) {
           chipPenalty[s] -= penalty * 3;
         } else {
@@ -943,7 +956,7 @@ function applyBuuWinSideEffects(
   // result panel only shows the point delta mid-match.
   return {
     kind: "ok",
-    chipDelta: [0, 0, 0, 0],
+    chipDelta: seatValues(next.ruleSet.playerCount, () => 0),
     sinkingCount: 0,
     consumedDabuken: false,
     awardedDabuken: false,
@@ -964,6 +977,7 @@ function applyWin(
   score: ScoreResult
 ): EngineEvent[] {
   let delta = distributePayments({
+    playerCount: next.ruleSet.playerCount,
     score,
     winner,
     dealer: next.dealer,
@@ -993,7 +1007,7 @@ function applyWin(
       delta[winner] += bonus;
     } else {
       const bonusPer = next.honba * 100;
-      for (let s = 0; s < 4; s++) {
+      for (let s = 0; s < next.ruleSet.playerCount; s++) {
         if (s === winner) {
           continue;
         }
@@ -1098,12 +1112,16 @@ function applyMultiRon(
   winTile: Tile,
   scores: ScoreResult[]
 ): EngineEvent[] {
-  const combined: [number, number, number, number] = [0, 0, 0, 0];
+  const combined: SeatValues<number> = seatValues(
+    next.ruleSet.playerCount,
+    () => 0
+  );
   const events: EngineEvent[] = [];
   for (let i = 0; i < winners.length; i++) {
     const w = winners[i];
     const score = scores[i];
     let d = distributePayments({
+      playerCount: next.ruleSet.playerCount,
       score,
       winner: w,
       dealer: next.dealer,
@@ -1115,7 +1133,7 @@ function applyMultiRon(
     if (paoPayer !== null && paoPayer !== w) {
       d = applyPaoOverride(d, w, loser, paoPayer);
     }
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < next.ruleSet.playerCount; s++) {
       combined[s] += d[s];
     }
     events.push({ type: "win", winner: w, loser, winTile, score, delta: d });
@@ -1172,23 +1190,21 @@ function applyMultiRon(
  *   split equally between the noten seats; the tenpai side
  *   receives that 3000 split equally between the tenpai seats.
  */
-function tenpaiPaymentDelta(
-  tenpai: readonly boolean[]
-): [number, number, number, number] {
-  const delta: [number, number, number, number] = [0, 0, 0, 0];
+function tenpaiPaymentDelta(tenpai: readonly boolean[]): SeatValues<number> {
+  const delta: SeatValues<number> = seatValues(
+    participantCount(tenpai),
+    () => 0
+  );
   const tenpaiSeats: Seat[] = [];
   const notenSeats: Seat[] = [];
-  for (let s = 0; s < 4; s++) {
+  for (let s = 0; s < participantCount(tenpai); s++) {
     if (tenpai[s]) {
       tenpaiSeats.push(s as Seat);
     } else {
       notenSeats.push(s as Seat);
     }
   }
-  if (tenpaiSeats.length === 0 || notenSeats.length === 4) {
-    return delta;
-  }
-  if (tenpaiSeats.length === 4) {
+  if (tenpaiSeats.length === 0 || notenSeats.length === 0) {
     return delta;
   }
   const perNotenPay = -3000 / notenSeats.length;
@@ -1213,16 +1229,19 @@ function tenpaiPaymentDelta(
 function nagashiPaymentDelta(
   nagashi: readonly boolean[],
   dealer: Seat
-): [number, number, number, number] {
-  const delta: [number, number, number, number] = [0, 0, 0, 0];
-  for (let s = 0; s < 4; s++) {
+): SeatValues<number> {
+  const delta: SeatValues<number> = seatValues(
+    participantCount(nagashi),
+    () => 0
+  );
+  for (let s = 0; s < participantCount(nagashi); s++) {
     if (!nagashi[s]) {
       continue;
     }
     const winner = s as Seat;
     if (winner === dealer) {
       // Dealer nagashi: each of the three non-dealers pays 4000.
-      for (let p = 0; p < 4; p++) {
+      for (let p = 0; p < participantCount(nagashi); p++) {
         if (p === winner) {
           continue;
         }
@@ -1231,7 +1250,7 @@ function nagashiPaymentDelta(
       }
     } else {
       // Non-dealer nagashi: dealer pays 4000, other non-dealers 2000.
-      for (let p = 0; p < 4; p++) {
+      for (let p = 0; p < participantCount(nagashi); p++) {
         if (p === winner) {
           continue;
         }
@@ -1244,30 +1263,26 @@ function nagashiPaymentDelta(
   return delta;
 }
 
-type BooleanTuple4 = [boolean, boolean, boolean, boolean];
+type BooleanSeatValues = SeatValues<boolean>;
 
 function computeRyuukyokuStatus(state: MatchState): {
-  actualTenpai: BooleanTuple4;
-  nagashi: BooleanTuple4;
+  actualTenpai: BooleanSeatValues;
+  nagashi: BooleanSeatValues;
 } {
   const isTenpai = (seat: Seat): boolean =>
     state.riichiDeclared[seat] ||
-    waits(state.hands[seat], state.melds[seat].length).length > 0;
-  const actualTenpai: BooleanTuple4 = [
-    isTenpai(0),
-    isTenpai(1),
-    isTenpai(2),
-    isTenpai(3),
-  ];
-  const nagashi: BooleanTuple4 = [false, false, false, false];
+    waitsForRules(state.hands[seat], state.melds[seat].length, state.ruleSet)
+      .length > 0;
+  const actualTenpai = seatValues(state.ruleSet.playerCount, isTenpai);
+  const nagashi = seatValues(state.ruleSet.playerCount, () => false);
   if (state.ruleSet.nagashiMangan) {
-    for (let seat = 0; seat < 4; seat++) {
+    for (let seat = 0; seat < state.ruleSet.playerCount; seat++) {
       const discards = state.discards[seat];
       if (discards.length === 0 || !discards.every(isTerminalOrHonor)) {
         continue;
       }
       let wasCalled = false;
-      for (let other = 0; other < 4; other++) {
+      for (let other = 0; other < state.ruleSet.playerCount; other++) {
         if (other === seat) {
           continue;
         }
@@ -1291,20 +1306,17 @@ function computeRyuukyokuStatus(state: MatchState): {
 
 function settleRyuukyoku(
   next: MatchState,
-  tenpai: BooleanTuple4,
-  nagashi: BooleanTuple4
+  tenpai: BooleanSeatValues,
+  nagashi: BooleanSeatValues
 ): StepResult {
-  const tenpaiDelta: [number, number, number, number] = next.ruleSet
-    .tenpaiPayments
+  const tenpaiDelta: SeatValues<number> = next.ruleSet.tenpaiPayments
     ? tenpaiPaymentDelta(tenpai)
-    : [0, 0, 0, 0];
+    : seatValues(next.ruleSet.playerCount, () => 0);
   const nagashiDelta = nagashiPaymentDelta(nagashi, next.dealer);
-  const delta: [number, number, number, number] = [
-    tenpaiDelta[0] + nagashiDelta[0],
-    tenpaiDelta[1] + nagashiDelta[1],
-    tenpaiDelta[2] + nagashiDelta[2],
-    tenpaiDelta[3] + nagashiDelta[3],
-  ];
+  const delta = mapSeatValues(
+    tenpaiDelta,
+    (value, seat) => value + nagashiDelta[seat]
+  );
   applyDelta(next.scores, delta);
   next.pendingRyuukyoku = null;
   next.phase = "hand_ended";
@@ -1326,20 +1338,35 @@ function settleRyuukyoku(
   };
 }
 
+/** Shared entry for ordinary wall exhaustion and mandatory Duplicate nuki. */
+function beginRyuukyoku(next: MatchState): StepResult {
+  const { actualTenpai, nagashi } = computeRyuukyokuStatus(next);
+  const statusAffectsOutcome =
+    next.ruleSet.tenpaiPayments ||
+    next.ruleSet.tenpaiRenchan ||
+    (next.ruleSet.tenpaiYame && isFinalHandOfMatch(next));
+  if (statusAffectsOutcome) {
+    next.pendingRyuukyoku = {
+      actualTenpai,
+      declarations: seatValues(next.ruleSet.playerCount, () => null),
+      nagashi,
+    };
+    next.turn = next.dealer;
+    next.phase = "awaiting_ryuukyoku_declarations";
+    return { state: next, events: [] };
+  }
+  return settleRyuukyoku(next, actualTenpai, nagashi);
+}
+
 /**
  * Snapshot per-seat furiten status using the same predicate the
  * engine uses to gate ron — so the indicator the client renders is
  * always consistent with the engine's "can this seat ron?" answer.
  */
-function computeFuritenAll(
-  state: MatchState
-): [boolean, boolean, boolean, boolean] {
-  return [
-    isFuritenForRon(state, 0),
-    isFuritenForRon(state, 1),
-    isFuritenForRon(state, 2),
-    isFuritenForRon(state, 3),
-  ];
+function computeFuritenAll(state: MatchState): SeatValues<boolean> {
+  return seatValues(state.ruleSet.playerCount, (seat) =>
+    isFuritenForRon(state, seat)
+  );
 }
 
 function resolveDiscardSelection(
@@ -1372,6 +1399,12 @@ function resolveDiscardSelection(
 }
 
 export function step(state: MatchState, action: Action): StepResult {
+  if (
+    "seat" in action &&
+    !isActiveSeat(action.seat, state.ruleSet.playerCount)
+  ) {
+    return noop(state);
+  }
   const before = computeFuritenAll(state);
   const result = stepInternal(state, action);
   if (result.events.length === 0) {
@@ -1379,7 +1412,7 @@ export function step(state: MatchState, action: Action): StepResult {
   }
   const after = computeFuritenAll(result.state);
   const changes: FuritenChange[] = [];
-  for (let s = 0; s < 4; s++) {
+  for (let s = 0; s < state.ruleSet.playerCount; s++) {
     if (before[s] !== after[s]) {
       changes.push({ seat: s as Seat, active: after[s] });
     }
@@ -1392,6 +1425,25 @@ export function step(state: MatchState, action: Action): StepResult {
 
 function stepInternal(state: MatchState, action: Action): StepResult {
   if (state.phase === "match_ended") {
+    return noop(state);
+  }
+  if (state.pendingNuki != null && state.pendingShouminkan != null) {
+    return noop(state);
+  }
+  if (
+    state.phase === "awaiting_nuki_replacement" &&
+    action.type !== "complete_nuki"
+  ) {
+    return noop(state);
+  }
+  const mandatoryNuki =
+    state.ruleSet.playerCount === 3 && state.ruleSet.sanmaType === "kansai";
+  if (
+    mandatoryNuki &&
+    state.phase === "awaiting_discard" &&
+    state.hands[state.turn].some((tile) => isNukiTile(tile, state.ruleSet)) &&
+    action.type !== "nuki"
+  ) {
     return noop(state);
   }
 
@@ -1417,7 +1469,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (nextPending.declarations.every((value) => value !== null)) {
       next.phase = "awaiting_ryuukyoku_settlement";
     } else {
-      next.turn = ((action.seat + 1) % 4) as Seat;
+      next.turn = nextSeat(action.seat, state.ruleSet.playerCount);
     }
     return {
       state: next,
@@ -1440,14 +1492,115 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     ) {
       return noop(state);
     }
-    const tenpai: BooleanTuple4 = [
-      pending.declarations[0] as boolean,
-      pending.declarations[1] as boolean,
-      pending.declarations[2] as boolean,
-      pending.declarations[3] as boolean,
-    ];
-    const nagashi = [...pending.nagashi] as BooleanTuple4;
+    const tenpai = mapSeatValues(
+      pending.declarations,
+      (value) => value === true
+    );
+    const nagashi = mapSeatValues(pending.nagashi, (value) => value);
     return settleRyuukyoku(clone(state), tenpai, nagashi);
+  }
+
+  // ----- Nuki declaration / mandatory extraction ------------------------
+  if (action.type === "nuki") {
+    if (!canDeclareNuki(state, action)) {
+      return noop(state);
+    }
+    const next = clone(state);
+    next.hands[action.seat].splice(
+      next.hands[action.seat].lastIndexOf(action.tile),
+      1
+    );
+    next.lastDrawn[action.seat] = null;
+    next.lastDrawFromDeadWall = false;
+    closeDiscardWindow(next);
+    next.pendingNuki = {
+      seat: action.seat,
+      tile: action.tile,
+      opening: action.opening === true,
+    };
+    if (mandatoryNuki) {
+      next.nukiTiles[action.seat].push(action.tile);
+      next.phase = "awaiting_nuki_replacement";
+    } else {
+      next.ippatsuEligible = seatValues(state.ruleSet.playerCount, () => false);
+      next.phase = "awaiting_chankan";
+    }
+    return {
+      state: next,
+      events: [
+        {
+          type: "nuki",
+          seat: action.seat,
+          tile: action.tile,
+          stage: mandatoryNuki ? "completed" : "declared",
+        },
+      ],
+    };
+  }
+
+  if (action.type === "complete_nuki") {
+    const pending = state.pendingNuki;
+    if (
+      pending == null ||
+      !isActiveSeat(pending.seat, state.ruleSet.playerCount) ||
+      !isNukiTile(pending.tile, state.ruleSet) ||
+      state.pendingRyuukyoku !== null ||
+      (!pending.opening && state.turn !== pending.seat) ||
+      (mandatoryNuki
+        ? state.phase !== "awaiting_nuki_replacement"
+        : getPendingRobbery(state)?.kind !== "nuki")
+    ) {
+      return noop(state);
+    }
+    const duplicate = state.sanmaWall?.mode === "duplicate";
+    if (
+      action.forceExhaustive === true &&
+      (!mandatoryNuki || !duplicate || action.replacementTile !== undefined)
+    ) {
+      return noop(state);
+    }
+    const next = clone(state);
+    if (
+      mandatoryNuki &&
+      duplicate &&
+      (action.forceExhaustive === true ||
+        (action.replacementTile === undefined && state.liveWall.length === 0))
+    ) {
+      next.pendingNuki = null;
+      next.lastDrawn[pending.seat] = null;
+      next.lastDrawFromDeadWall = false;
+      return beginRyuukyoku(next);
+    }
+    const replacement = drawRinshan(next, action.replacementTile, "nuki");
+    if (replacement === undefined) {
+      return noop(state);
+    }
+    const events: EngineEvent[] = [];
+    if (!mandatoryNuki) {
+      lockMissedRonFuriten(next, pending.tile, pending.seat, true);
+      next.nukiTiles[pending.seat].push(pending.tile);
+      events.push({
+        type: "nuki",
+        seat: pending.seat,
+        tile: pending.tile,
+        stage: "completed",
+      });
+    }
+    next.pendingNuki = null;
+    next.hands[pending.seat].push(replacement.tile);
+    next.lastDrawn[pending.seat] = pending.opening ? null : replacement.tile;
+    next.lastDrawFromDeadWall = !pending.opening;
+    next.phase = pending.opening ? "awaiting_draw" : "awaiting_discard";
+    events.push({
+      type: "draw",
+      seat: pending.seat,
+      tile: replacement.tile,
+      wallRemaining: next.liveWall.length,
+      fromDeadWall: !replacement.fixedDeadWall,
+      replacementKind: "nuki",
+      ...(pending.opening ? { opening: true } : {}),
+    });
+    return { state: next, events };
   }
 
   // ----- Draw ------------------------------------------------------------
@@ -1456,23 +1609,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       return noop(state);
     }
     if (state.liveWall.length === 0 || action.forceExhaustive === true) {
-      const next = clone(state);
-      const { actualTenpai, nagashi } = computeRyuukyokuStatus(state);
-      const statusAffectsOutcome =
-        next.ruleSet.tenpaiPayments ||
-        next.ruleSet.tenpaiRenchan ||
-        (next.ruleSet.tenpaiYame && isFinalHandOfMatch(next));
-      if (statusAffectsOutcome) {
-        next.pendingRyuukyoku = {
-          actualTenpai,
-          declarations: [null, null, null, null],
-          nagashi,
-        };
-        next.turn = next.dealer;
-        next.phase = "awaiting_ryuukyoku_declarations";
-        return { state: next, events: [] };
-      }
-      return settleRyuukyoku(next, actualTenpai, nagashi);
+      return beginRyuukyoku(clone(state));
     }
     const next = clone(state);
     if (
@@ -1566,7 +1703,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (next.ippatsuEligible[action.seat]) {
       next.ippatsuEligible[action.seat] = false;
     }
-    next.turn = ((action.seat + 1) % 4) as Seat;
+    next.turn = ((action.seat + 1) % state.ruleSet.playerCount) as Seat;
     next.phase = "awaiting_draw";
     const discardEvent: EngineEvent = {
       type: "discard",
@@ -1587,7 +1724,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (next.ruleSet.aborts.suufonRenda) {
       const allFirstDiscards =
         next.discards.every((d) => d.length === 1) &&
-        next.melds.every((m) => m.length === 0);
+        next.melds.every((m) => m.length === 0) &&
+        !hasNukiInterruption(next);
       if (allFirstDiscards) {
         const first = next.discards[0][0];
         const isWind =
@@ -1629,7 +1767,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     // Standard rule: ≥4 tiles in the live wall (so all seats can take
     // at least one more turn).
-    if (state.liveWall.length < 4) {
+    if (state.liveWall.length < state.ruleSet.playerCount) {
       return noop(state);
     }
     const selection = resolveDiscardSelection(
@@ -1650,7 +1788,10 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // turns / earlier this turn via rinshan).
     const after = [...state.hands[action.seat]];
     after.splice(selection.index, 1);
-    if (waits(after, state.melds[action.seat].length).length === 0) {
+    if (
+      waitsForRules(after, state.melds[action.seat].length, state.ruleSet)
+        .length === 0
+    ) {
       return noop(state);
     }
     const next = clone(state);
@@ -1675,12 +1816,13 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // interrupted the natural turn order.
     if (next.ruleSet.doubleRiichi) {
       const seatHasNotDiscarded = state.discards[action.seat].length === 0;
-      const noCallsYet = state.melds.every((m) => m.length === 0);
+      const noCallsYet =
+        state.melds.every((m) => m.length === 0) && !hasNukiInterruption(state);
       if (seatHasNotDiscarded && noCallsYet) {
         next.doubleRiichi[action.seat] = true;
       }
     }
-    next.turn = ((action.seat + 1) % 4) as Seat;
+    next.turn = ((action.seat + 1) % state.ruleSet.playerCount) as Seat;
     next.phase = "awaiting_draw";
     const discardEvent: EngineEvent = {
       type: "discard",
@@ -1725,35 +1867,18 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       return noop(state);
     }
     const score = scoreHand({
+      ...handScoringContext(state, action.seat),
       hand: handBeforeWin,
       winTile,
       tsumo: true,
-      roundWind: state.roundWind,
-      seatWind: seatWindFor(action.seat, state.dealer),
-      doraIndicators: state.doraIndicators,
-      uraDoraIndicators:
-        state.ruleSet.uraDora && state.riichiDeclared[action.seat]
-          ? state.uraDoraIndicators
-          : undefined,
-      riichi: state.riichiDeclared[action.seat],
-      doubleRiichi: state.doubleRiichi[action.seat],
-      ippatsu: state.ippatsuEligible[action.seat],
       blessingOfHeavenOrEarth: isFirstUninterruptedGoAround(state, action.seat),
-      melds: state.melds[action.seat],
-      noKuitan: !state.ruleSet.kuitan,
-      noAka: isAkaDisabled(state.ruleSet),
-      kiriageMangan: state.ruleSet.kiriageMangan,
-      doubleWindPairFu: state.ruleSet.doubleWindPairFu,
-      scoreCap: state.ruleSet.scoreCap,
       // Haitei raoyue: tsumo on the very last live-wall tile.
       // Exclude rinshan draws (those score rinshan kaihou via
       // `rinshanOrChankan` instead) — the two collide when the
       // wall is already empty at kan time.
       haiteiOrHoutei:
         state.liveWall.length === 0 && !state.lastDrawFromDeadWall,
-      // Rinshan kaihou: tsumo on a dead-wall replacement draw
-      // (any kan kind). `lastDrawFromDeadWall` is set by every
-      // rinshan draw site and cleared by the next live-wall draw.
+      // Rinshan follows kan/nuki replacement cause, including Duplicate.
       rinshanOrChankan: state.lastDrawFromDeadWall,
     });
     // Reject no-yaku wins. The riichi lib zeroes `han` when the
@@ -1773,23 +1898,25 @@ function stepInternal(state: MatchState, action: Action): StepResult {
   if (action.type === "ron") {
     // Ron is legal in two situations:
     //   1. `awaiting_draw` with a fresh discard on the table.
-    //   2. `awaiting_chankan` — chankan ("robbing the kan"), where
-    //      the win tile is the pending shouminkan upgrade tile and
-    //      the "discarder" is the seat who declared the shouminkan.
+    //   2. `awaiting_chankan` — added-kan or Online North robbery.
     let discarder: Seat;
     let winTile: Tile;
     let isChankan = false;
     if (state.phase === "awaiting_chankan") {
-      if (state.pendingShouminkan === null) {
+      const pending = getPendingRobbery(state);
+      if (pending === null) {
         return noop(state);
       }
-      discarder = state.pendingShouminkan.seat;
-      winTile = state.pendingShouminkan.tile;
+      discarder = pending.seat;
+      winTile = pending.tile;
       isChankan = true;
     } else if (state.phase === "awaiting_draw" && state.lastDiscard !== null) {
       discarder = state.lastDiscard.seat;
       winTile = state.lastDiscard.tile;
     } else {
+      return noop(state);
+    }
+    if (mandatoryNuki && isNukiTile(winTile, state.ruleSet)) {
       return noop(state);
     }
     // Build the full winners list (head bumper + additional). Reject
@@ -1801,13 +1928,17 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       ...(action.additionalWinners ?? []),
     ];
     for (const w of candidates) {
-      if (w === discarder || seen.has(w)) {
+      if (
+        !isActiveSeat(w, state.ruleSet.playerCount) ||
+        w === discarder ||
+        seen.has(w)
+      ) {
         return noop(state);
       }
       seen.add(w);
       winners.push(w);
     }
-    if (winners.length === 0 || winners.length > 3) {
+    if (winners.length === 0 || winners.length >= state.ruleSet.playerCount) {
       return noop(state);
     }
     // Reject any winner who is in furiten. (Chankan rons are exempt
@@ -1816,6 +1947,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // checks uniformly here; chankan-specific carve-outs can ship
     // as a follow-up if needed.)
     for (const w of winners) {
+      if (
+        mandatoryNuki &&
+        state.hands[w].some((tile) => isNukiTile(tile, state.ruleSet))
+      ) {
+        return noop(state);
+      }
       if (isFuritenForRon(state, w)) {
         return noop(state);
       }
@@ -1828,19 +1965,10 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         return noop(state);
       }
       const score = scoreHand({
+        ...handScoringContext(state, w),
         hand: state.hands[w],
         winTile,
         tsumo: false,
-        roundWind: state.roundWind,
-        seatWind: seatWindFor(w, state.dealer),
-        doraIndicators: state.doraIndicators,
-        uraDoraIndicators:
-          state.ruleSet.uraDora && state.riichiDeclared[w]
-            ? state.uraDoraIndicators
-            : undefined,
-        riichi: state.riichiDeclared[w],
-        doubleRiichi: state.doubleRiichi[w],
-        ippatsu: state.ippatsuEligible[w],
         // Renhou: non-dealer ron on the first uninterrupted
         // go-around. Dealer cannot renhou (they don't ron before
         // their first draw). Gated by ruleSet.
@@ -1849,12 +1977,6 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           w !== state.dealer &&
           !isChankan &&
           isFirstUninterruptedGoAround(state, w),
-        melds: state.melds[w],
-        noKuitan: !state.ruleSet.kuitan,
-        noAka: isAkaDisabled(state.ruleSet),
-        kiriageMangan: state.ruleSet.kiriageMangan,
-        doubleWindPairFu: state.ruleSet.doubleWindPairFu,
-        scoreCap: state.ruleSet.scoreCap,
         rinshanOrChankan: isChankan,
         // Houtei raoyui: ron on the final discard of the hand —
         // i.e. the discarder's last draw emptied the live wall.
@@ -1878,6 +2000,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
 
   // ----- Chi -------------------------------------------------------------
   if (action.type === "chi") {
+    if (state.ruleSet.playerCount === 3) {
+      return noop(state);
+    }
     if (state.phase !== "awaiting_draw" || state.lastDiscard === null) {
       return noop(state);
     }
@@ -1886,7 +2011,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     // Chi only legal from the seat immediately to the discarder's
     // left (i.e. the next-to-act seat under turn order).
-    const expected = ((state.lastDiscard.seat + 1) % 4) as Seat;
+    const expected = ((state.lastDiscard.seat + 1) %
+      state.ruleSet.playerCount) as Seat;
     if (action.seat !== expected || action.seat !== state.turn) {
       return noop(state);
     }
@@ -1931,8 +2057,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.melds[action.seat].push(meld);
     next.discards[state.lastDiscard.seat].pop(); // remove called tile
     closeDiscardWindow(next);
-    next.lastDrawn = [null, null, null, null];
-    next.ippatsuEligible = [false, false, false, false];
+    next.lastDrawn = seatValues(state.ruleSet.playerCount, () => null);
+    next.ippatsuEligible = seatValues(state.ruleSet.playerCount, () => false);
     next.turn = action.seat;
     next.phase = "awaiting_discard";
     return {
@@ -1956,6 +2082,15 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       return noop(state);
     }
     const claimed = state.lastDiscard.tile;
+    if (
+      mandatoryNuki &&
+      (isNukiTile(claimed, state.ruleSet) ||
+        state.hands[action.seat].some((tile) =>
+          isNukiTile(tile, state.ruleSet)
+        ))
+    ) {
+      return noop(state);
+    }
     // Pon matches by numeric tile value (red 5 and white 5 share).
     const claimedKey = (claimed[0] === "0" ? "5" : claimed[0]) + claimed[1];
     for (const t of action.tiles) {
@@ -1985,8 +2120,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     detectPao(next, action.seat, state.lastDiscard.seat);
     next.discards[state.lastDiscard.seat].pop();
     closeDiscardWindow(next);
-    next.lastDrawn = [null, null, null, null];
-    next.ippatsuEligible = [false, false, false, false];
+    next.lastDrawn = seatValues(state.ruleSet.playerCount, () => null);
+    next.ippatsuEligible = seatValues(state.ruleSet.playerCount, () => false);
     next.turn = action.seat;
     next.phase = "awaiting_discard";
     return {
@@ -1997,7 +2132,35 @@ function stepInternal(state: MatchState, action: Action): StepResult {
 
   // ----- Kan -------------------------------------------------------------
   if (action.type === "kan") {
-    if (state.liveWall.length === 0) {
+    if (
+      mandatoryNuki &&
+      (isNukiTile(action.tile, state.ruleSet) ||
+        (action.kind === "daiminkan" &&
+          state.lastDiscard !== null &&
+          isNukiTile(state.lastDiscard.tile, state.ruleSet)) ||
+        state.hands[action.seat].some((tile) =>
+          isNukiTile(tile, state.ruleSet)
+        ))
+    ) {
+      return noop(state);
+    }
+    if (state.ruleSet.playerCount === 3) {
+      if (state.sanmaWall?.sanmaType !== state.ruleSet.sanmaType) {
+        return noop(state);
+      }
+      // Added-kan declarations do not consume a queue tile. The driver checks
+      // that personal queue; completion must supply its actual replacement.
+      const deferredQueueTile =
+        action.kind === "shouminkan" &&
+        state.sanmaWall.mode === "duplicate" &&
+        action.replacementTile === undefined;
+      const availabilityTile = deferredQueueTile
+        ? state.liveWall[0]
+        : action.replacementTile;
+      if (!canTakeSanmaReplacement(state, "kan", availabilityTile)) {
+        return noop(state);
+      }
+    } else if (state.liveWall.length === 0) {
       return noop(state);
     }
     if (action.kind === "shouminkan") {
@@ -2070,8 +2233,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         from: oldPon.from,
       };
       next.melds[action.seat][ponIdx] = meld;
-      next.lastDrawn = [null, null, null, null];
-      next.ippatsuEligible = [false, false, false, false];
+      next.lastDrawn = seatValues(state.ruleSet.playerCount, () => null);
+      next.ippatsuEligible = seatValues(state.ruleSet.playerCount, () => false);
       next.pendingShouminkan = {
         seat: action.seat,
         tile: upgraded,
@@ -2128,8 +2291,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       detectPao(next, action.seat, state.lastDiscard.seat);
       next.discards[state.lastDiscard.seat].pop();
       closeDiscardWindow(next);
-      next.lastDrawn = [null, null, null, null];
-      next.ippatsuEligible = [false, false, false, false];
+      next.lastDrawn = seatValues(state.ruleSet.playerCount, () => null);
+      next.ippatsuEligible = seatValues(state.ruleSet.playerCount, () => false);
       // Rinshan draw from the front of the dead wall, then reveal a
       // new dora indicator.
       const rinshan = drawRinshan(next, action.replacementTile);
@@ -2146,7 +2309,11 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           seat: action.seat,
           tile: rinshan.tile,
           wallRemaining: next.liveWall.length,
-          fromDeadWall: true,
+          fromDeadWall:
+            state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall,
+          ...(state.ruleSet.playerCount === 3
+            ? { replacementKind: "kan" as const }
+            : {}),
         },
       ];
       // New dora indicator: the dead-wall layout shifts when rinshan
@@ -2154,7 +2321,13 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       // layout. Cap at 4 additional reveals. Skipped entirely when
       // `ruleSet.kanDora` is off, and deferred to the declarer's next
       // discard when `ruleSet.instantlyRevealDoraForMinkan` is off.
-      captureKanDora(next, "minkan", events, rinshan.fixedDeadWall);
+      captureKanDora(
+        next,
+        "minkan",
+        events,
+        rinshan.fixedDeadWall,
+        rinshan.indicators
+      );
       next.turn = action.seat;
       next.phase = "awaiting_discard";
       return { state: next, events };
@@ -2221,7 +2394,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       from: null,
     };
     next.melds[action.seat].push(meld);
-    next.ippatsuEligible = [false, false, false, false];
+    next.ippatsuEligible = seatValues(state.ruleSet.playerCount, () => false);
     const rinshan = drawRinshan(next, action.replacementTile);
     if (rinshan === undefined) {
       return noop(state);
@@ -2236,10 +2409,19 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         seat: action.seat,
         tile: rinshan.tile,
         wallRemaining: next.liveWall.length,
-        fromDeadWall: true,
+        fromDeadWall: state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall,
+        ...(state.ruleSet.playerCount === 3
+          ? { replacementKind: "kan" as const }
+          : {}),
       },
     ];
-    captureKanDora(next, "ankan", events, rinshan.fixedDeadWall);
+    captureKanDora(
+      next,
+      "ankan",
+      events,
+      rinshan.fixedDeadWall,
+      rinshan.indicators
+    );
     // Phase stays awaiting_discard — the seat now holds 14-3*melds
     // tiles and must discard (or declare another kan / tsumo).
     return { state: next, events };
@@ -2274,7 +2456,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     //   - no calls yet from anyone (all melds empty)
     //   - no discards yet from any prior seat in turn order this go-round
     //     (the active seat just drew their 14th tile)
-    if (state.melds.some((m) => m.length > 0)) {
+    if (state.melds.some((m) => m.length > 0) || hasNukiInterruption(state)) {
       return noop(state);
     }
     if (state.discards.some((d) => d.length > 0)) {
@@ -2314,6 +2496,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (rinshan === undefined) {
       return noop(state);
     }
+    lockMissedRonFuriten(next, state.pendingShouminkan.tile, declarer, true);
     next.hands[declarer].push(rinshan.tile);
     next.lastDrawn[declarer] = rinshan.tile;
     next.lastDrawFromDeadWall = true;
@@ -2325,10 +2508,19 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         seat: declarer,
         tile: rinshan.tile,
         wallRemaining: next.liveWall.length,
-        fromDeadWall: true,
+        fromDeadWall: state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall,
+        ...(state.ruleSet.playerCount === 3
+          ? { replacementKind: "kan" as const }
+          : {}),
       },
     ];
-    captureKanDora(next, "minkan", events, rinshan.fixedDeadWall);
+    captureKanDora(
+      next,
+      "minkan",
+      events,
+      rinshan.fixedDeadWall,
+      rinshan.indicators
+    );
     return { state: next, events };
   }
 
@@ -2368,7 +2560,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         ended.riichiSticks > 0
       ) {
         let highestSeat: Seat = 0;
-        for (let seat = 1; seat < 4; seat++) {
+        for (let seat = 1; seat < state.ruleSet.playerCount; seat++) {
           if (ended.scores[seat] > ended.scores[highestSeat]) {
             highestSeat = seat as Seat;
           }
@@ -2384,7 +2576,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           {
             type: "match_end",
             reason: endDecision.reason,
-            finalScores: [...ended.scores] as [number, number, number, number],
+            finalScores: [...ended.scores] as SeatValues<number>,
           },
         ],
       };
@@ -2410,7 +2602,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       } else {
         honba = result.reason === "exhaustive_draw" ? honba + 1 : 0;
       }
-      dealer = ((state.dealer + 1) % 4) as Seat;
+      dealer = ((state.dealer + 1) % state.ruleSet.playerCount) as Seat;
       roundNumber += 1;
       if (roundNumber > state.roundLimit) {
         // Round-wind progression (e.g. hanchan E→S). When we get
@@ -2436,22 +2628,52 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     const dealt =
       action.deal ??
       dealMatch(handSeed, {
+        playerCount: state.ruleSet.playerCount,
+        sanmaType: state.ruleSet.sanmaType,
+        duplicate: state.sanmaWall?.mode === "duplicate",
         redFives: {
           m: state.ruleSet.nbRedFiveManzu,
           p: state.ruleSet.nbRedFivePinzu,
           s: state.ruleSet.nbRedFiveSouzu,
         },
       });
+    const openingPair =
+      state.ruleSet.playerCount === 3
+        ? getSanmaIndicatorPair(dealt, 0)
+        : undefined;
+    if (
+      state.ruleSet.playerCount === 3 &&
+      (!openingPair ||
+        !state.sanmaWall ||
+        dealt.hands.length !== 3 ||
+        dealt.doraIndicators.length !== 1 ||
+        dealt.doraIndicators[0] !== openingPair.dora ||
+        dealt.sanmaWall?.sanmaType !== state.ruleSet.sanmaType ||
+        dealt.sanmaWall.mode !== state.sanmaWall.mode ||
+        dealt.sanmaWall.replacementsTaken !== 0 ||
+        dealt.sanmaWall.kanCount !== 0)
+    ) {
+      return noop(state);
+    }
     const next = clone(state);
     next.hands = dealt.hands.map((h) => [...h]);
-    next.discards = [[], [], [], []];
+    next.discards = seatValues(state.ruleSet.playerCount, () => []);
+    next.nukiTiles = seatValues(state.ruleSet.playerCount, () => []);
     next.liveWall = [...dealt.liveWall];
     next.deadWall = [...dealt.deadWall];
+    if (state.ruleSet.playerCount === 3 && dealt.sanmaWall) {
+      next.sanmaWall = { ...dealt.sanmaWall };
+    } else {
+      delete next.sanmaWall;
+    }
     next.doraIndicators = [...dealt.doraIndicators];
-    next.uraDoraIndicators = [dealt.deadWall[5]];
+    next.uraDoraIndicators =
+      state.ruleSet.playerCount === 3
+        ? [openingPair!.ura]
+        : [dealt.deadWall[5]];
     next.pendingKanDora = [];
     next.pendingKanUraDora = [];
-    next.lastDrawn = [null, null, null, null];
+    next.lastDrawn = seatValues(state.ruleSet.playerCount, () => null);
     next.lastDrawFromDeadWall = false;
     next.lastDiscard = null;
     next.pendingRiichiSeat = null;
@@ -2459,18 +2681,20 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.roundWind = roundWind;
     next.roundNumber = roundNumber;
     next.honba = honba;
-    next.riichiDeclared = [false, false, false, false];
-    next.doubleRiichi = [false, false, false, false];
-    next.ippatsuEligible = [false, false, false, false];
-    next.melds = [[], [], [], []];
+    next.riichiDeclared = seatValues(state.ruleSet.playerCount, () => false);
+    next.doubleRiichi = seatValues(state.ruleSet.playerCount, () => false);
+    next.ippatsuEligible = seatValues(state.ruleSet.playerCount, () => false);
+    next.melds = seatValues(state.ruleSet.playerCount, () => []);
+    next.pendingShouminkan = null;
+    next.pendingNuki = null;
     next.pendingRyuukyoku = null;
     next.turn = dealer;
     next.phase = "awaiting_draw";
     next.lastHandResult = null;
-    next.furitenLocked = [false, false, false, false];
-    next.furitenTemp = [false, false, false, false];
-    next.paoDaisangen = [null, null, null, null];
-    next.paoDaisuushii = [null, null, null, null];
+    next.furitenLocked = seatValues(state.ruleSet.playerCount, () => false);
+    next.furitenTemp = seatValues(state.ruleSet.playerCount, () => false);
+    next.paoDaisangen = seatValues(state.ruleSet.playerCount, () => null);
+    next.paoDaisuushii = seatValues(state.ruleSet.playerCount, () => null);
     return {
       state: { ...next, seed: baseSeed },
       events: [
@@ -2490,6 +2714,10 @@ function stepInternal(state: MatchState, action: Action): StepResult {
 }
 
 /** Test/debug accessor for the seat-wind helper. */
-export function seatWind(seat: Seat, dealer: Seat): Wind {
-  return seatWindFor(seat, dealer);
+export function seatWind(
+  seat: Seat,
+  dealer: Seat,
+  count: PlayerCount = 4
+): Wind {
+  return windForSeat(seat, dealer, count);
 }

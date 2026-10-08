@@ -18,10 +18,19 @@
 import { z } from "zod";
 import { DEFAULT_PRESET_ID, getPreset, presetToRuleSet } from "./presets";
 import { UmaTableSchema, zeroUma, type Uma } from "./matchScoring";
+import {
+  PlayerCountSchema,
+  SanmaTypeSchema,
+  type PlayerCount,
+  type SanmaType,
+} from "../protocol/seat";
 
 export type KuikaeRule = "allowed" | "same-tile-only" | "full";
 
 export interface RuleSet {
+  playerCount: PlayerCount;
+  /** Inactive in four-player matches. */
+  sanmaType: SanmaType;
   /**
    * Number of round winds played (E only / E+S / E+S+W+N).
    *   1 = tonpuusen (East-only)
@@ -54,9 +63,7 @@ export interface RuleSet {
    * `highest_score_player` awards every stick to the current highest-scoring
    * seat; score ties use seat order, matching final-placement ordering.
    */
-  unclaimedRiichiDeposits:
-    | "left_outside_table_score"
-    | "highest_score_player";
+  unclaimedRiichiDeposits: "left_outside_table_score" | "highest_score_player";
   /** Number of red 5m tiles (0–4; replaces that many "5m" copies). */
   nbRedFiveManzu: number;
   /** Number of red 5p tiles (0–4; replaces that many "5p" copies). */
@@ -170,7 +177,7 @@ export interface RuleSet {
   /**
    * Point value of a single riichi stick. Standard riichi: 1000.
    * Buu: 100. Affects both the at-declaration deduction and the
-  * payout at hand-end or match-end (`riichiSticks * riichiBetValue`).
+   * payout at hand-end or match-end (`riichiSticks * riichiBetValue`).
    */
   riichiBetValue: number;
   /**
@@ -286,6 +293,8 @@ export interface RuleSet {
 
 export const RuleSetSchema: z.ZodType<RuleSet> = z
   .object({
+    playerCount: PlayerCountSchema.default(4),
+    sanmaType: SanmaTypeSchema.default("online"),
     roundWindCount: z.union([z.literal(1), z.literal(2), z.literal(4)]),
     roundLimit: z.number().int().positive(),
     startingScore: z.number().int(),
@@ -329,12 +338,8 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
     tenpaiPayments: z.boolean(),
     tenpaiRenchan: z.boolean(),
     kiriageMangan: z.boolean(),
-    doubleWindPairFu: z
-      .union([z.literal(2), z.literal(4)])
-      .default(4),
-    scoreCap: z
-      .enum(["mangan", "haneman", "baiman", "sanbaiman"])
-      .nullable(),
+    doubleWindPairFu: z.union([z.literal(2), z.literal(4)]).default(4),
+    scoreCap: z.enum(["mangan", "haneman", "baiman", "sanbaiman"]).nullable(),
     chipPayouts: z
       .object({
         sankoro: z.number().int().nonnegative(),
@@ -357,6 +362,22 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
     startingChips: z.number().int().nonnegative(),
   })
   .strict()
+  .superRefine((rules, context) => {
+    if (rules.playerCount === 3 && rules.buuMode) {
+      context.addIssue({
+        code: "custom",
+        path: ["buuMode"],
+        message: "Sanma cannot use Buu rules",
+      });
+    }
+    if (rules.playerCount === 3 && rules.roundLimit !== 3) {
+      context.addIssue({
+        code: "custom",
+        path: ["roundLimit"],
+        message: "Sanma plays three hands per wind",
+      });
+    }
+  })
   .transform((rules) => ({
     ...rules,
     returnScore: rules.returnScore ?? rules.startingScore,
@@ -380,23 +401,39 @@ export function resolveRuleSet(partial?: RuleSetOverride): RuleSet {
   if (!partial) {
     return structuredClone(DEFAULT_RULE_SET);
   }
-  return {
-    ...DEFAULT_RULE_SET,
+  const base =
+    partial.playerCount === 3
+      ? presetToRuleSet(getPreset("m-league"))
+      : DEFAULT_RULE_SET;
+  const rules: RuleSet = {
+    ...base,
     ...partial,
-    uma: structuredClone(partial.uma ?? DEFAULT_RULE_SET.uma),
+    uma: structuredClone(partial.uma ?? base.uma),
     aborts: {
-      ...DEFAULT_RULE_SET.aborts,
+      ...base.aborts,
       ...(partial.aborts ?? {}),
     },
     chipPayouts: {
-      ...DEFAULT_RULE_SET.chipPayouts,
+      ...base.chipPayouts,
       ...(partial.chipPayouts ?? {}),
     },
     illegalVictoryRules: {
-      ...DEFAULT_RULE_SET.illegalVictoryRules,
+      ...base.illegalVictoryRules,
       ...(partial.illegalVictoryRules ?? {}),
     },
-  } as RuleSet;
+  };
+  if (rules.playerCount === 3) {
+    if (rules.buuMode) {
+      throw new Error("Sanma cannot use Buu rules");
+    }
+    rules.roundLimit = 3;
+    rules.atamahane = false;
+    if (rules.sanmaType === "online") {
+      rules.nbRedFiveManzu = 0;
+    }
+    return RuleSetSchema.parse(rules);
+  }
+  return rules;
 }
 
 /** Deep-partial-style override accepted by `resolveRuleSet`. */

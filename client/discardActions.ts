@@ -27,6 +27,7 @@ export function isCurrentAutoDiscardWindow(
     state.lastSeq === expected.lastSeq &&
     state.actionDeadline === expected.actionDeadline &&
     state.freshlyDrawnSeat === expected.seat &&
+    !state.legalActions.some((action) => action.type === "nuki") &&
     state.legalActions.some((action) => action.id === expected.actionId)
   );
 }

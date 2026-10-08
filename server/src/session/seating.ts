@@ -1,4 +1,10 @@
+import { type SeatValues } from "~/game/protocol/seat";
 import type { Seat } from "~/game/protocol/messages";
+import {
+  activeSeats,
+  copySeatValues,
+  type PlayerCount,
+} from "~/game/rules/seats";
 
 export function deterministicShuffle<T>(
   items: readonly T[],
@@ -21,8 +27,10 @@ export function deterministicShuffle<T>(
 }
 
 export function waitingRoomSeatPermutation(
-  seed: number
-): [Seat, Seat, Seat, Seat] {
-  const shuffled = deterministicShuffle<Seat>([0, 1, 2, 3], seed);
-  return [shuffled[0], shuffled[1], shuffled[2], shuffled[3]];
+  seed: number,
+  playerCount: PlayerCount = 4
+): SeatValues<Seat> {
+  return copySeatValues(
+    deterministicShuffle<Seat>(activeSeats(playerCount), seed)
+  );
 }

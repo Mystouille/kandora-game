@@ -1,3 +1,6 @@
+import { copySeatValues } from "~/game/rules/seats";
+import { seatValues } from "~/game/rules/seats";
+import { type SeatValues } from "~/game/protocol/seat";
 import type {
   DuplicateMatchModeConfig,
   MatchModeConfig,
@@ -16,9 +19,7 @@ import {
 export type MatchHandContext = DuplicateHandKey;
 
 export type MatchDrawDirective =
-  | { kind: "standard" }
-  | { kind: "tile"; tile: Tile }
-  | { kind: "exhaustive" };
+  { kind: "standard" } | { kind: "tile"; tile: Tile } | { kind: "exhaustive" };
 
 export interface NormalMatchDriverSnapshot {
   type: "normal";
@@ -28,13 +29,12 @@ export interface DuplicateMatchDriverSnapshot {
   type: "duplicate";
   activeHand: {
     key: DuplicateHandKey;
-    cursors: [number, number, number, number];
+    cursors: SeatValues<number>;
   } | null;
 }
 
 export type MatchDriverSnapshot =
-  | NormalMatchDriverSnapshot
-  | DuplicateMatchDriverSnapshot;
+  NormalMatchDriverSnapshot | DuplicateMatchDriverSnapshot;
 
 export interface DuplicateQueueCounts {
   initial: DuplicateDrawCounts;
@@ -43,17 +43,23 @@ export interface DuplicateQueueCounts {
 
 export interface MatchDriver {
   readonly mode: MatchModeConfig;
-  prepareHand(context: MatchHandContext, ruleSet: RuleSet): DealtMatch | undefined;
+  prepareHand(
+    context: MatchHandContext,
+    ruleSet: RuleSet
+  ): DealtMatch | undefined;
   peekDraw(seat: Seat): MatchDrawDirective;
   canSupplyReplacement(seat: Seat): boolean;
   commitDraw(seat: Seat, tile: Tile): void;
   duplicateQueueCounts(): DuplicateQueueCounts | null;
   snapshot(): MatchDriverSnapshot;
-  drawQueuesForArchive(): [Tile[], Tile[], Tile[], Tile[]] | null;
+  drawQueuesForArchive(): SeatValues<Tile[]> | null;
 }
 
 function wallOptionsForRuleSet(ruleSet: RuleSet): WallOptions {
   return {
+    playerCount: ruleSet.playerCount,
+    sanmaType: ruleSet.sanmaType,
+    duplicate: true,
     redFives: {
       m: ruleSet.nbRedFiveManzu,
       p: ruleSet.nbRedFivePinzu,
@@ -68,6 +74,7 @@ function cloneDeal(deal: DealtMatch): DealtMatch {
     liveWall: [...deal.liveWall],
     deadWall: [...deal.deadWall],
     doraIndicators: [...deal.doraIndicators],
+    ...(deal.sanmaWall ? { sanmaWall: { ...deal.sanmaWall } } : {}),
   };
 }
 
@@ -104,7 +111,7 @@ class StandardMatchDriver implements MatchDriver {
 class DuplicateMatchDriver implements MatchDriver {
   readonly mode: DuplicateMatchModeConfig;
   private activePlan: DuplicateHandPlan | null = null;
-  private cursors: [number, number, number, number] = [0, 0, 0, 0];
+  private cursors: SeatValues<number> = [0, 0, 0, 0];
 
   constructor(
     mode: DuplicateMatchModeConfig,
@@ -120,7 +127,7 @@ class DuplicateMatchDriver implements MatchDriver {
       context,
       wallOptionsForRuleSet(ruleSet)
     );
-    this.cursors = [0, 0, 0, 0];
+    this.cursors = seatValues(ruleSet.playerCount, () => 0);
     return cloneDeal(this.activePlan.deal);
   }
 
@@ -149,7 +156,9 @@ class DuplicateMatchDriver implements MatchDriver {
   duplicateQueueCounts(): DuplicateQueueCounts {
     const plan = this.requireActivePlan();
     return {
-      initial: plan.drawQueues.map((queue) => queue.length) as DuplicateDrawCounts,
+      initial: plan.drawQueues.map(
+        (queue) => queue.length
+      ) as DuplicateDrawCounts,
       remaining: plan.drawQueues.map(
         (queue, seat) => queue.length - this.cursors[seat]
       ) as DuplicateDrawCounts,
@@ -164,27 +173,24 @@ class DuplicateMatchDriver implements MatchDriver {
           ? null
           : {
               key: { ...this.activePlan.key },
-              cursors: [...this.cursors],
+              cursors: copySeatValues(this.cursors),
             },
     };
   }
 
-  drawQueuesForArchive(): [Tile[], Tile[], Tile[], Tile[]] | null {
+  drawQueuesForArchive(): SeatValues<Tile[]> | null {
     if (this.activePlan === null) {
       return null;
     }
-    return this.activePlan.drawQueues.map((queue) => [...queue]) as [
-      Tile[],
-      Tile[],
-      Tile[],
-      Tile[],
-    ];
+    return this.activePlan.drawQueues.map((queue) => [...queue]) as SeatValues<
+      Tile[]
+    >;
   }
 
   restore(snapshot: DuplicateMatchDriverSnapshot, ruleSet: RuleSet): void {
     if (snapshot.activeHand === null) {
       this.activePlan = null;
-      this.cursors = [0, 0, 0, 0];
+      this.cursors = seatValues(ruleSet.playerCount, () => 0);
       return;
     }
     const { key, cursors } = snapshot.activeHand;
@@ -194,7 +200,12 @@ class DuplicateMatchDriver implements MatchDriver {
       key,
       wallOptionsForRuleSet(ruleSet)
     );
-    for (let seat = 0; seat < 4; seat++) {
+    if (cursors.length !== ruleSet.playerCount) {
+      throw new Error(
+        "DuplicateMatchDriver.restore: participant count does not match"
+      );
+    }
+    for (let seat = 0; seat < ruleSet.playerCount; seat++) {
       const cursor = cursors[seat];
       if (
         !Number.isInteger(cursor) ||
@@ -207,7 +218,7 @@ class DuplicateMatchDriver implements MatchDriver {
       }
     }
     this.activePlan = plan;
-    this.cursors = [...cursors];
+    this.cursors = copySeatValues(cursors);
   }
 
   private requireActivePlan(): DuplicateHandPlan {
@@ -235,7 +246,10 @@ export function createMatchDriver(
   }
   const driver = new DuplicateMatchDriver(mode, presetId);
   if (restore) {
-    driver.restore(restore.snapshot as DuplicateMatchDriverSnapshot, restore.ruleSet);
+    driver.restore(
+      restore.snapshot as DuplicateMatchDriverSnapshot,
+      restore.ruleSet
+    );
   }
   return driver;
 }

@@ -214,7 +214,8 @@ export class ResultPresenter {
         stageReveal,
         revealElapsedMs,
         view.scoreCap,
-        view.uraDoraEnabled
+        view.uraDoraEnabled,
+        view.playerCount === 3 && view.sanmaType === "kansai"
       );
       this.advanceRevealSounds(plan, stageReveal);
       rows = plan.rows;

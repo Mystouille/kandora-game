@@ -7,6 +7,7 @@ import { MatchKernel } from "./matchKernel";
 import { CallResolution } from "./callResolution";
 
 import type { CallWorkflowPort } from "./workflowPorts";
+import { seatDistance, seatValues } from "~/game/rules/seats";
 
 import {
   buildCallLegals,
@@ -25,14 +26,9 @@ export interface CallResolutionSnapshot {
 }
 
 export class CallCoordinator {
-  private callWindow: (CallOption[] | null)[] = [null, null, null, null];
+  private callWindow: (CallOption[] | null)[];
 
-  private pendingHumanCallActions: (LegalAction | null)[] = [
-    null,
-    null,
-    null,
-    null,
-  ];
+  private pendingHumanCallActions: (LegalAction | null)[];
 
   private pendingBotRons: Seat[] = [];
 
@@ -45,6 +41,8 @@ export class CallCoordinator {
     private readonly kernel: MatchKernel,
     private readonly port: CallWorkflowPort
   ) {
+    this.callWindow = seatValues(kernel.playerCount, () => null);
+    this.pendingHumanCallActions = seatValues(kernel.playerCount, () => null);
     this.resolution = new CallResolution(kernel, port);
   }
   isOpen(seat: Seat): boolean {
@@ -84,8 +82,11 @@ export class CallCoordinator {
     this.pendingChankanBotRons = [...snapshot.pendingChankanBotRons];
   }
   resetHand(): void {
-    this.callWindow = [null, null, null, null];
-    this.pendingHumanCallActions = [null, null, null, null];
+    this.callWindow = seatValues(this.kernel.playerCount, () => null);
+    this.pendingHumanCallActions = seatValues(
+      this.kernel.playerCount,
+      () => null
+    );
     this.pendingBotRons = [];
     this.pendingBotCalls = [];
   }
@@ -150,40 +151,40 @@ export class CallCoordinator {
   }
 
   async openChankanWindow(): Promise<void> {
-    const pending = this.kernel.currentState().pendingShouminkan;
+    const pending = this.kernel.pendingRobbery();
     if (pending === null) {
       await this.port.advanceTurn();
       return;
     }
     const declarer = pending.seat;
-    const winTile = pending.tile;
-
     const botCandidates: Seat[] = [];
-    let humanCandidate: Seat | null = null;
-    for (let s = 0; s < 4; s++) {
+    const humanCandidates: Seat[] = [];
+    for (let s = 0; s < this.kernel.playerCount; s++) {
       const seat = s as Seat;
       if (seat === declarer) {
         continue;
       }
-      if (!this.kernel.canChankanRon(seat, winTile)) {
+      if (!this.kernel.canChankanRon(seat)) {
         continue;
       }
-      if (this.port.isHumanSeat(seat) && humanCandidate === null) {
-        humanCandidate = seat;
+      if (this.port.isHumanSeat(seat)) {
+        humanCandidates.push(seat);
       } else {
         botCandidates.push(seat);
       }
     }
-    if (humanCandidate !== null) {
+    if (humanCandidates.length > 0) {
       this.pendingChankanBotRons = botCandidates;
-      this.openCallWindow(humanCandidate, [{ kind: "ron" }]);
+      for (const seat of humanCandidates) {
+        this.openCallWindow(seat, [{ kind: "ron" }]);
+      }
       return;
     }
     if (botCandidates.length > 0) {
       await this.resolution.dispatchChankanRons(botCandidates);
       return;
     }
-    await this.resolution.completeShouminkanAndResume();
+    await this.resolution.completeRobberyAndResume();
   }
 
   openCallWindow(seat: Seat, options: CallOption[]): void {
@@ -204,7 +205,7 @@ export class CallCoordinator {
 
     const submittedPrio = callActionPriority(action);
     if (submittedPrio > 0) {
-      for (let s = 0; s < 4; s++) {
+      for (let s = 0; s < this.kernel.playerCount; s++) {
         const seatIdx = s as Seat;
         const opts = this.callWindow[seatIdx];
         if (opts === null) {
@@ -223,13 +224,17 @@ export class CallCoordinator {
     if (action.type === "ron" && this.kernel.currentState().ruleSet.atamahane) {
       const discarder = this.kernel.currentState().lastDiscard?.seat;
       if (discarder !== undefined) {
-        const submittedHb = (seat - discarder + 3) % 4;
-        for (let s = 0; s < 4; s++) {
+        const submittedHb = seatDistance(
+          discarder,
+          seat,
+          this.kernel.playerCount
+        );
+        for (let s = 0; s < this.kernel.playerCount; s++) {
           const seatIdx = s as Seat;
           if (this.callWindow[seatIdx] === null) {
             continue;
           }
-          const hb = (seatIdx - discarder + 3) % 4;
+          const hb = seatDistance(discarder, seatIdx, this.kernel.playerCount);
           if (hb > submittedHb) {
             this.pendingHumanCallActions[seatIdx] = {
               id: "pass",
@@ -243,7 +248,7 @@ export class CallCoordinator {
       }
     }
 
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < this.kernel.playerCount; s++) {
       if (this.callWindow[s as Seat] !== null) {
         return;
       }
@@ -253,7 +258,10 @@ export class CallCoordinator {
 
   async finalizeCallWindow(): Promise<void> {
     const humanActions = this.pendingHumanCallActions;
-    this.pendingHumanCallActions = [null, null, null, null];
+    this.pendingHumanCallActions = seatValues(
+      this.kernel.playerCount,
+      () => null
+    );
     const pendingBotRons = this.pendingBotRons;
     const pendingBotCalls = this.pendingBotCalls;
     const pendingChankanBotRons = this.pendingChankanBotRons;
@@ -263,7 +271,7 @@ export class CallCoordinator {
 
     if (this.kernel.currentState().phase === "awaiting_chankan") {
       const candidates: Seat[] = [...pendingChankanBotRons];
-      for (let s = 0; s < 4; s++) {
+      for (let s = 0; s < this.kernel.playerCount; s++) {
         const a = humanActions[s];
         if (a && a.type === "ron") {
           candidates.push(s as Seat);
@@ -272,13 +280,13 @@ export class CallCoordinator {
       if (candidates.length > 0) {
         await this.resolution.dispatchChankanRons(candidates);
       } else {
-        await this.resolution.completeShouminkanAndResume();
+        await this.resolution.completeRobberyAndResume();
       }
       return;
     }
 
     const ronCandidates: Seat[] = [...pendingBotRons];
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < this.kernel.playerCount; s++) {
       const a = humanActions[s];
       if (a && a.type === "ron") {
         ronCandidates.push(s as Seat);
@@ -296,7 +304,8 @@ export class CallCoordinator {
       return;
     }
     const headBump = (a: Seat, b: Seat): number =>
-      ((a - discarder + 3) % 4) - ((b - discarder + 3) % 4);
+      seatDistance(discarder, a, this.kernel.playerCount) -
+      seatDistance(discarder, b, this.kernel.playerCount);
 
     type CallClaim =
       | { kind: "chi"; seat: Seat; tiles: [Tile, Tile] }
@@ -304,7 +313,7 @@ export class CallCoordinator {
       | { kind: "daiminkan"; seat: Seat };
 
     const claims: CallClaim[] = [];
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < this.kernel.playerCount; s++) {
       const a = humanActions[s];
       if (!a) {
         continue;
