@@ -75,6 +75,10 @@ Resuming a saved table keeps that table's rules rather than using new-game defau
 The web lobby's **Debug seed** menu supports every Riichi preset, including
 Buu, both sanma variants, and MCR:
 
+- **Seating:** debug overrides keep the waiting-room host in seat 0 (East)
+  instead of shuffling seats when bots are added and the game starts. This
+  ensures the host, not a bot, receives the specified hand and draw queue.
+  Normal games without debug overrides retain random seating.
 - **Starting hand:** 13 tiles before the opening draw. MCR still starts with
   14 tiles: the first queued draw overrides the dealer's opening tile, or
   that tile remains random when the draw queue is empty.

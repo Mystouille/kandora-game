@@ -1,5 +1,5 @@
 import { type SeatValues } from "~/game/protocol/seat";
-import type { Seat } from "~/game/protocol/messages";
+import type { MatchDebug, Seat } from "~/game/protocol/messages";
 import {
   activeSeats,
   copySeatValues,
@@ -28,9 +28,17 @@ export function deterministicShuffle<T>(
 
 export function waitingRoomSeatPermutation(
   seed: number,
-  playerCount: PlayerCount = 4
+  playerCount: PlayerCount = 4,
+  debug?: MatchDebug
 ): SeatValues<Seat> {
+  const seats = activeSeats(playerCount);
+  const hasDebugOverrides = [
+    debug?.humanHand,
+    debug?.humanDraws,
+    debug?.leftDiscards,
+  ].some((tiles) => (tiles?.length ?? 0) > 0);
+  // Debug hands and draw queues target the host's fixed seat 0.
   return copySeatValues(
-    deterministicShuffle<Seat>(activeSeats(playerCount), seed)
+    hasDebugOverrides ? seats : deterministicShuffle<Seat>(seats, seed)
   );
 }

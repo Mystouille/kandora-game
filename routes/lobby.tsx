@@ -805,7 +805,9 @@ export default function LobbyRoute() {
                 Whitespace- or comma-separated groups are also fine. Leave any
                 field blank to keep the random default. Debug fields are only
                 meaningful for solo matches (seat 0 = you, seat{" "}
-                {debugDiscardSeat(setupSelection.playerCount)} = previous bot).
+                {debugDiscardSeat(setupSelection.playerCount)} = previous bot).{" "}
+                Debug overrides keep you in seat 0 (East) instead of shuffling
+                seats at game start.
               </p>
               <p className="text-gray-600 dark:text-gray-300">
                 Enter 13 starting tiles. The first queued draw supplies your

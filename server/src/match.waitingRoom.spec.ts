@@ -22,7 +22,8 @@ import { describe, expect, it } from "vitest";
 
 import { MatchProcess, waitingRoomSeatPermutation } from "./match";
 import { ephemeralMatchRepository } from "./repository";
-import type { Seat, ServerMessage } from "~/game/protocol/messages";
+import type { MatchDebug, Seat, ServerMessage } from "~/game/protocol/messages";
+import { activeSeats } from "~/game/rules/seats";
 
 const dependencies = { repository: ephemeralMatchRepository };
 
@@ -38,6 +39,43 @@ function makeSink(): {
 }
 
 describe("MatchProcess waiting-room state machine", () => {
+  it.each([3, 4] as const)(
+    "keeps debug seat order for each override in a %i-player game",
+    (playerCount) => {
+      const overrides: MatchDebug[] = [
+        { humanHand: Array<string>(13).fill("1p") },
+        { humanDraws: ["2p"] },
+        { leftDiscards: ["3p"] },
+      ];
+      for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        for (const debug of overrides) {
+          expect(waitingRoomSeatPermutation(seed, playerCount, debug)).toEqual(
+            activeSeats(playerCount)
+          );
+        }
+      }
+    }
+  );
+
+  it.each([3, 4] as const)(
+    "preserves normal shuffled seating for empty debug options in a %i-player game",
+    (playerCount) => {
+      const emptyDebug: MatchDebug[] = [
+        undefined,
+        {},
+        { humanDraws: [], leftDiscards: [] },
+      ];
+      for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const expected = waitingRoomSeatPermutation(seed, playerCount);
+        for (const debug of emptyDebug) {
+          expect(waitingRoomSeatPermutation(seed, playerCount, debug)).toEqual(
+            expected
+          );
+        }
+      }
+    }
+  );
+
   it("keeps join positions stable but varies final East by match seed", () => {
     const room = MatchProcess.createWaitingRoom(
       "stable-joins",

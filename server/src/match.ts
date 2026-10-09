@@ -505,7 +505,11 @@ export class MatchProcess {
   async startWaitingRoom(requestedBy: Seat): Promise<void> {
     await this.owners.roster.startWaitingRoom(
       requestedBy,
-      waitingRoomSeatPermutation(this.seed, this.owners.roster.playerCount)
+      waitingRoomSeatPermutation(
+        this.seed,
+        this.owners.roster.playerCount,
+        this.owners.config.debug
+      )
     );
   }
 
@@ -523,7 +527,11 @@ export class MatchProcess {
 
   async fillBotsAndStart(): Promise<void> {
     await this.owners.roster.fillBotsAndStart(
-      waitingRoomSeatPermutation(this.seed, this.owners.roster.playerCount)
+      waitingRoomSeatPermutation(
+        this.seed,
+        this.owners.roster.playerCount,
+        this.owners.config.debug
+      )
     );
   }
 
