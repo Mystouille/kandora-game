@@ -1,11 +1,11 @@
 /**
  * Server-side action-deadline enforcement.
  *
- * The HUD timer is purely cosmetic on the client; the source of
- * truth is `MatchProcess.setLegalActions`, which schedules a
- * `setTimeout` for `ACTION_TIMEOUT_MS` and, on expiry, picks the
- * least-impact default (`pass` for a call window, tsumogiri for
- * an awaiting discard) and applies it through `handleAct`.
+ * The HUD timer is purely cosmetic on the client; authoritative
+ * timed windows schedule an expiry that picks the least-impact
+ * default (`pass` for a call window, tsumogiri for an awaiting
+ * discard). Explicit solo-vs-bots play uses unlimited windows,
+ * while disconnect handling can still apply the default.
  *
  * Tests use a tiny timeout (15ms) instead of fake timers because
  * the production path interleaves real microtasks (engine step,
@@ -22,10 +22,12 @@ import {
 } from "./match";
 import { ephemeralMatchRepository } from "./repository";
 import type { GameEvent, ServerMessage } from "~/game/protocol/messages";
+import { normalMatchMode } from "~/game/protocol/matchMode";
 
 function makeMatch(
   seed: number,
-  onAutomaticAction?: (context: AutomaticActionContext) => void
+  onAutomaticAction?: (context: AutomaticActionContext) => void,
+  soloPlay = false
 ): MatchProcess {
   return new MatchProcess(
     `m-${seed}-${Math.random().toString(36).slice(2, 8)}`,
@@ -36,7 +38,13 @@ function makeMatch(
       { userId: "u2", displayName: "Bot2", isBot: true },
       { userId: "u3", displayName: "Bot3", isBot: true },
     ],
-    { repository: ephemeralMatchRepository, onAutomaticAction }
+    { repository: ephemeralMatchRepository, onAutomaticAction },
+    undefined,
+    undefined,
+    "tenhou-hanchan",
+    normalMatchMode,
+    0,
+    soloPlay
   );
 }
 
@@ -138,5 +146,71 @@ describe("MatchProcess — deadline enforcement", () => {
       (e) => e.type === "discard" && e.seat === 0
     ).length;
     expect(after).toBe(before);
+  });
+
+  it("keeps explicit solo-vs-bots play untimed across checkpoint restore", async () => {
+    const onAutomaticAction = vi.fn();
+    const m = makeMatch(12, onAutomaticAction, true);
+    const s = sink();
+    m.attachHuman(0, s.send);
+    await m.start();
+
+    const snapshot = m.buildSnapshotForSeat(0);
+    expect(snapshot.deadline).toBeUndefined();
+    expect(snapshot.actionWindow).toMatchObject({
+      deadlineMode: "unlimited",
+    });
+    expect(m.owners.actionWindows.view(0)).toMatchObject({
+      deadline: null,
+      timerPending: false,
+    });
+
+    const checkpoint = m.createCheckpoint();
+    expect(checkpoint).toMatchObject({
+      soloPlay: true,
+      checkpointKind: "action_window",
+      actionWindow: { deadlineMode: "unlimited" },
+    });
+    const restored = MatchProcess.restoreCheckpoint(checkpoint, {
+      repository: ephemeralMatchRepository,
+    });
+    expect(restored.buildSnapshotForSeat(0)).toMatchObject({
+      actionWindow: { deadlineMode: "unlimited" },
+    });
+    expect(restored.owners.actionWindows.view(0)).toMatchObject({
+      deadline: null,
+      timerPending: false,
+    });
+
+    const before = s.events.filter(
+      (event) => event.type === "discard" && event.seat === 0
+    ).length;
+    await wait(60);
+    const after = s.events.filter(
+      (event) => event.type === "discard" && event.seat === 0
+    ).length;
+    expect(after).toBe(before);
+    expect(onAutomaticAction).not.toHaveBeenCalled();
+  });
+
+  it("still auto-defaults an untimed solo turn when the player disconnects", async () => {
+    const m = makeMatch(13, undefined, true);
+    const player = sink();
+    const spectator = sink();
+    m.attachHuman(0, player.send);
+    m.attachSpectator(spectator.send);
+    await m.start();
+    expect(m.owners.actionWindows.view(0).deadline).toBeNull();
+    const before = spectator.events.filter(
+      (event) => event.type === "discard" && event.seat === 0
+    ).length;
+
+    m.detachHuman(0);
+    await wait(60);
+
+    const after = spectator.events.filter(
+      (event) => event.type === "discard" && event.seat === 0
+    ).length;
+    expect(after).toBeGreaterThan(before);
   });
 });

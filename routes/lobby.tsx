@@ -280,7 +280,8 @@ export default function LobbyRoute() {
 
   async function createRoomOnServer(
     debug: MatchDebug,
-    setup: GameSetup
+    setup: GameSetup,
+    solo = false
   ): Promise<string | null> {
     try {
       const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -291,6 +292,7 @@ export default function LobbyRoute() {
         body: JSON.stringify({
           debug,
           ...setup,
+          ...(solo ? { solo: true } : {}),
         }),
       });
       if (res.status === 401 || res.status === 403) {
@@ -351,7 +353,7 @@ export default function LobbyRoute() {
       return;
     }
     setStarting(true);
-    const matchId = await createRoomOnServer(debug, setup);
+    const matchId = await createRoomOnServer(debug, setup, true);
     if (!matchId) {
       setStarting(false);
       return;

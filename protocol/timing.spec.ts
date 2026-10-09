@@ -41,6 +41,15 @@ describe("timing contracts", () => {
     expect(ActionWindowViewSchema.parse(window)).toEqual(window);
   });
 
+  it("accepts an explicit unlimited gameplay window", () => {
+    expect(
+      ActionWindowViewSchema.parse({
+        ...window,
+        deadlineMode: "unlimited",
+      })
+    ).toMatchObject({ deadlineMode: "unlimited" });
+  });
+
   it.each([
     { allowanceMs: 501 },
     { opensAt: 6_001 },

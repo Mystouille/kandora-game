@@ -299,18 +299,21 @@ export class EngineEventPresenter {
     }
     if (e.type === "hand_end") {
       const r = this.port.state().lastHandResult;
-      // At exhaustive draw, reveal the concealed hand of each
-      // tenpai seat so the post-hand panel can show what each
-      // tenpai player was waiting on. Non-tenpai seats stay
-      // null; other reasons skip this entirely (winners are
-      // handled by per-seat `win` events).
+      // At a Riichi exhaustive draw, reveal the concealed hand of
+      // each tenpai seat so the post-hand panel can show what each
+      // tenpai player was waiting on. MCR does not reveal hands at
+      // exhaustive draw. Non-tenpai seats stay null; other reasons
+      // skip this entirely (winners are handled by per-seat `win`
+      // events).
       //
       // Kyuushuu kyuuhai is the one abort that also reveals a hand:
       // just the declaring seat's, so opponents and spectators see
       // the ≥9 terminals/honors that justified the abort. The engine
       // keeps `turn` pinned to the declarer through the abort.
       const tenpaiHands =
-        e.reason === "exhaustive_draw" && r?.tenpai
+        e.reason === "exhaustive_draw" &&
+        this.port.state().ruleSet.rulesFamily !== "mcr" &&
+        r?.tenpai
           ? (r.tenpai.map((t, s) =>
               t ? [...this.port.state().hands[s]] : null
             ) as (Tile[] | null)[])

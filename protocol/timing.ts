@@ -60,6 +60,7 @@ export const ActionWindowViewSchema = z
     id: z.string().min(1).max(256),
     clockEpoch: z.string().min(1).max(128),
     timingVersion: z.literal(TIMING_VERSION),
+    deadlineMode: z.literal("unlimited").optional(),
     seat: SeatSchema.nullable(),
     kind: ActionWindowKindSchema,
     state: z.enum(["scheduled", "open", "resolved", "expired", "cancelled"]),
@@ -87,6 +88,12 @@ export const ActionWindowViewSchema = z
     }
   });
 export type ActionWindowView = z.infer<typeof ActionWindowViewSchema>;
+
+export function actionWindowHasDeadline(
+  window: Pick<ActionWindowView, "deadlineMode">
+): boolean {
+  return window.deadlineMode !== "unlimited";
+}
 
 export const PromptTimingSnapshotSchema = z
   .object({

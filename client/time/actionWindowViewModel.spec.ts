@@ -41,6 +41,16 @@ describe("shared action-window view", () => {
     });
   });
 
+  it("keeps an unlimited action ready after its nominal timing metadata", () => {
+    expect(
+      actionTimerView({ ...window, deadlineMode: "unlimited" }, 60_000)
+    ).toMatchObject({
+      ready: true,
+      baseRemainingMs: 0,
+      bankRemainingMs: 0,
+    });
+  });
+
   it("captures displayed window identity rather than a later store value", () => {
     expect(intentForWindow(window, 42)).toEqual({
       windowId: "window-1",

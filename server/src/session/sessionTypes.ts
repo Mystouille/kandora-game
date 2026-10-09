@@ -7,6 +7,7 @@ import type { MatchEndReason, RuleSetOverride } from "~/game/rules";
 export interface MatchConfiguration {
   readonly matchId: string;
   readonly seed: number;
+  readonly soloPlay: boolean;
   readonly debug: MatchDebug;
   readonly ruleSetOverride?: RuleSetOverride;
   readonly presetId: string;

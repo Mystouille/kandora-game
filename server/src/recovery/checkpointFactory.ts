@@ -33,6 +33,7 @@ import type { HandMetadata } from "../session/handMetadata";
 import type { ActionWindowRegistry } from "../timing/actionWindows";
 import type { TimeBank } from "../timing/timeBank";
 import type { DecisionTiming } from "../timing/decisionTiming";
+import { actionWindowHasDeadline } from "~/game/protocol/timing";
 import type { MatchRuntime } from "../runtime";
 import type { MatchConfiguration } from "../session/sessionTypes";
 import type { Tile, GameEvent } from "~/game/protocol/messages";
@@ -117,6 +118,7 @@ export class CheckpointFactory {
       savedAt: this.port.runtime.now(),
       matchId: this.port.config.matchId,
       seed: this.port.config.seed,
+      soloPlay: this.port.config.soloPlay,
       presetId: this.port.config.presetId,
       spectatorDelayMs: this.port.config.spectatorDelayMs,
       mode: this.port.kernel.mode,
@@ -188,6 +190,7 @@ export class CheckpointFactory {
       savedAt,
       matchId: this.port.config.matchId,
       seed: this.port.config.seed,
+      soloPlay: this.port.config.soloPlay,
       presetId: this.port.config.presetId,
       spectatorDelayMs: this.port.config.spectatorDelayMs,
       mode: this.port.kernel.mode,
@@ -276,12 +279,17 @@ export class CheckpointFactory {
     }
     const actionStartedAt = this.port.windows.view(seat).startedAt;
     const visibleDeadline = this.port.windows.view(seat).deadline;
-    if (
-      actionStartedAt === null ||
-      visibleDeadline === null ||
-      !this.port.windows.view(seat).timerPending
-    ) {
+    const timed = this.port.windows.timedView(seat);
+    if (actionStartedAt === null || timed === null) {
       this.checkpointUnsupported("action timer is not active");
+    }
+    const hasDeadline = actionWindowHasDeadline(timed);
+    const timerPending = this.port.windows.view(seat).timerPending;
+    if (
+      (hasDeadline && (visibleDeadline === null || !timerPending)) ||
+      (!hasDeadline && (visibleDeadline !== null || timerPending))
+    ) {
+      this.checkpointUnsupported("action deadline state is inconsistent");
     }
 
     const savedAt = this.port.runtime.now();
@@ -294,20 +302,22 @@ export class CheckpointFactory {
           : gameTiming.BASE_ACTION_MS +
             this.port.bank.balance(seat) +
             gameTiming.ACTION_GRACE_MS;
-    const timed = this.port.windows.timedView(seat);
-    const expiryRemainingMs = Math.max(
-      0,
-      timed ? timed.expiresAt - savedAt : expiryDurationMs - elapsedMs
-    );
+    const expiryRemainingMs = hasDeadline
+      ? Math.max(0, timed.expiresAt - savedAt)
+      : 0;
     return PlayingActionCheckpointSchema.parse({
       ...this.playingCheckpointBase(savedAt),
       checkpointKind: "action_window",
       actionWindow: {
         kind: windowKind,
+        ...(!hasDeadline ? { deadlineMode: "unlimited" as const } : {}),
         seat,
         legalActions,
         elapsedMs,
-        visibleRemainingMs: Math.max(0, visibleDeadline - savedAt),
+        visibleRemainingMs:
+          visibleDeadline === null
+            ? 0
+            : Math.max(0, visibleDeadline - savedAt),
         expiryRemainingMs,
       },
     });
@@ -341,13 +351,21 @@ export class CheckpointFactory {
         const seat = seatIndex as Seat;
         const startedAt = this.port.windows.view(seat).startedAt;
         const deadline = this.port.windows.view(seat).deadline;
+        const timed = this.port.windows.timedView(seat);
         if (
           startedAt === null ||
-          deadline === null ||
-          !this.port.windows.view(seat).timerPending ||
+          timed === null ||
           this.port.windows.legals(seat).length === 0
         ) {
           this.checkpointUnsupported("open call window timer is incomplete");
+        }
+        const hasDeadline = actionWindowHasDeadline(timed);
+        const timerPending = this.port.windows.view(seat).timerPending;
+        if (
+          (hasDeadline && (deadline === null || !timerPending)) ||
+          (!hasDeadline && (deadline !== null || timerPending))
+        ) {
+          this.checkpointUnsupported("call window deadline is inconsistent");
         }
         const elapsedMs = Math.max(0, savedAt - startedAt);
         const expiryDurationMs = this.port.connections.view(seat).disconnected
@@ -356,16 +374,14 @@ export class CheckpointFactory {
             this.port.bank.balance(seat) +
             gameTiming.ACTION_GRACE_MS;
         return {
+          ...(!hasDeadline ? { deadlineMode: "unlimited" as const } : {}),
           legalActions: this.port.windows.legals(seat),
           elapsedMs,
-          visibleRemainingMs: Math.max(0, deadline - savedAt),
-          expiryRemainingMs: Math.max(
-            0,
-            this.port.windows.timedView(seat)
-              ? (this.port.windows.timedView(seat)?.expiresAt ?? savedAt) -
-                  savedAt
-              : expiryDurationMs - elapsedMs
-          ),
+          visibleRemainingMs:
+            deadline === null ? 0 : Math.max(0, deadline - savedAt),
+          expiryRemainingMs: hasDeadline
+            ? Math.max(0, timed.expiresAt - savedAt)
+            : 0,
         };
       });
     return PlayingCallCheckpointSchema.parse({

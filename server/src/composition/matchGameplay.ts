@@ -31,6 +31,7 @@ export interface GameplayServices {
   readonly runtime: MatchRuntime;
   readonly kernel: MatchKernel;
   readonly roster: RoomRoster;
+  readonly soloPlay: boolean;
   readonly connections: PlayerConnections;
   readonly windows: ActionWindowRegistry;
   readonly bank: TimeBank;
@@ -73,6 +74,7 @@ export class MatchGameplay {
       runtime,
       kernel,
       roster,
+      soloPlay,
       connections,
       windows,
       bank,
@@ -86,6 +88,11 @@ export class MatchGameplay {
       isCallOpen: (seat) => this.calls.isOpen(seat),
       emitEngineEvent: (event) => port.emitEngineEvent(event),
       emitFuritenChanges: (changes) => port.emitFuritenChanges(changes),
+      usesUnlimitedActionWindow: (seat, kind) =>
+        kind === "turn" &&
+        soloPlay &&
+        roster.isSoloVsBots() &&
+        !connections.view(seat).disconnected,
     });
     const kernelEffects = {
       applyEngineAction: (action: KernelAction) =>

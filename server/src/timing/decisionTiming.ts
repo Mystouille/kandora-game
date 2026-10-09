@@ -120,7 +120,8 @@ export class DecisionTiming {
     kind: ActionWindowKind,
     policy: ActionWindowPolicy,
     disconnected: boolean,
-    call = false
+    call = false,
+    unlimited = false
   ): boolean {
     if (actions.length === 0) {
       this.windows.clear(seat);
@@ -128,6 +129,7 @@ export class DecisionTiming {
     }
     const now = this.runtime.now();
     const automated = disconnected && kind !== "ryuukyoku_declaration";
+    const unlimitedWindow = unlimited && !automated;
     let baseMs =
       kind === "ryuukyoku_declaration" ? policy.declarationMs : policy.baseMs;
     const opensAt = automated
@@ -148,13 +150,16 @@ export class DecisionTiming {
           now,
         });
     const bankMs =
-      kind === "ryuukyoku_declaration" || automated
+      kind === "ryuukyoku_declaration" || automated || unlimitedWindow
         ? 0
         : this.bank.balance(seat);
     const timing = {
       id: `${this.matchId}:${seat}:${this.nextWindow++}`,
       clockEpoch: this.clockEpoch,
       timingVersion: 2 as const,
+      ...(unlimitedWindow
+        ? { deadlineMode: "unlimited" as const }
+        : {}),
       kind:
         kind === "ryuukyoku_declaration"
           ? kind

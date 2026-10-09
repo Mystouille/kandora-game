@@ -69,12 +69,14 @@ export class MatchProcess {
     ruleSetOverride?: RuleSetOverride,
     presetId = "tenhou-hanchan",
     mode: MatchModeConfig = normalMatchMode,
-    spectatorDelayMs: SpectatorDelayMs = 0
+    spectatorDelayMs: SpectatorDelayMs = 0,
+    soloPlay = false
   ) {
     this.owners = new MatchComposition(
       {
         matchId,
         seed,
+        soloPlay,
         debug,
         ruleSetOverride,
         presetId,
@@ -240,7 +242,8 @@ export class MatchProcess {
     ruleSetOverride?: RuleSetOverride,
     presetId = "tenhou-hanchan",
     mode: MatchModeConfig = normalMatchMode,
-    spectatorDelayMs: SpectatorDelayMs = 0
+    spectatorDelayMs: SpectatorDelayMs = 0,
+    soloPlay = false
   ): MatchProcess {
     const players = activeSeats(ruleSetOverride?.playerCount ?? 4).map(
       (seat) => ({
@@ -258,7 +261,8 @@ export class MatchProcess {
       ruleSetOverride,
       presetId,
       mode,
-      spectatorDelayMs
+      spectatorDelayMs,
+      soloPlay
     );
     match.owners.roster.empty();
     return match;
@@ -318,7 +322,8 @@ export class MatchProcess {
             checkpoint.ruleSet,
             checkpoint.presetId,
             checkpoint.mode,
-            checkpoint.spectatorDelayMs
+            checkpoint.spectatorDelayMs,
+            checkpoint.soloPlay
           )
         : new MatchProcess(
             checkpoint.matchId,
@@ -329,7 +334,8 @@ export class MatchProcess {
             checkpoint.state.ruleSet,
             checkpoint.presetId,
             checkpoint.mode,
-            checkpoint.spectatorDelayMs
+            checkpoint.spectatorDelayMs,
+            checkpoint.soloPlay
           );
     match.owners.recovery.restoreCheckpoint(checkpoint);
     return match;

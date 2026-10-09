@@ -1,4 +1,8 @@
-import type { ActionWindowView, InputReceipt } from "~/game/protocol/timing";
+import {
+  actionWindowHasDeadline,
+  type ActionWindowView,
+  type InputReceipt,
+} from "~/game/protocol/timing";
 
 export class DecisionWindowError extends Error {
   constructor(message: string) {
@@ -44,7 +48,8 @@ export function validateWindowReceipt(
     throw new DecisionWindowError("Decision window is not open");
   }
   if (
-    receipt.receivedAt > window.expiresAt ||
+    (actionWindowHasDeadline(window) &&
+      receipt.receivedAt > window.expiresAt) ||
     !window.legalActionIds.includes(action)
   ) {
     throw new DecisionWindowError(

@@ -8,6 +8,7 @@ import {
   type SeatValues,
 } from "~/game/rules/seats";
 import {
+  actionWindowHasDeadline,
   ActionWindowViewSchema,
   type ActionWindowView,
   type InputReceipt,
@@ -92,10 +93,16 @@ export class ActionWindowRegistry {
 
   view(seat: Seat): ActionWindowSummary {
     const window = this.windows[seat];
+    const timing = window.timing;
     return {
       kind: window.kind,
-      startedAt: window.timing?.opensAt ?? window.startedAt,
-      deadline: window.timing?.baseEndsAt ?? window.deadline,
+      startedAt: timing?.opensAt ?? window.startedAt,
+      deadline:
+        timing === null
+          ? window.deadline
+          : actionWindowHasDeadline(timing)
+            ? timing.baseEndsAt
+            : null,
       timerPending: window.timer !== null,
       generation: window.generation,
     };
@@ -199,7 +206,9 @@ export class ActionWindowRegistry {
     window.reservation = null;
     window.reservedActionId = null;
     window.debited = false;
-    this.schedule(seat, Math.max(0, view.expiresAt - this.runtime.now()));
+    if (actionWindowHasDeadline(view)) {
+      this.schedule(seat, Math.max(0, view.expiresAt - this.runtime.now()));
+    }
     return view;
   }
 
@@ -258,7 +267,7 @@ export class ActionWindowRegistry {
       receivedAt - timing.allowanceMs
     );
     const baseMs = timing.baseEndsAt - timing.opensAt;
-    if (timing.bankAtOpenMs > 0) {
+    if (actionWindowHasDeadline(timing) && timing.bankAtOpenMs > 0) {
       bank.debitExact(
         seat,
         Math.max(0, Math.floor(effectiveAt - timing.opensAt - baseMs))
@@ -276,7 +285,11 @@ export class ActionWindowRegistry {
     ) {
       window.reservation = null;
       window.reservedActionId = null;
-      if (window.timing && !window.debited) {
+      if (
+        window.timing &&
+        !window.debited &&
+        actionWindowHasDeadline(window.timing)
+      ) {
         this.schedule(
           seat,
           Math.max(0, window.timing.expiresAt - this.runtime.now())

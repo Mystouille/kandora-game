@@ -96,6 +96,7 @@ export const WaitingRoomCheckpointSchema = z
     savedAt: z.number().int().nonnegative(),
     matchId: z.string().min(1),
     seed: z.number().int(),
+    soloPlay: z.boolean().default(false),
     presetId: z.string().min(1),
     spectatorDelayMs: SpectatorDelayMsSchema.default(0),
     decisionTiming: DecisionTimingCheckpointSchema,
@@ -135,6 +136,7 @@ const PlayingCheckpointBaseShape = {
   savedAt: z.number().int().nonnegative(),
   matchId: z.string().min(1),
   seed: z.number().int(),
+  soloPlay: z.boolean().default(false),
   presetId: z.string().min(1),
   spectatorDelayMs: SpectatorDelayMsSchema.default(0),
   decisionTiming: DecisionTimingCheckpointSchema,
@@ -289,6 +291,7 @@ export type PlayingFlowerCheckpoint = z.infer<
 >;
 const CallTimerSlotSchema = z
   .object({
+    deadlineMode: z.literal("unlimited").optional(),
     legalActions: z.array(LegalActionSchema).min(1),
     elapsedMs: z.number().int().nonnegative(),
     visibleRemainingMs: z.number().int().nonnegative(),
@@ -304,6 +307,7 @@ export const PlayingActionCheckpointSchema = z
     actionWindow: z
       .object({
         kind: z.enum(["turn", "ryuukyoku_declaration"]).default("turn"),
+        deadlineMode: z.literal("unlimited").optional(),
         seat: SeatSchema,
         legalActions: z.array(LegalActionSchema).min(1),
         elapsedMs: z.number().int().nonnegative(),
@@ -863,6 +867,9 @@ function migratedWindow(
     id: `${matchId}:${seat}:migrated`,
     clockEpoch: `checkpoint-${matchId}`,
     timingVersion: 2,
+    ...(stored.deadlineMode === "unlimited"
+      ? { deadlineMode: "unlimited" as const }
+      : {}),
     seat,
     kind,
     state: "open",

@@ -2,6 +2,7 @@ import type {
   ActionWindowView,
   ActionIntentContext,
 } from "~/game/protocol/timing";
+import { actionWindowHasDeadline } from "~/game/protocol/timing";
 
 export interface ActionTimerView {
   ready: boolean;
@@ -19,16 +20,20 @@ export function actionTimerView(
     throw new RangeError("Invalid synchronized time");
   }
   const active = window.state === "scheduled" || window.state === "open";
+  const hasDeadline = actionWindowHasDeadline(window);
   const ready =
-    active && serverNow >= window.opensAt && serverNow <= window.budgetEndsAt;
-  const baseRemainingMs = Math.max(
-    0,
-    window.baseEndsAt - Math.max(serverNow, window.opensAt)
-  );
-  const bankRemainingMs = Math.max(
-    0,
-    window.bankAtOpenMs - Math.max(0, serverNow - window.baseEndsAt)
-  );
+    active &&
+    serverNow >= window.opensAt &&
+    (!hasDeadline || serverNow <= window.budgetEndsAt);
+  const baseRemainingMs = hasDeadline
+    ? Math.max(0, window.baseEndsAt - Math.max(serverNow, window.opensAt))
+    : 0;
+  const bankRemainingMs = hasDeadline
+    ? Math.max(
+        0,
+        window.bankAtOpenMs - Math.max(0, serverNow - window.baseEndsAt)
+      )
+    : 0;
   return {
     ready,
     baseRemainingMs,

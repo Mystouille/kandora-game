@@ -81,6 +81,31 @@ describe("ActionWindowRegistry", () => {
     expect(f.scheduled[0].delayMs).toBe(25_500);
   });
 
+  it("keeps unlimited windows open without scheduling an expiry", () => {
+    const f = fixture();
+    const opened = f.windows.openTimed(0, f.actions, {
+      ...f.timing,
+      deadlineMode: "unlimited",
+    });
+    expect(opened.deadlineMode).toBe("unlimited");
+    expect(f.windows.view(0)).toMatchObject({
+      kind: "turn",
+      startedAt: 1_300,
+      deadline: null,
+      timerPending: false,
+    });
+    expect(f.scheduled).toEqual([]);
+
+    f.setNow(f.timing.expiresAt + 1_000);
+    expect(() =>
+      f.windows.reserve(0, f.actions[0].id, {
+        receivedAt: f.timing.expiresAt + 1_000,
+        windowId: f.timing.id,
+        clockEpoch: f.timing.clockEpoch,
+      })
+    ).not.toThrow();
+  });
+
   it("fences cancelled callbacks even when the runtime still dispatches them", () => {
     const f = fixture();
     f.windows.openTimed(0, f.actions, f.timing);

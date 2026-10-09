@@ -311,6 +311,15 @@ export class RoomRoster {
       .map(([seat]) => seat);
   }
 
+  isSoloVsBots(): boolean {
+    const players = [...this.occupants.values()];
+    return (
+      players.filter((player) => player !== null && !player.isBot).length ===
+        1 &&
+      players.every((player) => player !== null)
+    );
+  }
+
   humanUserIds(): string[] {
     return this.humanSeats().map((seat) => {
       const player = this.occupants.get(seat);

@@ -17,6 +17,7 @@ export interface GameplayEffectsPort {
   history(): readonly PersistedMatchEvent[];
   now(): number;
   isCallOpen(seat: Seat): boolean;
+  usesUnlimitedActionWindow(seat: Seat, kind: ActionWindowKind): boolean;
   emitEngineEvent(event: EngineEvent): Promise<void>;
   emitFuritenChanges(
     changes: readonly FuritenChange[] | undefined
@@ -71,7 +72,8 @@ export class GameplayEffects {
         automatedMs: gameTiming.DRAW_TO_DISCARD_DELAY_MS,
       },
       this.connections.view(seat).disconnected,
-      this.port.isCallOpen(seat)
+      this.port.isCallOpen(seat),
+      this.port.usesUnlimitedActionWindow(seat, kind)
     );
   }
 

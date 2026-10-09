@@ -171,6 +171,65 @@ describe("MCR authoritative sessions", () => {
     });
   });
 
+  it("does not reveal concealed hands after an exhaustive draw", async () => {
+    const messages = activeSeats(4).map(() => [] as ServerMessage[]);
+    const match = new MatchProcess(
+      "mcr-exhaustive-privacy",
+      42,
+      activeSeats(4).map((seat) => ({
+        userId: `human-${seat}`,
+        displayName: `Human ${seat}`,
+        isBot: false,
+      })),
+      dependencies(),
+      undefined,
+      presetToRuleSet(getPreset("mcr-ema")),
+      "mcr-ema"
+    );
+    for (const seat of activeSeats(4)) {
+      match.attachHuman(seat, (message) => messages[seat].push(message));
+    }
+    setReadyCheckMs(0);
+    await match.start();
+    for (const seatMessages of messages) {
+      seatMessages.length = 0;
+    }
+    Object.assign(match.owners.kernel.view, {
+      phase: "hand_ended",
+      lastHandResult: {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: [true, false, true, false],
+        abortKind: null,
+        nagashi: null,
+        winHan: null,
+        winYakuman: null,
+      },
+    });
+
+    await match.owners.lifecycle.engineEvents.emitEngineEvent({
+      type: "hand_end",
+      reason: "exhaustive_draw",
+      delta: [0, 0, 0, 0],
+    });
+
+    const handEnd = messages[0]
+      .flatMap((message) => (message.type === "event" ? message.events : []))
+      .find((event) => event.type === "hand_end");
+    expect(handEnd).toMatchObject({
+      type: "hand_end",
+      reason: "exhaustive_draw",
+      tenpai: [true, false, true, false],
+    });
+    expect(handEnd).not.toHaveProperty("tenpaiHands");
+
+    const snapshot = match.buildSnapshotForSeat(0);
+    expect(snapshot.state.ryuukyokuTenpaiHands).toBeUndefined();
+    expect(snapshot.state.hands[2].every((tile) => tile === null)).toBe(true);
+  });
+
   it("changes seats with scores and connections after the East round", async () => {
     const messages = activeSeats(4).map(() => [] as ServerMessage[]);
     const match = new MatchProcess(

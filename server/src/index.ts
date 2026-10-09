@@ -399,7 +399,7 @@ async function readJsonBody(
  * `matchId`. The portal calls this on behalf of the user, then
  * navigates the client to `/game/:matchId` to join via WS.
  *
- * Body: `{ token, debug?, preset?, rulesFamily?, playerCount?, sanmaType?, mode?, spectatorDelayMs? }`.
+ * Body: `{ token, debug?, preset?, rulesFamily?, playerCount?, sanmaType?, mode?, spectatorDelayMs?, solo? }`.
  *
  * Splitting creation off the WS upgrade is what makes the URL
  * itself idempotent: visiting `/game/:id` only joins; it never
@@ -434,6 +434,7 @@ async function handleCreateRoom(
     sanmaType,
     mode,
     spectatorDelayMs,
+    solo,
   } = body as {
     token?: unknown;
     debug?: unknown;
@@ -443,6 +444,7 @@ async function handleCreateRoom(
     sanmaType?: unknown;
     mode?: unknown;
     spectatorDelayMs?: unknown;
+    solo?: unknown;
   };
   if (typeof token !== "string" || token.length === 0) {
     reply(401, { error: "missing_token" });
@@ -488,6 +490,10 @@ async function handleCreateRoom(
     SpectatorDelayMsSchema.default(0).safeParse(spectatorDelayMs);
   if (!parsedSpectatorDelay.success) {
     reply(400, { error: "invalid_spectator_delay" });
+    return;
+  }
+  if (solo !== undefined && typeof solo !== "boolean") {
+    reply(400, { error: "invalid_solo" });
     return;
   }
   if (parsedMode.data.type === "duplicate" && parsedDebug !== undefined) {
@@ -539,7 +545,8 @@ async function handleCreateRoom(
     rules,
     presetId,
     parsedMode.data,
-    parsedSpectatorDelay.data
+    parsedSpectatorDelay.data,
+    solo === true
   );
   matches.set(matchId, match);
   // Post-creation grace timer: if nobody connects within the

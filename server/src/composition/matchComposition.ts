@@ -210,6 +210,7 @@ export class MatchComposition {
         runtime: this.runtime,
         kernel: this.kernel,
         roster: this.roster,
+        soloPlay: this.config.soloPlay,
         connections: this.connections,
         windows: this.actionWindows,
         bank: this.timeBank,
