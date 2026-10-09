@@ -188,9 +188,18 @@ export class TurnCoordinator {
           await this.port.afterHandEnd();
           return;
         }
-        const nuki = this.kernel
-          .discardLegals(seat)
-          .find((action) => action.type === "nuki");
+        const legals = this.kernel.discardLegals(seat);
+        const flower = legals.find((action) => action.type === "flower");
+        if (flower?.tile) {
+          await this.port.applyEngineAction({
+            type: "flower",
+            seat,
+            tile: flower.tile,
+          });
+          await this.afterCall();
+          return;
+        }
+        const nuki = legals.find((action) => action.type === "nuki");
         if (nuki?.tile) {
           await this.port.applyEngineAction({
             type: "nuki",

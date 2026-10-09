@@ -62,6 +62,61 @@ describe("MCR authoritative sessions", () => {
     });
   });
 
+  it("keeps concealed Kong identities private on opponent wires", async () => {
+    const messages = activeSeats(4).map(() => [] as ServerMessage[]);
+    const match = new MatchProcess(
+      "mcr-hidden-kong",
+      42,
+      activeSeats(4).map((seat) => ({
+        userId: `human-${seat}`,
+        displayName: `Human ${seat}`,
+        isBot: false,
+      })),
+      dependencies(),
+      undefined,
+      presetToRuleSet(getPreset("mcr-ema")),
+      "mcr-ema"
+    );
+    for (const seat of activeSeats(4)) {
+      match.attachHuman(seat, (message) => messages[seat].push(message));
+    }
+    setReadyCheckMs(0);
+    await match.start();
+    for (const seatMessages of messages) {
+      seatMessages.length = 0;
+    }
+    const meld = {
+      type: "ankan" as const,
+      tiles: ["5m", "5m", "5m", "5m"],
+      claimedTile: null,
+      from: null,
+    };
+
+    await match.owners.publisher.emitEvent({ type: "call", seat: 1, meld });
+
+    expect(messages[1].at(-1)).toMatchObject({
+      type: "event",
+      events: [{ type: "call", seat: 1, meld }],
+    });
+    for (const seat of [0, 2, 3] as const) {
+      expect(messages[seat].at(-1)).toMatchObject({
+        type: "event",
+        events: [
+          {
+            type: "call",
+            seat: 1,
+            meld: { ...meld, tiles: [] },
+          },
+        ],
+      });
+    }
+    expect(match.owners.publisher.history().at(-1)?.event).toEqual({
+      type: "call",
+      seat: 1,
+      meld,
+    });
+  });
+
   it("changes seats with scores and connections after the East round", async () => {
     const messages = activeSeats(4).map(() => [] as ServerMessage[]);
     const match = new MatchProcess(

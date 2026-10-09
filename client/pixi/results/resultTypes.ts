@@ -15,7 +15,8 @@ export interface MeldDrawingPort {
   drawMeld(
     meld: Meld,
     seat: number,
-    shouminkanOffsetY?: number
+    shouminkanOffsetY?: number,
+    revealAnkan?: boolean
   ): {
     node: Container;
     width: number;
@@ -95,7 +96,13 @@ export type ResultRow =
       hidden?: boolean;
     }
   | { kind: "tiles"; tiles: (string | null)[] }
-  | { kind: "hand"; concealed: string[]; winTile?: string; melds?: Meld[] }
+  | {
+      kind: "hand";
+      concealed: string[];
+      winTile?: string;
+      melds?: Meld[];
+      revealConcealedKongs?: boolean;
+    }
   | { kind: "divider" };
 
 export interface ResultRowPlan {

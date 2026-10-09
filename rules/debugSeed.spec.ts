@@ -115,13 +115,13 @@ describe("variant-aware debug seed validation", () => {
     );
   });
 
-  it("does not offer MCR flower discards", () => {
+  it("allows MCR flower discards", () => {
     expect(
       debugSeedValidationError(
         { leftDiscards: ["1f"] },
         presetToRuleSet(getPreset("mcr-ema"))
       )
-    ).toContain("cannot contain");
+    ).toBeNull();
   });
 
   it.each([0, 12, 14])("rejects a %i-tile starting hand", (length) => {

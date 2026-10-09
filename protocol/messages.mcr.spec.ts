@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { GameEventSchema, SnapshotStateSchema, TileSchema } from "./messages";
+import {
+  GameEventSchema,
+  LegalActionSchema,
+  SnapshotStateSchema,
+  TileSchema,
+} from "./messages";
 
 describe("MCR protocol", () => {
   it("accepts flower tiles and rules-family metadata", () => {
@@ -58,6 +63,16 @@ describe("MCR protocol", () => {
         ],
       })
     ).not.toThrow();
+  });
+
+  it("accepts a flower declaration legal action", () => {
+    expect(
+      LegalActionSchema.parse({
+        id: "flower:1f",
+        type: "flower",
+        tile: "1f",
+      })
+    ).toEqual({ id: "flower:1f", type: "flower", tile: "1f" });
   });
 
   it("round-trips pending flower replacement snapshots", () => {

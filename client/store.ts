@@ -1085,17 +1085,11 @@ export const useMatchStore = create<MatchStore>((set) => ({
               : state.sanmaWall,
             turn: event.opening ? state.dealer : event.seat,
             phase:
-              event.tile?.endsWith("f") === true
-                ? "awaiting_flower_replacement"
-                : event.opening
-                  ? "awaiting_draw"
-                  : "awaiting_discard",
+              event.opening ? "awaiting_draw" : "awaiting_discard",
             pendingFlower:
-              event.tile?.endsWith("f") === true
-                ? { seat: event.seat, tile: event.tile }
-                : event.replacementKind === "flower"
-                  ? null
-                  : state.pendingFlower,
+              event.replacementKind === "flower"
+                ? null
+                : state.pendingFlower,
             pendingNuki:
               event.replacementKind === "nuki" ? null : state.pendingNuki,
             hands,
@@ -1439,7 +1433,20 @@ export const useMatchStore = create<MatchStore>((set) => ({
             }
             return rest;
           })();
-          for (const t of contributed) {
+          const hiddenAnkan =
+            meld.type === "ankan" && contributed.length === 0;
+          if (hiddenAnkan) {
+            const hand = hands[caller];
+            for (let count = 0; count < 4; count++) {
+              const hiddenIndex = hand.indexOf(null);
+              if (hiddenIndex >= 0) {
+                hand.splice(hiddenIndex, 1);
+              } else if (hand.length > 0) {
+                hand.splice(hand.length - 1, 1);
+              }
+            }
+          }
+          for (const t of hiddenAnkan ? [] : contributed) {
             const hand = hands[caller];
             // Same visibility rule as `discard`: a spectator sees
             // every seat's real tiles, a player sees only their

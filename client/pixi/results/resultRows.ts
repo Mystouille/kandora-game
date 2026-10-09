@@ -149,7 +149,13 @@ export function buildWinResultRows(
               ? null
               : (((meld.from - win.seat + 4) % 4) as 0 | 1 | 2 | 3),
         }));
-      rows.push({ kind: "hand", concealed, winTile: agari, melds });
+      rows.push({
+        kind: "hand",
+        concealed,
+        winTile: agari,
+        melds,
+        revealConcealedKongs: true,
+      });
     }
     return {
       rows,

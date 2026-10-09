@@ -139,6 +139,8 @@ describe("MCR opening draw interaction", () => {
       { gesture: "right", firstDraw: "5p" },
       { gesture: "left", firstDraw: "9s" },
       { gesture: "right", firstDraw: "9s" },
+      { gesture: "left", firstDraw: "1f" },
+      { gesture: "right", firstDraw: "1f" },
     ])(
       `${layout}: $gesture-click discards opening $firstDraw without a ghost tile`,
       async ({ gesture, firstDraw }) => {

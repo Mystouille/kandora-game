@@ -8,7 +8,7 @@ import {
 import { type SeatValues } from "~/game/protocol/seat";
 import type { GameEvent, Seat, ServerMessage } from "~/game/protocol/messages";
 import { type Tile } from "~/game/rules";
-import { projectEvent } from "../projection";
+import { projectEvent, projectMeldForRecipient } from "../projection";
 
 import type { MatchStateView, MatchKernel } from "./matchKernel";
 import type { MatchPlayerInit } from "./roomRoster";
@@ -72,6 +72,15 @@ function discardTsumogiriFromHistory(
 
 export class SnapshotComposer {
   constructor(private readonly port: SnapshotComposerPort) {}
+
+  private revealsMcrAnkan(owner: Seat): boolean {
+    const state = this.port.state();
+    return (
+      state.ruleSet.rulesFamily === "mcr" &&
+      (state.phase === "hand_ended" || state.phase === "match_ended") &&
+      state.lastHandResult?.winner === owner
+    );
+  }
 
   private variantFields() {
     const state = this.port.state();
@@ -222,7 +231,16 @@ export class SnapshotComposer {
   }
 
   projectForSeat(event: GameEvent, recipient: Seat): GameEvent | null {
-    const projected = projectEvent(event, recipient);
+    const rulesFamily =
+      event.type === "call"
+        ? this.port.state().ruleSet.rulesFamily
+        : ("riichi" as const);
+    const projected = projectEvent(
+      event,
+      recipient,
+      rulesFamily,
+      event.type === "call" && this.revealsMcrAnkan(event.seat)
+    );
     if (projected === null) {
       return null;
     }
@@ -261,12 +279,15 @@ export class SnapshotComposer {
           ),
         discards: this.port.state().discards.map((d) => [...d]),
         discardTsumogiri,
-        melds: this.port.state().melds.map((mlds) =>
+        melds: this.port.state().melds.map((mlds, owner) =>
           mlds.map((m) => ({
-            type: m.type,
-            tiles: [...m.tiles],
-            claimedTile: m.claimedTile,
-            from: m.from,
+            ...projectMeldForRecipient(
+              m,
+              owner as Seat,
+              seat,
+              this.port.state().ruleSet.rulesFamily,
+              this.revealsMcrAnkan(owner as Seat)
+            ),
           }))
         ),
         wallRemaining: this.port.state().liveWall.length,

@@ -83,6 +83,17 @@ export class ActionExecutor {
       return;
     }
 
+    if (action.type === "flower" && action.tile) {
+      this.port.setSeatLegals(seat, []);
+      await this.port.applyEngineAction({
+        type: "flower",
+        seat,
+        tile: action.tile,
+      });
+      await this.port.afterCall();
+      return;
+    }
+
     if (action.type === "nuki" && action.tile) {
       this.port.setSeatLegals(seat, []);
       await this.port.applyEngineAction({

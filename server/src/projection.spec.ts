@@ -52,6 +52,30 @@ describe("projectEvent — privacy redaction", () => {
     };
     expect(projectEvent(ev, 0)).toEqual(ev);
   });
+
+  it("redacts MCR ankan identities only from opponents until reveal", () => {
+    const ev: GameEvent = {
+      type: "call",
+      seat: 1,
+      meld: {
+        type: "ankan",
+        tiles: ["5m", "5m", "5m", "5m"],
+        claimedTile: null,
+        from: null,
+      },
+    };
+
+    expect(projectEvent(ev, 1, "mcr")).toEqual(ev);
+    for (const recipient of [0, 2, 3] as Seat[]) {
+      expect(projectEvent(ev, recipient, "mcr")).toEqual({
+        ...ev,
+        meld: { ...ev.meld, tiles: [] },
+      });
+      expect(projectEvent(ev, recipient, "mcr", true)).toEqual(ev);
+    }
+    expect(projectEvent(ev, 0, "riichi")).toEqual(ev);
+    expect(projectEvent(ev, "spectator", "mcr")).toEqual(ev);
+  });
 });
 
 describe("projectEvent — spectator (omniscient)", () => {

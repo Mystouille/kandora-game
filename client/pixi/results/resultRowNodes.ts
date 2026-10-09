@@ -137,7 +137,10 @@ export function buildResultRowNodes(
       if (row.melds && row.melds.length > 0) {
         for (const meld of row.melds) {
           dx += meldGap;
-          const { node, width } = melds.drawMeld(meld, 0);
+          const rendered = row.revealConcealedKongs
+            ? melds.drawMeld(meld, 0, 0, true)
+            : melds.drawMeld(meld, 0);
+          const { node, width } = rendered;
           node.position.set(dx, 0);
           handContainer.addChild(node);
           dx += width;

@@ -22,6 +22,9 @@ export function waitsForRules(
   rules: Pick<RuleSet, "playerCount"> & Partial<Pick<RuleSet, "rulesFamily">>
 ): Tile[] {
   if (rules.rulesFamily === "mcr") {
+    if (hand.some((tile) => tile.endsWith("f"))) {
+      return [];
+    }
     return mcrWaits(hand, meldCount);
   }
   return waits(hand, meldCount).filter((tile) => isPlayableTile(tile, rules));

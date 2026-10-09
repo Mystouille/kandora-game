@@ -8,6 +8,7 @@ export interface ResultSeatReveal {
   hand: Array<string | null>;
   melds: Meld[] | null;
   separatesLastTile: boolean;
+  winning: boolean;
 }
 
 export interface SeatHandPresentation {
@@ -18,6 +19,7 @@ export interface SeatHandPresentation {
   displayMelds: Meld[];
   displayForceReveal: boolean;
   displaySeparatesLastTile: boolean;
+  displayWinningReveal: boolean;
   maskedForResult: boolean;
   historicalReveal: boolean;
 }
@@ -40,6 +42,7 @@ export function resultSeatReveal(
       hand: separatesLastTile ? [...concealed, agari] : concealed,
       melds: win.melds ?? null,
       separatesLastTile,
+      winning: true,
     };
   }
   if (
@@ -51,6 +54,7 @@ export function resultSeatReveal(
       hand: [...result.tenpaiHands[seat]],
       melds: null,
       separatesLastTile: false,
+      winning: false,
     };
   }
   return null;
@@ -97,6 +101,7 @@ export function resolveSeatHandPresentation(
         hand: [...declaredTenpaiHand],
         melds: null,
         separatesLastTile: false,
+        winning: false,
       }
     : null;
   const currentReveal =
@@ -128,6 +133,7 @@ export function resolveSeatHandPresentation(
     displaySeparatesLastTile:
       displayReveal?.separatesLastTile ??
       (currentMask !== null ? false : view.freshlyDrawnSeat === seat),
+    displayWinningReveal: displayReveal?.winning === true,
     maskedForResult: currentMask !== null,
     historicalReveal: historicalReveal !== null,
   };

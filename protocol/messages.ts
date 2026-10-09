@@ -398,6 +398,7 @@ const RyuukyokuDeclarationEvent = z
 
 const MeldSchema = z.object({
   type: z.enum(["chi", "pon", "daiminkan", "ankan", "shouminkan"]),
+  /** Empty only for an opponent-projected MCR ankan whose tiles stay private. */
   tiles: z.array(TileSchema),
   claimedTile: TileSchema.nullable(),
   from: SeatSchema.nullable(),
@@ -763,6 +764,7 @@ export const LegalActionSchema = z.object({
     "pon",
     "kan",
     "nuki",
+    "flower",
     "ron",
     "tsumo",
     "riichi",

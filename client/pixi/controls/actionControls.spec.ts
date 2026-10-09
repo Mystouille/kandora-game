@@ -196,6 +196,23 @@ describe("action control owner", () => {
       );
     }
   );
+  it.each([false, true])(
+    "labels and dispatches an MCR flower declaration (mobile=%s)",
+    (mobile) => {
+      const flower: LegalAction = {
+        id: "flower:1f",
+        type: "flower",
+        tile: "1f",
+      };
+      const h = harness([flower], mobile);
+      h.frame.view.rulesFamily = "mcr";
+      h.render();
+      click(button(h.frame.root, "Declare Spring"));
+      expect(h.actionClick).toHaveBeenCalledExactlyOnceWith({
+        action: flower,
+      });
+    }
+  );
   it("never offers a voluntary action for automatic Kansai fives", () => {
     const h = harness([{ id: "automatic", type: "nuki", tile: "0m" }]);
     h.frame.view.playerCount = 3;

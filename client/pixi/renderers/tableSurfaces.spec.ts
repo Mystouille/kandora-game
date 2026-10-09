@@ -78,6 +78,7 @@ function handState(frame: RenderFrame, seat: Seat): HandSeatRender {
     longAxisOffset: 0,
     handWidth: 0,
     displayMelds: [],
+    revealConcealedKongs: false,
     animateMelds: false,
     hand: ["1m", "2m", "3m"],
     isFreshlyDrawn: false,
@@ -364,25 +365,72 @@ describe("extracted meld and wall passes", () => {
     ).toBe(false);
   });
 
-  it("conceals ankan outer copies and retains the shouminkan stack offset and layer", () => {
+  it("supports standard, opponent-hidden, and winning-reveal ankan faces", () => {
     const h = harness();
     const drawer = new MeldTileRenderer(h.resources, new Set());
     const drawTile = vi.spyOn(drawer, "drawMeldTile");
-    drawer.drawMeld(
-      {
-        type: "ankan",
-        tiles: ["5m", "5m", "0m", "5m"],
-        claimedTile: null,
-        from: null,
-      },
-      0
-    );
+    const ankan: Meld = {
+      type: "ankan",
+      tiles: ["5m", "5m", "0m", "5m"],
+      claimedTile: null,
+      from: null,
+    };
+    drawer.drawMeld(ankan, 0);
     expect(drawTile.mock.calls.map(([tile]) => tile)).toEqual([
       null,
       "0m",
       "5m",
       null,
     ]);
+    drawTile.mockClear();
+    drawer.drawMeld({ ...ankan, tiles: [] }, 0);
+    expect(drawTile.mock.calls.map(([tile]) => tile)).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
+    drawTile.mockClear();
+    drawer.drawMeld(ankan, 0, 0, true);
+    expect(drawTile.mock.calls.map(([tile]) => tile)).toEqual([
+      "5m",
+      "0m",
+      "5m",
+      "5m",
+    ]);
+  });
+
+  it("reveals a winning MCR ankan through the meld pass", () => {
+    const h = harness({ rulesFamily: "mcr" });
+    const drawer = new MeldTileRenderer(h.resources, new Set());
+    const drawMeld = vi.spyOn(drawer, "drawMeld");
+    const renderer = new MeldRenderer(
+      h.resources,
+      new MeldAnimator(),
+      h.shadows
+    );
+    const ankan: Meld = {
+      type: "ankan",
+      tiles: ["7z", "7z", "7z", "7z"],
+      claimedTile: null,
+      from: null,
+    };
+    renderer.render(
+      h.frame,
+      1,
+      {
+        ...handState(h.frame, 1),
+        displayMelds: [ankan],
+        revealConcealedKongs: true,
+      },
+      drawer
+    );
+    expect(drawMeld).toHaveBeenCalledWith(ankan, 1, 0, true);
+  });
+
+  it("retains the shouminkan stack offset and layer", () => {
+    const h = harness();
+    const drawer = new MeldTileRenderer(h.resources, new Set());
     const added = drawer.drawMeld(
       {
         type: "shouminkan",

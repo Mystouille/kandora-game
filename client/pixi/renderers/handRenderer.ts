@@ -238,6 +238,8 @@ export class HandRenderer {
       longAxisOffset,
       handWidth,
       displayMelds: presentation.displayMelds,
+      revealConcealedKongs:
+        view.rulesFamily === "mcr" && presentation.displayWinningReveal,
       animateMelds: !presentation.historicalReveal,
       hand,
       isFreshlyDrawn,

@@ -46,18 +46,28 @@ describe("MCR flower flow", () => {
     expect(MatchStateSchema.parse(state)).toEqual(state);
   });
 
-  it("banks a drawn flower and replaces it from the wall tail", () => {
+  it("banks a declared drawn flower and replaces it from the wall tail", () => {
     const state = stateForDraw();
     state.liveWall = ["1f", "2m"];
 
     const drawn = step(state, { type: "draw", seat: 0 });
-    expect(drawn.state.phase).toBe("awaiting_flower_replacement");
-    expect(drawn.state.pendingFlower).toEqual({ seat: 0, tile: "1f" });
+    expect(drawn.state.phase).toBe("awaiting_discard");
+    expect(drawn.state.pendingFlower).toBeNull();
+    expect(drawn.state.lastDrawn[0]).toBe("1f");
     expect(drawn.events).toEqual([
       { type: "draw", seat: 0, tile: "1f", wallRemaining: 1 },
     ]);
 
-    const replaced = step(drawn.state, { type: "complete_flower" });
+    const declared = step(drawn.state, {
+      type: "flower",
+      seat: 0,
+      tile: "1f",
+    });
+    expect(declared.state.phase).toBe("awaiting_flower_replacement");
+    expect(declared.state.pendingFlower).toEqual({ seat: 0, tile: "1f" });
+    expect(declared.events).toEqual([]);
+
+    const replaced = step(declared.state, { type: "complete_flower" });
     expect(replaced.state.phase).toBe("awaiting_discard");
     expect(replaced.state.pendingFlower).toBeNull();
     expect(replaced.state.flowerTiles[0]).toContain("1f");
@@ -75,19 +85,71 @@ describe("MCR flower flow", () => {
     ]);
   });
 
-  it("discards an unreplaceable final flower and settles a zero-delta draw", () => {
+  it("allows a flower drawn during play to be discarded without banking it", () => {
+    const state = stateForDraw();
+    state.liveWall = ["8f", "2m"];
+
+    const drawn = step(state, { type: "draw", seat: 0 });
+    const discarded = step(drawn.state, {
+      type: "discard",
+      seat: 0,
+      tile: "8f",
+      discardSource: "draw",
+    });
+
+    expect(discarded.state.phase).toBe("awaiting_draw");
+    expect(discarded.state.flowerTiles[0]).not.toContain("8f");
+    expect(discarded.state.discards[0]).toContain("8f");
+    expect(discarded.events).toEqual([
+      {
+        type: "discard",
+        seat: 0,
+        tile: "8f",
+        tsumogiri: true,
+        discardSource: "draw",
+      },
+    ]);
+    expect(enumerateCalls(discarded.state)).toEqual([]);
+  });
+
+  it("allows a flower from the starting hand to be discarded", () => {
+    const state = createInitialState(43, {
+      ruleSet: presetToRuleSet(getPreset("mcr-ema")),
+    });
+    state.hands[0] = ["1f", ...ORPHANS];
+    state.lastDrawn[0] = "7z";
+
+    const discarded = step(state, {
+      type: "discard",
+      seat: 0,
+      tile: "1f",
+      discardSource: "hand",
+    });
+
+    expect(discarded.state.hands[0]).toEqual(ORPHANS);
+    expect(discarded.state.discards[0]).toEqual(["1f"]);
+    expect(discarded.state.flowerTiles[0]).toEqual([]);
+    expect(discarded.events[0]).toMatchObject({
+      type: "discard",
+      tile: "1f",
+      discardSource: "hand",
+    });
+  });
+
+  it("settles normally after discarding the final wall flower", () => {
     const state = stateForDraw();
     state.liveWall = ["8f"];
 
     const drawn = step(state, { type: "draw", seat: 0 });
-    const settled = step(drawn.state, {
-      type: "complete_flower",
-      forceExhaustive: true,
+    const discarded = step(drawn.state, {
+      type: "discard",
+      seat: 0,
+      tile: "8f",
+      discardSource: "draw",
     });
+    const settled = step(discarded.state, { type: "draw", seat: 1 });
 
     expect(settled.state.phase).toBe("hand_ended");
-    expect(settled.state.flowerTiles[0]).not.toContain("8f");
-    expect(settled.state.discards[0]).toContain("8f");
     expect(settled.state.lastHandResult?.delta).toEqual([0, 0, 0, 0]);
     expect(settled.events.at(-1)).toEqual({
       type: "hand_end",
@@ -268,7 +330,12 @@ describe("MCR flower flow", () => {
     state.lastDrawn[0] = null;
 
     const flower = step(state, { type: "draw", seat: 0 });
-    const replaced = step(flower.state, { type: "complete_flower" });
+    const declared = step(flower.state, {
+      type: "flower",
+      seat: 0,
+      tile: "1f",
+    });
+    const replaced = step(declared.state, { type: "complete_flower" });
     const won = step(replaced.state, { type: "tsumo", seat: 0 });
     const win = won.events.find((event) => event.type === "win");
     if (win?.type !== "win") {
@@ -279,7 +346,7 @@ describe("MCR flower flow", () => {
     ).toBe(false);
   });
 
-  it("rejects a kong when the remaining wall cannot yield a structural replacement", () => {
+  it("allows a kong replacement flower to be discarded", () => {
     const state = createInitialState(31, {
       ruleSet: presetToRuleSet(getPreset("mcr-ema")),
     });
@@ -303,13 +370,35 @@ describe("MCR flower flow", () => {
     state.liveWall = ["1f", "2f"];
     state.phase = "awaiting_discard";
 
+    const kong = step(state, {
+      type: "kan",
+      seat: 0,
+      kind: "ankan",
+      tile: "1m",
+    });
+    expect(kong.state.phase).toBe("awaiting_discard");
+    expect(kong.state.lastDrawn[0]).toBe("2f");
+    expect(kong.events).toContainEqual({
+      type: "draw",
+      seat: 0,
+      tile: "2f",
+      wallRemaining: 1,
+      fromDeadWall: false,
+      replacementKind: "kan",
+    });
     expect(
-      step(state, {
-        type: "kan",
+      step(kong.state, {
+        type: "discard",
         seat: 0,
-        kind: "ankan",
-        tile: "1m",
+        tile: "2f",
+        discardSource: "draw",
       }).events
-    ).toEqual([]);
+    ).toContainEqual({
+      type: "discard",
+      seat: 0,
+      tile: "2f",
+      tsumogiri: true,
+      discardSource: "draw",
+    });
   });
 });

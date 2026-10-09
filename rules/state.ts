@@ -47,7 +47,7 @@ export type MatchPhase =
   | "awaiting_discard" // active seat has drawn, must choose a discard
   | "awaiting_chankan" // added kan or Online North declared; opponents may ron
   | "awaiting_nuki_replacement" // mandatory Kansai tile extracted; replacement owed
-  | "awaiting_flower_replacement" // MCR flower drawn; automatic replacement owed
+  | "awaiting_flower_replacement" // MCR flower declared; replacement owed
   | "awaiting_ryuukyoku_declarations" // exhaustive draw; seats declare in dealer order
   | "awaiting_ryuukyoku_settlement" // all declarations collected; awaiting settlement
   | "hand_ended" // hand finished (win or exhaustive draw)
@@ -595,7 +595,7 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
       context.addIssue({
         code: "custom",
         path: ["pendingFlower"],
-        message: "Only a drawn MCR flower may await replacement",
+        message: "Only a concealed MCR flower may await replacement",
       });
     }
     const flowerTiles =

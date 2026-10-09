@@ -1,4 +1,5 @@
 import { scoreMcr, type McrScoreResult } from "../scoring/mcr";
+import { isFlowerTile } from "../flowers";
 import { windForSeat } from "../seats";
 import type { MatchState } from "../state";
 import type { Seat, Tile } from "../types";
@@ -40,6 +41,15 @@ export function scoreMcrForState(
   } = {}
 ): McrScoreResult {
   const hand = [...state.hands[seat]];
+  if (isFlowerTile(winTile) || hand.some(isFlowerTile)) {
+    return {
+      isWinningShape: false,
+      fans: [],
+      totalFan: 0,
+      nonFlowerFan: 0,
+      meetsMinimum: false,
+    };
+  }
   if (method === "self-draw") {
     const winIndex = hand.lastIndexOf(winTile);
     if (winIndex < 0) {

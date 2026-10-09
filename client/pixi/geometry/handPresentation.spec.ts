@@ -58,6 +58,7 @@ describe("extracted hand presentation", () => {
     expect(resultSeatReveal(result, 1)).toMatchObject({
       hand: ["1p", "3p"],
       separatesLastTile: true,
+      winning: true,
     });
     const current = view({ lastHandResult: result });
     expect(resolveSeatHandPresentation(current, null, 0)).toMatchObject({
@@ -65,6 +66,10 @@ describe("extracted hand presentation", () => {
       displayHand: [null, null, null],
       maskedForResult: true,
       displaySeparatesLastTile: false,
+      displayWinningReveal: false,
+    });
+    expect(resolveSeatHandPresentation(current, null, 1)).toMatchObject({
+      displayWinningReveal: true,
     });
   });
 

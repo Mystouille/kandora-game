@@ -35,7 +35,8 @@
  *              so the observer can render the indicator.
  *   - All other event types are public in the slice.
  */
-import type { GameEvent, Seat } from "~/game/protocol/messages";
+import type { GameEvent, Meld, Seat } from "~/game/protocol/messages";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 
 /**
  * Projection target. A numeric `Seat` is a player; `"spectator"`
@@ -45,9 +46,35 @@ import type { GameEvent, Seat } from "~/game/protocol/messages";
  */
 export type Recipient = Seat | "spectator";
 
+export function projectMeldForRecipient(
+  meld: {
+    readonly type: Meld["type"];
+    readonly tiles: readonly Meld["tiles"][number][];
+    readonly claimedTile: Meld["claimedTile"];
+    readonly from: Meld["from"];
+  },
+  owner: Seat,
+  recipient: Recipient,
+  rulesFamily: RulesFamily,
+  revealMcrAnkan = false
+): Meld {
+  if (
+    rulesFamily === "mcr" &&
+    meld.type === "ankan" &&
+    recipient !== "spectator" &&
+    recipient !== owner &&
+    !revealMcrAnkan
+  ) {
+    return { ...meld, tiles: [] };
+  }
+  return { ...meld, tiles: [...meld.tiles] };
+}
+
 export function projectEvent(
   event: GameEvent,
-  recipient: Recipient
+  recipient: Recipient,
+  rulesFamily: RulesFamily = "riichi",
+  revealMcrAnkan = false
 ): GameEvent | null {
   switch (event.type) {
     case "draw": {
@@ -87,6 +114,18 @@ export function projectEvent(
         return null;
       }
       return event;
+    }
+    case "call": {
+      return {
+        ...event,
+        meld: projectMeldForRecipient(
+          event.meld,
+          event.seat,
+          recipient,
+          rulesFamily,
+          revealMcrAnkan
+        ),
+      };
     }
     default: {
       return event;

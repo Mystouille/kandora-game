@@ -20,7 +20,8 @@ export class MeldTileRenderer implements MeldDrawingPort {
   drawMeld(
     meld: Meld,
     seat: number,
-    shouminkanOffsetY = 0
+    shouminkanOffsetY = 0,
+    revealAnkan = false
   ): {
     node: Container;
     width: number;
@@ -61,11 +62,16 @@ export class MeldTileRenderer implements MeldDrawingPort {
       return 0;
     };
     if (meld.type === "ankan") {
-      const tiles = ankanTilesForDisplay(meld.tiles);
+      const tiles: Array<string | null> =
+        meld.tiles.length === 0
+          ? [null, null, null, null]
+          : ankanTilesForDisplay(meld.tiles);
       let ax = 0;
       const mt = meldTileDims(this.resources.tileDesign, seat);
       tiles.forEach((tile, i) => {
-        const faceUp = !(i === 0 || i === tiles.length - 1);
+        const faceUp =
+          tile !== null &&
+          (revealAnkan || !(i === 0 || i === tiles.length - 1));
         const {
           node: sprite,
           offX,

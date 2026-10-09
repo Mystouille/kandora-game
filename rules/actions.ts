@@ -136,6 +136,13 @@ export interface NukiAction {
   replacementTile?: Tile;
 }
 
+/** Declare a concealed MCR flower and request its replacement draw. */
+export interface FlowerAction {
+  type: "flower";
+  seat: Seat;
+  tile: Tile;
+}
+
 /**
  * Finish an unrobbed North declaration or supply a mandatory Kansai
  * replacement. Duplicate supplies the acting seat's next personal-queue tile.
@@ -147,7 +154,7 @@ export interface CompleteNukiAction {
   forceExhaustive?: boolean;
 }
 
-/** Complete the automatic replacement for an MCR flower draw. */
+/** Complete the replacement for a declared MCR flower. */
 export interface CompleteFlowerAction {
   type: "complete_flower";
   replacementTile?: Tile;
@@ -233,6 +240,7 @@ export type Action =
   | PonAction
   | KanAction
   | NukiAction
+  | FlowerAction
   | CompleteNukiAction
   | CompleteFlowerAction
   | AbortAction

@@ -162,47 +162,33 @@ describe("dealMatch", () => {
     expect(dealt.liveWall).toHaveLength(70);
   });
 
-  it("deals and normalizes the complete MCR inventory", () => {
+  it("deals the complete MCR inventory without declaring opening flowers", () => {
     const dealt = dealMatch(42, { rulesFamily: "mcr", dealer: 2 });
     expect(dealt.hands.map((hand) => hand.length)).toEqual([13, 13, 14, 13]);
-    expect(dealt.hands.flat().some((tile) => tile.endsWith("f"))).toBe(false);
+    expect(dealt.hands.flat().some((tile) => tile.endsWith("f"))).toBe(true);
     expect(dealt.deadWall).toEqual([]);
     expect(dealt.doraIndicators).toEqual([]);
+    expect(dealt.flowerTiles).toEqual([[], [], [], []]);
+    expect(dealt.liveWall).toHaveLength(91);
     expect(
       dealt.hands.flat().length +
         dealt.liveWall.length +
         (dealt.flowerTiles?.flat().length ?? 0)
     ).toBe(144);
-    expect(dealt.flowerTiles?.flat().every((tile) => tile.endsWith("f"))).toBe(
-      true
-    );
   });
 
-  it("assigns opening flower replacements in dealer order", () => {
-    const seed = Array.from({ length: 500 }, (_, value) => value).find(
-      (candidate) => {
-        const east = dealMatch(candidate, {
-          rulesFamily: "mcr",
-          dealer: 0,
-        });
-        const south = dealMatch(candidate, {
-          rulesFamily: "mcr",
-          dealer: 1,
-        });
-        return (
-          (east.flowerTiles?.flat().length ?? 0) >= 2 &&
-          JSON.stringify(east.hands) !== JSON.stringify(south.hands)
-        );
-      }
-    );
-    expect(seed).toBeDefined();
-    const first = dealMatch(seed as number, {
-      rulesFamily: "mcr",
-      dealer: 1,
-    });
-    expect(first.hands[1]).toHaveLength(14);
-    expect(first.hands.flat().some((tile) => tile.endsWith("f"))).toBe(false);
-  });
+  it.each([0, 1, 2, 3] as const)(
+    "gives dealer %i fourteen concealed tiles without consuming replacements",
+    (dealer) => {
+      const dealt = dealMatch(42, { rulesFamily: "mcr", dealer });
+      expect(dealt.hands[dealer]).toHaveLength(14);
+      expect(
+        dealt.hands.filter((_, seat) => seat !== dealer).map((hand) => hand.length)
+      ).toEqual([13, 13, 13]);
+      expect(dealt.flowerTiles).toEqual([[], [], [], []]);
+      expect(dealt.liveWall).toHaveLength(91);
+    }
+  );
 
   it("is reproducible from the seed", () => {
     const a = dealMatch(2026);

@@ -245,7 +245,7 @@ describe("authoritative debug seed startup", () => {
     }
   );
 
-  it("starts a seeded MCR flower chain with a valid fourteen-tile hand", async () => {
+  it("offers discard and declaration for a seeded MCR flower draw", async () => {
     const { match } = createMatch(
       presetToRuleSet(getPreset("mcr-ema")),
       "mcr-ema",
@@ -253,14 +253,49 @@ describe("authoritative debug seed startup", () => {
     );
     setReadyCheckMs(0);
     await match.start();
-    const snapshot = match.buildSnapshotForSeat(0);
-    expect(snapshot.state.hands[0]).toEqual([...hand, "5s"]);
-    expect(snapshot.state.flowerTiles?.[0]).toEqual(["1f", "2f"]);
+    expect(match.buildSnapshotForSeat(0).state.hands[0]).toEqual([
+      ...hand,
+      "1f",
+    ]);
+    expect(match.buildSnapshotForSeat(0).state.flowerTiles?.[0]).toEqual([]);
+    expect(match.owners.actionWindows.legals(0)).toEqual(
+      expect.arrayContaining([
+        {
+          id: "discard:draw:1f",
+          type: "discard",
+          tile: "1f",
+          discardSource: "draw",
+        },
+        { id: "flower:1f", type: "flower", tile: "1f" },
+      ])
+    );
+    expect(match.owners.kernel.debugQueues().humanDraws).toEqual([
+      "2f",
+      "5s",
+      "6s",
+    ]);
+
+    await match.handleAct(0, "flower:1f");
+
+    expect(match.buildSnapshotForSeat(0).state.hands[0]).toEqual([
+      ...hand,
+      "2f",
+    ]);
+    expect(match.buildSnapshotForSeat(0).state.flowerTiles?.[0]).toEqual([
+      "1f",
+    ]);
     expect(match.owners.actionWindows.legals(0)).toContainEqual({
-      id: "tsumo",
-      type: "tsumo",
+      id: "discard:draw:2f",
+      type: "discard",
+      tile: "2f",
+      discardSource: "draw",
     });
-    expect(match.owners.kernel.debugQueues().humanDraws).toEqual(["6s"]);
+    expect(match.owners.actionWindows.legals(0)).toContainEqual({
+      id: "flower:2f",
+      type: "flower",
+      tile: "2f",
+    });
+    expect(match.owners.kernel.debugQueues().humanDraws).toEqual(["5s", "6s"]);
   });
 
   it("rejects invalid debug tiles before a session can be started", () => {

@@ -5,7 +5,8 @@ import type { RuleSet } from "./ruleSet";
 import type { MatchState } from "./state";
 import { isPlayableTile } from "./tileAvailability";
 import type { Tile } from "./types";
-import { buildAllTiles, normalizeMcrOpeningFlowers } from "./wall";
+import { isFlowerTile } from "./flowers";
+import { buildAllTiles } from "./wall";
 
 export function debugDiscardSeat(playerCount: PlayerCount): 2 | 3 {
   return playerCount === 3 ? 2 : 3;
@@ -43,8 +44,14 @@ export function debugSeedValidationError(
   if (unavailable.length > 0) {
     return `Tile(s) not available for this game type: ${unavailable.join(", ")}.`;
   }
-  if (debug.leftDiscards?.some((tile) => !isPlayableTile(tile, rules))) {
-    return "Forced discards cannot contain flowers or mandatory Kansai nuki tiles.";
+  if (
+    debug.leftDiscards?.some(
+      (tile) =>
+        !isPlayableTile(tile, rules) &&
+        !(rules.rulesFamily === "mcr" && isFlowerTile(tile))
+    )
+  ) {
+    return "Forced discards cannot contain mandatory Kansai nuki tiles.";
   }
   return null;
 }
@@ -67,11 +74,6 @@ export function applyDebugHand(
       if (debug.humanHand !== undefined) {
         state.flowerTiles[0] = [];
       }
-      normalizeMcrOpeningFlowers(
-        state.hands[0],
-        state.flowerTiles[0],
-        () => humanDrawQueue.shift() ?? state.liveWall.pop()
-      );
       state.lastDrawn[0] = state.hands[0][13];
     }
   } else if (debug.humanHand !== undefined) {

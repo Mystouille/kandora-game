@@ -182,6 +182,96 @@ describe("MCR replay folding", () => {
     }
   );
 
+  it("keeps a drawn flower discardable in live and replay views", () => {
+    const start = openingHand(0, "5p");
+    useMatchStore.getState().setMatch("mcr-flower-discard", 1);
+    useMatchStore
+      .getState()
+      .applyEvent({ ...start, hand: [...startingHand] }, 1);
+    let replay = applyReplayEvent(initialView(), start);
+    const draw: GameEvent = {
+      type: "draw",
+      seat: 1,
+      tile: "1f",
+      wallRemaining: 90,
+    };
+
+    useMatchStore.getState().applyEvent(draw, 2);
+    replay = applyReplayEvent(replay, draw);
+    expect(useMatchStore.getState().phase).toBe("awaiting_discard");
+    expect(useMatchStore.getState().pendingFlower).toBeNull();
+    expect(replay.phase).toBe("awaiting_discard");
+    expect(replay.pendingFlower).toBeNull();
+
+    const discard: GameEvent = {
+      type: "discard",
+      seat: 1,
+      tile: "1f",
+      tsumogiri: true,
+      discardSource: "draw",
+    };
+    useMatchStore.getState().applyEvent(discard, 3);
+    replay = applyReplayEvent(replay, discard);
+    expect(useMatchStore.getState().discards[1]).toEqual(["1f"]);
+    expect(useMatchStore.getState().flowerTiles?.[1]).toEqual([]);
+    expect(replay.discards[1]).toEqual(["1f"]);
+    expect(replay.flowerTiles[1]).toEqual([]);
+  });
+
+  it("keeps an opponent ankan hidden until that player wins", () => {
+    const start = openingHand(1, "5m");
+    useMatchStore.getState().setMatch("mcr-hidden-ankan", 0);
+    useMatchStore
+      .getState()
+      .applyEvent({ ...start, hand: [...startingHand] }, 1);
+    let replay = applyReplayEvent(initialView(), start);
+    const hiddenCall: GameEvent = {
+      type: "call",
+      seat: 1,
+      meld: {
+        type: "ankan",
+        tiles: [],
+        claimedTile: null,
+        from: null,
+      },
+    };
+
+    useMatchStore.getState().applyEvent(hiddenCall, 2);
+    replay = applyReplayEvent(replay, hiddenCall);
+    expect(useMatchStore.getState().hands[1]).toHaveLength(10);
+    expect(useMatchStore.getState().melds[1][0].tiles).toEqual([]);
+    expect(replay.hands[1]).toHaveLength(10);
+    expect(replay.melds[1][0].tiles).toEqual([]);
+
+    const win: GameEvent = {
+      type: "win",
+      seat: 1,
+      loser: 0,
+      winTile: "9s",
+      scoringFamily: "mcr",
+      hand: [...startingHand],
+      melds: [
+        {
+          type: "ankan",
+          tiles: ["5m", "5m", "5m", "5m"],
+          claimedTile: null,
+          from: null,
+        },
+      ],
+    };
+    useMatchStore.getState().applyEvent(win, 3);
+    replay = applyReplayEvent(replay, win);
+    expect(
+      useMatchStore.getState().lastHandResult?.wins?.[0].melds?.[0].tiles
+    ).toEqual(["5m", "5m", "5m", "5m"]);
+    expect(replay.lastHandResult?.wins?.[0].melds?.[0].tiles).toEqual([
+      "5m",
+      "5m",
+      "5m",
+      "5m",
+    ]);
+  });
+
   it("tracks flowers and MCR score details in the neutral replay view", () => {
     const events: GameEvent[] = [
       {

@@ -1,6 +1,7 @@
 import type { LegalAction, Seat } from "~/game/protocol/messages";
 import {
   isDiscardForbiddenByKuikae,
+  isFlowerTile,
   step,
   type DiscardSource,
   type MatchState,
@@ -21,12 +22,9 @@ function canSupplySelfReplacement(
   }
   const directive = driver.peekDraw(seat);
   if (directive.kind === "standard") {
-    return state.liveWall.some((tile) => !tile.endsWith("f"));
+    return state.liveWall.length > 0;
   }
-  if (directive.kind !== "tile" || !directive.tile.endsWith("f")) {
-    return directive.kind === "tile";
-  }
-  return false;
+  return directive.kind === "tile";
 }
 
 export function buildDiscardLegals(
@@ -95,6 +93,7 @@ export function buildDiscardLegals(
   for (const opt of buildSelfKanLegals(state, driver, seat)) {
     out.push(opt);
   }
+  out.push(...buildFlowerLegals(state, driver, seat));
   out.push(...buildNukiLegals(state, driver, seat));
   if (inRiichi) {
     return out;
@@ -135,6 +134,26 @@ export function buildDiscardLegals(
     }
   }
   return out;
+}
+
+export function buildFlowerLegals(
+  state: MatchState,
+  driver: MatchDriver,
+  seat: Seat
+): LegalAction[] {
+  if (
+    state.ruleSet.rulesFamily !== "mcr" ||
+    state.phase !== "awaiting_discard" ||
+    state.turn !== seat ||
+    !canSupplySelfReplacement(state, driver, seat)
+  ) {
+    return [];
+  }
+  return [...new Set(state.hands[seat].filter(isFlowerTile))].map((tile) => ({
+    id: `flower:${tile}`,
+    type: "flower",
+    tile,
+  }));
 }
 
 export function buildNukiLegals(

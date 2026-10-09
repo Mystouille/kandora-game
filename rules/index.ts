@@ -37,6 +37,7 @@ export type {
   ChiAction,
   PonAction,
   KanAction,
+  FlowerAction,
   AbortAction,
   DeclareRyuukyokuStatusAction,
   CompleteRyuukyokuAction,

@@ -50,7 +50,7 @@ export interface DealtMatch {
   deadWall: Tile[];
   /** Dora indicators currently revealed (slice: just the first). */
   doraIndicators: Tile[];
-  /** Public flowers banked while normalizing the opening deal. MCR only. */
+  /** Public flowers already banked at hand start. MCR initializes empty banks. */
   flowerTiles?: Tile[][];
   /** Explicit replacement/indicator cursor, emitted only for three-player deals. */
   sanmaWall?: SanmaWallState;
@@ -139,13 +139,6 @@ export function dealMatch(seed: number, opts: WallOptions = {}): DealtMatch {
 
   if (rulesFamily === "mcr") {
     const flowerTiles = Array.from({ length: playerCount }, () => [] as Tile[]);
-    const dealer = opts.dealer ?? 0;
-    for (let offset = 0; offset < playerCount; offset++) {
-      const seat = (dealer + offset) % playerCount;
-      normalizeMcrOpeningFlowers(hands[seat], flowerTiles[seat], () =>
-        liveWall.pop()
-      );
-    }
     return {
       hands,
       liveWall,
@@ -165,22 +158,4 @@ export function dealMatch(seed: number, opts: WallOptions = {}): DealtMatch {
     };
   }
   return dealt;
-}
-
-export function normalizeMcrOpeningFlowers(
-  hand: Tile[],
-  flowers: Tile[],
-  drawReplacement: () => Tile | undefined
-): void {
-  let flowerIndex = hand.findIndex((tile) => tile.endsWith("f"));
-  while (flowerIndex >= 0) {
-    const [flower] = hand.splice(flowerIndex, 1);
-    flowers.push(flower);
-    const replacement = drawReplacement();
-    if (replacement === undefined) {
-      throw new Error("MCR opening flower replacement exhausted the wall");
-    }
-    hand.push(replacement);
-    flowerIndex = hand.findIndex((tile) => tile.endsWith("f"));
-  }
 }

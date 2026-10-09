@@ -68,7 +68,12 @@ Web, mobile online, and local/Nearby lobbies start at **Riichi / Yonma
 types: the lobby's Riichi presets for Yonma, or **Online / Kansai** for Sanma.
 MCR uses the fixed four-player EMA Green Book profile without Riichi selectors.
 Its buttons and call announcements use **Chow**, **Pung**, **Kong**, and
-**Mahjong**; Riichi terminology is unchanged.
+**Mahjong**; Riichi terminology is unchanged. Flower tiles remain in the
+concealed hand until their owner either discards them normally or uses the
+**Declare** action to bank the flower and draw a replacement. The same choice
+is available for flowers in the opening hand and flowers drawn later. MCR
+concealed Kongs expose no tile faces or tile identities to opponents during
+play; all four tiles are revealed only when that player wins the hand.
 **Duplicate** has its own section and seed field, independent of these choices.
 Resuming a saved table keeps that table's rules rather than using new-game defaults.
 
@@ -88,15 +93,17 @@ Buu, both sanma variants, and MCR:
   and the right-click discard shortcut.
 - **Next draws:** consumed in order for ordinary draws and flower, nuki, and
   kan replacements. Opening Kansai nuki replacements precede the first
-  ordinary draw. MCR opening flowers are banked and replaced automatically.
+  ordinary draw. MCR flower replacements are consumed only after the player
+  declares the flower.
 - **Bot discards:** target the previous active bot, seat 3 in four-player
   games or seat 2 in sanma.
 
 Compact notation supports `m`, `p`, `s`, `z`, and MCR flowers `1f` through
 `8f`. For example, `123456789p1234s` is a valid thirteen-tile input in every
 game type. Tiles absent from the selected rules are rejected with an error;
-flowers and mandatory Kansai nuki tiles cannot be forced discards. Physical
-copy counts are intentionally unrestricted for engine testing.
+mandatory Kansai nuki tiles cannot be forced discards. MCR flowers can be
+forced discards; other profiles reject them as unavailable. Physical copy
+counts are intentionally unrestricted for engine testing.
 
 Debug overrides remain unavailable in **Duplicate** mode so that its public
 seed continues to determine the deal and personal draw queues.

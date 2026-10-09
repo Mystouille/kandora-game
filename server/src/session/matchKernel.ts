@@ -111,12 +111,9 @@ export class MatchKernel {
     }
     const directive = this.driver.peekDraw(seat);
     if (directive.kind === "standard") {
-      return this.stateValue.liveWall.some((tile) => !tile.endsWith("f"));
+      return this.stateValue.liveWall.length > 0;
     }
-    if (directive.kind !== "tile" || !directive.tile.endsWith("f")) {
-      return directive.kind === "tile";
-    }
-    return false;
+    return directive.kind === "tile";
   }
 
   initialize(

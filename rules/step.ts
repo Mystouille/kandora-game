@@ -54,6 +54,7 @@ import {
 import { scoreHand, type ScoreResult } from "./score";
 import { settleMcrWin, type McrScoreResult } from "./scoring/mcr";
 import { isQualifiedMcrScore, scoreMcrForState } from "./mcr/scoringContext";
+import { isFlowerTile } from "./flowers";
 import { isWinningShape } from "./shanten";
 import { isAnkanLegalDuringRiichi } from "./riichiKan";
 import { type Seat, type Tile, type Wind } from "./types";
@@ -306,12 +307,6 @@ function drawRinshan(
 function finishReplacementDraw(next: MatchState, seat: Seat, tile: Tile): void {
   next.lastDrawFromDeadWall = true;
   next.lastDrawFromKong = true;
-  if (next.ruleSet.rulesFamily === "mcr" && tile.endsWith("f")) {
-    next.pendingFlower = { seat, tile };
-    next.lastDrawn[seat] = null;
-    next.phase = "awaiting_flower_replacement";
-    return;
-  }
   next.lastDrawn[seat] = tile;
   next.phase = "awaiting_discard";
 }
@@ -1729,6 +1724,24 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     return { state: next, events };
   }
 
+  if (action.type === "flower") {
+    if (
+      state.ruleSet.rulesFamily !== "mcr" ||
+      state.phase !== "awaiting_discard" ||
+      action.seat !== state.turn ||
+      !isFlowerTile(action.tile) ||
+      !state.hands[action.seat].includes(action.tile)
+    ) {
+      return noop(state);
+    }
+    const next = clone(state);
+    next.pendingFlower = { seat: action.seat, tile: action.tile };
+    next.lastDrawn[action.seat] = null;
+    closeDiscardWindow(next);
+    next.phase = "awaiting_flower_replacement";
+    return { state: next, events: [] };
+  }
+
   if (action.type === "complete_flower") {
     const pending = state.pendingFlower;
     if (
@@ -1799,14 +1812,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         replacementKind: "flower",
       },
     ];
-    if (replacement.endsWith("f")) {
-      next.pendingFlower = { seat: pending.seat, tile: replacement };
-      next.lastDrawn[pending.seat] = null;
-      next.phase = "awaiting_flower_replacement";
-    } else {
-      next.lastDrawn[pending.seat] = replacement;
-      next.phase = "awaiting_discard";
-    }
+    next.lastDrawn[pending.seat] = replacement;
+    next.phase = "awaiting_discard";
     return { state: next, events };
   }
 
@@ -1851,18 +1858,10 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     next.hands[next.turn].push(tile);
     closeDiscardWindow(next);
-    if (next.ruleSet.rulesFamily === "mcr" && tile.endsWith("f")) {
-      next.pendingFlower = { seat: next.turn, tile };
-      next.lastDrawn[next.turn] = null;
-      next.lastDrawFromDeadWall = false;
-      next.lastDrawFromKong = false;
-      next.phase = "awaiting_flower_replacement";
-    } else {
-      next.lastDrawn[next.turn] = tile;
-      next.lastDrawFromDeadWall = false;
-      next.lastDrawFromKong = false;
-      next.phase = "awaiting_discard";
-    }
+    next.lastDrawn[next.turn] = tile;
+    next.lastDrawFromDeadWall = false;
+    next.lastDrawFromKong = false;
+    next.phase = "awaiting_discard";
     return {
       state: next,
       events: [
@@ -2405,12 +2404,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       if (!canTakeSanmaReplacement(state, "kan", availabilityTile)) {
         return noop(state);
       }
-    } else if (
-      state.liveWall.length === 0 ||
-      (state.ruleSet.rulesFamily === "mcr" &&
-        action.replacementTile === undefined &&
-        state.liveWall.every((tile) => tile.endsWith("f")))
-    ) {
+    } else if (state.liveWall.length === 0) {
       return noop(state);
     }
     if (action.kind === "shouminkan") {

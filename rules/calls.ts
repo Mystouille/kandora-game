@@ -19,6 +19,7 @@ import { scoreHand } from "./score";
 import { isWinningShape } from "./shanten";
 import type { Seat, Tile } from "./types";
 import { isQualifiedMcrScore, scoreMcrForState } from "./mcr/scoringContext";
+import { isFlowerTile } from "./flowers";
 
 export type CallOption =
   | { kind: "chi"; tiles: [Tile, Tile] }
@@ -56,6 +57,9 @@ export function enumerateCalls(state: MatchState): SeatCallOptions[] {
   }
   const discarder = state.lastDiscard.seat;
   const claimed = state.lastDiscard.tile;
+  if (isFlowerTile(claimed)) {
+    return [];
+  }
   const out: SeatCallOptions[] = [];
   for (let s = 0; s < state.ruleSet.playerCount; s++) {
     const seat = s as Seat;

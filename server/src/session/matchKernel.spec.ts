@@ -160,26 +160,60 @@ describe("MatchKernel", () => {
     }
   );
 
-  it("normalizes MCR starting flowers using queued replacements", () => {
+  it("offers discard and declaration for an MCR starting flower", () => {
     const kernel = fixture(presetToRuleSet(getPreset("mcr-ema")), "mcr-ema");
     kernel.applyDebugSeed({
       humanHand: ["1f", ...debugHand.slice(1)],
       humanDraws: ["5s", "2f", "1p", "6s"],
     });
     expect(kernel.view.hands[0]).toHaveLength(14);
-    expect(kernel.view.hands[0]).not.toContain("1f");
+    expect(kernel.view.hands[0]).toContain("1f");
     expect(kernel.view.hands[0]).not.toContain("2f");
-    expect(kernel.view.flowerTiles[0]).toEqual(["1f", "2f"]);
-    expect(kernel.view.lastDrawn[0]).toBe("1p");
-    expect(kernel.debugQueues().humanDraws).toEqual(["6s"]);
+    expect(kernel.view.flowerTiles[0]).toEqual([]);
+    expect(kernel.discardLegals(0)).toEqual(
+      expect.arrayContaining([
+        {
+          id: "discard:hand:1f",
+          type: "discard",
+          tile: "1f",
+          discardSource: "hand",
+        },
+        { id: "flower:1f", type: "flower", tile: "1f" },
+      ])
+    );
+
+    kernel.applyAction({ type: "flower", seat: 0, tile: "1f" });
+    expect(kernel.view.pendingFlower).toEqual({ seat: 0, tile: "1f" });
+    kernel.applyAction({ type: "complete_flower" });
+    expect(kernel.view.flowerTiles[0]).toEqual(["1f"]);
+    expect(kernel.view.lastDrawn[0]).toBe("2f");
+    expect(kernel.discardLegals(0)).toContainEqual({
+      id: "discard:draw:2f",
+      type: "discard",
+      tile: "2f",
+      discardSource: "draw",
+    });
+    expect(kernel.debugQueues().humanDraws).toEqual(["1p", "6s"]);
   });
 
-  it("handles an MCR opening flower draw and chained replacements", () => {
+  it("requires a choice for each MCR flower in a replacement chain", () => {
     const kernel = fixture(presetToRuleSet(getPreset("mcr-ema")), "mcr-ema");
     kernel.applyDebugSeed({
       humanHand: debugHand,
       humanDraws: ["1f", "2f", "5s", "6s"],
     });
+    expect(kernel.view.hands[0]).toEqual([...debugHand, "1f"]);
+    expect(kernel.view.flowerTiles[0]).toEqual([]);
+    expect(kernel.view.lastDrawn[0]).toBe("1f");
+
+    kernel.applyAction({ type: "flower", seat: 0, tile: "1f" });
+    kernel.applyAction({ type: "complete_flower" });
+    expect(kernel.view.hands[0]).toEqual([...debugHand, "2f"]);
+    expect(kernel.view.flowerTiles[0]).toEqual(["1f"]);
+    expect(kernel.view.lastDrawn[0]).toBe("2f");
+
+    kernel.applyAction({ type: "flower", seat: 0, tile: "2f" });
+    kernel.applyAction({ type: "complete_flower" });
     expect(kernel.view.hands[0]).toEqual([...debugHand, "5s"]);
     expect(kernel.view.flowerTiles[0]).toEqual(["1f", "2f"]);
     expect(kernel.view.lastDrawn[0]).toBe("5s");
@@ -207,9 +241,13 @@ describe("MatchKernel", () => {
     expect(kernel.debugQueues().humanDraws).toEqual(["1f", "2f", "6s", "7s"]);
     kernel.prepareDebugDraw();
     kernel.draw();
-    expect(kernel.view.pendingFlower?.tile).toBe("1f");
+    expect(kernel.view.pendingFlower).toBeNull();
+    expect(kernel.view.lastDrawn[0]).toBe("1f");
+    kernel.applyAction({ type: "flower", seat: 0, tile: "1f" });
     kernel.applyAction({ type: "complete_flower" });
-    expect(kernel.view.pendingFlower?.tile).toBe("2f");
+    expect(kernel.view.pendingFlower).toBeNull();
+    expect(kernel.view.lastDrawn[0]).toBe("2f");
+    kernel.applyAction({ type: "flower", seat: 0, tile: "2f" });
     kernel.applyAction({ type: "complete_flower" });
     expect(kernel.view.hands[0]).toEqual([...debugHand, "6s"]);
     expect(kernel.view.flowerTiles[0]).toEqual(["1f", "2f"]);

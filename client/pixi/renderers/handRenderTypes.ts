@@ -48,6 +48,7 @@ export interface HandSeatRender {
   readonly longAxisOffset: number;
   readonly handWidth: number;
   readonly displayMelds: readonly Meld[];
+  readonly revealConcealedKongs: boolean;
   readonly animateMelds: boolean;
   readonly hand: ReadonlyArray<string | null>;
   readonly isFreshlyDrawn: boolean;

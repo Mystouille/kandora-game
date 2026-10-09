@@ -15,6 +15,7 @@ import { ephemeralMatchRepository } from "./repository";
 import { ServerMessageSchema } from "~/game/protocol/messages";
 import { useMatchStore } from "~/game/client/store";
 import type { RuleSetOverride } from "~/game/rules/ruleSet";
+import { getPreset, presetToRuleSet } from "~/game/rules/presets";
 function makeMatch(
   seed: number,
   ruleSetOverride?: RuleSetOverride
@@ -193,6 +194,36 @@ describe("snapshot hydration", () => {
     // reflects real engine state. At match start no seat is in
     // furiten, so the whole tuple is false.
     expect(parsed.data.state.furiten).toEqual([false, false, false, false]);
+  });
+  it("redacts MCR concealed Kong tiles from opponent snapshots", async () => {
+    const m = makeMatch(11, presetToRuleSet(getPreset("mcr-ema")));
+    m.attachHuman(0, () => undefined);
+    await m.start();
+    editMatchState(m, (state) => {
+      state.melds[1] = [
+        {
+          type: "ankan",
+          tiles: ["5m", "5m", "5m", "5m"],
+          claimedTile: null,
+          from: null,
+        },
+      ];
+    });
+
+    const opponent = ServerMessageSchema.parse(m.buildSnapshotForSeat(0));
+    const owner = m.buildSnapshotForSeat(1);
+    expect(opponent.type).toBe("snapshot");
+    expect(owner.type).toBe("snapshot");
+    if (opponent.type !== "snapshot" || owner.type !== "snapshot") {
+      throw new Error("expected player snapshots");
+    }
+    expect(opponent.state.melds[1][0].tiles).toEqual([]);
+    expect(owner.state.melds[1][0].tiles).toEqual([
+      "5m",
+      "5m",
+      "5m",
+      "5m",
+    ]);
   });
   it("rehydrates completed declarations without exposing concealed seats", async () => {
     const m = makeMatch(7);

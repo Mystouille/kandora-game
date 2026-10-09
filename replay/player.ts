@@ -491,17 +491,9 @@ export function applyReplayEvent(
         sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : view.sanmaWall,
         turn: event.opening ? view.dealer : event.seat,
         phase:
-          event.tile?.endsWith("f") === true
-            ? "awaiting_flower_replacement"
-            : event.opening
-              ? "awaiting_draw"
-              : "awaiting_discard",
+          event.opening ? "awaiting_draw" : "awaiting_discard",
         pendingFlower:
-          event.tile?.endsWith("f") === true
-            ? { seat: event.seat, tile: event.tile }
-            : event.replacementKind === "flower"
-              ? null
-              : view.pendingFlower,
+          event.replacementKind === "flower" ? null : view.pendingFlower,
         pendingNuki: event.replacementKind === "nuki" ? null : view.pendingNuki,
         hands,
         wallRemaining: event.wallRemaining,
@@ -698,7 +690,15 @@ export function applyReplayEvent(
         }
         return rest;
       })();
-      for (const t of contributed) {
+      const hiddenAnkan = meld.type === "ankan" && contributed.length === 0;
+      if (hiddenAnkan) {
+        const hand = hands[caller];
+        for (let count = 0; count < 4; count++) {
+          const hiddenIndex = hand.indexOf(null);
+          hand.splice(hiddenIndex >= 0 ? hiddenIndex : hand.length - 1, 1);
+        }
+      }
+      for (const t of hiddenAnkan ? [] : contributed) {
         const hand = hands[caller];
         let i = hand.lastIndexOf(t);
         if (i < 0) {

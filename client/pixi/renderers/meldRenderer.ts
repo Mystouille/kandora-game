@@ -89,11 +89,10 @@ export class MeldRenderer {
       const shouminkanOffsetY = animate
         ? this.meldAnimator.getShouminkanOffsetY(seat, i, slideDistance)
         : 0;
-      const { node, width, boxes } = drawer.drawMeld(
-        melds[i],
-        seat,
-        shouminkanOffsetY
-      );
+      const rendered = hand.revealConcealedKongs
+        ? drawer.drawMeld(melds[i], seat, shouminkanOffsetY, true)
+        : drawer.drawMeld(melds[i], seat, shouminkanOffsetY);
+      const { node, width, boxes } = rendered;
       built.push({
         index: i,
         node,

@@ -83,6 +83,7 @@ describe("MCR result rows", () => {
         null,
         false
       );
+
       expect(plan.rows).toContainEqual({
         kind: "title",
         text: "Mahjong",
@@ -90,6 +91,47 @@ describe("MCR result rows", () => {
       });
     }
   );
+
+  it("marks winning concealed Kongs for full result reveal", () => {
+    const plan = buildWinResultRows(
+      {
+        reason: "tsumo",
+        wins: [
+          {
+            seat: 0,
+            scoringFamily: "mcr",
+            totalFan: 8,
+            nonFlowerFan: 8,
+            hand: ["1m", "2m", "3m"],
+            melds: [
+              {
+                type: "ankan",
+                tiles: ["7z", "7z", "7z", "7z"],
+                claimedTile: null,
+                from: null,
+              },
+            ],
+          },
+        ],
+      },
+      0,
+      false,
+      Number.POSITIVE_INFINITY,
+      null,
+      false
+    );
+
+    expect(plan.rows.find((row) => row.kind === "hand")).toMatchObject({
+      kind: "hand",
+      revealConcealedKongs: true,
+      melds: [
+        {
+          type: "ankan",
+          tiles: ["7z", "7z", "7z", "7z"],
+        },
+      ],
+    });
+  });
 
   it.each(["ron", "tsumo"] as const)(
     "keeps the legacy Riichi %s announcement",
