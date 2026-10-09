@@ -1,5 +1,6 @@
 import type { ColorSource } from "pixi.js";
 import type { LegalAction } from "~/game/protocol/messages";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 import type { Rect } from "../tableLayout";
 import type { TableRendererPresentation } from "../scene/renderTypes";
 import { tileNum } from "./tileOrder";
@@ -107,13 +108,49 @@ export function layoutActionButtonRows(
   return { placements, rowCount: row + 1 };
 }
 
-export function labelForAction(action: LegalAction): string {
-  if (action.type === "chi" && action.tiles) {
-    const a = action.tiles[0];
-    const b = action.tiles[1];
-    return `Chi ${tileNum(a)}·${tileNum(b)}`;
+const CALL_LABELS = {
+  riichi: {
+    chi: "Chi",
+    pon: "Pon",
+    kan: "Kan",
+    ron: "Ron",
+    tsumo: "Tsumo",
+    win: "Win",
+  },
+  mcr: {
+    chi: "Chow",
+    pon: "Pung",
+    kan: "Kong",
+    ron: "Mahjong",
+    tsumo: "Mahjong",
+    win: "Mahjong",
+  },
+} as const;
+
+export function callLabel(
+  type: keyof typeof CALL_LABELS.riichi,
+  rulesFamily: RulesFamily = "riichi"
+) {
+  return CALL_LABELS[rulesFamily][type];
+}
+
+export function labelForAction(
+  action: LegalAction,
+  rulesFamily: RulesFamily = "riichi"
+): string {
+  if (action.type === "chi") {
+    const label = callLabel("chi", rulesFamily);
+    if (action.tiles) {
+      const a = action.tiles[0];
+      const b = action.tiles[1];
+      return `${label} ${tileNum(a)}·${tileNum(b)}`;
+    }
+    return label;
   }
   if (action.type === "kan") {
+    if (rulesFamily === "mcr") {
+      return callLabel("kan", rulesFamily);
+    }
     if (action.kanKind === "ankan") {
       const t = action.tiles?.[0];
       return t ? `Ankan ${tileNum(t)}` : "Ankan";
@@ -122,19 +159,19 @@ export function labelForAction(action: LegalAction): string {
       const t = action.tiles?.[0];
       return t ? `Shouminkan ${tileNum(t)}` : "Shouminkan";
     }
-    return "Kan";
+    return callLabel("kan", rulesFamily);
   }
   if (action.type === "pon") {
-    return "Pon";
+    return callLabel("pon", rulesFamily);
   }
   if (action.type === "nuki") {
     return "Nuki 北";
   }
   if (action.type === "ron") {
-    return "Ron";
+    return callLabel("ron", rulesFamily);
   }
   if (action.type === "tsumo") {
-    return "Tsumo";
+    return callLabel("tsumo", rulesFamily);
   }
   if (action.type === "pass") {
     return "Pass";
@@ -143,7 +180,7 @@ export function labelForAction(action: LegalAction): string {
     return "Riichi";
   }
   if (action.type === "win") {
-    return "Win";
+    return callLabel("win", rulesFamily);
   }
   if (action.type === "declare_tenpai") {
     return "Tenpai";
@@ -154,8 +191,11 @@ export function labelForAction(action: LegalAction): string {
   return action.type;
 }
 
-export function actionButtonLabel(action: LegalAction): string {
-  return action.type === "pass" ? "Skip" : labelForAction(action);
+export function actionButtonLabel(
+  action: LegalAction,
+  rulesFamily: RulesFamily = "riichi"
+): string {
+  return action.type === "pass" ? "Skip" : labelForAction(action, rulesFamily);
 }
 
 export function actionButtonColor(action: LegalAction): ColorSource {

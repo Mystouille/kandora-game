@@ -436,8 +436,9 @@ export interface MatchView {
    * (the "tsumo gap"). Hand-length alone is ambiguous — after a
    * chi/pon the closed hand is also length 11 (== 2 mod 3) even
    * though no tile was drawn — so we track this explicitly.
-   * Set on every `draw`; cleared on `discard`, `call`,
-   * `hand_start`, and snapshot resync.
+   * Set on every `draw` and on MCR's dealer opening hand; cleared
+   * on `discard`, `call`, and other hand starts. Snapshots restore
+   * the authoritative server marker.
    */
   freshlyDrawnSeat: Seat | null;
 
@@ -1063,7 +1064,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ),
             lastHandResult: null,
             matchEnded: null,
-            freshlyDrawnSeat: null,
+            freshlyDrawnSeat: rulesFamily === "mcr" ? event.dealer : null,
             freshlyDiscardedSeat: null,
           };
         }

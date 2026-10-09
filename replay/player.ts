@@ -462,7 +462,7 @@ export function applyReplayEvent(
         ),
         lastHandResult: null,
         matchEnded: null,
-        freshlyDrawnSeat: null,
+        freshlyDrawnSeat: rulesFamily === "mcr" ? event.dealer : null,
         freshlyDiscardedSeat: null,
       };
     }

@@ -9,6 +9,7 @@ import {
 } from "../geometry/resultReveal";
 import { RESULT_YAKU_REVEAL_INTERVAL_MS } from "../geometry/renderConstants";
 import { sortHand } from "../geometry/tileOrder";
+import { callLabel } from "../geometry/actionGeometry";
 import { splitWinningHandForDisplay } from "../winningHand";
 import type {
   ResultLabels,
@@ -106,16 +107,10 @@ export function buildWinResultRows(
       color: 0xcbd5e1,
     });
   }
-  if (result.reason === "tsumo") {
+  if (result.reason === "tsumo" || result.reason === "ron") {
     rows.push({
       kind: "title",
-      text: win.scoringFamily === "mcr" ? "Self-draw" : "Tsumo",
-      size: 36,
-    });
-  } else if (result.reason === "ron") {
-    rows.push({
-      kind: "title",
-      text: win.scoringFamily === "mcr" ? "Win" : "Ron",
+      text: callLabel(result.reason, win.scoringFamily),
       size: 36,
     });
   }

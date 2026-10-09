@@ -67,6 +67,8 @@ Web, mobile online, and local/Nearby lobbies start at **Riichi / Yonma
 **Yonma (4 players)** or **Sanma (3 players)**, followed by the applicable game
 types: the lobby's Riichi presets for Yonma, or **Online / Kansai** for Sanma.
 MCR uses the fixed four-player EMA Green Book profile without Riichi selectors.
+Its buttons and call announcements use **Chow**, **Pung**, **Kong**, and
+**Mahjong**; Riichi terminology is unchanged.
 **Duplicate** has its own section and seed field, independent of these choices.
 Resuming a saved table keeps that table's rules rather than using new-game defaults.
 
@@ -81,7 +83,9 @@ Buu, both sanma variants, and MCR:
   Normal games without debug overrides retain random seating.
 - **Starting hand:** 13 tiles before the opening draw. MCR still starts with
   14 tiles: the first queued draw overrides the dealer's opening tile, or
-  that tile remains random when the draw queue is empty.
+  that tile remains random when the draw queue is empty. The opening draw
+  stays separate from the starting hand and supports both clicking the tile
+  and the right-click discard shortcut.
 - **Next draws:** consumed in order for ordinary draws and flower, nuki, and
   kan replacements. Opening Kansai nuki replacements precede the first
   ordinary draw. MCR opening flowers are banked and replaced automatically.

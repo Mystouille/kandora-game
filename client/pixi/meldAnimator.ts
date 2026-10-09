@@ -1,5 +1,7 @@
 import type { MatchView } from "../store";
 import type { Meld } from "~/game/protocol/messages";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
+import { callLabel } from "./geometry/actionGeometry";
 
 export const MELD_SLIDE_DURATION_MS = 350;
 export const MELD_SLIDE_TILE_WIDTHS = 3;
@@ -7,7 +9,7 @@ export const CALL_EFFECT_DURATION_MS = 750;
 
 export interface CallEffectFrame {
   seat: number;
-  label: "Chii" | "Pon" | "Kan";
+  label: "Chii" | ReturnType<typeof callLabel>;
   alpha: number;
   scale: number;
 }
@@ -76,14 +78,17 @@ function easeOutCubic(progress: number): number {
   return 1 - Math.pow(1 - progress, 3);
 }
 
-function callEffectLabel(meld: Meld): CallEffectFrame["label"] {
-  if (meld.type === "chi") {
+function callEffectLabel(
+  meld: Meld,
+  rulesFamily: RulesFamily = "riichi"
+): CallEffectFrame["label"] {
+  if (meld.type === "chi" && rulesFamily === "riichi") {
     return "Chii";
   }
-  if (meld.type === "pon") {
-    return "Pon";
-  }
-  return "Kan";
+  return callLabel(
+    meld.type === "chi" || meld.type === "pon" ? meld.type : "kan",
+    rulesFamily
+  );
 }
 
 export function callEffectPresentation(progress: number): {
@@ -240,7 +245,8 @@ export class MeldAnimator {
     this.callEffect = {
       seat: candidate.seat,
       label: callEffectLabel(
-        currentMelds[candidate.seat][candidate.meldIndex]
+        currentMelds[candidate.seat][candidate.meldIndex],
+        view.rulesFamily
       ),
       startMs: now,
     };

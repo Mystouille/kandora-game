@@ -1,11 +1,13 @@
 import { Container, Graphics, Sprite, Text, TextStyle } from "pixi.js";
 import type { ColorSource } from "pixi.js";
 import type { LegalAction } from "~/game/protocol/messages";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 import type { TableRendererPresentation } from "../scene/renderTypes";
 import type { TileTextureStore } from "../tiles/tileTextureStore";
 import {
   actionButtonColor,
   actionButtonStyle,
+  callLabel,
   labelForAction,
 } from "../geometry/actionGeometry";
 import { SMALL_TILE_H, SMALL_TILE_W } from "../geometry/renderConstants";
@@ -68,7 +70,8 @@ export function drawCallGroupButton(
   presentation: TableRendererPresentation,
   group: CallGroup,
   expanded: CallGroup | null,
-  expand: (group: CallGroup | null) => void
+  expand: (group: CallGroup | null) => void,
+  rulesFamily: RulesFamily = "riichi"
 ): ActionButtonNode {
   const style = actionButtonStyle(presentation);
   const height = style.height;
@@ -84,7 +87,7 @@ export function drawCallGroupButton(
     fill: 0xffffff,
   });
   const active = expanded === group;
-  const labelText = group === "chi" ? "Chi" : group === "pon" ? "Pon" : "Kan";
+  const labelText = callLabel(group, rulesFamily);
   const labelNode = new Text({
     text: `${labelText} ${active ? "▴" : "▾"}`,
     style: labelStyle,
@@ -198,7 +201,7 @@ export function drawActionButton(
   presentation: TableRendererPresentation,
   action: LegalAction,
   choose: (action: LegalAction) => void,
-  labelOverride?: string
+  rulesFamily: RulesFamily = "riichi"
 ): ActionButtonNode {
   const style = actionButtonStyle(presentation);
   const height = style.height;
@@ -208,18 +211,10 @@ export function drawActionButton(
     fontWeight: "700",
     fill: 0xffffff,
   });
-  let text: string;
-  if (labelOverride !== undefined) {
-    text = labelOverride;
-  } else if (action.type === "chi") {
-    text = "Chi";
-  } else if (action.type === "pon") {
-    text = "Pon";
-  } else if (action.type === "kan") {
-    text = "Kan";
-  } else {
-    text = labelForAction(action);
-  }
+  const text =
+    action.type === "chi" || action.type === "pon" || action.type === "kan"
+      ? callLabel(action.type, rulesFamily)
+      : labelForAction(action, rulesFamily);
   const labelNode = new Text({ text, style: labelStyle });
   const width = Math.max(
     style.minActionWidth,

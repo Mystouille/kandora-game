@@ -120,6 +120,53 @@ describe("MeldAnimator", () => {
     expect(animator.getCallEffect()).toBeNull();
   });
 
+  it.each([
+    { meld: CHI, label: "Chow" },
+    { meld: PON, label: "Pung" },
+    { meld: DAIMINKAN, label: "Kong" },
+    { meld: ANKAN, label: "Kong" },
+  ])("uses $label for an MCR $meld.type animation", ({ meld, label }) => {
+    let now = 0;
+    const animator = new MeldAnimator({ now: () => now });
+    animator.beginFrame({
+      ...view([[], [], [], []]),
+      rulesFamily: "mcr",
+    });
+    animator.beginFrame({
+      ...view([[], [], [meld], []]),
+      rulesFamily: "mcr",
+    });
+    now += CALL_EFFECT_DURATION_MS / 2;
+    expect(animator.getCallEffect()).toMatchObject({
+      seat: 2,
+      label,
+      alpha: 1,
+    });
+    now += CALL_EFFECT_DURATION_MS / 2;
+    expect(animator.getCallEffect()).toBeNull();
+  });
+
+  it("announces an added MCR kan as Kong", () => {
+    const animator = new MeldAnimator({ now: () => 0 });
+    animator.beginFrame({
+      ...view([[PON], [], [], []]),
+      rulesFamily: "mcr",
+    });
+    animator.beginFrame({
+      ...view([
+        [{ ...PON, type: "shouminkan", tiles: ["2m", "2m", "2m", "2m"] }],
+        [],
+        [],
+        [],
+      ]),
+      rulesFamily: "mcr",
+    });
+    expect(animator.getCallEffect()).toMatchObject({
+      seat: 0,
+      label: "Kong",
+    });
+  });
+
   it("fades at both ends while enlarging faintly", () => {
     const start = callEffectPresentation(0);
     const middle = callEffectPresentation(0.5);

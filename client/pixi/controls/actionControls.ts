@@ -223,7 +223,8 @@ export class ActionControls {
             (group) => {
               this.expandedCallGroup = group;
               this.requestRender();
-            }
+            },
+            view.rulesFamily
           )
         );
       } else {
@@ -233,10 +234,7 @@ export class ActionControls {
             entry.action,
             (action) =>
               this.onActionClick({ action, ...(intent ? { intent } : {}) }),
-            view.rulesFamily === "mcr" &&
-              (entry.action.type === "ron" || entry.action.type === "tsumo")
-              ? "Hu"
-              : undefined
+            view.rulesFamily
           )
         );
       }

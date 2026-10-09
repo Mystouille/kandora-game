@@ -46,7 +46,7 @@ describe("MCR result rows", () => {
 
     expect(plan.rows).toContainEqual({
       kind: "title",
-      text: "Win",
+      text: "Mahjong",
       size: 36,
     });
     expect(plan.rows).toContainEqual({
@@ -61,4 +61,52 @@ describe("MCR result rows", () => {
       ptsColor: 0xfde68a,
     });
   });
+
+  it.each(["ron", "tsumo"] as const)(
+    "announces an MCR %s win as Mahjong",
+    (reason) => {
+      const plan = buildWinResultRows(
+        {
+          reason,
+          wins: [
+            {
+              seat: 0,
+              scoringFamily: "mcr",
+              totalFan: 8,
+              nonFlowerFan: 8,
+            },
+          ],
+        },
+        0,
+        true,
+        0,
+        null,
+        false
+      );
+      expect(plan.rows).toContainEqual({
+        kind: "title",
+        text: "Mahjong",
+        size: 36,
+      });
+    }
+  );
+
+  it.each(["ron", "tsumo"] as const)(
+    "keeps the legacy Riichi %s announcement",
+    (reason) => {
+      const plan = buildWinResultRows(
+        { reason, wins: [{ seat: 0, han: 1, fu: 30 }] },
+        0,
+        false,
+        0,
+        null,
+        true
+      );
+      expect(plan.rows).toContainEqual({
+        kind: "title",
+        text: reason === "ron" ? "Ron" : "Tsumo",
+        size: 36,
+      });
+    }
+  );
 });

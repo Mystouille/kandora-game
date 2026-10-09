@@ -25,6 +25,50 @@ const CHI: LegalAction[] = [
   { id: "chi:4m:2m,3m", type: "chi", tile: "4m", tiles: ["3m", "2m"] },
 ];
 
+const MCR_ACTIONS: Array<{
+  action: LegalAction;
+  label: string;
+  riichiLabel: string;
+}> = [
+  {
+    action: { id: "wire-chi", type: "chi", tile: "3m", tiles: ["1m", "2m"] },
+    label: "Chow",
+    riichiLabel: "Chi",
+  },
+  {
+    action: { id: "wire-pon", type: "pon", tile: "5p", tiles: ["5p", "5p"] },
+    label: "Pung",
+    riichiLabel: "Pon",
+  },
+  ...(["daiminkan", "ankan", "shouminkan"] as const).map((kanKind) => ({
+    action: {
+      id: `wire-${kanKind}`,
+      type: "kan" as const,
+      kanKind,
+      tile: "7s",
+      tiles:
+        kanKind === "daiminkan" ? ["7s", "7s", "7s"] : ["7s", "7s", "7s", "7s"],
+    },
+    label: "Kong",
+    riichiLabel: "Kan",
+  })),
+  {
+    action: { id: "wire-ron", type: "ron" },
+    label: "Mahjong",
+    riichiLabel: "Ron",
+  },
+  {
+    action: { id: "wire-tsumo", type: "tsumo" },
+    label: "Mahjong",
+    riichiLabel: "Tsumo",
+  },
+  {
+    action: { id: "wire-win", type: "win" },
+    label: "Mahjong",
+    riichiLabel: "Win",
+  },
+];
+
 function harness(actions: LegalAction[], mobile = false) {
   const initial = createFrame(
     { conn: "open", mySeat: 0, legalActions: actions },
@@ -81,6 +125,56 @@ afterEach(() => {
 });
 
 describe("action control owner", () => {
+  for (const mobile of [false, true]) {
+    it.each(MCR_ACTIONS)(
+      `uses MCR $label for $action.id without changing dispatch (mobile=${mobile})`,
+      ({ action, label, riichiLabel }) => {
+        const h = harness([action], mobile);
+        h.frame.view.rulesFamily = "mcr";
+        h.render();
+        expect(allText(h.frame.root).map((text) => text.text)).toEqual([label]);
+        click(button(h.frame.root, label));
+        expect(h.actionClick).toHaveBeenCalledExactlyOnceWith({ action });
+
+        h.frame.view.rulesFamily = "riichi";
+        h.render();
+        expect(allText(h.frame.root).map((text) => text.text)).toEqual([
+          riichiLabel,
+        ]);
+      }
+    );
+
+    it.each(["chi", "pon", "kan"] as const)(
+      `uses MCR wording for expanded and collapsed %s choices (mobile=${mobile})`,
+      (group) => {
+        const example = MCR_ACTIONS.find(({ action }) => action.type === group);
+        if (example === undefined) {
+          throw new Error(`Missing ${group} action fixture`);
+        }
+        const actions = [
+          example.action,
+          { ...example.action, id: `${example.action.id}-alternative` },
+        ];
+        const h = harness(actions, mobile);
+        h.frame.view.rulesFamily = "mcr";
+        h.render();
+        click(button(h.frame.root, `${example.label} ▾`));
+        h.render();
+        expect(button(h.frame.root, `${example.label} ▴`)).toBeDefined();
+        const choices = h.frame.root.children[0].children.filter((child) =>
+          child.children.some((node) => node instanceof Sprite)
+        );
+        expect(choices).toHaveLength(2);
+        click(choices[1]);
+        expect(h.actionClick).toHaveBeenCalledExactlyOnceWith({
+          action: actions[1],
+        });
+        h.render();
+        expect(button(h.frame.root, `${example.label} ▾`)).toBeDefined();
+      }
+    );
+  }
+
   it.each([false, true])(
     "keeps native sanma North voluntary, dispatches its server id and never renders Chii (mobile=%s)",
     (mobile) => {
