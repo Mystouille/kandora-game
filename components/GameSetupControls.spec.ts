@@ -34,7 +34,7 @@ const presets: readonly GameSetupPreset[] = [
   {
     id: "mcr-ema",
     rulesFamily: "mcr",
-    displayName: "MCR EMA Green Book",
+    displayName: "MCR",
   },
 ];
 
@@ -173,9 +173,7 @@ describe("native game setup controls", () => {
       mode: { type: "normal" },
       spectatorDelayMs: 0,
     });
-    expect(gameVariantLabel({ rulesFamily: "mcr", playerCount: 4 })).toBe(
-      "MCR · EMA Green Book"
-    );
+    expect(gameVariantLabel({ rulesFamily: "mcr", playerCount: 4 })).toBe("MCR");
   });
 
   it.each(["", "   ", "x".repeat(129)])(

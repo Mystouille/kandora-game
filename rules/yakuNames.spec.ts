@@ -14,6 +14,13 @@ describe("riichiLibYakuToRomaji", () => {
     expect(RIICHI_LIB_YAKU_KANJI_BY_ROMAJI["Nuki Dora"]).toBe("抜きドラ");
   });
 
+  it("maps the Kansai North value honor in both directions", () => {
+    expect(riichiLibYakuToRomaji({ 北: "1飜" })).toEqual({
+      Kita: "1飜",
+    });
+    expect(RIICHI_LIB_YAKU_KANJI_BY_ROMAJI.Kita).toBe("北");
+  });
+
   it("normalizes scorer yaku without changing values or order", () => {
     const normalized = riichiLibYakuToRomaji({
       立直: "1飜",

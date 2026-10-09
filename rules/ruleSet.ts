@@ -444,6 +444,7 @@ export function resolveRuleSet(partial?: RuleSetOverride): RuleSet {
       throw new Error("Sanma cannot use Buu rules");
     }
     rules.roundLimit = 3;
+    rules.startingScore = 45_000;
     rules.atamahane = false;
     if (rules.sanmaType === "online") {
       rules.nbRedFiveManzu = 0;

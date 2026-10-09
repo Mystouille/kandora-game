@@ -14,7 +14,7 @@ Sanma uses the M-League base with these changes:
   applies.
 - The variant tile, nuki, wall, and payment rules below.
 
-Other defaults remain M-League: 25,000 starting points, no bankruptcy or
+Other defaults remain M-League: 45,000 starting points, no bankruptcy or
 abortive draws, no nagashi mangan, normal dealer continuation, 1,000-point
 riichi, one red 5p/5s, and ordinary ippatsu/ura. Honba adds 300 on ron or
 100 from each actual tsumo payer. The 3,000-point noten pool is shared among
@@ -41,6 +41,8 @@ fails explicitly; native replay/share remains available.
 | Ordinary use | North may remain in the hand or a pon/kan | 5m never remains in a playable hand or meld |
 | Manzu dora cycle | 1m -> 9m -> 1m | 1m -> 5m -> 9m -> 1m |
 | Red 5m | Absent | The M-League red 5m is retained |
+
+In Kansai, a North triplet or kan is always a one-han qualifying yaku.
 
 An extracted tile gives one nuki bonus han plus any applicable indicator,
 ura, and red-five bonuses. Nuki is not itself a qualifying yaku, does not

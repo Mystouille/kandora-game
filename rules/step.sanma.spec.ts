@@ -12,7 +12,7 @@ describe("three-player engine topology", () => {
   it("initializes only three participants and validates their cardinality", () => {
     const state = createInitialState(42, { ruleSet: { playerCount: 3 } });
     expect(state.hands.map((hand) => hand.length)).toEqual([13, 13, 13]);
-    expect(state.scores).toEqual([25_000, 25_000, 25_000]);
+    expect(state.scores).toEqual([45_000, 45_000, 45_000]);
     for (const values of [
       state.discards,
       state.lastDrawn,
@@ -36,7 +36,7 @@ describe("three-player engine topology", () => {
     expect(
       MatchStateSchema.safeParse({
         ...state,
-        scores: [25_000, 25_000, 25_000, 0],
+        scores: [45_000, 45_000, 45_000, 0],
       }).success
     ).toBe(false);
   });
@@ -770,6 +770,6 @@ describe("three-player engine topology", () => {
       0,
     ]);
     expect(next.hands).toHaveLength(3);
-    expect(next.scores).toEqual([25_000, 25_000, 25_000]);
+    expect(next.scores).toEqual([45_000, 45_000, 45_000]);
   });
 });

@@ -97,7 +97,7 @@ describe("game lobby", () => {
       {
         id: "mcr-ema",
         rulesFamily: "mcr",
-        displayName: "MCR - EMA Green Book",
+        displayName: "MCR",
       },
     ];
 

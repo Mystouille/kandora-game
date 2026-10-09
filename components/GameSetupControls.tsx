@@ -77,7 +77,7 @@ export function gameVariantLabel(
   variant: Partial<Pick<GameSetup, "rulesFamily" | "playerCount" | "sanmaType">>
 ): string | null {
   if (variant.rulesFamily === "mcr") {
-    return "MCR · EMA Green Book";
+    return "MCR";
   }
   if (variant.playerCount !== 3) {
     return null;

@@ -10,6 +10,7 @@ import {
   TableRenderer,
   actionButtonLabel,
   genericPassOrTsumogiriAction,
+  wallZIndex,
 } from "./TableRenderer";
 import { useMatchStore, type MatchView } from "../store";
 import { initialView } from "~/game/replay/player";
@@ -58,6 +59,62 @@ function root(): Container {
   }
   return child;
 }
+
+describe("public bonus tile layering", () => {
+  it.each(["standard", "compact", "mobile"] as const)(
+    "keeps MCR flowers and both sanma nuki strips behind discards (%s)",
+    async (mode) => {
+      const renderer = new TableRenderer(
+        mode === "mobile"
+          ? { presentation: "mobile", layoutConfig: mobileTableLayout }
+          : { webTableLayoutMode: mode }
+      );
+      renderer.setAnimationsEnabled(false);
+      await renderer.mount(new HTMLElement());
+      const views: MatchView[] = [
+        {
+          ...raw(4),
+          rulesFamily: "mcr",
+          flowerTiles: [["1f"], ["2f"], ["3f"], ["4f"]],
+        },
+        raw(3),
+        {
+          ...raw(3),
+          sanmaType: "kansai",
+          nukiTiles: [["0m"], ["5m"], ["5m"]],
+        },
+      ];
+      for (const view of views) {
+        renderer.render(view);
+        const scene = root();
+        expect(scene.sortableChildren).toBe(true);
+        scene.sortChildren();
+        const prefix =
+          view.rulesFamily === "mcr" ? "flowers-seat-" : "nuki-seat-";
+        const bonuses = scene.children.filter((node) =>
+          node.label?.startsWith(prefix)
+        );
+        const ponds = scene.children.filter((node) =>
+          node.label?.startsWith("discard-seat-")
+        );
+        expect(bonuses).toHaveLength(view.playerCount ?? 4);
+        expect(ponds).toHaveLength(view.playerCount ?? 4);
+        for (const bonus of bonuses) {
+          expect(bonus.zIndex).toBeGreaterThan(
+            Math.max(...[0, 1, 2, 3].map(wallZIndex))
+          );
+          for (const pond of ponds) {
+            expect(bonus.zIndex).toBeLessThan(pond.zIndex);
+            expect(scene.getChildIndex(bonus)).toBeLessThan(
+              scene.getChildIndex(pond)
+            );
+          }
+        }
+      }
+      renderer.destroy();
+    }
+  );
+});
 
 describe("three-seat rendering across shared layouts", () => {
   it.each(["standard", "compact", "mobile"] as const)(

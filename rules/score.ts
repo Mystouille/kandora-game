@@ -387,10 +387,13 @@ export function scoreHand(input: ScoreInput): ScoreResult {
   const sanma = input.playerCount === 3;
   const nukiTiles = sanma ? (input.nukiTiles ?? []) : [];
   const uraIndicators = applicableUraIndicators(input);
-  const winningTiles = [
+  const handTiles = [
     ...input.hand,
     input.winTile,
     ...(input.melds?.flatMap((meld) => meld.tiles) ?? []),
+  ];
+  const winningTiles = [
+    ...handTiles,
     ...nukiTiles,
   ];
   const doraCount = countIndicatorDora(
@@ -407,6 +410,10 @@ export function scoreHand(input: ScoreInput): ScoreResult {
     noKuitan: input.noKuitan,
     noAka: input.noAka,
     rinshan: sanma && input.tsumo && input.rinshanOrChankan,
+    kansaiNorthYakuhai:
+      sanma &&
+      input.sanmaType === "kansai" &&
+      handTiles.filter((tile) => tile === "4z").length >= 3,
     nukiDora: nukiTiles.length,
     nukiIndicatorDora: countIndicatorDora(
       nukiTiles,

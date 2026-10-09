@@ -1196,7 +1196,7 @@ describe("three-seat exhaustion after nuki", () => {
         delta,
       });
       expect(result.state.scores).toEqual(
-        delta.map((change) => 25_000 + change)
+        delta.map((change) => 45_000 + change)
       );
       expect(result.events).toEqual([
         { type: "hand_end", reason: "exhaustive_draw", delta },

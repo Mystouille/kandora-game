@@ -1,7 +1,7 @@
 {
   "rulesFamily": "mcr",
   "id": "mcr-ema",
-  "displayName": "MCR - EMA Green Book",
+  "displayName": "MCR",
   "description": "Mahjong Competition Rules using the EMA English Green Book: 81 fan, an 8-point non-flower minimum, flowers, and a fixed 16-hand game.",
   "playerCount": 4,
   "sanmaType": "online",

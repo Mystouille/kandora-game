@@ -69,7 +69,7 @@ describe("three-player authoritative sessions", () => {
     expect(snapshot.state.hands.map((hand) => hand.length)).toEqual([
       14, 13, 13,
     ]);
-    expect(snapshot.state.scores).toEqual([25_000, 25_000, 25_000]);
+    expect(snapshot.state.scores).toEqual([45_000, 45_000, 45_000]);
     expect(match.owners.timeBank.snapshot()).toHaveLength(3);
     expect(match.owners.actionWindows.allLegals()).toHaveLength(3);
     expect(ServerMessageSchema.parse(snapshot)).toMatchObject({

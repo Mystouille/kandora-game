@@ -42,6 +42,7 @@ export const RIICHI_LIB_YAKU_ROMAJI: Readonly<Record<string, string>> = {
   役牌白: "Haku",
   役牌発: "Hatsu",
   役牌中: "Chun",
+  北: "Kita",
   天和: "Tenhou",
   地和: "Chiihou",
   人和: "Renhou",

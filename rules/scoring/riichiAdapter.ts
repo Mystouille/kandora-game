@@ -37,6 +37,8 @@ export interface RiichiAdapterOptions {
   noAka?: boolean;
   /** A declared sanma replacement win, even without a kan or with Kansai ippatsu. */
   rinshan?: boolean;
+  /** Treat a completed North set as a one-han Kansai value honor. */
+  kansaiNorthYakuhai?: boolean;
   nukiDora?: number;
   nukiIndicatorDora?: number;
   nukiAkaDora?: number;
@@ -139,15 +141,22 @@ export function createRiichiScorer(
   }
   scorer.calcFu = () => calculateFu(scorer, options.doubleWindPairFu ?? 4);
 
-  if (options.rinshan && scorer.isTsumo) {
+  const addRinshan = options.rinshan && scorer.isTsumo;
+  if (addRinshan || options.kansaiNorthYakuhai) {
     const calculateYaku = scorer.calcYaku.bind(scorer);
     scorer.calcYaku = () => {
       calculateYaku();
       const candidate = scorer.tmpResult;
-      // The library requires a kan and rejects ippatsu here. Nuki replacements
-      // have neither restriction; rinshan must qualify before bonus counting.
-      if (candidate.yakuman === 0 && !candidate.yaku["嶺上開花"]) {
+      if (candidate.yakuman > 0) {
+        return;
+      }
+      if (addRinshan && !candidate.yaku["嶺上開花"]) {
+        // The library requires a kan and rejects ippatsu here. Nuki replacements
+        // have neither restriction; rinshan must qualify before bonus counting.
         addHan(candidate, "嶺上開花", 1);
+      }
+      if (options.kansaiNorthYakuhai) {
+        addHan(candidate, "北", 1);
       }
     };
   }

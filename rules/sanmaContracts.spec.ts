@@ -17,7 +17,7 @@ describe("sanma configuration", () => {
   it("does not silently apply four-place tournament UMA to native sanma", () => {
     expect(() =>
       calculateMatchPoints(
-        [25_000, 25_000, 25_000],
+        [45_000, 45_000, 45_000],
         resolveRuleSet({ playerCount: 3 })
       )
     ).toThrow(/raw match scores/);
@@ -47,7 +47,7 @@ describe("sanma configuration", () => {
         sanmaType,
         roundWindCount: 2,
         roundLimit: 3,
-        startingScore: 25_000,
+        startingScore: 45_000,
         atamahane: false,
         nagashiMangan: false,
         bustedScore: null,

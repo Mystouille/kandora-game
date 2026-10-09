@@ -229,6 +229,50 @@ describe("Online scoring", () => {
   });
 });
 
+describe("Kansai value honors", () => {
+  it("makes a concealed North triplet a one-han qualifying yaku", () => {
+    const input: ScoreInput = {
+      hand: tiles("123p1267899s444z"),
+      winTile: "3s",
+      tsumo: false,
+      playerCount: 3,
+    };
+
+    const online = scoreHand({ ...input, sanmaType: "online" });
+    expect(online).toMatchObject({ han: 0, ten: 0 });
+    expect(online.yaku["北"]).toBeUndefined();
+
+    const kansai = scoreHand({ ...input, sanmaType: "kansai" });
+    expect(kansai).toMatchObject({ isAgari: true, han: 1, ten: 1000 });
+    expect(kansai.yaku["北"]).toBe("1飜");
+  });
+
+  it.each(["pon", "daiminkan", "ankan"] as const)(
+    "values a North %s exactly once",
+    (type) => {
+      const northTiles = tiles(type === "pon" ? "444z" : "4444z");
+      const score = scoreHand({
+        hand: tiles("123p1267899s"),
+        winTile: "3s",
+        tsumo: false,
+        playerCount: 3,
+        sanmaType: "kansai",
+        melds: [
+          {
+            type,
+            tiles: northTiles,
+            claimedTile: type === "ankan" ? null : "4z",
+            from: type === "ankan" ? null : 2,
+          },
+        ],
+      });
+
+      expect(score).toMatchObject({ isAgari: true, han: 1, ten: 1000 });
+      expect(score.yaku["北"]).toBe("1飜");
+    }
+  );
+});
+
 const kansaiRows = [
   {
     han: 1,

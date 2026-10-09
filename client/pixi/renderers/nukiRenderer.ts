@@ -1,7 +1,10 @@
 import { Container, Graphics } from "pixi.js";
 import type { Seat } from "~/game/protocol/seat";
 import type { RenderFrame, RenderResources } from "../scene/renderTypes";
-import { SEAT_CONTAINER_ROT } from "../geometry/renderConstants";
+import {
+  DISCARD_LAYER_BASE_Z,
+  SEAT_CONTAINER_ROT,
+} from "../geometry/renderConstants";
 import {
   playerIdentityCenter,
   type SeatRects,
@@ -38,7 +41,7 @@ export function renderNukiTiles(
       ? `flowers-seat-${seat}`
       : `nuki-seat-${seat}`;
   container.eventMode = "none";
-  container.zIndex = 11;
+  container.zIndex = DISCARD_LAYER_BASE_Z - 0.5;
   container.position.set(center.x, center.y);
   container.rotation = SEAT_CONTAINER_ROT[seat];
   // Sanma has no Buu chips: the lower part of its identity panel is public bonus space.
