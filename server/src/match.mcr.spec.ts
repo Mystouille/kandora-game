@@ -62,6 +62,60 @@ describe("MCR authoritative sessions", () => {
     });
   });
 
+  it("separates head and replacement draws in spectator snapshots", async () => {
+    const match = new MatchProcess(
+      "mcr-spectator-wall",
+      42,
+      activeSeats(4).map((seat) => ({
+        userId: `human-${seat}`,
+        displayName: `Human ${seat}`,
+        isBot: false,
+      })),
+      dependencies(),
+      undefined,
+      presetToRuleSet(getPreset("mcr-ema")),
+      "mcr-ema"
+    );
+    for (const seat of activeSeats(4)) {
+      match.attachHuman(seat, () => undefined);
+    }
+    setReadyCheckMs(0);
+    await match.start();
+
+    const state = match.owners.kernel.view;
+    const liveWall = [...state.liveWall];
+    const headTile = liveWall.shift();
+    const replacementTile = liveWall.pop();
+    if (headTile === undefined || replacementTile === undefined) {
+      throw new Error("Expected an initialized MCR wall");
+    }
+    Object.assign(state, { liveWall });
+    await match.owners.publisher.emitEvent({
+      type: "draw",
+      seat: 1,
+      tile: headTile,
+      wallRemaining: liveWall.length + 1,
+    });
+    await match.owners.publisher.emitEvent({
+      type: "draw",
+      seat: 1,
+      tile: replacementTile,
+      wallRemaining: liveWall.length,
+      fromDeadWall: false,
+      replacementKind: "flower",
+    });
+
+    const snapshot = match.buildSpectatorSnapshot();
+    expect(snapshot.type).toBe("snapshot");
+    if (snapshot.type !== "snapshot") {
+      throw new Error("Expected a spectator snapshot");
+    }
+    expect(snapshot.state.drawsTaken).toBe(2);
+    expect(snapshot.state.liveDrawsTaken).toBe(1);
+    expect(snapshot.state.wallRemaining).toBe(89);
+    expect(snapshot.state.liveWall).toHaveLength(91);
+  });
+
   it("keeps concealed Kong identities private on opponent wires", async () => {
     const messages = activeSeats(4).map(() => [] as ServerMessage[]);
     const match = new MatchProcess(

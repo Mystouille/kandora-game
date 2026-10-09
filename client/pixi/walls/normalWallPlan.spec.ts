@@ -67,6 +67,75 @@ describe("buildNormalWallPlan", () => {
     expect(afterHeadAndTailDraw.tiles).toHaveLength(89);
   });
 
+  it("continues MCR draws clockwise from the wall split", () => {
+    const plan = buildNormalWallPlan(
+      input({
+        rulesFamily: "mcr",
+        flowerTiles: [[], [], [], []],
+        wallRemaining: 91,
+        doraIndicators: [],
+      })
+    );
+
+    expect(plan.tiles.find((tile) => tile.sourceIndex === 0)).toMatchObject({
+      seat: 1,
+      stackIndex: 2,
+      row: 0,
+    });
+    expect(plan.tiles.find((tile) => tile.sourceIndex === 1)).toMatchObject({
+      seat: 1,
+      stackIndex: 1,
+      row: 1,
+    });
+  });
+
+  it("takes MCR replacement tiles from the wall tail, top tile first", () => {
+    const afterOne = buildNormalWallPlan(
+      input({
+        rulesFamily: "mcr",
+        flowerTiles: [["1f"], [], [], []],
+        wallRemaining: 90,
+        drawsTaken: 1,
+        doraIndicators: [],
+      })
+    );
+    const afterTwo = buildNormalWallPlan(
+      input({
+        rulesFamily: "mcr",
+        flowerTiles: [["1f", "2f"], [], [], []],
+        wallRemaining: 89,
+        drawsTaken: 2,
+        doraIndicators: [],
+      })
+    );
+    const afterThree = buildNormalWallPlan(
+      input({
+        rulesFamily: "mcr",
+        flowerTiles: [["1f", "2f", "3f"], [], [], []],
+        wallRemaining: 88,
+        drawsTaken: 3,
+        doraIndicators: [],
+      })
+    );
+    const hasTile = (
+      plan: ReturnType<typeof buildNormalWallPlan>,
+      stackIndex: number,
+      row: 0 | 1
+    ) =>
+      plan.tiles.some(
+        (tile) =>
+          tile.seat === 2 && tile.stackIndex === stackIndex && tile.row === row
+      );
+
+    expect(afterOne.tiles.some((tile) => tile.sourceIndex === 0)).toBe(true);
+    expect(hasTile(afterOne, 11, 1)).toBe(false);
+    expect(hasTile(afterOne, 11, 0)).toBe(true);
+    expect(hasTile(afterTwo, 11, 1)).toBe(false);
+    expect(hasTile(afterTwo, 11, 0)).toBe(false);
+    expect(hasTile(afterThree, 12, 1)).toBe(false);
+    expect(hasTile(afterThree, 12, 0)).toBe(true);
+  });
+
   it("shows the 70-tile live wall and 14-tile dead wall after dealing", () => {
     const plan = buildNormalWallPlan(input());
 

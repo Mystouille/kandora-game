@@ -935,13 +935,12 @@ export const SnapshotStateSchema = z
      * works after the next round starts (because it's normally
      * threaded in via `hand_start`'s archival fields). */
     liveWall: z.array(TileSchema).optional(),
-    /** Number of tiles drawn from `liveWall` since the current
-     * hand began (excludes rinshan replacement draws when the
-     * server tracks them separately; in this build the engine
-     * doesn't distinguish, so this is `handStartLiveWall.length −
-     * state.liveWall.length`). Mirrors `MatchView.liveDrawsTaken`;
-     * the renderer uses it to hide positions already taken off
-     * the wall. Optional — only present alongside `liveWall`. */
+    /** Number of ordinary draws taken from the head of `liveWall`
+     * since the current hand began. Excludes replacement draws when
+     * the active rules track them separately. Mirrors
+     * `MatchView.liveDrawsTaken`; the renderer uses it to hide
+     * positions already taken off the wall. Optional — only present
+     * alongside `liveWall`. */
     liveDrawsTaken: z.number().int().nonnegative().optional(),
     /** Display names for each seat in absolute-seat order. Optional
      * for back-compat with older snapshots / replays — the renderer

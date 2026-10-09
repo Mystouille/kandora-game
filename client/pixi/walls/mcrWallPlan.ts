@@ -40,6 +40,41 @@ function wrap(position: number): number {
   return ((position % TOTAL_STACKS) + TOTAL_STACKS) % TOTAL_STACKS;
 }
 
+function consumedPhysicalIndexes(
+  headConsumed: number,
+  tailConsumed: number
+): ReadonlySet<number> {
+  const consumed = new Set<number>();
+  for (
+    let physicalIndex = 0;
+    physicalIndex < Math.min(headConsumed, TOTAL_TILES);
+    physicalIndex++
+  ) {
+    consumed.add(physicalIndex);
+  }
+
+  let replacementsTaken = 0;
+  for (
+    let stackIndex = TOTAL_STACKS - 1;
+    stackIndex >= 0 && replacementsTaken < tailConsumed;
+    stackIndex--
+  ) {
+    // Replacement draws walk backward by stack but take the upper tile first.
+    for (const row of [1, 0] as const) {
+      const physicalIndex = stackIndex * 2 + (row === 1 ? 0 : 1);
+      if (consumed.has(physicalIndex)) {
+        continue;
+      }
+      consumed.add(physicalIndex);
+      replacementsTaken++;
+      if (replacementsTaken >= tailConsumed) {
+        break;
+      }
+    }
+  }
+  return consumed;
+}
+
 export function buildMcrWallPlan(input: McrWallPlanInput): WallRenderPlan {
   const { layout, metrics, showWalls, showUndealtWall, view } = input;
   const dice = view.dice ?? [3, 4];
@@ -62,6 +97,7 @@ export function buildMcrWallPlan(input: McrWallPlanInput): WallRenderPlan {
           (view.wallRemaining ?? 0) -
           view.liveDrawsTaken
       );
+  const consumed = consumedPhysicalIndexes(headConsumed, tailConsumed);
   const tiles: WallTilePlan[] = [];
 
   for (let seatIndex = 0; seatIndex < 4; seatIndex++) {
@@ -70,13 +106,10 @@ export function buildMcrWallPlan(input: McrWallPlanInput): WallRenderPlan {
     const geometry = wallTileGeometry(metrics, seat);
     for (let stackIndex = 0; stackIndex < STACKS_PER_WALL; stackIndex++) {
       const global = globalStackPosition(seat, stackIndex);
-      const fromBreak = wrap(global - breakStack);
+      const fromBreak = wrap(breakStack - 1 - global);
       for (const row of [0, 1] as const) {
         const physicalIndex = fromBreak * 2 + (row === 1 ? 0 : 1);
-        if (
-          physicalIndex < headConsumed ||
-          physicalIndex >= TOTAL_TILES - tailConsumed
-        ) {
+        if (consumed.has(physicalIndex)) {
           continue;
         }
         const sourceIndex = physicalIndex - INITIAL_DEAL_TILES;

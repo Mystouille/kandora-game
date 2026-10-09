@@ -475,7 +475,8 @@ export class SnapshotComposer {
           ? {
               liveWall: [...startingWall],
               liveDrawsTaken:
-                this.port.state().ruleSet.playerCount === 3
+                this.port.state().ruleSet.playerCount === 3 ||
+                this.port.state().ruleSet.rulesFamily === "mcr"
                   ? this.drawCounters().liveDrawsTaken
                   : Math.max(
                       0,
