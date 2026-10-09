@@ -1,12 +1,12 @@
 .game-setup-controls {
-  --setup-surface: #f3f4f6;
+  --setup-surface: var(--color-gray-100, #f3f4f6);
   --setup-input: #ffffff;
-  --setup-text: #111827;
-  --setup-muted: #4b5563;
-  --setup-border: #d1d5db;
-  --setup-selected: #d1fae5;
-  --setup-selected-text: #065f46;
-  --setup-accent: #047857;
+  --setup-text: var(--color-gray-900, #111827);
+  --setup-muted: var(--color-gray-600, #4b5563);
+  --setup-border: var(--color-gray-300, #d1d5db);
+  --setup-selected: var(--color-blue-100, #dbeafe);
+  --setup-selected-text: var(--color-blue-800, #1e40af);
+  --setup-accent: var(--color-blue-700, #1d4ed8);
   display: grid;
   gap: 16px;
   min-width: 0;
@@ -20,14 +20,14 @@
 
 .dark .game-setup-controls,
 .game-setup-controls--mobile {
-  --setup-surface: #15231d;
-  --setup-input: #101c17;
-  --setup-text: #f1f6f2;
-  --setup-muted: #b5c5bb;
-  --setup-border: #4b6356;
-  --setup-selected: #14532d;
-  --setup-selected-text: #ecfdf5;
-  --setup-accent: #6ee7b7;
+  --setup-surface: var(--color-gray-800, #1f2937);
+  --setup-input: var(--color-gray-900, #111827);
+  --setup-text: var(--color-gray-100, #f3f4f6);
+  --setup-muted: var(--color-gray-400, #9ca3af);
+  --setup-border: var(--color-gray-600, #4b5563);
+  --setup-selected: var(--color-blue-900, #1e3a8a);
+  --setup-selected-text: var(--color-blue-50, #eff6ff);
+  --setup-accent: var(--color-blue-300, #93c5fd);
   color-scheme: dark;
 }
 
