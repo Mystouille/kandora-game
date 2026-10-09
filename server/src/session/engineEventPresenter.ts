@@ -1,6 +1,9 @@
 import { copySeatValues } from "~/game/rules/seats";
 import { activeSeats } from "~/game/rules/seats";
-import { type SeatValues } from "~/game/protocol/seat";
+import {
+  type ReadonlySeatValues,
+  type SeatValues,
+} from "~/game/protocol/seat";
 import {
   riichiLibYakuToRomaji,
   type EngineEvent,
@@ -15,7 +18,11 @@ import type { HandLifecycle } from "./handLifecycle";
 import type { EndMatchOptions } from "./sessionTypes";
 import type { TimeBank } from "../timing/timeBank";
 import type { TransitionKind } from "./transitionBarrier";
-import type { DuplicateWallState, GameEvent } from "~/game/protocol/messages";
+import type {
+  DuplicateWallState,
+  GameEvent,
+  Seat,
+} from "~/game/protocol/messages";
 export interface EngineEventPort {
   state(): MatchStateView;
   readonly metadata: Pick<
@@ -37,6 +44,8 @@ export interface EngineEventPort {
   ): Promise<void>;
   duplicateWallEventFields(): { duplicateWallState?: DuplicateWallState };
   computeSinking(): SeatValues<boolean>;
+  permuteSeats(permutation: ReadonlySeatValues<Seat>): void;
+  seatNames(): SeatValues<string>;
   rollDice(): [number, number];
   endMatch(
     reason: "exhaustive_draw" | "ron" | "tsumo" | "abort",
@@ -376,6 +385,9 @@ export class EngineEventPresenter {
       return;
     }
     if (e.type === "hand_start") {
+      if (e.seatPermutation !== undefined) {
+        this.port.permuteSeats(e.seatPermutation);
+      }
       this.port.metadata.resetRiichiTiles();
       // Refill each seat's per-hand think buffer.
       this.port.bank.refill(gameTiming.INITIAL_BUFFER_MS);
@@ -413,6 +425,7 @@ export class EngineEventPresenter {
         honba: e.honba,
         riichiSticks: this.port.state().riichiSticks,
         scores: copySeatValues(this.port.state().scores),
+        seatNames: this.port.seatNames(),
         sinking: this.port.computeSinking(),
         ...(this.port.state().ruleSet.buuMode
           ? {

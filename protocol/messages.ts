@@ -181,6 +181,8 @@ const HandStartEvent = z
     riichiSticks: z.number().int().nonnegative().optional(),
     /** Per-seat scores at hand start. */
     scores: z.array(z.number().int()).min(3).max(4).optional(),
+    /** Per-seat display names after any between-round seat change. */
+    seatNames: seatValuesSchema(z.string()).optional(),
     /**
      * Per-seat "sinking" flag at hand start under the active rule
      * set. A sinking seat has `score <= rs.sinkThreshold`; the
@@ -300,6 +302,7 @@ const HandStartEvent = z
     for (const field of [
       "startingHands",
       "scores",
+      "seatNames",
       "nukiTiles",
       "flowerTiles",
       "duplicateDrawQueues",

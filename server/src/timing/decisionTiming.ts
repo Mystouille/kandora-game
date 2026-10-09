@@ -1,4 +1,10 @@
-import { activeSeats, seatValues, type SeatValues } from "~/game/rules/seats";
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
+import {
+  activeSeats,
+  permuteSeatValues,
+  seatValues,
+  type SeatValues,
+} from "~/game/rules/seats";
 import type { GameEvent, LegalAction, Seat } from "~/game/protocol/messages";
 import type {
   ClockStamp,
@@ -64,6 +70,20 @@ export class DecisionTiming {
     profile: () => LatencyProfile | null
   ): void {
     this.profiles.set(seat, { network, profile });
+  }
+
+  permuteSeats(permutation: ReadonlySeatValues<Seat>): void {
+    const profiles = seatValues(this.windows.playerCount, (seat) => {
+      return this.profiles.get(seat) ?? null;
+    });
+    const permuted = permuteSeatValues(profiles, permutation);
+    this.profiles.clear();
+    for (const seat of activeSeats(this.windows.playerCount)) {
+      const profile = permuted[seat];
+      if (profile !== null) {
+        this.profiles.set(seat, profile);
+      }
+    }
   }
 
   stamp(): ClockStamp {

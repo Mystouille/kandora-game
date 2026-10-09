@@ -100,6 +100,7 @@ describe("MCR flower flow", () => {
     let state = createInitialState(7, {
       ruleSet: presetToRuleSet(getPreset("mcr-ema")),
     });
+    state.scores = [100, 200, 300, 400];
     const completedHands: string[] = [];
     for (let hand = 0; hand < 16; hand++) {
       completedHands.push(`${state.roundWind}${state.roundNumber}`);
@@ -120,6 +121,22 @@ describe("MCR flower flow", () => {
       if (hand < 15) {
         expect(state.phase).toBe("awaiting_discard");
         expect(state.dealer).toBe((hand + 1) % 4);
+        if (hand === 3) {
+          expect(state.scores).toEqual([200, 100, 400, 300]);
+          expect(next.events[0]).toMatchObject({
+            seatPermutation: [1, 0, 3, 2],
+          });
+        } else if (hand === 7) {
+          expect(state.scores).toEqual([300, 400, 100, 200]);
+          expect(next.events[0]).toMatchObject({
+            seatPermutation: [3, 2, 1, 0],
+          });
+        } else if (hand === 11) {
+          expect(state.scores).toEqual([400, 300, 200, 100]);
+          expect(next.events[0]).toMatchObject({
+            seatPermutation: [1, 0, 3, 2],
+          });
+        }
       } else {
         expect(state.phase).toBe("match_ended");
       }

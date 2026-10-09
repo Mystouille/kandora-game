@@ -258,6 +258,12 @@ export class MatchComposition {
           this.publisher.openEventJournal(gameId, seq),
         archiveCurrentGame: (scores) => this.archive.archiveCurrentGame(scores),
         broadcastRoomState: () => this.broadcast.broadcastRoomState(),
+        permuteSeats: (permutation) => {
+          this.roster.permute(permutation);
+          this.publisher.permuteSeats(permutation);
+          this.timing.permuteSeats(permutation);
+          this.broadcast.broadcastRoomState();
+        },
         advanceTurn: () => this.gameplay.turns.advanceTurn(),
         resetCallState: () => this.gameplay.calls.resetHand(),
         runTransition: (kind, delay) => this.barrier.run(kind, delay),

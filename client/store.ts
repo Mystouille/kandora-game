@@ -1051,6 +1051,9 @@ export const useMatchStore = create<MatchStore>((set) => ({
                 state.scores[seat] ??
                 (rulesFamily === "mcr" ? 0 : 25000)
             ),
+            seatNames: event.seatNames
+              ? copySeatValues(event.seatNames)
+              : state.seatNames,
             sinking: (event.sinking
               ? copySeatValues(event.sinking)
               : seatValues(playerCount, () => false)) as SeatValues<boolean>,

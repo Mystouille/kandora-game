@@ -123,6 +123,7 @@ export interface ReplayView extends VariantView {
   dice: [number, number] | null;
   doraIndicators: Tile[];
   scores: SeatValues<number>;
+  seatNames: SeatValues<string> | null;
   dealer: Seat;
   roundWind: "E" | "S" | "W" | "N";
   roundNumber: number;
@@ -307,6 +308,7 @@ export function initialView(variant: VariantView = {}): ReplayView {
     duplicateDrawQueues: null,
     dice: null,
     doraIndicators: [],
+    seatNames: null,
     dealer: 0,
     roundWind: "E",
     roundNumber: 1,
@@ -338,6 +340,15 @@ export function applyReplayEvent(
       const rulesFamily = event.rulesFamily ?? "riichi";
       const playerCount = event.playerCount ?? view.playerCount ?? 4;
       const sanmaType = event.sanmaType ?? view.sanmaType ?? "online";
+      const seatNames =
+        event.seats.length === 0
+          ? view.seatNames
+          : seatValues(
+              playerCount,
+              (seat) =>
+                event.seats.find((entry) => entry.seat === seat)
+                  ?.displayName ?? ""
+            );
       return {
         ...view,
         ...emptyParticipantState(playerCount),
@@ -373,6 +384,7 @@ export function applyReplayEvent(
         matchEnded: null,
         duplicateWallState: null,
         duplicateDrawQueues: null,
+        seatNames,
       };
     }
     case "hand_start": {
@@ -449,6 +461,9 @@ export function applyReplayEvent(
             view.scores[seat] ??
             (rulesFamily === "mcr" ? 0 : 25000)
         ),
+        seatNames: event.seatNames
+          ? copySeatValues(event.seatNames)
+          : view.seatNames,
         sinking: (event.sinking
           ? copySeatValues(event.sinking)
           : seatValues(playerCount, () => false)) as SeatValues<boolean>,
@@ -1135,12 +1150,14 @@ export function replayViewToMatchView(
     actionBufferMs: null,
     readyCheck: null,
     scores: view.scores,
-    seatNames: opts.seatNames
-      ? seatValues(
-          view.playerCount ?? 4,
-          (seat) => opts.seatNames?.[seat] ?? ""
-        )
-      : null,
+    seatNames:
+      view.seatNames ??
+      (opts.seatNames
+        ? seatValues(
+            view.playerCount ?? 4,
+            (seat) => opts.seatNames?.[seat] ?? ""
+          )
+        : null),
     dealer: view.dealer,
     roundWind: view.roundWind,
     roundNumber: view.roundNumber,

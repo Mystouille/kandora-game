@@ -34,6 +34,41 @@ function openingHand(
 afterEach(() => useMatchStore.getState().reset());
 
 describe("MCR replay folding", () => {
+  it("keeps live and replay names aligned after a round seat change", () => {
+    const names = ["Player 2", "Player 1", "Player 4", "Player 3"] as const;
+    const matchStart: GameEvent = {
+      type: "match_start",
+      rulesFamily: "mcr",
+      seats,
+      ruleSet: "mcr-ema",
+    };
+    const handStart: GameEvent = {
+      ...openingHand(0, "5p"),
+      round: 4,
+      roundWind: "S",
+      roundNumber: 1,
+      scores: [200, 100, 400, 300],
+      seatNames: [...names],
+    };
+
+    useMatchStore.getState().setMatch("mcr-seat-change", 1);
+    useMatchStore.getState().applyEvent(matchStart, 0);
+    useMatchStore.getState().applyEvent(handStart, 1);
+
+    const replay = applyReplayEvent(
+      applyReplayEvent(initialView(), matchStart),
+      handStart
+    );
+    expect(useMatchStore.getState().seatNames).toEqual(names);
+    expect(replay.seatNames).toEqual(names);
+    expect(
+      replayViewToMatchView(replay, {
+        index: 1,
+        seatNames: ["stale 0", "stale 1", "stale 2", "stale 3"],
+      }).seatNames
+    ).toEqual(names);
+  });
+
   it.each([
     { playerCount: 4, sanmaType: "online" },
     { playerCount: 3, sanmaType: "online" },

@@ -1,6 +1,10 @@
 import type { ReadonlySeatValues } from "~/game/protocol/seat";
 import { copySeatValues } from "~/game/rules/seats";
-import { seatValues, type PlayerCount } from "~/game/rules/seats";
+import {
+  permuteSeatValues,
+  seatValues,
+  type PlayerCount,
+} from "~/game/rules/seats";
 import { type SeatValues } from "~/game/protocol/seat";
 import type { GameEvent } from "~/game/protocol/messages";
 import { MatchEventJournal } from "../eventJournal";
@@ -127,6 +131,9 @@ export class MatchEventPublisher {
   }
   restoreSeatSequences(values: ReadonlySeatValues<number>): void {
     this.seatSeq = copySeatValues(values);
+  }
+  permuteSeats(permutation: ReadonlySeatValues<Seat>): void {
+    this.seatSeq = permuteSeatValues(this.seatSeq, permutation);
   }
   get spectatorSequence(): number {
     return this.spectatorSeq;

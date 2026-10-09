@@ -57,6 +57,21 @@ export function copySeatValues<T>(values: readonly T[]): SeatValues<T> {
   return mapSeatValues(values, (value) => value);
 }
 
+export function permuteSeatValues<T>(
+  values: readonly T[],
+  permutation: readonly Seat[]
+): SeatValues<T> {
+  const count = participantCount(values);
+  if (
+    permutation.length !== count ||
+    new Set(permutation).size !== count ||
+    permutation.some((seat) => !isActiveSeat(seat, count))
+  ) {
+    throw new Error("Expected a complete active-seat permutation");
+  }
+  return seatValues(count, (seat) => values[permutation[seat]]);
+}
+
 export function seatValues<T>(
   count: PlayerCount,
   create: (seat: Seat) => T

@@ -22,6 +22,7 @@ import {
   mapSeatValues,
   nextSeat,
   participantCount,
+  permuteSeatValues,
   seatDistance,
   seatValues,
   windForSeat,
@@ -62,6 +63,7 @@ import {
   type ChipDelta,
   type IllegalVictoryReason,
 } from "./buu";
+import { mcrSeatPermutationAfterRound } from "./mcrSeating";
 
 export type EngineEvent =
   | {
@@ -152,6 +154,8 @@ export type EngineEvent =
       roundNumber: number;
       honba: number;
       doraIndicators: Tile[];
+      /** New-seat to previous-seat mapping applied at an MCR round boundary. */
+      seatPermutation?: SeatValues<Seat>;
     }
   | {
       type: "match_end";
@@ -2788,6 +2792,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     let roundNumber = state.roundNumber;
     let roundWind = state.roundWind;
     let honba = state.honba;
+    let seatPermutation: SeatValues<Seat> | undefined;
     const dealerKeeps =
       state.ruleSet.rulesFamily === "mcr"
         ? false
@@ -2848,6 +2853,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       dealer = ((state.dealer + 1) % state.ruleSet.playerCount) as Seat;
       roundNumber += 1;
       if (roundNumber > state.roundLimit) {
+        seatPermutation =
+          mcrSeatPermutationAfterRound(state.roundWind) ?? undefined;
         const currentWindIdx = WINDS.indexOf(state.roundWind);
         roundWind = WINDS[currentWindIdx + 1];
         roundNumber = 1;
@@ -2919,6 +2926,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       return noop(state);
     }
     const next = clone(state);
+    if (seatPermutation !== undefined) {
+      next.scores = permuteSeatValues(state.scores, seatPermutation);
+    }
     next.hands = dealt.hands.map((h) => [...h]);
     next.discards = seatValues(state.ruleSet.playerCount, () => []);
     next.nukiTiles = seatValues(state.ruleSet.playerCount, () => []);
@@ -2983,6 +2993,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           roundNumber,
           honba,
           doraIndicators: next.doraIndicators,
+          ...(seatPermutation !== undefined ? { seatPermutation } : {}),
         },
       ],
     };

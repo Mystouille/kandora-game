@@ -1,4 +1,7 @@
 import type { GameEvent } from "~/game/protocol/messages";
+import type { ReadonlySeatValues } from "~/game/protocol/seat";
+import type { Seat } from "~/game/protocol/messages";
+import { seatValues } from "~/game/rules/seats";
 import type { MatchRepository } from "../repository";
 import type { MatchRuntime } from "../runtime";
 import type { ActionWindowRegistry } from "../timing/actionWindows";
@@ -44,6 +47,7 @@ export interface LifecycleCompositionPort {
   openEventJournal(gameId: string, seq: number): void;
   archiveCurrentGame(scores: FinalScore[]): Promise<void>;
   broadcastRoomState(): void;
+  permuteSeats(permutation: ReadonlySeatValues<Seat>): void;
   advanceTurn(): Promise<void>;
   resetCallState(): void;
   runTransition(kind: TransitionKind, delayMs: number): Promise<void>;
@@ -173,6 +177,12 @@ export class MatchLifecycle {
         port.runTransition(kind, delay),
       duplicateWallEventFields: () => details.duplicateWallEventFields(),
       computeSinking: () => details.computeSinking(),
+      permuteSeats: (permutation) => port.permuteSeats(permutation),
+      seatNames: () =>
+        seatValues(
+          roster.playerCount,
+          (seat) => roster.player(seat)?.displayName ?? ""
+        ),
       rollDice: () => metadata.rollDice(),
       endMatch: (reason, options) => this.session.endMatch(reason, options),
     });

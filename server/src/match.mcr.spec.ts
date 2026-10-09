@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ServerMessageSchema } from "~/game/protocol/messages";
+import {
+  ServerMessageSchema,
+  type ServerMessage,
+} from "~/game/protocol/messages";
 import { presetToRuleSet, getPreset } from "~/game/rules/presets";
 import { activeSeats } from "~/game/rules/seats";
 import { MatchProcess, setReadyCheckMs } from "./match";
@@ -56,6 +59,85 @@ describe("MCR authoritative sessions", () => {
     expect(match.owners.roomViews.summary().rulesFamily).toBe("mcr");
     expect(ServerMessageSchema.parse(snapshot)).toMatchObject({
       state: { rulesFamily: "mcr", scores: [0, 0, 0, 0] },
+    });
+  });
+
+  it("changes seats with scores and connections after the East round", async () => {
+    const messages = activeSeats(4).map(() => [] as ServerMessage[]);
+    const match = new MatchProcess(
+      "mcr-seat-change",
+      42,
+      activeSeats(4).map((seat) => ({
+        userId: `human-${seat}`,
+        displayName: `Human ${seat}`,
+        isBot: false,
+      })),
+      dependencies(),
+      undefined,
+      presetToRuleSet(getPreset("mcr-ema")),
+      "mcr-ema"
+    );
+    for (const seat of activeSeats(4)) {
+      match.attachHuman(seat, (message) => messages[seat].push(message));
+    }
+    setReadyCheckMs(0);
+    await match.start();
+    for (const playerMessages of messages) {
+      playerMessages.length = 0;
+    }
+    match.owners.publisher.restoreSeatSequences([10, 20, 30, 40]);
+    Object.assign(match.owners.kernel.view, {
+      phase: "hand_ended",
+      dealer: 3,
+      roundWind: "E",
+      roundNumber: 4,
+      scores: [100, 200, 300, 400],
+      lastHandResult: {
+        reason: "exhaustive_draw",
+        winner: null,
+        loser: null,
+        delta: [0, 0, 0, 0],
+        tenpai: null,
+        abortKind: null,
+        nagashi: null,
+        winHan: null,
+        winYakuman: null,
+      },
+    });
+
+    for (const seat of activeSeats(4)) {
+      match.owners.actionWindows.clear(seat);
+    }
+    await match.owners.lifecycle.hand.beginNextHandAfterReady();
+
+    expect(
+      activeSeats(4).map((seat) => match.owners.roster.player(seat)?.userId)
+    ).toEqual(["human-1", "human-0", "human-3", "human-2"]);
+    expect(match.owners.kernel.view.scores).toEqual([200, 100, 400, 300]);
+    expect(match.owners.publisher.seatSequences()).toEqual([21, 11, 41, 31]);
+
+    const humanZeroRoom = messages[0].find(
+      (message) => message.type === "room_state"
+    );
+    expect(humanZeroRoom).toMatchObject({ type: "room_state", mySeat: 1 });
+
+    const humanZeroHand = messages[0].find(
+      (message) =>
+        message.type === "event" &&
+        message.events.some((event) => event.type === "hand_start")
+    );
+    expect(humanZeroHand).toMatchObject({
+      type: "event",
+      seq: 10,
+      events: [
+        {
+          type: "hand_start",
+          roundWind: "S",
+          roundNumber: 1,
+          seatNames: ["Human 1", "Human 0", "Human 3", "Human 2"],
+          scores: [200, 100, 400, 300],
+        },
+      ],
     });
   });
 });

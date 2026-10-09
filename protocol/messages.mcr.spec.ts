@@ -32,6 +32,7 @@ describe("MCR protocol", () => {
         roundWind: "E",
         roundNumber: 1,
         flowerTiles: [["1f"], [], [], []],
+        seatNames: ["East", "South", "West", "North"],
         doraIndicators: [],
         liveWall: Array.from({ length: 90 }, () => "1m"),
         deadWall: [],
