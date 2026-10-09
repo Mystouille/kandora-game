@@ -142,17 +142,9 @@ export function dealMatch(seed: number, opts: WallOptions = {}): DealtMatch {
     const dealer = opts.dealer ?? 0;
     for (let offset = 0; offset < playerCount; offset++) {
       const seat = (dealer + offset) % playerCount;
-      let flowerIndex = hands[seat].findIndex((tile) => tile.endsWith("f"));
-      while (flowerIndex >= 0) {
-        const [flower] = hands[seat].splice(flowerIndex, 1);
-        flowerTiles[seat].push(flower);
-        const replacement = liveWall.pop();
-        if (replacement === undefined) {
-          throw new Error("MCR opening flower replacement exhausted the wall");
-        }
-        hands[seat].push(replacement);
-        flowerIndex = hands[seat].findIndex((tile) => tile.endsWith("f"));
-      }
+      normalizeMcrOpeningFlowers(hands[seat], flowerTiles[seat], () =>
+        liveWall.pop()
+      );
     }
     return {
       hands,
@@ -173,4 +165,22 @@ export function dealMatch(seed: number, opts: WallOptions = {}): DealtMatch {
     };
   }
   return dealt;
+}
+
+export function normalizeMcrOpeningFlowers(
+  hand: Tile[],
+  flowers: Tile[],
+  drawReplacement: () => Tile | undefined
+): void {
+  let flowerIndex = hand.findIndex((tile) => tile.endsWith("f"));
+  while (flowerIndex >= 0) {
+    const [flower] = hand.splice(flowerIndex, 1);
+    flowers.push(flower);
+    const replacement = drawReplacement();
+    if (replacement === undefined) {
+      throw new Error("MCR opening flower replacement exhausted the wall");
+    }
+    hand.push(replacement);
+    flowerIndex = hand.findIndex((tile) => tile.endsWith("f"));
+  }
 }

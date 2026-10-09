@@ -70,6 +70,29 @@ MCR uses the fixed four-player EMA Green Book profile without Riichi selectors.
 **Duplicate** has its own section and seed field, independent of these choices.
 Resuming a saved table keeps that table's rules rather than using new-game defaults.
 
+### Debug seed (engine testing)
+
+The web lobby's **Debug seed** menu supports every Riichi preset, including
+Buu, both sanma variants, and MCR:
+
+- **Starting hand:** 13 tiles before the opening draw. MCR still starts with
+  14 tiles: the first queued draw overrides the dealer's opening tile, or
+  that tile remains random when the draw queue is empty.
+- **Next draws:** consumed in order for ordinary draws and flower, nuki, and
+  kan replacements. Opening Kansai nuki replacements precede the first
+  ordinary draw. MCR opening flowers are banked and replaced automatically.
+- **Bot discards:** target the previous active bot, seat 3 in four-player
+  games or seat 2 in sanma.
+
+Compact notation supports `m`, `p`, `s`, `z`, and MCR flowers `1f` through
+`8f`. For example, `123456789p1234s` is a valid thirteen-tile input in every
+game type. Tiles absent from the selected rules are rejected with an error;
+flowers and mandatory Kansai nuki tiles cannot be forced discards. Physical
+copy counts are intentionally unrestricted for engine testing.
+
+Debug overrides remain unavailable in **Duplicate** mode so that its public
+seed continues to determine the deal and personal draw queues.
+
 ## Three-player mahjong (sanma)
 
 Choose **Riichi / Sanma (3 players)** in game setup to select **Online** or

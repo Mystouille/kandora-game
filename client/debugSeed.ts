@@ -66,17 +66,17 @@ export function takeAutoStart(matchId: string): boolean {
   return false;
 }
 
-const TILE_RE = /^([0-9][mps]|[1-7]z)$/;
+const TILE_RE = /^([0-9][mps]|[1-7]z|[1-8]f)$/;
 
 /**
  * Parse a free-form tile list. Accepts whitespace-, comma-, or
  * newline-separated tokens; ignores empties; lowercases. Each token
  * may be either:
  *
- *   - A single tile in protocol notation (`5m`, `1z`, `0p`).
+ *   - A single tile in protocol notation (`5m`, `1z`, `0p`, `1f`).
  *   - A compact group like `1234s45p7z` — digits inherit the next
  *     suit letter, so `1234s45p7z` expands to
- *     `1s 2s 3s 4s 4p 5p 7z`. For honors, only `1`–`7` are valid.
+ *     `1s 2s 3s 4s 4p 5p 7z`. Honors use `1`–`7`; flowers use `1`–`8`.
  *
  * Returns the list of valid tiles plus a list of invalid tokens so
  * the UI can surface them to the user.
@@ -109,10 +109,10 @@ export function parseTileList(input: string): {
 /**
  * Expand a compact-notation token (e.g. `1234s45p7z`) into individual
  * tiles. Returns `null` if the token doesn't fully consume into
- * digit-run + suit groups, or if any honor digit is outside `1`–`7`.
+ * digit-run + suit groups, or an honor/flower digit is out of range.
  */
 function expandCompact(token: string): string[] | null {
-  if (!/^[0-9mpsz]+$/.test(token)) {
+  if (!/^[0-9mpszf]+$/.test(token)) {
     return null;
   }
   const out: string[] = [];
@@ -126,17 +126,12 @@ function expandCompact(token: string): string[] | null {
     if (digits.length === 0) {
       return null;
     }
-    if (ch === "z") {
-      for (const d of digits) {
-        if (d < "1" || d > "7") {
-          return null;
-        }
-        out.push(`${d}z`);
+    for (const d of digits) {
+      const tile = `${d}${ch}`;
+      if (!TILE_RE.test(tile)) {
+        return null;
       }
-    } else {
-      for (const d of digits) {
-        out.push(`${d}${ch}`);
-      }
+      out.push(tile);
     }
     digits = "";
   }

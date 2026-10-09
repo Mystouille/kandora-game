@@ -3,6 +3,12 @@ import { type SeatValues } from "~/game/protocol/seat";
 import { copySeatValues, type PlayerCount } from "~/game/rules/seats";
 import { getPendingRobbery, nextAutomaticNuki } from "~/game/rules/nuki";
 import { waitsForRules } from "~/game/rules/tileAvailability";
+import {
+  applyDebugHand,
+  debugDiscardSeat,
+  debugSeedValidationError,
+  withDebugReplacement,
+} from "~/game/rules/debugSeed";
 import type { MatchModeConfig } from "~/game/protocol/matchMode";
 import type { LegalAction, MatchDebug, Seat } from "~/game/protocol/messages";
 import {
@@ -144,11 +150,14 @@ export class MatchKernel {
     if (debug === undefined) {
       return;
     }
-    if (debug.humanHand && debug.humanHand.length === 13) {
-      this.stateValue.hands[0] = [...debug.humanHand];
+    const state = this.stateValue;
+    const error = debugSeedValidationError(debug, state.ruleSet);
+    if (error !== null) {
+      throw new Error(`MatchKernel: ${error}`);
     }
     this.humanDrawQueue = debug.humanDraws ? [...debug.humanDraws] : [];
     this.leftDiscardQueue = debug.leftDiscards ? [...debug.leftDiscards] : [];
+    applyDebugHand(state, debug, this.humanDrawQueue);
   }
 
   debugQueues(): { humanDraws: Tile[]; leftDiscards: Tile[] } {
@@ -281,13 +290,32 @@ export class MatchKernel {
         suppliedDraw = { seat, tile: directive.tile };
       }
     }
-    const result = step(this.stateValue, drivenAction);
-    if (result.events.length === 0 && result.state === this.stateValue) {
+    const inputState = withDebugReplacement(
+      this.stateValue,
+      drivenAction,
+      this.humanDrawQueue[0]
+    );
+    const result = step(inputState, drivenAction);
+    if (result.events.length === 0 && result.state === inputState) {
       throw new Error(
         `applyEngineAction: engine rejected ${action.type} for seat ${
           "seat" in action ? action.seat : "?"
         }`
       );
+    }
+    if (inputState !== this.stateValue) {
+      const expectedTile = this.humanDrawQueue[0];
+      if (
+        !result.events.some(
+          (event) =>
+            event.type === "draw" &&
+            event.seat === 0 &&
+            event.tile === expectedTile
+        )
+      ) {
+        throw new Error("MatchKernel: debug replacement draw was not emitted");
+      }
+      this.humanDrawQueue.shift();
     }
     if (suppliedDraw !== null) {
       const emitted = result.events.find(
@@ -369,7 +397,10 @@ export class MatchKernel {
   }
 
   hasForcedBotDiscard(seat: Seat): boolean {
-    return seat === 3 && this.leftDiscardQueue.length > 0;
+    return (
+      seat === debugDiscardSeat(this.playerCount) &&
+      this.leftDiscardQueue.length > 0
+    );
   }
 
   botDiscard(seat: Seat): { tile: Tile; discardSource: DiscardSource } {

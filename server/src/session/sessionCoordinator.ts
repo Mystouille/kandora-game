@@ -147,7 +147,7 @@ export class SessionCoordinator {
     // keeps the overlay mounted over the live table.
     this.port.broadcastRoomState();
 
-    // Apply debug seed (no validation — dev surface only).
+    // Apply debug overrides before publishing the opening hand.
     this.kernel.applyDebugSeed(this.config.debug);
 
     const matchPlayers = persistedRoster(this.roster.players());

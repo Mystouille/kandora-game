@@ -36,7 +36,7 @@ import {
 import { SpectatorDelayMsSchema } from "~/game/protocol/spectatorDelay";
 import { listPresetIds } from "~/game/rules/presets";
 import { GameSetupSchema, gameSetupRules } from "~/game/rules/gameSetup";
-import { buildAllTiles } from "~/game/rules/wall";
+import { debugSeedValidationError } from "~/game/rules/debugSeed";
 import { SANMA_CAPABILITY } from "~/game/protocol/sanma";
 import { MCR_CAPABILITY } from "~/game/protocol/rulesFamily";
 import {
@@ -518,31 +518,13 @@ async function handleCreateRoom(
     return;
   }
   const rules = gameSetupRules(setup.data);
-  if (rules.playerCount === 3 && parsedDebug !== undefined) {
-    const inventory = new Set(
-      buildAllTiles({
-        playerCount: 3,
-        sanmaType: rules.sanmaType,
-        redFives: {
-          m: rules.nbRedFiveManzu,
-          p: rules.nbRedFivePinzu,
-          s: rules.nbRedFiveSouzu,
-        },
-      })
-    );
-    if (
-      (parsedDebug.leftDiscards?.length ?? 0) > 0 ||
-      [
-        ...(parsedDebug.humanHand ?? []),
-        ...(parsedDebug.humanDraws ?? []),
-      ].some((tile) => !inventory.has(tile))
-    ) {
-      reply(400, {
-        error: "invalid_sanma_debug",
-        message: "Sanma has no left player and requires its reduced tile set.",
-      });
-      return;
-    }
+  const debugError = debugSeedValidationError(parsedDebug, rules);
+  if (debugError !== null) {
+    reply(400, {
+      error: rules.playerCount === 3 ? "invalid_sanma_debug" : "invalid_debug",
+      message: debugError,
+    });
+    return;
   }
   const matchId = nanoid(12);
   const matchSeed =

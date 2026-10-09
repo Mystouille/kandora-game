@@ -9,7 +9,11 @@ import {
   gameVariantLabel,
   initialGameSetupSelection,
 } from "~/game/components/GameSetupControls";
-import type { GameSetup } from "~/game/rules/gameSetup";
+import { gameSetupRules, type GameSetup } from "~/game/rules/gameSetup";
+import {
+  debugDiscardSeat,
+  debugSeedValidationError,
+} from "~/game/rules/debugSeed";
 import {
   spectatorDelayLabel,
   type SpectatorDelayMs,
@@ -69,7 +73,7 @@ export interface LobbyLoaderData {
   }>;
 }
 
-const PLACEHOLDER_HAND = "123456789m1234p";
+const PLACEHOLDER_HAND = "123456789p1234s";
 const PLACEHOLDER_DRAWS = "555z";
 const PLACEHOLDER_LEFT = "123z";
 
@@ -209,7 +213,7 @@ export default function LobbyRoute() {
     return () => window.removeEventListener("auth-changed", handler);
   }, [refreshRooms]);
 
-  function buildDebug(): { debug: MatchDebug; ok: boolean } {
+  function buildDebug(setup: GameSetup): { debug: MatchDebug; ok: boolean } {
     if (!showDebug) {
       return { debug: undefined, ok: true };
     }
@@ -242,14 +246,13 @@ export default function LobbyRoute() {
       setError(
         `Invalid tile token(s): ${invalid.join(
           ", "
-        )}. Use compact notation like "123456789m1234p" or single tokens like "1m 5p 7s 1z".`
+        )}. Use compact notation like "123456789p1234s" or single tokens like "1m 5p 7s 1z".`
       );
       return { debug: undefined, ok: false };
     }
-    if (out.humanHand && out.humanHand.length !== 13) {
-      setError(
-        `Starting hand should have 13 tiles, got ${out.humanHand.length}.`
-      );
+    const debugError = debugSeedValidationError(out, gameSetupRules(setup));
+    if (debugError !== null) {
+      setError(debugError);
       return { debug: undefined, ok: false };
     }
     return {
@@ -343,7 +346,7 @@ export default function LobbyRoute() {
     if (setup === null) {
       return;
     }
-    const { debug, ok } = buildDebug();
+    const { debug, ok } = buildDebug(setup);
     if (!ok) {
       return;
     }
@@ -367,7 +370,7 @@ export default function LobbyRoute() {
     if (setup === null) {
       return;
     }
-    const { debug, ok } = buildDebug();
+    const { debug, ok } = buildDebug(setup);
     if (!ok) {
       return;
     }
@@ -784,14 +787,39 @@ export default function LobbyRoute() {
             <div className="mt-4 space-y-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-md text-sm">
               <p className="text-gray-600 dark:text-gray-300">
                 Compact mahjong notation: digits inherit the next suit letter,
-                e.g. <code>123456789m1234p</code> or <code>1234s45p7z</code>.
+                e.g. <code>123456789p1234s</code> or <code>1234s45p7z</code>.
                 Suits are <code>m</code> (man), <code>p</code> (pin),{" "}
                 <code>s</code> (sou); honors use <code>z</code> (1z=East,
                 2z=South, 3z=West, 4z=North, 5z=White, 6z=Green, 7z=Red);{" "}
-                <code>0m</code>/<code>0p</code>/<code>0s</code> are red fives.
+                {setupSelection.rulesFamily === "mcr" ? (
+                  <>
+                    <code>1f</code> through <code>8f</code> are flowers. MCR
+                    does not use red fives.
+                  </>
+                ) : (
+                  <>
+                    <code>0m</code>/<code>0p</code>/<code>0s</code> are red
+                    fives when included in the selected rules.
+                  </>
+                )}{" "}
                 Whitespace- or comma-separated groups are also fine. Leave any
                 field blank to keep the random default. Debug fields are only
-                meaningful for solo matches (seat 0 = you, seat 3 = left bot).
+                meaningful for solo matches (seat 0 = you, seat{" "}
+                {debugDiscardSeat(setupSelection.playerCount)} = previous bot).
+              </p>
+              <p className="text-gray-600 dark:text-gray-300">
+                Enter 13 starting tiles. The first queued draw supplies your
+                opening fourteenth tile, including in MCR. Queued draws also
+                supply flower, nuki, and kan replacements; opening Kansai nuki
+                replacements happen before the opening draw. Flowers and
+                mandatory Kansai nuki tiles cannot be forced discards.
+                {setupSelection.playerCount === 3 && (
+                  <>
+                    {" "}
+                    Sanma keeps only 1m and 9m in playable hands; Kansai also
+                    includes 5m/0m for automatic nuki.
+                  </>
+                )}
               </p>
 
               <DebugField
@@ -807,7 +835,11 @@ export default function LobbyRoute() {
                 placeholder={PLACEHOLDER_DRAWS}
               />
               <DebugField
-                label="Left bot's next discards (seat 3, in order)"
+                label={
+                  setupSelection.playerCount === 3
+                    ? "Previous bot's next discards (seat 2, in order)"
+                    : "Left bot's next discards (seat 3, in order)"
+                }
                 value={leftDiscards}
                 setValue={setLeftDiscards}
                 placeholder={PLACEHOLDER_LEFT}

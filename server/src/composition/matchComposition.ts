@@ -32,6 +32,7 @@ import type { MatchProcessDependencies } from "./dependencies";
 import { MatchGameplay } from "./matchGameplay";
 import { MatchLifecycle } from "./matchLifecycle";
 import { resolveRuleSet } from "~/game/rules/ruleSet";
+import { debugSeedValidationError } from "~/game/rules/debugSeed";
 
 /** Readonly owner references, never a replacement bag of match state. */
 export class MatchComposition {
@@ -68,9 +69,14 @@ export class MatchComposition {
     players: MatchPlayerInit[],
     dependencies: MatchProcessDependencies
   ) {
-    const playerCount = resolveRuleSet(config.ruleSetOverride).playerCount;
+    const rules = resolveRuleSet(config.ruleSetOverride);
+    const playerCount = rules.playerCount;
     if (players.length !== playerCount) {
       throw new Error(`MatchProcess requires exactly ${playerCount} players`);
+    }
+    const debugError = debugSeedValidationError(config.debug, rules);
+    if (debugError !== null) {
+      throw new Error(`MatchProcess: ${debugError}`);
     }
     this.roster = new RoomRoster(config.matchId, players, {
       status: () => this.lifecycle.session.snapshot().status,

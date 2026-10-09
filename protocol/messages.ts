@@ -1230,13 +1230,14 @@ export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Match-debug seed sent in the `hello` frame on first attach. Lets the
- * tester force seat 0's starting hand, the next tiles seat 0 will draw,
- * and the next tiles the left-side bot (seat 3) will discard.
+ * Room-creation debug seed, also retained on the legacy `hello` frame.
+ * Forces seat 0's thirteen starting tiles and subsequent draws, including
+ * opening/replacement draws, and the previous bot's discards (seat 3 in
+ * four-player games, seat 2 in sanma).
  *
- * The debug seed is intentionally lax — duplicate tiles beyond 4 of a
- * kind, hand sizes other than 13, etc. are all accepted; the server
- * applies them as-is. This is a developer surface, not a player one.
+ * Runtime validation checks hand size and the selected rules' tile inventory,
+ * but intentionally permits impossible physical copy counts for engine tests.
+ * The shape remains permissive for legacy checkpoint compatibility.
  */
 export const MatchDebugSchema = z
   .object({
