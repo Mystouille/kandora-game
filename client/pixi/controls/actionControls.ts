@@ -142,6 +142,7 @@ export class ActionControls {
     const pon = raw.filter((action) => action.type === "pon");
     const kan = raw.filter((action) => action.type === "kan");
     const declarations = orderedRyuukyokuDeclarationActions(raw);
+    const flower = raw.find((action) => action.type === "flower");
     const others = raw.filter(
       (action) =>
         action.type !== "chi" &&
@@ -149,7 +150,8 @@ export class ActionControls {
         action.type !== "kan" &&
         action.type !== "riichi" &&
         action.type !== "declare_tenpai" &&
-        action.type !== "declare_noten"
+        action.type !== "declare_noten" &&
+        (action.type !== "flower" || action === flower)
     );
     const riichiAvailable = raw.some((action) => action.type === "riichi");
     if (

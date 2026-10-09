@@ -68,11 +68,11 @@ describe("MCR protocol", () => {
   it("accepts a flower declaration legal action", () => {
     expect(
       LegalActionSchema.parse({
-        id: "flower:1f",
+        id: "flower",
         type: "flower",
         tile: "1f",
       })
-    ).toEqual({ id: "flower:1f", type: "flower", tile: "1f" });
+    ).toEqual({ id: "flower", type: "flower", tile: "1f" });
   });
 
   it("round-trips pending flower replacement snapshots", () => {

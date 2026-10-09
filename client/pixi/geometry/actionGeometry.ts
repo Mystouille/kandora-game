@@ -1,7 +1,6 @@
 import type { ColorSource } from "pixi.js";
 import type { LegalAction } from "~/game/protocol/messages";
 import type { RulesFamily } from "~/game/protocol/rulesFamily";
-import { flowerTileName } from "~/game/rules";
 import type { Rect } from "../tableLayout";
 import type { TableRendererPresentation } from "../scene/renderTypes";
 import { tileNum } from "./tileOrder";
@@ -169,8 +168,7 @@ export function labelForAction(
     return "Nuki 北";
   }
   if (action.type === "flower") {
-    const name = action.tile ? flowerTileName(action.tile) : null;
-    return name ? `Declare ${name}` : "Declare Flower";
+    return "Declare Flower";
   }
   if (action.type === "ron") {
     return callLabel("ron", rulesFamily);

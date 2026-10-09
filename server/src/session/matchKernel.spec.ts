@@ -178,7 +178,7 @@ describe("MatchKernel", () => {
           tile: "1f",
           discardSource: "hand",
         },
-        { id: "flower:1f", type: "flower", tile: "1f" },
+        { id: "flower", type: "flower", tile: "1f" },
       ])
     );
 
@@ -194,6 +194,20 @@ describe("MatchKernel", () => {
       discardSource: "draw",
     });
     expect(kernel.debugQueues().humanDraws).toEqual(["1p", "6s"]);
+  });
+
+  it("offers one generic declaration for multiple MCR flowers", () => {
+    const kernel = fixture(presetToRuleSet(getPreset("mcr-ema")), "mcr-ema");
+    kernel.applyDebugSeed({
+      humanHand: ["1f", "2f", ...debugHand.slice(2)],
+      humanDraws: ["5s", "6s"],
+    });
+
+    expect(
+      kernel
+        .discardLegals(0)
+        .filter((action) => action.type === "flower")
+    ).toEqual([{ id: "flower", type: "flower", tile: "1f" }]);
   });
 
   it("requires a choice for each MCR flower in a replacement chain", () => {

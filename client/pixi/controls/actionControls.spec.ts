@@ -197,19 +197,19 @@ describe("action control owner", () => {
     }
   );
   it.each([false, true])(
-    "labels and dispatches an MCR flower declaration (mobile=%s)",
+    "merges and dispatches MCR flower declarations (mobile=%s)",
     (mobile) => {
-      const flower: LegalAction = {
-        id: "flower:1f",
-        type: "flower",
-        tile: "1f",
-      };
-      const h = harness([flower], mobile);
+      const flowers: LegalAction[] = [
+        { id: "flower:1f", type: "flower", tile: "1f" },
+        { id: "flower:2f", type: "flower", tile: "2f" },
+      ];
+      const h = harness(flowers, mobile);
       h.frame.view.rulesFamily = "mcr";
       h.render();
-      click(button(h.frame.root, "Declare Spring"));
+      expect(h.controls.bounds).toHaveLength(1);
+      click(button(h.frame.root, "Declare Flower"));
       expect(h.actionClick).toHaveBeenCalledExactlyOnceWith({
-        action: flower,
+        action: flowers[0],
       });
     }
   );

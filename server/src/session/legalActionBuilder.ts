@@ -149,11 +149,8 @@ export function buildFlowerLegals(
   ) {
     return [];
   }
-  return [...new Set(state.hands[seat].filter(isFlowerTile))].map((tile) => ({
-    id: `flower:${tile}`,
-    type: "flower",
-    tile,
-  }));
+  const tile = state.hands[seat].find(isFlowerTile);
+  return tile ? [{ id: "flower", type: "flower", tile }] : [];
 }
 
 export function buildNukiLegals(

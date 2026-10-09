@@ -266,7 +266,7 @@ describe("authoritative debug seed startup", () => {
           tile: "1f",
           discardSource: "draw",
         },
-        { id: "flower:1f", type: "flower", tile: "1f" },
+        { id: "flower", type: "flower", tile: "1f" },
       ])
     );
     expect(match.owners.kernel.debugQueues().humanDraws).toEqual([
@@ -275,7 +275,7 @@ describe("authoritative debug seed startup", () => {
       "6s",
     ]);
 
-    await match.handleAct(0, "flower:1f");
+    await match.handleAct(0, "flower");
 
     expect(match.buildSnapshotForSeat(0).state.hands[0]).toEqual([
       ...hand,
@@ -291,7 +291,7 @@ describe("authoritative debug seed startup", () => {
       discardSource: "draw",
     });
     expect(match.owners.actionWindows.legals(0)).toContainEqual({
-      id: "flower:2f",
+      id: "flower",
       type: "flower",
       tile: "2f",
     });

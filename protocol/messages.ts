@@ -751,7 +751,8 @@ export type GameEvent = z.infer<typeof GameEventSchema>;
  * discard when the recipient seat can call on it. The companion
  * `pass` action declines the call window. For `kan`, `kanKind`
  * distinguishes `daiminkan` (after a discard) from `ankan`/
- * `shouminkan` (self-call on own turn).
+ * `shouminkan` (self-call on own turn). MCR exposes at most one
+ * `flower` action; its tile is the server-selected declaration.
  */
 export const LegalActionSchema = z.object({
   id: z.string(),
