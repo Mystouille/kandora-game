@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { GameEvent, Seat } from "~/game/protocol/messages";
 import type { MatchModeConfig } from "~/game/protocol/matchMode";
 import type { SpectatorDelayMs } from "~/game/protocol/spectatorDelay";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 import {
   MatchCheckpointSchema,
   parseMatchCheckpoint,
@@ -251,6 +252,7 @@ export interface ArchiveReplayLogArgs {
   startedAt: Date;
   endedAt: Date;
   ruleSet: string;
+  rulesFamily?: RulesFamily;
   mode?: MatchModeConfig;
   ruleSetDetails?: Record<string, unknown>;
   events: GameEvent[];

@@ -62,21 +62,25 @@ export class TileTextureStore {
    * sub-texture framed to the tile's cell.
    */
   getTexture(atlasId: AtlasId, tile: string | null): Texture {
-    const entry = this.atlases.get(atlasId);
+    const resolvedAtlasId =
+      tile?.endsWith("f") && this.design.flowerAtlas
+        ? this.design.flowerAtlas
+        : atlasId;
+    const entry = this.atlases.get(resolvedAtlasId);
     if (!entry) {
-      throw new Error(`TileTextureStore: atlas ${atlasId} not loaded`);
+      throw new Error(`TileTextureStore: atlas ${resolvedAtlasId} not loaded`);
     }
-    const atlas = this.design.atlases[atlasId];
+    const atlas = this.design.atlases[resolvedAtlasId];
     const cell = resolveTileFrame(atlas, tile);
     if (cell === null) {
       return entry.texture;
     }
-    const key = `${atlasId}:${cell.row}:${cell.col}`;
+    const key = `${resolvedAtlasId}:${cell.row}:${cell.col}`;
     const cached = this.frames.get(key);
     if (cached) {
       return cached;
     }
-    const inset = atlas.kind === "grid" ? atlas.inset ?? 0 : 0;
+    const inset = atlas.kind === "grid" ? (atlas.inset ?? 0) : 0;
     const r = frameRect(cell, entry.cell.w, entry.cell.h, inset);
     const tex = new Texture({
       source: entry.texture.source,

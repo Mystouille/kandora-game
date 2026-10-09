@@ -197,7 +197,8 @@ export function drawCallOptionButton(
 export function drawActionButton(
   presentation: TableRendererPresentation,
   action: LegalAction,
-  choose: (action: LegalAction) => void
+  choose: (action: LegalAction) => void,
+  labelOverride?: string
 ): ActionButtonNode {
   const style = actionButtonStyle(presentation);
   const height = style.height;
@@ -208,7 +209,9 @@ export function drawActionButton(
     fill: 0xffffff,
   });
   let text: string;
-  if (action.type === "chi") {
+  if (labelOverride !== undefined) {
+    text = labelOverride;
+  } else if (action.type === "chi") {
     text = "Chi";
   } else if (action.type === "pon") {
     text = "Pon";

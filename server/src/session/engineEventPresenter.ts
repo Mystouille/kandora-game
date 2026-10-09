@@ -137,6 +137,14 @@ export class EngineEventPresenter {
       });
       return;
     }
+    if (e.type === "flower") {
+      await this.port.emitEvent({
+        type: "flower",
+        seat: e.seat,
+        tile: e.tile,
+      });
+      return;
+    }
     if (e.type === "discard") {
       await this.port.emitEvent({
         type: "discard",
@@ -179,6 +187,43 @@ export class EngineEventPresenter {
     }
     if (e.type === "win") {
       const score = e.score;
+      if (e.mcrScore) {
+        const mcrScore = e.mcrScore;
+        const revealMs = winResultRevealDurationMs({
+          visibleYakuCount: mcrScore.fans.length,
+          hasUraYaku: false,
+          uraDoraEnabled: false,
+        });
+        if (revealMs > this.port.hand.pendingRevealMs) {
+          this.port.hand.recordWinReveal(revealMs);
+        }
+        await this.port.emitEvent({
+          type: "win",
+          seat: e.winner,
+          loser: e.loser,
+          winTile: e.winTile,
+          delta: e.delta,
+          scoringFamily: "mcr",
+          totalFan: mcrScore.totalFan,
+          nonFlowerFan: mcrScore.nonFlowerFan,
+          fan: mcrScore.fans.map((entry) => ({
+            id: entry.id,
+            name: entry.englishName,
+            count: entry.count,
+            points: entry.awardedPoints,
+          })),
+          ten: e.delta[e.winner],
+          hand: [...this.port.state().hands[e.winner]],
+          melds: this.port.state().melds[e.winner].map((meld) => ({
+            type: meld.type,
+            tiles: [...meld.tiles],
+            claimedTile: meld.claimedTile,
+            from: meld.from,
+          })),
+          scoreText: `${mcrScore.totalFan} points`,
+        });
+        return;
+      }
       const yakuRomaji = riichiLibYakuToRomaji(score.yaku);
       // Compute this winner's staged-reveal duration so the
       // post-hand ready check (in `afterHandEnd`) can wait for
@@ -216,6 +261,7 @@ export class EngineEventPresenter {
       }
       await this.port.emitEvent({
         type: "win",
+        scoringFamily: "riichi",
         seat: e.winner,
         loser: e.loser,
         winTile: e.winTile,
@@ -335,6 +381,14 @@ export class EngineEventPresenter {
       this.port.bank.refill(gameTiming.INITIAL_BUFFER_MS);
       await this.port.emitEvent({
         type: "hand_start",
+        rulesFamily: this.port.state().ruleSet.rulesFamily,
+        ...(this.port.state().ruleSet.rulesFamily === "mcr"
+          ? {
+              flowerTiles: this.port
+                .state()
+                .flowerTiles.map((tiles) => [...tiles]),
+            }
+          : {}),
         ...(this.port.state().ruleSet.playerCount === 3
           ? {
               playerCount: 3 as const,

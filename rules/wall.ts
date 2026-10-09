@@ -15,13 +15,18 @@
  */
 
 import type { PlayerCount, SanmaType } from "../protocol/seat";
+import type { RulesFamily } from "../protocol/rulesFamily";
 import { createPRNG } from "./prng";
-import { SUITS, type Tile } from "./types";
+import { SUITS, type Seat, type Tile } from "./types";
 import type { SanmaWallState } from "./wallTransitions";
 
 export type { SanmaWallState } from "./wallTransitions";
 
 export interface WallOptions {
+  /** Rules family determines the physical tile set and wall layout. */
+  rulesFamily?: RulesFamily;
+  /** MCR dealer receives the fourteenth opening tile. */
+  dealer?: Seat;
   /** Omitted player count preserves the original four-player deal. */
   playerCount?: PlayerCount;
   /** Active only for three players; defaults to Online. */
@@ -45,15 +50,21 @@ export interface DealtMatch {
   deadWall: Tile[];
   /** Dora indicators currently revealed (slice: just the first). */
   doraIndicators: Tile[];
+  /** Public flowers banked while normalizing the opening deal. MCR only. */
+  flowerTiles?: Tile[][];
   /** Explicit replacement/indicator cursor, emitted only for three-player deals. */
   sanmaWall?: SanmaWallState;
 }
 
 export function buildAllTiles(opts: WallOptions = {}): Tile[] {
+  const rulesFamily = opts.rulesFamily ?? "riichi";
   const playerCount = opts.playerCount ?? 4;
   const sanmaType = opts.sanmaType ?? "online";
   if (playerCount !== 3 && playerCount !== 4) {
     throw new Error(`A wall requires 3 or 4 players, got ${playerCount}`);
+  }
+  if (rulesFamily === "mcr" && playerCount !== 4) {
+    throw new Error("MCR requires a four-player wall");
   }
   if (playerCount === 3 && sanmaType !== "online" && sanmaType !== "kansai") {
     throw new Error(`Unknown sanma wall variant: ${sanmaType}`);
@@ -61,7 +72,10 @@ export function buildAllTiles(opts: WallOptions = {}): Tile[] {
   const tiles: Tile[] = [];
   const redCounts = opts.redFives ?? {};
   for (const suit of SUITS) {
-    const redCount = Math.max(0, Math.min(4, redCounts[suit] ?? 0));
+    const redCount =
+      rulesFamily === "mcr"
+        ? 0
+        : Math.max(0, Math.min(4, redCounts[suit] ?? 0));
     for (let n = 1; n <= 9; n++) {
       if (
         playerCount === 3 &&
@@ -85,26 +99,69 @@ export function buildAllTiles(opts: WallOptions = {}): Tile[] {
       tiles.push(`${n}z`);
     }
   }
+  if (rulesFamily === "mcr") {
+    for (let n = 1; n <= 8; n++) {
+      tiles.push(`${n}f`);
+    }
+  }
   return tiles;
 }
 
 export function dealMatch(seed: number, opts: WallOptions = {}): DealtMatch {
+  const rulesFamily = opts.rulesFamily ?? "riichi";
   const prng = createPRNG(seed);
   const tiles = prng.shuffle(buildAllTiles(opts));
   const playerCount = opts.playerCount ?? 4;
   const sanmaType = opts.sanmaType ?? "online";
   const standardSanma = playerCount === 3 && !opts.duplicate;
-  const reserveSize = standardSanma && sanmaType === "kansai" ? 10 : 14;
+  const reserveSize =
+    rulesFamily === "mcr"
+      ? 0
+      : standardSanma && sanmaType === "kansai"
+        ? 10
+        : 14;
 
   const hands: Tile[][] = [];
   let cursor = 0;
   for (let seat = 0; seat < playerCount; seat++) {
-    hands.push(tiles.slice(cursor, cursor + 13));
-    cursor += 13;
+    const handSize =
+      rulesFamily === "mcr" && seat === (opts.dealer ?? 0) ? 14 : 13;
+    hands.push(tiles.slice(cursor, cursor + handSize));
+    cursor += handSize;
   }
-  const liveWall = tiles.slice(cursor, tiles.length - reserveSize);
+  const liveWall = tiles.slice(
+    cursor,
+    reserveSize === 0 ? undefined : tiles.length - reserveSize
+  );
   const deadWall = tiles.slice(tiles.length - reserveSize);
-  const doraIndicators = [deadWall[standardSanma ? 8 : 4]];
+  const doraIndicators =
+    rulesFamily === "mcr" ? [] : [deadWall[standardSanma ? 8 : 4]];
+
+  if (rulesFamily === "mcr") {
+    const flowerTiles = Array.from({ length: playerCount }, () => [] as Tile[]);
+    const dealer = opts.dealer ?? 0;
+    for (let offset = 0; offset < playerCount; offset++) {
+      const seat = (dealer + offset) % playerCount;
+      let flowerIndex = hands[seat].findIndex((tile) => tile.endsWith("f"));
+      while (flowerIndex >= 0) {
+        const [flower] = hands[seat].splice(flowerIndex, 1);
+        flowerTiles[seat].push(flower);
+        const replacement = liveWall.pop();
+        if (replacement === undefined) {
+          throw new Error("MCR opening flower replacement exhausted the wall");
+        }
+        hands[seat].push(replacement);
+        flowerIndex = hands[seat].findIndex((tile) => tile.endsWith("f"));
+      }
+    }
+    return {
+      hands,
+      liveWall,
+      deadWall: [],
+      doraIndicators: [],
+      flowerTiles,
+    };
+  }
 
   const dealt: DealtMatch = { hands, liveWall, deadWall, doraIndicators };
   if (playerCount === 3) {

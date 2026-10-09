@@ -11,7 +11,7 @@ import { MatchKernel } from "./matchKernel";
 import type { HandLifecyclePort } from "./lifecyclePorts";
 
 import { gameTiming } from "./timingPolicy";
-import { settleAutomaticNuki } from "./nukiFlow";
+import { settleAutomaticReplacements } from "./replacementFlow";
 
 export class HandLifecycle {
   private pendingWinRevealMs = 0;
@@ -30,6 +30,14 @@ export class HandLifecycle {
   async beginInitialHandAfterReady(): Promise<void> {
     await this.port.emitEvent({
       type: "hand_start",
+      rulesFamily: this.kernel.currentState().ruleSet.rulesFamily,
+      ...(this.kernel.currentState().ruleSet.rulesFamily === "mcr"
+        ? {
+            flowerTiles: this.kernel
+              .currentState()
+              .flowerTiles.map((tiles) => [...tiles]),
+          }
+        : {}),
       ...(this.kernel.playerCount === 3
         ? {
             playerCount: 3 as const,
@@ -54,7 +62,7 @@ export class HandLifecycle {
       ...this.port.duplicateWallEventFields(),
     });
 
-    await settleAutomaticNuki(
+    await settleAutomaticReplacements(
       this.kernel,
       (action) => this.port.applyEngineAction(action),
       true
@@ -113,7 +121,7 @@ export class HandLifecycle {
     ) {
       return;
     }
-    await settleAutomaticNuki(
+    await settleAutomaticReplacements(
       this.kernel,
       (action) => this.port.applyEngineAction(action),
       true

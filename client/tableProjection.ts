@@ -189,8 +189,14 @@ export function rotateMatchView(view: MatchView, focus: Seat): TableMatchView {
     nukiTiles: view.nukiTiles
       ? rotateSeatValues(view.nukiTiles, focus, [])
       : undefined,
+    flowerTiles: view.flowerTiles
+      ? rotateSeatValues(view.flowerTiles, focus, [])
+      : undefined,
     pendingNuki: view.pendingNuki
       ? { ...view.pendingNuki, seat: rot(view.pendingNuki.seat) }
+      : null,
+    pendingFlower: view.pendingFlower
+      ? { ...view.pendingFlower, seat: rot(view.pendingFlower.seat) }
       : null,
     liveDrawSchedule: view.liveDrawSchedule?.map(rot) ?? null,
     duplicateWallState: view.duplicateWallState

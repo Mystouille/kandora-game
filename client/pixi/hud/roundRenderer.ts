@@ -18,7 +18,10 @@ export function renderRoundInfo(
   const cy = center.y + center.h / 2;
   const fontSize = Math.max(22, Math.round(center.h * 0.13 * 1.6));
   const heading = new Text({
-    text: `${ROUND_WIND_KANJI[view.roundWind]} - ${view.roundNumber}`,
+    text:
+      view.rulesFamily === "mcr"
+        ? `${view.roundWind} - ${view.roundNumber}`
+        : `${ROUND_WIND_KANJI[view.roundWind]} - ${view.roundNumber}`,
     style: new TextStyle({
       fontFamily: KANJI_FONT_FAMILY,
       fontSize,
@@ -30,10 +33,18 @@ export function renderRoundInfo(
   const lineSize = Math.max(10, Math.round(center.h * 0.085));
   const lineGap = Math.round(lineSize * 0.25);
   const lines = [
-    ...(view.buuMode === true
+    ...(view.buuMode === true || view.rulesFamily === "mcr"
       ? []
       : [{ label: labels.repeat, value: String(view.honba), color: 0xfde68a }]),
-    { label: labels.riichi, value: String(view.riichiSticks), color: 0xfca5a5 },
+    ...(view.rulesFamily === "mcr"
+      ? []
+      : [
+          {
+            label: labels.riichi,
+            value: String(view.riichiSticks),
+            color: 0xfca5a5,
+          },
+        ]),
     {
       label: labels.tiles,
       value: String(displayedTilesRemaining(view)),

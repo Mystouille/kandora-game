@@ -24,6 +24,7 @@ import {
 } from "~/game/rules";
 import { chooseBotCall, chooseBotSelfKan } from "../bots/calls";
 import { randomBotDiscard } from "../bots/random";
+import { chooseMcrBotDiscard } from "../bots/mcrDiscard";
 import {
   createMatchDriver,
   matchHandContext,
@@ -96,7 +97,20 @@ export class MatchKernel {
   }
 
   canSupplyReplacement(seat: Seat): boolean {
-    return this.driver.canSupplyReplacement(seat);
+    if (!this.driver.canSupplyReplacement(seat)) {
+      return false;
+    }
+    if (this.stateValue.ruleSet.rulesFamily !== "mcr") {
+      return true;
+    }
+    const directive = this.driver.peekDraw(seat);
+    if (directive.kind === "standard") {
+      return this.stateValue.liveWall.some((tile) => !tile.endsWith("f"));
+    }
+    if (directive.kind !== "tile" || !directive.tile.endsWith("f")) {
+      return directive.kind === "tile";
+    }
+    return false;
   }
 
   initialize(
@@ -227,12 +241,15 @@ export class MatchKernel {
       }
     } else if (
       action.type === "complete_shouminkan" ||
-      action.type === "complete_nuki"
+      action.type === "complete_nuki" ||
+      action.type === "complete_flower"
     ) {
       const seat =
         action.type === "complete_nuki"
           ? this.stateValue.pendingNuki?.seat
-          : this.stateValue.pendingShouminkan?.seat;
+          : action.type === "complete_flower"
+            ? this.stateValue.pendingFlower?.seat
+            : this.stateValue.pendingShouminkan?.seat;
       if (seat === undefined) {
         throw new Error(
           "applyEngineAction: complete_shouminkan has no declarer"
@@ -241,8 +258,9 @@ export class MatchKernel {
       const directive = this.driver.peekDraw(seat);
       if (directive.kind === "exhaustive") {
         if (
-          action.type === "complete_nuki" &&
-          this.stateValue.ruleSet.sanmaType === "kansai"
+          (action.type === "complete_nuki" &&
+            this.stateValue.ruleSet.sanmaType === "kansai") ||
+          action.type === "complete_flower"
         ) {
           drivenAction = { ...action, forceExhaustive: true };
         } else {
@@ -250,6 +268,13 @@ export class MatchKernel {
             `applyEngineAction: no replacement tile for seat ${seat}`
           );
         }
+      }
+      if (
+        action.type === "complete_flower" &&
+        directive.kind === "standard" &&
+        this.stateValue.liveWall.length === 0
+      ) {
+        drivenAction = { ...action, forceExhaustive: true };
       }
       if (directive.kind === "tile") {
         drivenAction = { ...action, replacementTile: directive.tile };
@@ -338,7 +363,7 @@ export class MatchKernel {
   }
 
   botSelfKan(seat: Seat) {
-    return this.driver.canSupplyReplacement(seat)
+    return this.canSupplyReplacement(seat)
       ? chooseBotSelfKan(this.stateValue, seat)
       : null;
   }
@@ -372,13 +397,22 @@ export class MatchKernel {
             : "hand",
       };
     }
-    return randomBotDiscard({
+    const discardInput = {
       hand: this.stateValue.hands[seat],
       drawn: this.stateValue.lastDrawn[seat],
       random: () => this.runtime.random(),
-      isDiscardAllowed: (discard) =>
-        !isDiscardForbiddenByKuikae(this.stateValue, seat, discard.tile),
-    });
+      isDiscardAllowed: (discard: {
+        tile: Tile;
+        discardSource: DiscardSource;
+      }) => !isDiscardForbiddenByKuikae(this.stateValue, seat, discard.tile),
+    };
+    if (this.stateValue.ruleSet.rulesFamily === "mcr") {
+      return chooseMcrBotDiscard({
+        ...discardInput,
+        meldCount: this.stateValue.melds[seat].length,
+      });
+    }
+    return randomBotDiscard(discardInput);
   }
 
   isFuriten(seat: Seat): boolean {

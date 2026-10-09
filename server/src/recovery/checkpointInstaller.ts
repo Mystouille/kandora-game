@@ -53,7 +53,10 @@ export class CheckpointInstaller {
     if (checkpoint.status !== "playing") {
       return;
     }
-    if (checkpoint.checkpointKind === "nuki_replacement") {
+    if (
+      checkpoint.checkpointKind === "nuki_replacement" ||
+      checkpoint.checkpointKind === "flower_replacement"
+    ) {
       this.port.windows.resetForRestore();
       return;
     }
@@ -84,7 +87,10 @@ export class CheckpointInstaller {
     if (checkpoint.status !== "playing") {
       return;
     }
-    if (checkpoint.checkpointKind === "nuki_replacement") {
+    if (
+      checkpoint.checkpointKind === "nuki_replacement" ||
+      checkpoint.checkpointKind === "flower_replacement"
+    ) {
       this.port.bank.restore(checkpoint.bufferMs);
       this.port.windows.resetForRestore();
       return;

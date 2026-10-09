@@ -38,6 +38,7 @@ import { listPresetIds } from "~/game/rules/presets";
 import { GameSetupSchema, gameSetupRules } from "~/game/rules/gameSetup";
 import { buildAllTiles } from "~/game/rules/wall";
 import { SANMA_CAPABILITY } from "~/game/protocol/sanma";
+import { MCR_CAPABILITY } from "~/game/protocol/rulesFamily";
 import {
   ClientMessageSchema,
   MatchDebugSchema,
@@ -398,7 +399,7 @@ async function readJsonBody(
  * `matchId`. The portal calls this on behalf of the user, then
  * navigates the client to `/game/:matchId` to join via WS.
  *
- * Body: `{ token, debug?, preset?, playerCount?, sanmaType?, mode?, spectatorDelayMs? }`.
+ * Body: `{ token, debug?, preset?, rulesFamily?, playerCount?, sanmaType?, mode?, spectatorDelayMs? }`.
  *
  * Splitting creation off the WS upgrade is what makes the URL
  * itself idempotent: visiting `/game/:id` only joins; it never
@@ -428,6 +429,7 @@ async function handleCreateRoom(
     token,
     debug,
     preset,
+    rulesFamily,
     playerCount,
     sanmaType,
     mode,
@@ -436,6 +438,7 @@ async function handleCreateRoom(
     token?: unknown;
     debug?: unknown;
     preset?: unknown;
+    rulesFamily?: unknown;
     playerCount?: unknown;
     sanmaType?: unknown;
     mode?: unknown;
@@ -501,6 +504,7 @@ async function handleCreateRoom(
   }
   const setup = GameSetupSchema.safeParse({
     preset: presetId,
+    rulesFamily,
     playerCount,
     sanmaType,
     mode: parsedMode.data,
@@ -568,6 +572,7 @@ async function handleCreateRoom(
   waitingRoomGraceTimers.set(matchId, graceTimer);
   reply(200, {
     matchId,
+    rulesFamily: rules.rulesFamily,
     playerCount: rules.playerCount,
     sanmaType: rules.sanmaType,
     mode: parsedMode.data,
@@ -986,6 +991,17 @@ async function handleConnection(ws: WebSocket, matchId: string): Promise<void> {
       "Update Kandora to play or watch a three-player table."
     );
     ws.close(1008, "Sanma support required");
+    return;
+  }
+  if (
+    targetMatch?.summary().rulesFamily === "mcr" &&
+    hello.mcrCapability !== MCR_CAPABILITY
+  ) {
+    sendError(
+      "mcr_update_required",
+      "Update Kandora to play or watch an MCR table."
+    );
+    ws.close(1008, "MCR support required");
     return;
   }
 

@@ -12,6 +12,7 @@
 import { Sprite } from "pixi.js";
 import type { TileTextureStore } from "./tileTextureStore";
 import type { AtlasId } from "./tileDesign";
+import { flowerTileName } from "~/game/rules/flowers";
 
 export interface TileSpriteSpec {
   atlasId: AtlasId;
@@ -36,6 +37,9 @@ export class TileSpriteFactory {
 
   create(spec: TileSpriteSpec): Sprite {
     const sprite = new Sprite(this.store.getTexture(spec.atlasId, spec.tile));
+    if (spec.tile !== null) {
+      sprite.label = flowerTileName(spec.tile) ?? spec.tile;
+    }
     sprite.anchor.set(spec.anchor ?? 0.5);
     sprite.width = spec.width;
     sprite.height = spec.height;

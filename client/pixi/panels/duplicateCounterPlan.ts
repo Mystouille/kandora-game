@@ -33,12 +33,15 @@ export function displayedTilesRemaining(view: {
   drawsTaken: number;
   duplicateWallState?: DuplicateWallState | null;
   playerCount?: PlayerCount;
+  rulesFamily?: "riichi" | "mcr";
   wallRemaining?: number;
 }): number {
   return (
     view.duplicateWallState?.estimatedDrawsRemaining ??
-    (view.playerCount === 3
+    (view.rulesFamily === "mcr"
       ? Math.max(0, view.wallRemaining ?? 0)
-      : Math.max(0, 70 - view.drawsTaken))
+      : view.playerCount === 3
+        ? Math.max(0, view.wallRemaining ?? 0)
+        : Math.max(0, 70 - view.drawsTaken))
   );
 }

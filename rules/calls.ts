@@ -18,6 +18,7 @@ import { handScoringContext } from "./scoringContext";
 import { scoreHand } from "./score";
 import { isWinningShape } from "./shanten";
 import type { Seat, Tile } from "./types";
+import { isQualifiedMcrScore, scoreMcrForState } from "./mcr/scoringContext";
 
 export type CallOption =
   | { kind: "chi"; tiles: [Tile, Tile] }
@@ -206,12 +207,22 @@ function pushRon(
   claimed: Tile,
   out: CallOption[]
 ): void {
+  if (state.ruleSet.rulesFamily === "mcr") {
+    const score = scoreMcrForState(state, seat, claimed, "discard");
+    if (isQualifiedMcrScore(score)) {
+      out.push({ kind: "ron" });
+    }
+    return;
+  }
   // Furiten check (mirrors `isFuritenForRon` in step.ts):
   //   - permanent (riichi) missed-ron lock blocks all rons.
   //   - temporary missed-ron lock blocks all rons until the seat's
   //     next discard.
   //   - any wait tile sitting in own discards blocks all rons.
-  if (state.furitenLocked[seat] || state.furitenTemp[seat]) {
+  if (
+    state.ruleSet.rulesFamily === "riichi" &&
+    (state.furitenLocked[seat] || state.furitenTemp[seat])
+  ) {
     return;
   }
   // Fast shape gate: if `claimed` doesn't even complete the hand,
@@ -221,7 +232,7 @@ function pushRon(
     return;
   }
   const ownDiscards = state.discards[seat];
-  if (ownDiscards.length > 0) {
+  if (state.ruleSet.rulesFamily === "riichi" && ownDiscards.length > 0) {
     const seen = new Set<string>();
     for (const d of ownDiscards) {
       const key = (d[0] === "0" ? "5" : d[0]) + d[1];

@@ -15,7 +15,7 @@ import {
 import { MatchStateSchema } from "~/game/rules/state";
 import { RuleSetSchema } from "~/game/rules/ruleSet";
 
-export const MATCH_CHECKPOINT_SCHEMA_VERSION = 8 as const;
+export const MATCH_CHECKPOINT_SCHEMA_VERSION = 9 as const;
 
 const DecisionTimingCheckpointSchema = z
   .object({
@@ -183,6 +183,7 @@ const PlayingCheckpointBaseShape = {
     .enum([
       "draw",
       "nuki",
+      "flower",
       "discard",
       "ryuukyoku_declaration",
       "win",
@@ -252,6 +253,40 @@ export const PlayingNukiCheckpointSchema = z
   });
 
 export type PlayingNukiCheckpoint = z.infer<typeof PlayingNukiCheckpointSchema>;
+
+export const PlayingFlowerCheckpointSchema = z
+  .object({
+    ...PlayingCheckpointBaseShape,
+    checkpointKind: z.literal("flower_replacement"),
+  })
+  .strict()
+  .superRefine((checkpoint, context) => {
+    if (!validateParticipantCollections(checkpoint, context)) {
+      return;
+    }
+    if (
+      checkpoint.state.phase !== "awaiting_flower_replacement" ||
+      checkpoint.state.pendingFlower === null ||
+      checkpoint.state.ruleSet.rulesFamily !== "mcr"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["state"],
+        message: "Flower recovery requires a pending MCR replacement",
+      });
+    }
+    if (checkpoint.nextSeq !== checkpoint.eventLog.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextSeq"],
+        message: "Next sequence must match the event log",
+      });
+    }
+  });
+
+export type PlayingFlowerCheckpoint = z.infer<
+  typeof PlayingFlowerCheckpointSchema
+>;
 const CallTimerSlotSchema = z
   .object({
     legalActions: z.array(LegalActionSchema).min(1),
@@ -886,7 +921,7 @@ function migrateLegacyCheckpoint(input: unknown): unknown {
   ) {
     return input;
   }
-  if (input.schemaVersion === 7) {
+  if (input.schemaVersion === 7 || input.schemaVersion === 8) {
     return { ...input, schemaVersion: MATCH_CHECKPOINT_SCHEMA_VERSION };
   }
   if (
@@ -922,6 +957,7 @@ export const MatchCheckpointSchema = z.preprocess(
     PlayingContinueVoteCheckpointSchema,
     PlayingResultTransitionCheckpointSchema,
     PlayingNukiCheckpointSchema,
+    PlayingFlowerCheckpointSchema,
   ])
 );
 export type MatchCheckpoint = z.infer<typeof MatchCheckpointSchema>;

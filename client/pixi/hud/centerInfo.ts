@@ -50,7 +50,10 @@ export function renderMobileCenterInfo(
     root.addChild(sprite);
   });
   const heading = new Text({
-    text: `${ROUND_WIND_KANJI[view.roundWind]}${view.roundNumber}局`,
+    text:
+      view.rulesFamily === "mcr"
+        ? `${view.roundWind} ${view.roundNumber}`
+        : `${ROUND_WIND_KANJI[view.roundWind]}${view.roundNumber}局`,
     style: new TextStyle({
       fontFamily: KANJI_FONT_FAMILY,
       fontSize: Math.max(28, Math.round(center.h * 0.15)),
@@ -66,10 +69,18 @@ export function renderMobileCenterInfo(
     value: number;
     color: number;
   }> = [
-    ...(view.buuMode === true
+    ...(view.buuMode === true || view.rulesFamily === "mcr"
       ? []
       : [{ kind: "honba" as const, value: view.honba, color: 0xfde68a }]),
-    { kind: "riichi", value: view.riichiSticks, color: 0xfca5a5 },
+    ...(view.rulesFamily === "mcr"
+      ? []
+      : [
+          {
+            kind: "riichi" as const,
+            value: view.riichiSticks,
+            color: 0xfca5a5,
+          },
+        ]),
     { kind: "tiles", value: displayedTilesRemaining(view), color: 0xd1d5db },
   ];
   const cells = mobileCounterCells(center, counters.length);

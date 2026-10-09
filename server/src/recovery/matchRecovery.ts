@@ -123,7 +123,12 @@ export class MatchRecovery {
         return this.port.checkpoints.createPlayingCallCheckpoint();
       }
       if (this.port.kernel.view.phase === "awaiting_nuki_replacement") {
-        return this.port.checkpoints.createPlayingNukiCheckpoint();
+        return this.port.checkpoints.createPlayingReplacementCheckpoint("nuki");
+      }
+      if (this.port.kernel.view.phase === "awaiting_flower_replacement") {
+        return this.port.checkpoints.createPlayingReplacementCheckpoint(
+          "flower"
+        );
       }
       return this.port.checkpoints.createPlayingActionCheckpoint();
     }
@@ -141,9 +146,14 @@ export class MatchRecovery {
     if (checkpoint.status === "playing") {
       this.port.installer.install(checkpoint, restoredContinuation, restoredAt);
       this.restoreDecisionTiming(checkpoint, restoredAt);
-      if (checkpoint.checkpointKind === "nuki_replacement") {
+      if (
+        checkpoint.checkpointKind === "nuki_replacement" ||
+        checkpoint.checkpointKind === "flower_replacement"
+      ) {
         this.pendingNukiOpening =
-          checkpoint.state.pendingNuki?.opening ?? false;
+          checkpoint.checkpointKind === "nuki_replacement"
+            ? (checkpoint.state.pendingNuki?.opening ?? false)
+            : false;
         void this.resumeAutomaticWork().catch((error: unknown) =>
           this.port.reportResumeError(error)
         );
@@ -258,7 +268,9 @@ export class MatchRecovery {
     this.pendingNukiOpening =
       checkpoint.checkpointKind === "nuki_replacement"
         ? (checkpoint.state.pendingNuki?.opening ?? false)
-        : null;
+        : checkpoint.checkpointKind === "flower_replacement"
+          ? false
+          : null;
   }
 
   async restoreEventJournal(): Promise<void> {

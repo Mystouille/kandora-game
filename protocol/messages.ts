@@ -4,6 +4,7 @@ import { MatchModeConfigSchema } from "./matchMode";
 import { SpectatorDelayMsSchema } from "./spectatorDelay";
 import { GameVariantMetadata, SeatSchema } from "./seat";
 import { SANMA_CAPABILITY, SanmaWallStateSchema } from "./sanma";
+import { MCR_CAPABILITY } from "./rulesFamily";
 import { isActiveSeat } from "../rules/seats";
 import type { GameVariant } from "./seat";
 import {
@@ -42,7 +43,7 @@ import {
  * cleanly). Stricter typing lives in `app/game/rules/types.ts` once
  * the rules engine lands.
  */
-export const TileSchema = z.string().regex(/^([0-9][mps]|[1-7]z)$/);
+export const TileSchema = z.string().regex(/^([0-9][mps]|[1-7]z|[1-8]f)$/);
 export type Tile = z.infer<typeof TileSchema>;
 
 export type { Seat } from "./seat";
@@ -166,6 +167,7 @@ const HandStartEvent = z
     type: z.literal("hand_start"),
     ...GameVariantMetadata,
     nukiTiles: z.array(z.array(TileSchema)).min(3).max(4).optional(),
+    flowerTiles: z.array(z.array(TileSchema)).length(4).optional(),
     sanmaWall: SanmaWallStateSchema.optional(),
     round: z.number().int(),
     dealer: SeatSchema,
@@ -280,23 +282,26 @@ const HandStartEvent = z
           : 55;
     const expectedDead =
       count === 3 && event.sanmaType === "kansai" && !duplicate ? 10 : 14;
-    for (const [field, expected] of [
-      ["liveWall", expectedLive],
-      ["deadWall", expectedDead],
-    ] as const) {
-      const values = event[field];
-      if (values !== undefined && values.length !== expected) {
-        context.addIssue({
-          code: "custom",
-          path: [field],
-          message: `Expected ${expected} initial wall tiles`,
-        });
+    if (event.rulesFamily !== "mcr") {
+      for (const [field, expected] of [
+        ["liveWall", expectedLive],
+        ["deadWall", expectedDead],
+      ] as const) {
+        const values = event[field];
+        if (values !== undefined && values.length !== expected) {
+          context.addIssue({
+            code: "custom",
+            path: [field],
+            message: `Expected ${expected} initial wall tiles`,
+          });
+        }
       }
     }
     for (const field of [
       "startingHands",
       "scores",
       "nukiTiles",
+      "flowerTiles",
       "duplicateDrawQueues",
     ] as const) {
       const values = event[field];
@@ -327,7 +332,7 @@ const DrawEvent = z.object({
    * from the dead wall after a kan), false / absent for live-wall
    * draws. Attached post-parse by `annotateWallSchedule`. */
   fromDeadWall: z.boolean().optional(),
-  replacementKind: z.enum(["kan", "nuki"]).optional(),
+  replacementKind: z.enum(["kan", "nuki", "flower"]).optional(),
   opening: z.boolean().optional(),
   sanmaWall: SanmaWallStateSchema.optional(),
   duplicateWallState: DuplicateWallStateSchema.optional(),
@@ -344,6 +349,12 @@ const NukiEvent = z.object({
   opening: z.boolean().optional(),
   sanmaWall: SanmaWallStateSchema.optional(),
   duplicateWallState: DuplicateWallStateSchema.optional(),
+});
+
+const FlowerEvent = z.object({
+  type: z.literal("flower"),
+  seat: SeatSchema,
+  tile: TileSchema.refine((tile) => tile.endsWith("f"), "Expected a flower"),
 });
 
 const DiscardEvent = z.object({
@@ -402,12 +413,28 @@ const WinEvent = z.object({
    * are folded into the multi-ron `hand_end` summary, not here). */
   delta: z.array(z.number().int()).min(3).max(4).optional(),
   /** Han / fu / total points / yakuman count from the score lib. */
+  scoringFamily: z.enum(["riichi", "mcr"]).optional(),
   han: z.number().int().optional(),
   fu: z.number().int().optional(),
   ten: z.number().int().optional(),
   yakumanCount: z.number().int().optional(),
   /** Yaku name → "X飜" / "役満" string from the score lib. */
   yaku: z.record(z.string(), z.string()).optional(),
+  /** Ordered MCR fan breakdown. */
+  fan: z
+    .array(
+      z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          count: z.number().int().positive(),
+          points: z.number().int().nonnegative(),
+        })
+        .strict()
+    )
+    .optional(),
+  totalFan: z.number().int().nonnegative().optional(),
+  nonFlowerFan: z.number().int().nonnegative().optional(),
   /** Optional human-readable summary line. */
   scoreText: z.string().optional(),
   /** Concealed hand at win time (for the result panel). */
@@ -691,6 +718,7 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   HandStartEvent,
   DrawEvent,
   NukiEvent,
+  FlowerEvent,
   DiscardEvent,
   RyuukyokuDeclarationEvent,
   CallEvent,
@@ -763,6 +791,7 @@ export const SnapshotStateSchema = z
   .object({
     ...GameVariantMetadata,
     nukiTiles: z.array(z.array(TileSchema)).min(3).max(4).optional(),
+    flowerTiles: z.array(z.array(TileSchema)).length(4).optional(),
     sanmaWall: SanmaWallStateSchema.optional(),
     deadWall: z.array(TileSchema).optional(),
     pendingNuki: z
@@ -770,6 +799,13 @@ export const SnapshotStateSchema = z
         seat: SeatSchema,
         tile: TileSchema,
         opening: z.boolean(),
+      })
+      .nullable()
+      .optional(),
+    pendingFlower: z
+      .object({
+        seat: SeatSchema,
+        tile: TileSchema,
       })
       .nullable()
       .optional(),
@@ -1227,6 +1263,8 @@ const HelloMsg = z.object({
   timingCapabilities: z.array(z.literal(TIMING_CAPABILITY)).max(1).optional(),
   fixedPromptVersion: z.literal(FIXED_PROMPT_VERSION).optional(),
   gameCapabilities: z.array(z.literal(SANMA_CAPABILITY)).max(1).optional(),
+  /** Separate field keeps the legacy SANMA capability array backward-compatible. */
+  mcrCapability: z.literal(MCR_CAPABILITY).optional(),
   /** One-shot permission to replace a different client session
    * currently owning this user's seat. */
   takeover: z.boolean().optional(),

@@ -75,10 +75,18 @@ export class SnapshotComposer {
 
   private variantFields() {
     const state = this.port.state();
+    if (state.ruleSet.rulesFamily === "mcr") {
+      return {
+        rulesFamily: "mcr" as const,
+        flowerTiles: state.flowerTiles.map((tiles) => [...tiles]),
+        pendingFlower: state.pendingFlower ? { ...state.pendingFlower } : null,
+      };
+    }
     if (state.ruleSet.playerCount === 4) {
-      return {};
+      return { rulesFamily: "riichi" as const };
     }
     return {
+      rulesFamily: "riichi" as const,
       playerCount: 3 as const,
       sanmaType: state.ruleSet.sanmaType,
       nukiTiles: state.nukiTiles.map((tiles) => [...tiles]),
@@ -89,6 +97,22 @@ export class SnapshotComposer {
 
   private drawCounters() {
     const state = this.port.state();
+    if (state.ruleSet.rulesFamily === "mcr") {
+      let drawsTaken = 0;
+      let liveDrawsTaken = 0;
+      for (const { event } of this.port.history()) {
+        if (event.type === "hand_start") {
+          drawsTaken = 0;
+          liveDrawsTaken = 0;
+        } else if (event.type === "draw") {
+          drawsTaken++;
+          if (!event.fromDeadWall && !event.replacementKind) {
+            liveDrawsTaken++;
+          }
+        }
+      }
+      return { drawsTaken, liveDrawsTaken };
+    }
     if (state.ruleSet.playerCount === 4) {
       return { drawsTaken: 70 - state.liveWall.length };
     }

@@ -57,6 +57,7 @@ export interface MatchDriver {
 
 function wallOptionsForRuleSet(ruleSet: RuleSet): WallOptions {
   return {
+    rulesFamily: ruleSet.rulesFamily,
     playerCount: ruleSet.playerCount,
     sanmaType: ruleSet.sanmaType,
     duplicate: true,
@@ -74,6 +75,9 @@ function cloneDeal(deal: DealtMatch): DealtMatch {
     liveWall: [...deal.liveWall],
     deadWall: [...deal.deadWall],
     doraIndicators: [...deal.doraIndicators],
+    ...(deal.flowerTiles
+      ? { flowerTiles: deal.flowerTiles.map((tiles) => [...tiles]) }
+      : {}),
     ...(deal.sanmaWall ? { sanmaWall: { ...deal.sanmaWall } } : {}),
   };
 }

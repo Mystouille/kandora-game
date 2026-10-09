@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { mapSeatValues } from "../rules/seats";
+import {
+  RulesFamilyMetadata,
+  RulesFamilySchema,
+  type RulesFamily,
+} from "./rulesFamily";
 
 export const SeatSchema = z.union([
   z.literal(0),
@@ -17,6 +22,7 @@ export type SanmaType = z.infer<typeof SanmaTypeSchema>;
 
 export const GameVariantSchema = z
   .object({
+    rulesFamily: RulesFamilySchema.optional(),
     playerCount: PlayerCountSchema.default(4),
     sanmaType: SanmaTypeSchema.default("online"),
   })
@@ -24,9 +30,12 @@ export const GameVariantSchema = z
 export type GameVariant = z.infer<typeof GameVariantSchema>;
 
 export const GameVariantMetadata = {
+  ...RulesFamilyMetadata,
   playerCount: PlayerCountSchema.optional(),
   sanmaType: SanmaTypeSchema.optional(),
 };
+
+export type { RulesFamily };
 
 export type SeatValues<T> = T[] & { length: PlayerCount };
 export type ReadonlySeatValues<T> = readonly T[] & {

@@ -50,7 +50,9 @@ export class GameArchive {
         startedAt,
         endedAt: new Date(runtimeCalendarNow(this.runtime)),
         ruleSet: this.presetId,
-        ...(this.kernel.view.ruleSet.playerCount === 3
+        rulesFamily: this.kernel.view.ruleSet.rulesFamily,
+        ...(this.kernel.view.ruleSet.playerCount === 3 ||
+        this.kernel.view.ruleSet.rulesFamily === "mcr"
           ? { ruleSetDetails: { ...this.kernel.view.ruleSet } }
           : {}),
         mode: this.kernel.mode,

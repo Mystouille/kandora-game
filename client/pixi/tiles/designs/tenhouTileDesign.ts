@@ -16,6 +16,7 @@ import uprightSmallUrl from "~/game/tenhouSprites/shadowTenhouUprightSmall.png";
 import shadowTopBottomUrl from "~/game/tenhouSprites/shadowTenhouTopBottom.png";
 import shadowLeftRightUrl from "~/game/tenhouSprites/shadowTenhouLeftRight.png";
 import shadowLongUrl from "~/game/tenhouSprites/shadowTenhouLong.png";
+import mcrFlowersUrl from "~/game/tenhouSprites/mcrFlowers.svg";
 import type { GridAtlas, TileDesign } from "../tileDesign";
 
 /** Small/side tiles render at half size, trimmed by 9.4% so the
@@ -46,6 +47,17 @@ export const tenhouTileDesign: TileDesign = {
   id: "tenhou",
   displayName: "Tenhou",
   atlases: {
+    mcrFlowers: {
+      kind: "grid",
+      url: mcrFlowersUrl,
+      cols: 8,
+      rows: 1,
+      suitRows: { f: 0 },
+      supportedSuits: ["f"],
+      backCell: { row: 0, col: 0 },
+      numberColumnOffset: -1,
+      inset: 0.5,
+    },
     ownHand: grid(ownHandUrl),
     bottomSmall: grid(bottomSmallUrl),
     topSmall: grid(topSmallUrl),
@@ -59,6 +71,7 @@ export const tenhouTileDesign: TileDesign = {
     shadowLeftRight: { kind: "single", url: shadowLeftRightUrl },
     shadowLong: { kind: "single", url: shadowLongUrl },
   },
+  flowerAtlas: "mcrFlowers",
   categories: {
     small: { source: { w: 86, h: 130 }, scale: SMALL_SIDE_SCALE },
     side: { source: { w: 116, h: 107 }, scale: SMALL_SIDE_SCALE },

@@ -83,7 +83,7 @@ describe("game lobby", () => {
     expect(markup).not.toContain('placeholder="Enter seed"');
   });
 
-  it("offers EMA Hanchan in the rules dropdown", () => {
+  it("defaults to Riichi / Yonma / M-League and offers only Yonma game types", () => {
     loaderData.presets = [
       {
         id: "m-league",
@@ -94,10 +94,28 @@ describe("game lobby", () => {
         displayName: "EMA — Hanchan",
         description: "EMA hanchan rules",
       },
+      {
+        id: "mcr-ema",
+        rulesFamily: "mcr",
+        displayName: "MCR - EMA Green Book",
+      },
     ];
 
     const markup = renderToStaticMarkup(createElement(LobbyRoute));
 
+    expect(markup).toContain('aria-label="Mahjong rules"');
+    expect(markup).toContain("Yonma (4 players)");
+    expect(markup).toContain("Sanma (3 players)");
+    expect(markup).toContain('value="m-league" selected=""');
     expect(markup).toContain('<option value="ema">EMA — Hanchan</option>');
+    expect(markup).not.toContain('<option value="mcr-ema"');
+    expect(markup).not.toContain('name="sanmaType"');
+    expect(markup.match(/<select[^>]+aria-label="Game type"/g)).toHaveLength(1);
+    expect(markup.indexOf('aria-label="Mahjong rules"')).toBeLessThan(
+      markup.indexOf('aria-label="Game type"')
+    );
+    expect(markup.indexOf('aria-label="Game type"')).toBeLessThan(
+      markup.indexOf("Duplicate mode")
+    );
   });
 });

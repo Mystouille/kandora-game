@@ -195,6 +195,7 @@ export async function archiveReplayLog(args: {
   startedAt: Date;
   endedAt: Date;
   ruleSet: string;
+  rulesFamily?: import("~/game/protocol/rulesFamily").RulesFamily;
   mode?: import("~/game/protocol/matchMode").MatchModeConfig;
   ruleSetDetails?: Record<string, unknown>;
   events: GameEvent[];
@@ -225,6 +226,7 @@ export async function archiveReplayLog(args: {
     source,
     sourceGameId,
     ruleSet: args.ruleSet,
+    rulesFamily: args.rulesFamily ?? "riichi",
     mode: args.mode,
     ruleSetDetails: args.ruleSetDetails,
     startedAt: args.startedAt.getTime(),

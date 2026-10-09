@@ -118,13 +118,16 @@ export interface PendingDiscard {
 }
 
 export interface MatchView {
+  rulesFamily?: "riichi" | "mcr";
   /** Omitted only by legacy four-player producers. */
   playerCount?: PlayerCount;
   sanmaType?: SanmaType;
   /** Present only on an explicitly projected render view, never raw store state. */
   tableProjection?: TableProjection;
   nukiTiles?: Tile[][];
+  flowerTiles?: Tile[][];
   pendingNuki?: { seat: Seat; tile: Tile; opening: boolean } | null;
+  pendingFlower?: { seat: Seat; tile: Tile } | null;
   sanmaWall?: SnapshotState["sanmaWall"] | null;
   turn?: Seat;
   phase?: string;
@@ -352,6 +355,15 @@ export interface MatchView {
       ten?: number;
       yakumanCount?: number;
       yaku?: Record<string, string>;
+      scoringFamily?: "riichi" | "mcr";
+      fan?: Array<{
+        id: string;
+        name: string;
+        count: number;
+        points: number;
+      }>;
+      totalFan?: number;
+      nonFlowerFan?: number;
       doraCount?: number;
       akaDoraCount?: number;
       uraDoraCount?: number;
@@ -498,10 +510,13 @@ const emptyDiscards: Tile[][] = [[], [], [], []];
 const emptyMelds: Meld[][] = [[], [], [], []];
 
 const initialState: MatchView = {
+  rulesFamily: "riichi",
   playerCount: 4,
   sanmaType: "online",
   nukiTiles: [[], [], [], []],
+  flowerTiles: [[], [], [], []],
   pendingNuki: null,
+  pendingFlower: null,
   sanmaWall: null,
   turn: 0,
   phase: "awaiting_draw",
@@ -635,10 +650,14 @@ export const useMatchStore = create<MatchStore>((set) => ({
             ...emptyParticipantState(roomState.playerCount ?? 4),
             dealer: 0 as const,
             turn: 0 as const,
-            phase: "awaiting_draw",
+            phase:
+              roomState.rulesFamily === "mcr"
+                ? "awaiting_discard"
+                : "awaiting_draw",
           }
         : {}),
       roomState,
+      rulesFamily: roomState?.rulesFamily ?? state.rulesFamily ?? "riichi",
       playerCount: roomState
         ? (roomState.playerCount ?? 4)
         : (state.playerCount ?? 4),
@@ -664,6 +683,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
   hydrateSnapshot: (snap, seq) => {
     set((state) => ({
       ...state,
+      rulesFamily: snap.rulesFamily ?? "riichi",
       playerCount: snap.playerCount ?? 4,
       sanmaType: snap.sanmaType ?? "online",
       tableProjection: undefined,
@@ -671,6 +691,10 @@ export const useMatchStore = create<MatchStore>((set) => ({
         ...(snap.nukiTiles?.[seat] ?? []),
       ]),
       pendingNuki: snap.pendingNuki ? { ...snap.pendingNuki } : null,
+      flowerTiles: seatValues(4, (seat) => [
+        ...(snap.flowerTiles?.[seat] ?? []),
+      ]),
+      pendingFlower: snap.pendingFlower ? { ...snap.pendingFlower } : null,
       sanmaWall: snap.sanmaWall ? { ...snap.sanmaWall } : null,
       turn: snap.turn,
       phase: snap.phase,
@@ -886,6 +910,7 @@ export const useMatchStore = create<MatchStore>((set) => ({
       };
       switch (event.type) {
         case "match_start": {
+          const rulesFamily = event.rulesFamily ?? "riichi";
           const playerCount = event.playerCount ?? 4;
           const sanmaType = event.sanmaType ?? "online";
           const namesArr = seatValues(playerCount, () => "");
@@ -895,12 +920,21 @@ export const useMatchStore = create<MatchStore>((set) => ({
           return {
             ...next,
             ...emptyParticipantState(playerCount),
+            rulesFamily,
+            flowerTiles: seatValues(4, () => []),
+            pendingFlower: null,
+            scores: seatValues(playerCount, () =>
+              rulesFamily === "mcr" ? 0 : 25000
+            ),
             sanmaType,
             sanmaWall: null,
             dealer: 0,
             turn: 0,
-            phase: "awaiting_draw",
-            wallRemaining: initialLiveWallCount({ playerCount, sanmaType }),
+            phase: rulesFamily === "mcr" ? "awaiting_discard" : "awaiting_draw",
+            wallRemaining:
+              rulesFamily === "mcr"
+                ? 91
+                : initialLiveWallCount({ playerCount, sanmaType }),
             drawsTaken: 0,
             liveDrawsTaken: 0,
             liveWall: null,
@@ -936,6 +970,8 @@ export const useMatchStore = create<MatchStore>((set) => ({
           };
         }
         case "hand_start": {
+          const rulesFamily =
+            event.rulesFamily ?? state.rulesFamily ?? "riichi";
           const playerCount = event.playerCount ?? state.playerCount ?? 4;
           const sanmaType = event.sanmaType ?? state.sanmaType ?? "online";
           const hands = seatValues(playerCount, () => [] as Array<Tile | null>);
@@ -953,27 +989,42 @@ export const useMatchStore = create<MatchStore>((set) => ({
             // Opponents start with 13 redacted tiles.
             for (let s = 0; s < playerCount; s++) {
               if (s !== state.mySeat) {
-                hands[s] = new Array<Tile | null>(13).fill(null);
+                const handSize =
+                  rulesFamily === "mcr" && s === event.dealer ? 14 : 13;
+                hands[s] = new Array<Tile | null>(handSize).fill(null);
               }
             }
           }
           return {
             ...next,
             ...emptyParticipantState(playerCount),
+            rulesFamily,
             sanmaType,
             sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : null,
             nukiTiles: seatValues(playerCount, (seat) => [
               ...(event.nukiTiles?.[seat] ?? []),
             ]),
+            flowerTiles: seatValues(4, (seat) => [
+              ...(event.flowerTiles?.[seat] ?? []),
+            ]),
+            pendingFlower: null,
             hands,
             totalDiscards: 0,
             doraIndicators: [...event.doraIndicators],
-            wallRemaining: initialLiveWallCount(
-              { playerCount, sanmaType },
-              event.sanmaWall?.mode === "duplicate" ||
-                !!event.duplicateWallState ||
-                !!event.duplicateDrawQueues
-            ),
+            wallRemaining:
+              rulesFamily === "mcr"
+                ? (event.liveWall?.length ??
+                  91 -
+                    (event.flowerTiles?.reduce(
+                      (total, tiles) => total + tiles.length,
+                      0
+                    ) ?? 0))
+                : initialLiveWallCount(
+                    { playerCount, sanmaType },
+                    event.sanmaWall?.mode === "duplicate" ||
+                      !!event.duplicateWallState ||
+                      !!event.duplicateDrawQueues
+                  ),
             liveWall: event.liveWall ? [...event.liveWall] : null,
             deadWall: event.deadWall ? [...event.deadWall] : null,
             drawsTaken: 0,
@@ -987,14 +1038,17 @@ export const useMatchStore = create<MatchStore>((set) => ({
             dice: event.dice ? [event.dice[0], event.dice[1]] : null,
             dealer: event.dealer,
             turn: event.dealer,
-            phase: "awaiting_draw",
+            phase: rulesFamily === "mcr" ? "awaiting_discard" : "awaiting_draw",
             roundWind: event.roundWind ?? state.roundWind,
             roundNumber: event.roundNumber ?? state.roundNumber,
             honba: event.honba ?? 0,
             riichiSticks: event.riichiSticks ?? 0,
             scores: seatValues(
               playerCount,
-              (seat) => event.scores?.[seat] ?? state.scores[seat] ?? 25000
+              (seat) =>
+                event.scores?.[seat] ??
+                state.scores[seat] ??
+                (rulesFamily === "mcr" ? 0 : 25000)
             ),
             sinking: (event.sinking
               ? copySeatValues(event.sinking)
@@ -1026,15 +1080,25 @@ export const useMatchStore = create<MatchStore>((set) => ({
               ? { ...event.sanmaWall }
               : state.sanmaWall,
             turn: event.opening ? state.dealer : event.seat,
-            phase: event.opening ? "awaiting_draw" : "awaiting_discard",
+            phase:
+              event.tile?.endsWith("f") === true
+                ? "awaiting_flower_replacement"
+                : event.opening
+                  ? "awaiting_draw"
+                  : "awaiting_discard",
+            pendingFlower:
+              event.tile?.endsWith("f") === true
+                ? { seat: event.seat, tile: event.tile }
+                : event.replacementKind === "flower"
+                  ? null
+                  : state.pendingFlower,
             pendingNuki:
               event.replacementKind === "nuki" ? null : state.pendingNuki,
             hands,
             wallRemaining: event.wallRemaining,
             drawsTaken: state.drawsTaken + 1,
             liveDrawsTaken:
-              event.fromDeadWall ||
-              (state.playerCount === 3 && event.replacementKind !== undefined)
+              event.fromDeadWall || event.replacementKind !== undefined
                 ? state.liveDrawsTaken
                 : state.liveDrawsTaken + 1,
             freshlyDrawnSeat: event.opening
@@ -1057,6 +1121,29 @@ export const useMatchStore = create<MatchStore>((set) => ({
               : state.sanmaWall,
             freshlyDrawnSeat: event.opening ? state.freshlyDrawnSeat : null,
             freshlyDiscardedSeat: null,
+          };
+        }
+        case "flower": {
+          const hands = state.hands.map((hand) => [...hand]);
+          const flowerIndex = hands[event.seat].lastIndexOf(event.tile);
+          if (flowerIndex >= 0) {
+            hands[event.seat].splice(flowerIndex, 1);
+          } else {
+            const hiddenIndex = hands[event.seat].indexOf(null);
+            if (hiddenIndex >= 0) {
+              hands[event.seat].splice(hiddenIndex, 1);
+            }
+          }
+          const flowerTiles = seatValues(4, (seat) => [
+            ...(state.flowerTiles?.[seat] ?? []),
+          ]);
+          flowerTiles[event.seat].push(event.tile);
+          return {
+            ...next,
+            hands,
+            flowerTiles,
+            pendingFlower: null,
+            freshlyDrawnSeat: null,
           };
         }
         case "discard": {
@@ -1185,11 +1272,15 @@ export const useMatchStore = create<MatchStore>((set) => ({
             seat: event.seat,
             loser: event.loser ?? null,
             winTile: event.winTile,
+            scoringFamily: event.scoringFamily,
             han: event.han,
             fu: event.fu,
             ten: event.ten,
             yakumanCount: event.yakumanCount,
             yaku: event.yaku,
+            fan: event.fan?.map((entry) => ({ ...entry })),
+            totalFan: event.totalFan,
+            nonFlowerFan: event.nonFlowerFan,
             doraCount: event.doraCount,
             akaDoraCount: event.akaDoraCount,
             uraDoraCount: event.uraDoraCount,

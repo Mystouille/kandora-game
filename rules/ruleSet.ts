@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import { DEFAULT_PRESET_ID, getPreset, presetToRuleSet } from "./presets";
+import { RulesFamilySchema, type RulesFamily } from "../protocol/rulesFamily";
 import { UmaTableSchema, zeroUma, type Uma } from "./matchScoring";
 import {
   PlayerCountSchema,
@@ -28,6 +29,7 @@ import {
 export type KuikaeRule = "allowed" | "same-tile-only" | "full";
 
 export interface RuleSet {
+  rulesFamily: RulesFamily;
   playerCount: PlayerCount;
   /** Inactive in four-player matches. */
   sanmaType: SanmaType;
@@ -293,6 +295,7 @@ export interface RuleSet {
 
 export const RuleSetSchema: z.ZodType<RuleSet> = z
   .object({
+    rulesFamily: RulesFamilySchema.default("riichi"),
     playerCount: PlayerCountSchema.default(4),
     sanmaType: SanmaTypeSchema.default("online"),
     roundWindCount: z.union([z.literal(1), z.literal(2), z.literal(4)]),
@@ -363,6 +366,20 @@ export const RuleSetSchema: z.ZodType<RuleSet> = z
   })
   .strict()
   .superRefine((rules, context) => {
+    if (rules.rulesFamily === "mcr" && rules.playerCount !== 4) {
+      context.addIssue({
+        code: "custom",
+        path: ["playerCount"],
+        message: "MCR requires four players",
+      });
+    }
+    if (rules.rulesFamily === "mcr" && rules.buuMode) {
+      context.addIssue({
+        code: "custom",
+        path: ["buuMode"],
+        message: "MCR cannot use Buu rules",
+      });
+    }
     if (rules.playerCount === 3 && rules.buuMode) {
       context.addIssue({
         code: "custom",

@@ -147,6 +147,14 @@ export interface CompleteNukiAction {
   forceExhaustive?: boolean;
 }
 
+/** Complete the automatic replacement for an MCR flower draw. */
+export interface CompleteFlowerAction {
+  type: "complete_flower";
+  replacementTile?: Tile;
+  /** Trusted Duplicate/empty-wall signal: discard the flower and draw the hand. */
+  forceExhaustive?: boolean;
+}
+
 /**
  * Player-initiated abortive draw declaration.
  *
@@ -226,6 +234,7 @@ export type Action =
   | KanAction
   | NukiAction
   | CompleteNukiAction
+  | CompleteFlowerAction
   | AbortAction
   | DeclareRyuukyokuStatusAction
   | CompleteRyuukyokuAction

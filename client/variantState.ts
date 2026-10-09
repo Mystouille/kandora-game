@@ -5,9 +5,11 @@ import type {
   Tile,
 } from "~/game/protocol/messages";
 import type { PlayerCount, SanmaType } from "~/game/protocol/seat";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 import { seatValues } from "~/game/rules/seats";
 
 export interface VariantView {
+  rulesFamily?: RulesFamily;
   playerCount?: PlayerCount;
   sanmaType?: SanmaType;
 }
@@ -34,7 +36,9 @@ export function emptyParticipantState(playerCount: PlayerCount) {
     ),
     discardOrdinals: seatValues(playerCount, () => [] as number[]),
     nukiTiles: seatValues(playerCount, () => [] as Tile[]),
+    flowerTiles: seatValues(4, () => [] as Tile[]),
     pendingNuki: null,
+    pendingFlower: null,
     scores: seatValues(playerCount, () => 25000),
     riichiDeclared: seatValues(playerCount, () => false),
     ryuukyokuDeclarations: seatValues(
@@ -54,6 +58,9 @@ export function initialLiveWallCount(
   view: VariantView,
   duplicate: boolean = false
 ): number {
+  if (view.rulesFamily === "mcr") {
+    return 91;
+  }
   if (view.playerCount !== 3) {
     return 70;
   }

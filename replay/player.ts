@@ -66,7 +66,9 @@ import {
 
 export interface ReplayView extends VariantView {
   nukiTiles?: Tile[][];
+  flowerTiles: Tile[][];
   pendingNuki?: MatchView["pendingNuki"];
+  pendingFlower?: MatchView["pendingFlower"];
   sanmaWall?: MatchView["sanmaWall"];
   turn?: Seat;
   phase?: string;
@@ -205,6 +207,15 @@ export interface ReplayView extends VariantView {
       ten?: number;
       yakumanCount?: number;
       yaku?: Record<string, string>;
+      scoringFamily?: "riichi" | "mcr";
+      fan?: Array<{
+        id: string;
+        name: string;
+        count: number;
+        points: number;
+      }>;
+      totalFan?: number;
+      nonFlowerFan?: number;
       doraCount?: number;
       akaDoraCount?: number;
       uraDoraCount?: number;
@@ -274,12 +285,17 @@ export interface ReplayView extends VariantView {
 }
 
 export function initialView(variant: VariantView = {}): ReplayView {
+  const rulesFamily = variant.rulesFamily ?? "riichi";
   return {
     ...emptyParticipantState(variant.playerCount ?? 4),
+    rulesFamily,
+    scores: seatValues(variant.playerCount ?? 4, () =>
+      rulesFamily === "mcr" ? 0 : 25000
+    ),
     sanmaType: variant.sanmaType ?? "online",
     sanmaWall: null,
     turn: 0,
-    phase: "awaiting_draw",
+    phase: rulesFamily === "mcr" ? "awaiting_discard" : "awaiting_draw",
     totalDiscards: 0,
     wallRemaining: initialLiveWallCount(variant),
     liveWall: null,
@@ -319,17 +335,23 @@ export function applyReplayEvent(
 ): ReplayView {
   switch (event.type) {
     case "match_start": {
+      const rulesFamily = event.rulesFamily ?? "riichi";
       const playerCount = event.playerCount ?? view.playerCount ?? 4;
       const sanmaType = event.sanmaType ?? view.sanmaType ?? "online";
       return {
         ...view,
         ...emptyParticipantState(playerCount),
+        rulesFamily,
         sanmaType,
         sanmaWall: null,
         dealer: 0,
         turn: 0,
-        phase: "awaiting_draw",
-        wallRemaining: initialLiveWallCount({ playerCount, sanmaType }),
+        phase: rulesFamily === "mcr" ? "awaiting_discard" : "awaiting_draw",
+        wallRemaining: initialLiveWallCount({
+          rulesFamily,
+          playerCount,
+          sanmaType,
+        }),
         drawsTaken: 0,
         liveDrawsTaken: 0,
         liveWall: null,
@@ -354,6 +376,7 @@ export function applyReplayEvent(
       };
     }
     case "hand_start": {
+      const rulesFamily = event.rulesFamily ?? view.rulesFamily ?? "riichi";
       const playerCount = event.playerCount ?? view.playerCount ?? 4;
       const sanmaType = event.sanmaType ?? view.sanmaType ?? "online";
       // Archived `hand_start` events always carry the omniscient
@@ -369,20 +392,33 @@ export function applyReplayEvent(
       return {
         ...view,
         ...emptyParticipantState(playerCount),
+        rulesFamily,
         sanmaType,
         sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : null,
         nukiTiles: seatValues(playerCount, (seat) => [
           ...(event.nukiTiles?.[seat] ?? []),
         ]),
+        flowerTiles: seatValues(4, (seat) => [
+          ...(event.flowerTiles?.[seat] ?? []),
+        ]),
+        pendingFlower: null,
         hands,
         totalDiscards: 0,
         doraIndicators: [...event.doraIndicators],
-        wallRemaining: initialLiveWallCount(
-          { playerCount, sanmaType },
-          event.sanmaWall?.mode === "duplicate" ||
-            !!event.duplicateWallState ||
-            !!event.duplicateDrawQueues
-        ),
+        wallRemaining:
+          rulesFamily === "mcr"
+            ? (event.liveWall?.length ??
+              91 -
+                (event.flowerTiles?.reduce(
+                  (total, tiles) => total + tiles.length,
+                  0
+                ) ?? 0))
+            : initialLiveWallCount(
+                { rulesFamily, playerCount, sanmaType },
+                event.sanmaWall?.mode === "duplicate" ||
+                  !!event.duplicateWallState ||
+                  !!event.duplicateDrawQueues
+              ),
         liveWall: event.liveWall ? [...event.liveWall] : null,
         deadWall: event.deadWall ? [...event.deadWall] : null,
         drawsTaken: 0,
@@ -401,14 +437,17 @@ export function applyReplayEvent(
         dice: event.dice ? [event.dice[0], event.dice[1]] : null,
         dealer: event.dealer,
         turn: event.dealer,
-        phase: "awaiting_draw",
+        phase: rulesFamily === "mcr" ? "awaiting_discard" : "awaiting_draw",
         roundWind: event.roundWind ?? view.roundWind,
         roundNumber: event.roundNumber ?? view.roundNumber,
         honba: event.honba ?? 0,
         riichiSticks: event.riichiSticks ?? 0,
         scores: seatValues(
           playerCount,
-          (seat) => event.scores?.[seat] ?? view.scores[seat] ?? 25000
+          (seat) =>
+            event.scores?.[seat] ??
+            view.scores[seat] ??
+            (rulesFamily === "mcr" ? 0 : 25000)
         ),
         sinking: (event.sinking
           ? copySeatValues(event.sinking)
@@ -436,14 +475,24 @@ export function applyReplayEvent(
         ...view,
         sanmaWall: event.sanmaWall ? { ...event.sanmaWall } : view.sanmaWall,
         turn: event.opening ? view.dealer : event.seat,
-        phase: event.opening ? "awaiting_draw" : "awaiting_discard",
+        phase:
+          event.tile?.endsWith("f") === true
+            ? "awaiting_flower_replacement"
+            : event.opening
+              ? "awaiting_draw"
+              : "awaiting_discard",
+        pendingFlower:
+          event.tile?.endsWith("f") === true
+            ? { seat: event.seat, tile: event.tile }
+            : event.replacementKind === "flower"
+              ? null
+              : view.pendingFlower,
         pendingNuki: event.replacementKind === "nuki" ? null : view.pendingNuki,
         hands,
         wallRemaining: event.wallRemaining,
         drawsTaken: view.drawsTaken + 1,
         liveDrawsTaken:
-          event.fromDeadWall ||
-          (view.playerCount === 3 && event.replacementKind !== undefined)
+          event.fromDeadWall || event.replacementKind !== undefined
             ? view.liveDrawsTaken
             : view.liveDrawsTaken + 1,
         freshlyDrawnSeat: event.opening ? view.freshlyDrawnSeat : event.seat,
@@ -472,6 +521,25 @@ export function applyReplayEvent(
         ),
         freshlyDrawnSeat: event.opening ? view.freshlyDrawnSeat : null,
         freshlyDiscardedSeat: null,
+      };
+    }
+    case "flower": {
+      const hands = view.hands.map((hand) => [...hand]);
+      let flowerIndex = hands[event.seat].lastIndexOf(event.tile);
+      if (flowerIndex < 0) {
+        flowerIndex = hands[event.seat].lastIndexOf(null);
+      }
+      if (flowerIndex >= 0) {
+        hands[event.seat].splice(flowerIndex, 1);
+      }
+      const flowerTiles = view.flowerTiles.map((tiles) => [...tiles]);
+      flowerTiles[event.seat].push(event.tile);
+      return {
+        ...view,
+        hands,
+        flowerTiles,
+        pendingFlower: null,
+        freshlyDrawnSeat: null,
       };
     }
     case "discard": {
@@ -729,11 +797,15 @@ export function applyReplayEvent(
         seat: event.seat,
         loser: event.loser ?? null,
         winTile: event.winTile,
+        scoringFamily: event.scoringFamily,
         han: event.han,
         fu: event.fu,
         ten: event.ten,
         yakumanCount: event.yakumanCount,
         yaku: event.yaku,
+        fan: event.fan?.map((entry) => ({ ...entry })),
+        totalFan: event.totalFan,
+        nonFlowerFan: event.nonFlowerFan,
         doraCount: event.doraCount,
         akaDoraCount: event.akaDoraCount,
         uraDoraCount: event.uraDoraCount,
@@ -1026,10 +1098,13 @@ export function replayViewToMatchView(
       ? opts.mySeat
       : 0;
   const base: MatchView = {
+    rulesFamily: view.rulesFamily ?? "riichi",
     playerCount: view.playerCount,
     sanmaType: view.sanmaType,
     nukiTiles: view.nukiTiles,
+    flowerTiles: view.flowerTiles,
     pendingNuki: view.pendingNuki,
+    pendingFlower: view.pendingFlower,
     sanmaWall: view.sanmaWall,
     turn: view.turn,
     phase: view.phase,

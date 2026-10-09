@@ -13,6 +13,7 @@ import type { MatchConfiguration } from "./sessionTypes";
 import type { SessionSnapshot } from "./sessionCoordinator";
 import { activeSeats, seatValues } from "~/game/rules/seats";
 import type { PlayerCount, SanmaType } from "~/game/protocol/seat";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 
 export interface RoomViewPort {
   status(): SessionSnapshot["status"];
@@ -32,6 +33,7 @@ export class MatchRoomViews {
   ) {}
 
   summary(): {
+    rulesFamily: RulesFamily;
     playerCount?: PlayerCount;
     sanmaType?: SanmaType;
     matchId: string;
@@ -57,6 +59,7 @@ export class MatchRoomViews {
         ? (this.config.ruleSetOverride?.buuMode ?? false)
         : (this.kernel.view?.ruleSet.buuMode ?? false);
     return {
+      rulesFamily: this.config.ruleSetOverride?.rulesFamily ?? "riichi",
       ...(this.roster.playerCount === 3
         ? {
             playerCount: 3 as const,
@@ -117,6 +120,7 @@ export class MatchRoomViews {
     const hostSeat = this.roster.hostSeat();
     return {
       type: "room_state",
+      rulesFamily: this.config.ruleSetOverride?.rulesFamily ?? "riichi",
       ...(this.roster.playerCount === 3
         ? {
             playerCount: 3 as const,

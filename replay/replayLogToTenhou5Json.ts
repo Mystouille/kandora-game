@@ -503,7 +503,21 @@ export class UnsupportedSanmaExportError extends Error {
   }
 }
 
+export const MCR_EXTERNAL_EXPORT_ERROR =
+  "MCR replays cannot be exported to the Riichi-only Tenhou/NAGA format. Use Kandora's native replay instead.";
+
+export class UnsupportedMcrExportError extends Error {
+  readonly code = "unsupported_mcr_export";
+  constructor() {
+    super(MCR_EXTERNAL_EXPORT_ERROR);
+    this.name = "UnsupportedMcrExportError";
+  }
+}
+
 export function replayLogToTenhou5Json(replay: ReplayLog): Tenhou5Json {
+  if (replayVariant(replay).rulesFamily === "mcr") {
+    throw new UnsupportedMcrExportError();
+  }
   if (replayVariant(replay).playerCount === 3) {
     throw new UnsupportedSanmaExportError();
   }

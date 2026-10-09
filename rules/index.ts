@@ -22,6 +22,7 @@ export type {
   HandResult,
   Meld,
   PendingRyuukyoku,
+  PendingFlower,
 } from "./state";
 export { createInitialState, MatchStateSchema } from "./state";
 
@@ -39,6 +40,7 @@ export type {
   AbortAction,
   DeclareRyuukyokuStatusAction,
   CompleteRyuukyokuAction,
+  CompleteFlowerAction,
   StartNextHandAction,
 } from "./actions";
 
@@ -81,6 +83,20 @@ export { analyzeStandardUkeire } from "./ukeire";
 export type { ScoreInput, ScoreResult } from "./score";
 export { buildRiichiInput, indicatorToDora, scoreHand } from "./score";
 
+export type {
+  McrAwardedFan,
+  McrFanDefinition,
+  McrFanId,
+  McrMeldInput,
+  McrScoreInput,
+  McrScoreResult,
+  McrSeatDeltas,
+  McrSettlementInput,
+  McrWinContext,
+  McrWinMethod,
+} from "./scoring/mcr";
+export { MCR_FANS, MCR_FAN_IDS, scoreMcr, settleMcrWin } from "./scoring/mcr";
+
 export type { KuikaeRule, RuleSet, RuleSetOverride } from "./ruleSet";
 export {
   DEFAULT_RULE_SET,
@@ -101,6 +117,14 @@ export {
 } from "./presets";
 
 export { isAnkanLegalDuringRiichi } from "./riichiKan";
+
+export type { FlowerTile } from "./flowers";
+export {
+  MCR_FLOWER_NAMES,
+  MCR_FLOWER_TILES,
+  flowerTileName,
+  isFlowerTile,
+} from "./flowers";
 
 export type { ChipDelta } from "./buu";
 export {

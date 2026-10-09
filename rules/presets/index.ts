@@ -20,6 +20,7 @@ import buuEast from "./buu-east.json";
 import ema from "./ema.json";
 import jpmlHanchan from "./jpml-hanchan.json";
 import mLeague from "./m-league.json";
+import mcrEma from "./mcr-ema.json";
 
 import type { RuleSet } from "../ruleSet";
 import { UmaTableSchema } from "../matchScoring";
@@ -38,6 +39,7 @@ const PRESET_SOURCES: ReadonlyArray<unknown> = [
   ema,
   jpmlHanchan,
   mLeague,
+  mcrEma,
 ];
 
 const NON_SELECTABLE_PRESET_IDS = new Set([
@@ -110,6 +112,9 @@ function validatePreset(raw: unknown): RuleSetPreset {
   const obj = raw as Record<string, unknown>;
   const ctx = typeof obj.id === "string" ? `[${obj.id}] ` : "";
 
+  if (obj.rulesFamily !== "riichi" && obj.rulesFamily !== "mcr") {
+    throw new Error(`${ctx}rulesFamily must be "riichi" or "mcr"`);
+  }
   expectString(obj, "id", ctx);
   expectString(obj, "displayName", ctx);
   if (obj.description !== undefined) {
@@ -118,6 +123,9 @@ function validatePreset(raw: unknown): RuleSetPreset {
 
   if (obj.playerCount !== 4 || obj.sanmaType !== "online") {
     throw new Error(`${ctx}base presets must specify four-player defaults`);
+  }
+  if (obj.rulesFamily === "mcr" && obj.id !== "mcr-ema") {
+    throw new Error(`${ctx}MCR presets must use the supported EMA profile`);
   }
 
   const roundWindCount = obj.roundWindCount;

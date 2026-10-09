@@ -33,7 +33,7 @@ export function annotateWallSchedule(events: GameEvent[]): GameEvent[] {
       ev.sanmaWall?.mode === "duplicate" ||
       ev.duplicateDrawQueues !== undefined ||
       ev.duplicateWallState !== undefined;
-    let replacementKind: "kan" | "nuki" | undefined;
+    let replacementKind: "kan" | "nuki" | "flower" | undefined;
     let j = i + 1;
     for (; j < out.length; j++) {
       const e = out[j];
@@ -63,7 +63,7 @@ export function annotateWallSchedule(events: GameEvent[]): GameEvent[] {
             ? { replacementKind: e.replacementKind ?? replacementKind }
             : {}),
         };
-        if (!fromDeadWall) {
+        if (!fromDeadWall && !e.replacementKind) {
           schedule.push(e.seat);
         }
         replacementKind = undefined;

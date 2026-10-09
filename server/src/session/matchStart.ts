@@ -27,6 +27,7 @@ export function matchStartEvent(
 ): Extract<GameEvent, { type: "match_start" }> {
   return {
     type: "match_start",
+    rulesFamily: state.ruleSet.rulesFamily,
     ...(state.ruleSet.playerCount === 3
       ? { playerCount: 3 as const, sanmaType: state.ruleSet.sanmaType }
       : {}),

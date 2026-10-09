@@ -1,4 +1,5 @@
 import type { PlayerCount, SanmaType } from "~/game/protocol/seat";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 import type { ReplayLog } from "./types";
 import { seatValues } from "~/game/rules/seats";
 
@@ -11,6 +12,7 @@ export function replaySeatNames(log: ReplayLog) {
 
 /** Partial external seat listings are not evidence of native sanma. */
 export function replayVariant(log: ReplayLog): {
+  rulesFamily: RulesFamily;
   playerCount: PlayerCount;
   sanmaType: SanmaType;
 } {
@@ -21,6 +23,10 @@ export function replayVariant(log: ReplayLog): {
       ? (effective as Record<string, unknown>)
       : log.ruleSetDetails;
   return {
+    rulesFamily:
+      log.rulesFamily ??
+      start?.rulesFamily ??
+      (rules?.rulesFamily === "mcr" ? "mcr" : "riichi"),
     playerCount:
       log.playerCount ??
       start?.playerCount ??

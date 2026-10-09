@@ -47,6 +47,7 @@ export type MatchPhase =
   | "awaiting_discard" // active seat has drawn, must choose a discard
   | "awaiting_chankan" // added kan or Online North declared; opponents may ron
   | "awaiting_nuki_replacement" // mandatory Kansai tile extracted; replacement owed
+  | "awaiting_flower_replacement" // MCR flower drawn; automatic replacement owed
   | "awaiting_ryuukyoku_declarations" // exhaustive draw; seats declare in dealer order
   | "awaiting_ryuukyoku_settlement" // all declarations collected; awaiting settlement
   | "hand_ended" // hand finished (win or exhaustive draw)
@@ -81,6 +82,11 @@ export interface PendingNuki {
   tile: Tile;
   /** Resume awaiting_draw with a thirteen-tile hand, not a playable draw turn. */
   opening: boolean;
+}
+
+export interface PendingFlower {
+  seat: Seat;
+  tile: Tile;
 }
 
 export interface HandResult {
@@ -140,6 +146,7 @@ export interface MatchState {
   hands: Tile[][];
   discards: Tile[][];
   nukiTiles: Tile[][];
+  flowerTiles: Tile[][];
   liveWall: Tile[];
   deadWall: Tile[];
   /** Required for sanma; absent from legacy and current four-player states. */
@@ -158,6 +165,8 @@ export interface MatchState {
    * be indistinguishable. Reset on every draw and at hand start.
    */
   lastDrawFromDeadWall: boolean;
+  /** True only when the current replacement chain originated from a kong. */
+  lastDrawFromKong?: boolean;
   /**
    * Most recent discard, available for ron until the next seat draws.
    * Cleared when a draw completes.
@@ -254,6 +263,7 @@ export interface MatchState {
    * Never concurrent with pendingShouminkan or pendingRyuukyoku.
    */
   pendingNuki: PendingNuki | null;
+  pendingFlower: PendingFlower | null;
   /**
    * Exhaustive-draw status fixed before declarations begin. Cleared
    * when `complete_ryuukyoku` settles the hand.
@@ -302,7 +312,7 @@ export interface MatchState {
   dabuken: SeatValues<boolean>;
 }
 
-const StateTileSchema = z.string().regex(/^([0-9][mps]|[1-7]z)$/);
+const StateTileSchema = z.string().regex(/^([0-9][mps]|[1-7]z|[1-8]f)$/);
 const StateSeatSchema = z.union([
   z.literal(0),
   z.literal(1),
@@ -353,6 +363,7 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
     hands: z.array(z.array(StateTileSchema)).min(3).max(4),
     discards: z.array(z.array(StateTileSchema)).min(3).max(4),
     nukiTiles: seatValuesSchema(z.array(StateTileSchema)).optional(),
+    flowerTiles: seatValuesSchema(z.array(StateTileSchema)).optional(),
     liveWall: z.array(StateTileSchema),
     deadWall: z.array(StateTileSchema),
     sanmaWall: SanmaWallStateSchema.optional(),
@@ -360,6 +371,7 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
     turn: StateSeatSchema,
     lastDrawn: z.array(StateTileSchema.nullable()).min(3).max(4),
     lastDrawFromDeadWall: z.boolean(),
+    lastDrawFromKong: z.boolean().default(false),
     lastDiscard: z
       .object({ seat: StateSeatSchema, tile: StateTileSchema })
       .strict()
@@ -369,6 +381,7 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
       "awaiting_discard",
       "awaiting_chankan",
       "awaiting_nuki_replacement",
+      "awaiting_flower_replacement",
       "awaiting_ryuukyoku_declarations",
       "awaiting_ryuukyoku_settlement",
       "hand_ended",
@@ -403,6 +416,14 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
         seat: StateSeatSchema,
         tile: StateTileSchema,
         opening: z.boolean(),
+      })
+      .strict()
+      .nullable()
+      .default(null),
+    pendingFlower: z
+      .object({
+        seat: StateSeatSchema,
+        tile: StateTileSchema,
       })
       .strict()
       .nullable()
@@ -553,6 +574,45 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
           "A replacement or robbery phase requires its pending declaration",
       });
     }
+    if (
+      (state.phase === "awaiting_flower_replacement") !==
+      (state.pendingFlower !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["pendingFlower"],
+        message: "MCR flower replacement phase and custody must match",
+      });
+    }
+    if (
+      state.pendingFlower !== null &&
+      (state.ruleSet.rulesFamily !== "mcr" ||
+        !state.pendingFlower.tile.endsWith("f") ||
+        !state.hands[state.pendingFlower.seat]?.includes(
+          state.pendingFlower.tile
+        ))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["pendingFlower"],
+        message: "Only a drawn MCR flower may await replacement",
+      });
+    }
+    const flowerTiles =
+      state.flowerTiles ?? seatValues<Tile[]>(count, () => []);
+    const bankedFlowers = flowerTiles.flat();
+    if (
+      flowerTiles.length !== count ||
+      bankedFlowers.length > 8 ||
+      bankedFlowers.some((tile) => !tile.endsWith("f")) ||
+      new Set(bankedFlowers).size !== bankedFlowers.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["flowerTiles"],
+        message: "MCR flower banks must contain unique physical flowers",
+      });
+    }
     for (const key of [
       "hands",
       "discards",
@@ -584,6 +644,7 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
       ["lastDiscard", state.lastDiscard?.seat ?? null],
       ["pendingShouminkan", state.pendingShouminkan?.seat ?? null],
       ["pendingNuki", pendingNuki?.seat ?? null],
+      ["pendingFlower", state.pendingFlower?.seat ?? null],
       ["winner", state.lastHandResult?.winner ?? null],
       ["loser", state.lastHandResult?.loser ?? null],
     ] as const) {
@@ -635,6 +696,9 @@ export const MatchStateSchema: z.ZodType<MatchState> = z
     nukiTiles:
       state.nukiTiles ??
       seatValues<Tile[]>(state.ruleSet.playerCount, () => []),
+    flowerTiles:
+      state.flowerTiles ??
+      seatValues<Tile[]>(state.ruleSet.playerCount, () => []),
   }));
 
 export function createInitialState(
@@ -653,6 +717,7 @@ export function createInitialState(
     ...(opts.wall ?? {}),
     playerCount: ruleSet.playerCount,
     sanmaType: ruleSet.sanmaType,
+    rulesFamily: ruleSet.rulesFamily,
   };
   const dealt: DealtMatch = opts.deal ?? dealMatch(seed, wallOpts);
   if (dealt.hands.length !== ruleSet.playerCount) {
@@ -679,6 +744,9 @@ export function createInitialState(
     hands: dealt.hands.map((h) => [...h]),
     discards: seatValues<Tile[]>(count, () => []),
     nukiTiles: seatValues<Tile[]>(count, () => []),
+    flowerTiles:
+      dealt.flowerTiles?.map((tiles) => [...tiles]) ??
+      seatValues<Tile[]>(count, () => []),
     liveWall: [...dealt.liveWall],
     deadWall: [...dealt.deadWall],
     ...(count === 3 && dealt.sanmaWall
@@ -686,10 +754,16 @@ export function createInitialState(
       : {}),
     doraIndicators: [...dealt.doraIndicators],
     turn: 0,
-    lastDrawn: seatValues<Tile | null>(count, () => null),
+    lastDrawn:
+      ruleSet.rulesFamily === "mcr"
+        ? seatValues<Tile | null>(count, (seat) =>
+            seat === 0 ? (dealt.hands[0].at(-1) ?? null) : null
+          )
+        : seatValues<Tile | null>(count, () => null),
     lastDrawFromDeadWall: false,
+    lastDrawFromKong: false,
     lastDiscard: null,
-    phase: "awaiting_draw",
+    phase: ruleSet.rulesFamily === "mcr" ? "awaiting_discard" : "awaiting_draw",
     dealer: 0,
     roundWind: "E",
     roundNumber: 1,
@@ -704,8 +778,14 @@ export function createInitialState(
     melds: seatValues<Meld[]>(count, () => []),
     pendingShouminkan: null,
     pendingNuki: null,
+    pendingFlower: null,
     pendingRyuukyoku: null,
-    uraDoraIndicators: count === 3 ? [openingPair!.ura] : [dealt.deadWall[5]],
+    uraDoraIndicators:
+      ruleSet.rulesFamily === "mcr"
+        ? []
+        : count === 3
+          ? [openingPair!.ura]
+          : [dealt.deadWall[5]],
     pendingKanDora: [],
     pendingKanUraDora: [],
     lastHandResult: null,

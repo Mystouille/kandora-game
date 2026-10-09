@@ -42,6 +42,31 @@ function input(
 }
 
 describe("buildNormalWallPlan", () => {
+  it("renders the MCR wall without a reserved dead wall", () => {
+    const initial = buildNormalWallPlan(
+      input({
+        rulesFamily: "mcr",
+        flowerTiles: [[], [], [], []],
+        wallRemaining: 91,
+        doraIndicators: [],
+      })
+    );
+    const afterHeadAndTailDraw = buildNormalWallPlan(
+      input({
+        rulesFamily: "mcr",
+        flowerTiles: [[], [], [], []],
+        wallRemaining: 89,
+        drawsTaken: 2,
+        liveDrawsTaken: 1,
+        doraIndicators: [],
+      })
+    );
+
+    expect(initial.tiles).toHaveLength(91);
+    expect(initial.tiles.every((tile) => tile.kind === "live")).toBe(true);
+    expect(afterHeadAndTailDraw.tiles).toHaveLength(89);
+  });
+
   it("shows the 70-tile live wall and 14-tile dead wall after dealing", () => {
     const plan = buildNormalWallPlan(input());
 
@@ -69,11 +94,11 @@ describe("buildNormalWallPlan", () => {
 
     expect(after.tiles.filter((tile) => tile.kind === "live")).toHaveLength(69);
     expect(
-      after.tiles.some(
-        (tile) => tile.kind === "live" && tile.sourceIndex === 0
-      )
+      after.tiles.some((tile) => tile.kind === "live" && tile.sourceIndex === 0)
     ).toBe(false);
-    for (const tile of after.tiles.filter((candidate) => candidate.kind === "live")) {
+    for (const tile of after.tiles.filter(
+      (candidate) => candidate.kind === "live"
+    )) {
       expect(tile).toMatchObject({
         x: beforeBySource.get(tile.sourceIndex)?.x,
         y: beforeBySource.get(tile.sourceIndex)?.y,
@@ -132,9 +157,7 @@ describe("buildNormalWallPlan", () => {
   });
 
   it("can render the complete undealt 136-tile wall", () => {
-    const plan = buildNormalWallPlan(
-      input({}, { showUndealtWall: true })
-    );
+    const plan = buildNormalWallPlan(input({}, { showUndealtWall: true }));
 
     expect(plan.tiles).toHaveLength(136);
   });

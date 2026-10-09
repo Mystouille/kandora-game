@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="150" viewBox="0 0 800 150">
+  <rect width="800" height="150" fill="#d7d0bd"/>
+  <g font-family="Arial, sans-serif" text-anchor="middle">
+    <g transform="translate(0 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <path d="M50 28 C28 42 31 69 50 78 C69 69 72 42 50 28Z" fill="#78b85a"/>
+      <text x="50" y="112" font-size="18" font-weight="700" fill="#275d2b">SPRING</text>
+    </g>
+    <g transform="translate(100 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <circle cx="50" cy="53" r="23" fill="#e6b84c"/>
+      <text x="50" y="112" font-size="18" font-weight="700" fill="#8d5b16">SUMMER</text>
+    </g>
+    <g transform="translate(200 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <path d="M50 25 L69 51 L58 82 L42 82 L31 51Z" fill="#db7e35"/>
+      <text x="50" y="112" font-size="18" font-weight="700" fill="#8e3d20">AUTUMN</text>
+    </g>
+    <g transform="translate(300 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <path d="M50 25 V82 M27 38 L73 69 M73 38 L27 69" stroke="#4a91c2" stroke-width="8" stroke-linecap="round"/>
+      <text x="50" y="112" font-size="18" font-weight="700" fill="#285b87">WINTER</text>
+    </g>
+    <g transform="translate(400 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <circle cx="50" cy="53" r="25" fill="#d95775"/>
+      <circle cx="50" cy="53" r="9" fill="#f5c6cf"/>
+      <text x="50" y="112" font-size="18" font-weight="700" fill="#8b2445">PLUM</text>
+    </g>
+    <g transform="translate(500 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <path d="M50 23 C21 42 27 76 50 86 C73 76 79 42 50 23Z" fill="#9c6bc4"/>
+      <text x="50" y="112" font-size="18" font-weight="700" fill="#5f2c86">ORCHID</text>
+    </g>
+    <g transform="translate(600 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <path d="M38 22 V87 M62 22 V87 M34 45 H66 M34 66 H66" stroke="#32925a" stroke-width="8" stroke-linecap="round"/>
+      <text x="50" y="112" font-size="18" font-weight="700" fill="#1d653f">BAMBOO</text>
+    </g>
+    <g transform="translate(700 0)">
+      <rect x="3" y="3" width="94" height="144" rx="8" fill="#fffdf3" stroke="#8b8068" stroke-width="3"/>
+      <g fill="#d99d2b">
+        <circle cx="50" cy="52" r="12"/>
+        <circle cx="50" cy="30" r="10"/>
+        <circle cx="50" cy="74" r="10"/>
+        <circle cx="28" cy="52" r="10"/>
+        <circle cx="72" cy="52" r="10"/>
+      </g>
+      <text x="50" y="112" font-size="13" font-weight="700" fill="#885e16">CHRYSANTHEMUM</text>
+    </g>
+  </g>
+</svg>

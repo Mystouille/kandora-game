@@ -8,7 +8,7 @@ export type ReplayViewWaits = SeatValues<Tile[]>;
 
 /** Compute canonical wait tiles for every fully-known, post-discard hand. */
 export function waitsForReplayView(
-  view: Pick<ReplayView, "hands" | "melds" | "playerCount">
+  view: Pick<ReplayView, "hands" | "melds" | "playerCount" | "rulesFamily">
 ): ReplayViewWaits {
   const result = seatValues(view.playerCount ?? 4, () => [] as Tile[]);
   for (let seat = 0; seat < result.length; seat++) {
@@ -25,6 +25,7 @@ export function waitsForReplayView(
     }
     result[seat] = waitsForRules(hand as Tile[], meldCount, {
       playerCount: view.playerCount ?? 4,
+      rulesFamily: view.rulesFamily,
     });
   }
   return result;

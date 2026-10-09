@@ -395,6 +395,7 @@ describe("native sanma live and replay state", () => {
     });
     expect(replayReducer(native, -1).scores).toHaveLength(3);
     expect(replayVariant(native)).toEqual({
+      rulesFamily: "riichi",
       playerCount: 3,
       sanmaType: "kansai",
     });

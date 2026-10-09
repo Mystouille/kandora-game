@@ -125,8 +125,13 @@ describe("rule-set presets", () => {
       expect([1, 2, 4]).toContain(p.roundWindCount);
       expect(Number.isInteger(p.roundLimit)).toBe(true);
       expect(Number.isInteger(p.startingScore)).toBe(true);
-      expect(p.kuikae).toBe("full");
-      expect(p.unclaimedRiichiDeposits).toBe("highest_score_player");
+      if (p.rulesFamily === "mcr") {
+        expect(p.kuikae).toBe("allowed");
+        expect(p.unclaimedRiichiDeposits).toBe("left_outside_table_score");
+      } else {
+        expect(p.kuikae).toBe("full");
+        expect(p.unclaimedRiichiDeposits).toBe("highest_score_player");
+      }
       expect([2, 4]).toContain(p.doubleWindPairFu);
       for (const key of [
         "nbRedFiveManzu",

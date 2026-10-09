@@ -8,6 +8,27 @@ import {
 } from "~/game/rules";
 import type { MatchDriver } from "../match-drivers/matchDriver";
 
+function canSupplySelfReplacement(
+  state: MatchState,
+  driver: MatchDriver,
+  seat: Seat
+): boolean {
+  if (!driver.canSupplyReplacement(seat)) {
+    return false;
+  }
+  if (state.ruleSet.rulesFamily !== "mcr") {
+    return true;
+  }
+  const directive = driver.peekDraw(seat);
+  if (directive.kind === "standard") {
+    return state.liveWall.some((tile) => !tile.endsWith("f"));
+  }
+  if (directive.kind !== "tile" || !directive.tile.endsWith("f")) {
+    return directive.kind === "tile";
+  }
+  return false;
+}
+
 export function buildDiscardLegals(
   state: MatchState,
   driver: MatchDriver,
@@ -85,7 +106,7 @@ export function buildDiscardLegals(
   // rules, < 4 wall, open hand, hand not tenpai after discard,
   // etc.), so a non-zero event
   // count is sufficient to surface the option.
-  if (!state.riichiDeclared[seat]) {
+  if (state.ruleSet.rulesFamily === "riichi" && !state.riichiDeclared[seat]) {
     const discardChoices = out.filter(
       (action) => action.type === "discard" && action.tile
     );
@@ -156,7 +177,7 @@ export function buildSelfKanLegals(
   if (state.liveWall.length === 0) {
     return out;
   }
-  if (!driver.canSupplyReplacement(seat)) {
+  if (!canSupplySelfReplacement(state, driver, seat)) {
     return out;
   }
   if (state.lastDrawn[seat] === null) {

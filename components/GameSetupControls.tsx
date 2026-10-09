@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { GameSetupSchema, type GameSetup } from "../rules/gameSetup";
 import {
   DUPLICATE_GENERATION_VERSION,
@@ -5,8 +6,19 @@ import {
 } from "../protocol/matchMode";
 import { SanmaTypeSchema, type PlayerCount } from "../protocol/seat";
 import type { SpectatorDelayMs } from "../protocol/spectatorDelay";
+import "./GameSetupControls.css";
+
+export interface GameSetupPreset {
+  id: string;
+  rulesFamily?: GameSetup["rulesFamily"];
+  displayName: string;
+  description?: string;
+}
+
+export const DEFAULT_GAME_SETUP_PRESET_ID = "m-league";
 
 export interface GameSetupSelection {
+  rulesFamily: GameSetup["rulesFamily"];
   playerCount: PlayerCount;
   sanmaType: GameSetup["sanmaType"];
   duplicateEnabled: boolean;
@@ -14,6 +26,7 @@ export interface GameSetupSelection {
 }
 
 export const initialGameSetupSelection: GameSetupSelection = {
+  rulesFamily: "riichi",
   playerCount: 4,
   sanmaType: "online",
   duplicateEnabled: false,
@@ -22,8 +35,12 @@ export const initialGameSetupSelection: GameSetupSelection = {
 
 export function setupPresetId(
   preset: string,
-  playerCount: PlayerCount
+  playerCount: PlayerCount,
+  rulesFamily: GameSetup["rulesFamily"] = "riichi"
 ): string {
+  if (rulesFamily === "mcr") {
+    return "mcr-ema";
+  }
   return playerCount === 3 ? "m-league" : preset;
 }
 
@@ -33,9 +50,10 @@ export function buildGameSetup(
   spectatorDelayMs: SpectatorDelayMs = 0
 ): GameSetup {
   const parsed = GameSetupSchema.safeParse({
-    preset: setupPresetId(preset, selection.playerCount),
-    playerCount: selection.playerCount,
-    sanmaType: selection.sanmaType,
+    preset: setupPresetId(preset, selection.playerCount, selection.rulesFamily),
+    rulesFamily: selection.rulesFamily,
+    playerCount: selection.rulesFamily === "mcr" ? 4 : selection.playerCount,
+    sanmaType: selection.rulesFamily === "mcr" ? "online" : selection.sanmaType,
     mode: selection.duplicateEnabled
       ? {
           type: "duplicate",
@@ -56,8 +74,11 @@ export function buildGameSetup(
 }
 
 export function gameVariantLabel(
-  variant: Partial<Pick<GameSetup, "playerCount" | "sanmaType">>
+  variant: Partial<Pick<GameSetup, "rulesFamily" | "playerCount" | "sanmaType">>
 ): string | null {
+  if (variant.rulesFamily === "mcr") {
+    return "MCR · EMA Green Book";
+  }
   if (variant.playerCount !== 3) {
     return null;
   }
@@ -67,41 +88,159 @@ export function gameVariantLabel(
 export function GameSetupControls({
   value,
   onChange,
+  presets,
+  preset,
+  onPresetChange,
   disabled = false,
   mobile = false,
 }: {
   value: GameSetupSelection;
   onChange: (value: GameSetupSelection) => void;
+  presets: readonly GameSetupPreset[];
+  /** Retained Yonma selection, even while Sanma or MCR is active. */
+  preset: string;
+  onPresetChange: (preset: string) => void;
   disabled?: boolean;
   mobile?: boolean;
 }) {
-  const fieldClass = mobile
-    ? "mobile-spectator-delay"
-    : "block text-sm font-medium text-gray-700 dark:text-gray-200";
-  const inputClass = mobile
-    ? undefined
-    : "mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100";
+  const controlId = useId();
+  const yonmaPresets = presets.filter(
+    (entry) => (entry.rulesFamily ?? "riichi") === "riichi"
+  );
+  const selectedPreset = yonmaPresets.find((entry) => entry.id === preset);
 
   return (
     <fieldset
       aria-label="Game setup"
       disabled={disabled}
-      style={{ display: "grid", gap: 12, border: 0, padding: 0, margin: 0 }}
+      className={`game-setup-controls${mobile ? " game-setup-controls--mobile" : ""}`}
     >
-      <div className={mobile ? "rule-options" : "grid gap-3"}>
-        <label className={mobile ? undefined : "flex items-center gap-3"}>
-          <input
-            type="checkbox"
-            role="switch"
-            checked={value.playerCount === 3}
-            onChange={(event) => {
-              onChange({ ...value, playerCount: event.target.checked ? 3 : 4 });
-            }}
-            className="h-5 w-5 accent-emerald-600"
-          />
-          <span>3-player</span>
-        </label>
-        <label className={mobile ? undefined : "flex items-center gap-3"}>
+      <fieldset
+        className="game-setup-controls__section"
+        aria-label="Mahjong rules"
+      >
+        <legend>Mahjong rules</legend>
+        <div className="game-setup-controls__segments">
+          {(["riichi", "mcr"] as const).map((rulesFamily) => (
+            <label className="game-setup-controls__option" key={rulesFamily}>
+              <input
+                type="radio"
+                name={`${controlId}-rules-family`}
+                value={rulesFamily}
+                checked={value.rulesFamily === rulesFamily}
+                onChange={() => {
+                  onChange({
+                    ...value,
+                    rulesFamily,
+                    ...(rulesFamily === "mcr"
+                      ? {
+                          playerCount: 4 as const,
+                          sanmaType: "online" as const,
+                        }
+                      : {}),
+                  });
+                }}
+              />
+              <span>{rulesFamily === "riichi" ? "Riichi" : "MCR"}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      {value.rulesFamily === "riichi" ? (
+        <>
+          <fieldset
+            className="game-setup-controls__section"
+            aria-label="Players"
+          >
+            <legend>Players</legend>
+            <div className="game-setup-controls__segments">
+              {([4, 3] as const).map((playerCount) => (
+                <label
+                  className="game-setup-controls__option"
+                  key={playerCount}
+                >
+                  <input
+                    type="radio"
+                    name={`${controlId}-players`}
+                    value={playerCount}
+                    checked={value.playerCount === playerCount}
+                    onChange={() => {
+                      onChange({ ...value, playerCount });
+                    }}
+                  />
+                  <span>
+                    {playerCount === 4
+                      ? "Yonma (4 players)"
+                      : "Sanma (3 players)"}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {value.playerCount === 4 ? (
+            <label className="game-setup-controls__field">
+              <span>Game type</span>
+              <select
+                name="preset"
+                aria-label="Game type"
+                aria-describedby={
+                  selectedPreset?.description
+                    ? `${controlId}-preset-description`
+                    : undefined
+                }
+                value={preset}
+                onChange={(event) => {
+                  onPresetChange(event.target.value);
+                }}
+              >
+                {yonmaPresets.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.displayName}
+                  </option>
+                ))}
+              </select>
+              {selectedPreset?.description && (
+                <span
+                  id={`${controlId}-preset-description`}
+                  className="game-setup-controls__hint"
+                >
+                  {selectedPreset.description}
+                </span>
+              )}
+            </label>
+          ) : (
+            <label className="game-setup-controls__field">
+              <span>Sanma game type</span>
+              <select
+                name="sanmaType"
+                aria-label="Sanma game type"
+                aria-describedby={`${controlId}-sanma-description`}
+                value={value.sanmaType}
+                onChange={(event) => {
+                  onChange({
+                    ...value,
+                    sanmaType: SanmaTypeSchema.parse(event.target.value),
+                  });
+                }}
+              >
+                <option value="online">Online</option>
+                <option value="kansai">Kansai</option>
+              </select>
+              <span
+                id={`${controlId}-sanma-description`}
+                className="game-setup-controls__hint"
+              >
+                Sanma uses a fixed M-League base (no head-bump).
+              </span>
+            </label>
+          )}
+        </>
+      ) : (
+        <p className="game-setup-controls__hint">EMA Green Book · 4 players</p>
+      )}
+      <fieldset className="game-setup-controls__section game-setup-controls__duplicate">
+        <legend>Duplicate</legend>
+        <label className="game-setup-controls__switch">
           <input
             type="checkbox"
             role="switch"
@@ -109,49 +248,27 @@ export function GameSetupControls({
             onChange={(event) => {
               onChange({ ...value, duplicateEnabled: event.target.checked });
             }}
-            className="h-5 w-5 accent-emerald-600"
           />
           <span>Duplicate mode</span>
         </label>
-      </div>
-      {value.playerCount === 3 && (
-        <label className={fieldClass}>
-          <span>Sanma rules · fixed M-League base (no head-bump)</span>
-          <select
-            name="sanmaType"
-            aria-label="Sanma rules"
-            value={value.sanmaType}
-            className={inputClass}
-            onChange={(event) => {
-              onChange({
-                ...value,
-                sanmaType: SanmaTypeSchema.parse(event.target.value),
-              });
-            }}
-          >
-            <option value="online">Online</option>
-            <option value="kansai">Kansai</option>
-          </select>
-        </label>
-      )}
-      {value.duplicateEnabled && (
-        <label className={mobile ? "nearby-name-field" : fieldClass}>
-          <span>Duplicate seed</span>
-          <input
-            type="text"
-            name="duplicateSeed"
-            value={value.duplicateSeed}
-            onChange={(event) => {
-              onChange({ ...value, duplicateSeed: event.target.value });
-            }}
-            required
-            maxLength={128}
-            autoComplete="off"
-            placeholder="Enter seed"
-            className={inputClass}
-          />
-        </label>
-      )}
+        {value.duplicateEnabled && (
+          <label className="game-setup-controls__field">
+            <span>Duplicate seed</span>
+            <input
+              type="text"
+              name="duplicateSeed"
+              value={value.duplicateSeed}
+              onChange={(event) => {
+                onChange({ ...value, duplicateSeed: event.target.value });
+              }}
+              required
+              maxLength={128}
+              autoComplete="off"
+              placeholder="Enter seed"
+            />
+          </label>
+        )}
+      </fieldset>
     </fieldset>
   );
 }

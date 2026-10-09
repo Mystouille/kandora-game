@@ -91,4 +91,29 @@ describe("generateDuplicateHandPlan", () => {
     expect(otherSeed.deal).not.toEqual(first.deal);
     expect(otherRound.deal).not.toEqual(first.deal);
   });
+
+  it("generates deterministic MCR queues after the dealer's opening discard", () => {
+    const mcrMode: DuplicateMatchModeConfig = {
+      type: "duplicate",
+      seed: "MCR-Board",
+      generationVersion: 2,
+    };
+    const mcrKey = { ...key, dealer: 2 as const };
+    const options = { rulesFamily: "mcr" as const };
+    const plan = generateDuplicateHandPlan(mcrMode, "mcr-ema", mcrKey, options);
+
+    expect(plan).toEqual(
+      generateDuplicateHandPlan(mcrMode, "mcr-ema", mcrKey, options)
+    );
+    expect(plan.deal.hands.map((hand) => hand.length)).toEqual([
+      13, 13, 14, 13,
+    ]);
+    expect(plan.deal.deadWall).toEqual([]);
+    expect(plan.drawQueues[3][0]).toBe(plan.deal.liveWall[0]);
+    expect(
+      plan.deal.hands.flat().length +
+        plan.drawQueues.flat().length +
+        (plan.deal.flowerTiles?.flat().length ?? 0)
+    ).toBe(144);
+  });
 });

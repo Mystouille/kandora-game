@@ -51,6 +51,8 @@ import {
   type MatchEndReason,
 } from "./matchEnd";
 import { scoreHand, type ScoreResult } from "./score";
+import { settleMcrWin, type McrScoreResult } from "./scoring/mcr";
+import { isQualifiedMcrScore, scoreMcrForState } from "./mcr/scoringContext";
 import { isWinningShape } from "./shanten";
 import { isAnkanLegalDuringRiichi } from "./riichiKan";
 import { type Seat, type Tile, type Wind } from "./types";
@@ -71,7 +73,7 @@ export type EngineEvent =
        * replacement comes from a personal queue; scoring follows the cause. */
       fromDeadWall?: boolean;
       /** Replacement cause is independent of Duplicate's physical tile source. */
-      replacementKind?: "kan" | "nuki";
+      replacementKind?: "kan" | "nuki" | "flower";
       /** Opening-hand normalization restores thirteen tiles, not a playable turn. */
       opening?: boolean;
     }
@@ -80,6 +82,11 @@ export type EngineEvent =
       seat: Seat;
       tile: Tile;
       stage: "declared" | "completed";
+    }
+  | {
+      type: "flower";
+      seat: Seat;
+      tile: Tile;
     }
   | {
       type: "discard";
@@ -94,7 +101,10 @@ export type EngineEvent =
       winner: Seat;
       loser: Seat | null;
       winTile: Tile;
+      /** Riichi-compatible display envelope retained for existing consumers. */
       score: ScoreResult;
+      /** Authoritative MCR breakdown when the active family is MCR. */
+      mcrScore?: McrScoreResult;
       delta: SeatValues<number>;
     }
   | {
@@ -241,6 +251,21 @@ function drawRinshan(
 ):
   | { tile: Tile; fixedDeadWall: boolean; indicators?: SanmaIndicatorPair }
   | undefined {
+  if (next.ruleSet.rulesFamily === "mcr") {
+    if (replacementTile !== undefined) {
+      const replacementIndex = next.liveWall.lastIndexOf(replacementTile);
+      if (replacementIndex < 0) {
+        return undefined;
+      }
+
+      next.liveWall.splice(replacementIndex, 1);
+      return { tile: replacementTile, fixedDeadWall: true };
+    }
+    const replacement = next.liveWall.pop();
+    return replacement === undefined
+      ? undefined
+      : { tile: replacement, fixedDeadWall: false };
+  }
   if (next.ruleSet.playerCount === 3) {
     if (next.sanmaWall?.sanmaType !== next.ruleSet.sanmaType) {
       return undefined;
@@ -272,6 +297,19 @@ function drawRinshan(
   }
   next.deadWall.push(reserved);
   return { tile: rinshan, fixedDeadWall: false };
+}
+
+function finishReplacementDraw(next: MatchState, seat: Seat, tile: Tile): void {
+  next.lastDrawFromDeadWall = true;
+  next.lastDrawFromKong = true;
+  if (next.ruleSet.rulesFamily === "mcr" && tile.endsWith("f")) {
+    next.pendingFlower = { seat, tile };
+    next.lastDrawn[seat] = null;
+    next.phase = "awaiting_flower_replacement";
+    return;
+  }
+  next.lastDrawn[seat] = tile;
+  next.phase = "awaiting_discard";
 }
 
 /**
@@ -370,6 +408,7 @@ function clone(state: MatchState): MatchState {
     hands: state.hands.map((h) => [...h]),
     discards: state.discards.map((d) => [...d]),
     nukiTiles: state.nukiTiles.map((tiles) => [...tiles]),
+    flowerTiles: state.flowerTiles.map((tiles) => [...tiles]),
     liveWall: [...state.liveWall],
     deadWall: [...state.deadWall],
     ...(state.sanmaWall ? { sanmaWall: { ...state.sanmaWall } } : {}),
@@ -377,6 +416,7 @@ function clone(state: MatchState): MatchState {
     turn: state.turn,
     lastDrawn: [...state.lastDrawn],
     lastDrawFromDeadWall: state.lastDrawFromDeadWall,
+    lastDrawFromKong: state.lastDrawFromKong ?? false,
     lastDiscard: state.lastDiscard ? { ...state.lastDiscard } : null,
     phase: state.phase,
     dealer: state.dealer,
@@ -397,6 +437,7 @@ function clone(state: MatchState): MatchState {
       ? { ...state.pendingShouminkan }
       : null,
     pendingNuki: state.pendingNuki ? { ...state.pendingNuki } : null,
+    pendingFlower: state.pendingFlower ? { ...state.pendingFlower } : null,
     pendingRyuukyoku: state.pendingRyuukyoku
       ? {
           actualTenpai: [
@@ -555,6 +596,9 @@ function detectPao(next: MatchState, caller: Seat, feeder: Seat): void {
  * Returns `true` if ron should be rejected.
  */
 export function isFuritenForRon(state: MatchState, seat: Seat): boolean {
+  if (state.ruleSet.rulesFamily === "mcr") {
+    return false;
+  }
   if (state.furitenLocked[seat] || state.furitenTemp[seat]) {
     return true;
   }
@@ -628,6 +672,9 @@ function lockMissedRonFuriten(
   discarder: Seat,
   chankan = false
 ): void {
+  if (next.ruleSet.rulesFamily === "mcr") {
+    return;
+  }
   for (let s = 0; s < next.ruleSet.playerCount; s++) {
     if (s === discarder) {
       continue;
@@ -970,6 +1017,72 @@ function applyBuuWinSideEffects(
  * hand is already 13 tiles).
  */
 function applyWin(
+  next: MatchState,
+  winner: Seat,
+  loser: Seat | null,
+  winTile: Tile,
+  score: ScoreResult | McrScoreResult
+): EngineEvent[] {
+  if ("isWinningShape" in score) {
+    if (!isQualifiedMcrScore(score)) {
+      return [];
+    }
+    const settled = settleMcrWin({
+      method: loser === null ? "self-draw" : "discard",
+      winner,
+      ...(loser === null ? {} : { discarder: loser }),
+      totalFan: score.totalFan,
+      nonFlowerFan: score.nonFlowerFan,
+    });
+    const delta = [...settled] as SeatValues<number>;
+    applyDelta(next.scores, delta);
+    const result: HandResult = {
+      reason: loser === null ? "tsumo" : "ron",
+      winner,
+      loser,
+      delta,
+      tenpai: null,
+      abortKind: null,
+      winHan: score.totalFan,
+      winYakuman: false,
+    };
+    next.lastHandResult = result;
+    next.phase = "hand_ended";
+    const legacyScore: ScoreResult = {
+      isAgari: true,
+      han: score.totalFan,
+      fu: 0,
+      ten: delta[winner],
+      yaku: Object.fromEntries(
+        score.fans.map((fan) => [fan.englishName, `${fan.awardedPoints} pts`])
+      ),
+      doraCount: 0,
+      akaDoraCount: 0,
+      uraDoraCount: 0,
+      isYakuman: false,
+      yakumanCount: 0,
+      oya: [],
+      ko: [],
+      text: `${score.totalFan} points`,
+      raw: score,
+    };
+    return [
+      {
+        type: "win",
+        winner,
+        loser,
+        winTile,
+        score: legacyScore,
+        mcrScore: score,
+        delta,
+      },
+      { type: "hand_end", reason: result.reason, delta },
+    ];
+  }
+  return applyRiichiWin(next, winner, loser, winTile, score);
+}
+
+function applyRiichiWin(
   next: MatchState,
   winner: Seat,
   loser: Seat | null,
@@ -1436,6 +1549,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
   ) {
     return noop(state);
   }
+  if (
+    state.phase === "awaiting_flower_replacement" &&
+    action.type !== "complete_flower"
+  ) {
+    return noop(state);
+  }
   const mandatoryNuki =
     state.ruleSet.playerCount === 3 && state.ruleSet.sanmaType === "kansai";
   if (
@@ -1512,6 +1631,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     );
     next.lastDrawn[action.seat] = null;
     next.lastDrawFromDeadWall = false;
+    next.lastDrawFromKong = false;
     closeDiscardWindow(next);
     next.pendingNuki = {
       seat: action.seat,
@@ -1569,6 +1689,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       next.pendingNuki = null;
       next.lastDrawn[pending.seat] = null;
       next.lastDrawFromDeadWall = false;
+      next.lastDrawFromKong = false;
       return beginRyuukyoku(next);
     }
     const replacement = drawRinshan(next, action.replacementTile, "nuki");
@@ -1590,6 +1711,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.hands[pending.seat].push(replacement.tile);
     next.lastDrawn[pending.seat] = pending.opening ? null : replacement.tile;
     next.lastDrawFromDeadWall = !pending.opening;
+    next.lastDrawFromKong = false;
     next.phase = pending.opening ? "awaiting_draw" : "awaiting_discard";
     events.push({
       type: "draw",
@@ -1600,6 +1722,87 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       replacementKind: "nuki",
       ...(pending.opening ? { opening: true } : {}),
     });
+    return { state: next, events };
+  }
+
+  if (action.type === "complete_flower") {
+    const pending = state.pendingFlower;
+    if (
+      state.ruleSet.rulesFamily !== "mcr" ||
+      state.phase !== "awaiting_flower_replacement" ||
+      pending === null ||
+      state.turn !== pending.seat
+    ) {
+      return noop(state);
+    }
+    const next = clone(state);
+    const hand = next.hands[pending.seat];
+    const flowerIndex = hand.lastIndexOf(pending.tile);
+    if (flowerIndex < 0) {
+      return noop(state);
+    }
+    hand.splice(flowerIndex, 1);
+    next.pendingFlower = null;
+
+    if (action.forceExhaustive === true) {
+      next.discards[pending.seat].push(pending.tile);
+      next.lastDrawn[pending.seat] = null;
+      next.lastDrawFromDeadWall = false;
+      next.lastDrawFromKong = false;
+      const settled = beginRyuukyoku(next);
+      return {
+        state: settled.state,
+        events: [
+          {
+            type: "discard",
+            seat: pending.seat,
+            tile: pending.tile,
+            tsumogiri: true,
+            discardSource: "draw",
+          },
+          ...settled.events,
+        ],
+      };
+    }
+
+    let replacement: Tile | undefined;
+    if (action.replacementTile !== undefined) {
+      const replacementIndex = next.liveWall.lastIndexOf(
+        action.replacementTile
+      );
+      if (replacementIndex < 0) {
+        return noop(state);
+      }
+      [replacement] = next.liveWall.splice(replacementIndex, 1);
+    } else {
+      replacement = next.liveWall.pop();
+    }
+    if (replacement === undefined) {
+      return noop(state);
+    }
+
+    next.flowerTiles[pending.seat].push(pending.tile);
+    next.hands[pending.seat].push(replacement);
+    next.lastDrawFromDeadWall = true;
+    const events: EngineEvent[] = [
+      { type: "flower", seat: pending.seat, tile: pending.tile },
+      {
+        type: "draw",
+        seat: pending.seat,
+        tile: replacement,
+        wallRemaining: next.liveWall.length,
+        fromDeadWall: false,
+        replacementKind: "flower",
+      },
+    ];
+    if (replacement.endsWith("f")) {
+      next.pendingFlower = { seat: pending.seat, tile: replacement };
+      next.lastDrawn[pending.seat] = null;
+      next.phase = "awaiting_flower_replacement";
+    } else {
+      next.lastDrawn[pending.seat] = replacement;
+      next.phase = "awaiting_discard";
+    }
     return { state: next, events };
   }
 
@@ -1643,10 +1846,19 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       tile = next.liveWall.shift() as Tile;
     }
     next.hands[next.turn].push(tile);
-    next.lastDrawn[next.turn] = tile;
-    next.lastDrawFromDeadWall = false;
     closeDiscardWindow(next);
-    next.phase = "awaiting_discard";
+    if (next.ruleSet.rulesFamily === "mcr" && tile.endsWith("f")) {
+      next.pendingFlower = { seat: next.turn, tile };
+      next.lastDrawn[next.turn] = null;
+      next.lastDrawFromDeadWall = false;
+      next.lastDrawFromKong = false;
+      next.phase = "awaiting_flower_replacement";
+    } else {
+      next.lastDrawn[next.turn] = tile;
+      next.lastDrawFromDeadWall = false;
+      next.lastDrawFromKong = false;
+      next.phase = "awaiting_discard";
+    }
     return {
       state: next,
       events: [
@@ -1746,6 +1958,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
 
   // ----- Riichi ----------------------------------------------------------
   if (action.type === "riichi") {
+    if (state.ruleSet.rulesFamily !== "riichi") {
+      return noop(state);
+    }
     if (state.phase !== "awaiting_discard" || action.seat !== state.turn) {
       return noop(state);
     }
@@ -1852,6 +2067,17 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (winTile === null) {
       return noop(state);
     }
+    if (state.ruleSet.rulesFamily === "mcr") {
+      const score = scoreMcrForState(state, action.seat, winTile, "self-draw", {
+        replacementTile: state.lastDrawFromKong,
+      });
+      if (!isQualifiedMcrScore(score)) {
+        return noop(state);
+      }
+      const next = clone(state);
+      const events = applyWin(next, action.seat, null, winTile, score);
+      return { state: next, events };
+    }
     // Build 13-tile concealed hand by removing the winning tile.
     const fullHand = state.hands[action.seat];
     const winIdx = fullHand.lastIndexOf(winTile);
@@ -1941,6 +2167,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     if (winners.length === 0 || winners.length >= state.ruleSet.playerCount) {
       return noop(state);
     }
+    if (state.ruleSet.rulesFamily === "mcr" && winners.length !== 1) {
+      return noop(state);
+    }
     // Reject any winner who is in furiten. (Chankan rons are exempt
     // from self-discard furiten in some rulesets, but the
     // permanent / missed-ron lock still applies. We apply both
@@ -1956,6 +2185,18 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       if (isFuritenForRon(state, w)) {
         return noop(state);
       }
+    }
+    if (state.ruleSet.rulesFamily === "mcr") {
+      const winner = winners[0];
+      const score = scoreMcrForState(state, winner, winTile, "discard", {
+        robbingPromotedKong: isChankan,
+      });
+      if (!isQualifiedMcrScore(score)) {
+        return noop(state);
+      }
+      const next = clone(state);
+      const events = applyWin(next, winner, discarder, winTile, score);
+      return { state: next, events };
     }
     // Score each winner; bail if any of them is not a valid agari.
     const scores: ScoreResult[] = [];
@@ -2160,7 +2401,12 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       if (!canTakeSanmaReplacement(state, "kan", availabilityTile)) {
         return noop(state);
       }
-    } else if (state.liveWall.length === 0) {
+    } else if (
+      state.liveWall.length === 0 ||
+      (state.ruleSet.rulesFamily === "mcr" &&
+        action.replacementTile === undefined &&
+        state.liveWall.every((tile) => tile.endsWith("f")))
+    ) {
       return noop(state);
     }
     if (action.kind === "shouminkan") {
@@ -2300,8 +2546,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         return noop(state);
       }
       next.hands[action.seat].push(rinshan.tile);
-      next.lastDrawn[action.seat] = rinshan.tile;
-      next.lastDrawFromDeadWall = true;
+      finishReplacementDraw(next, action.seat, rinshan.tile);
       const events: EngineEvent[] = [
         { type: "call", seat: action.seat, meld },
         {
@@ -2310,8 +2555,10 @@ function stepInternal(state: MatchState, action: Action): StepResult {
           tile: rinshan.tile,
           wallRemaining: next.liveWall.length,
           fromDeadWall:
-            state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall,
-          ...(state.ruleSet.playerCount === 3
+            state.ruleSet.rulesFamily === "riichi" &&
+            (state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall),
+          ...(state.ruleSet.playerCount === 3 ||
+          state.ruleSet.rulesFamily === "mcr"
             ? { replacementKind: "kan" as const }
             : {}),
         },
@@ -2329,7 +2576,6 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         rinshan.indicators
       );
       next.turn = action.seat;
-      next.phase = "awaiting_discard";
       return { state: next, events };
     }
     // Ankan
@@ -2400,8 +2646,7 @@ function stepInternal(state: MatchState, action: Action): StepResult {
       return noop(state);
     }
     next.hands[action.seat].push(rinshan.tile);
-    next.lastDrawn[action.seat] = rinshan.tile;
-    next.lastDrawFromDeadWall = true;
+    finishReplacementDraw(next, action.seat, rinshan.tile);
     const events: EngineEvent[] = [
       { type: "call", seat: action.seat, meld },
       {
@@ -2409,8 +2654,11 @@ function stepInternal(state: MatchState, action: Action): StepResult {
         seat: action.seat,
         tile: rinshan.tile,
         wallRemaining: next.liveWall.length,
-        fromDeadWall: state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall,
-        ...(state.ruleSet.playerCount === 3
+        fromDeadWall:
+          state.ruleSet.rulesFamily === "riichi" &&
+          (state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall),
+        ...(state.ruleSet.playerCount === 3 ||
+        state.ruleSet.rulesFamily === "mcr"
           ? { replacementKind: "kan" as const }
           : {}),
       },
@@ -2498,18 +2746,19 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     lockMissedRonFuriten(next, state.pendingShouminkan.tile, declarer, true);
     next.hands[declarer].push(rinshan.tile);
-    next.lastDrawn[declarer] = rinshan.tile;
-    next.lastDrawFromDeadWall = true;
+    finishReplacementDraw(next, declarer, rinshan.tile);
     next.pendingShouminkan = null;
-    next.phase = "awaiting_discard";
     const events: EngineEvent[] = [
       {
         type: "draw",
         seat: declarer,
         tile: rinshan.tile,
         wallRemaining: next.liveWall.length,
-        fromDeadWall: state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall,
-        ...(state.ruleSet.playerCount === 3
+        fromDeadWall:
+          state.ruleSet.rulesFamily === "riichi" &&
+          (state.ruleSet.playerCount === 4 || !rinshan.fixedDeadWall),
+        ...(state.ruleSet.playerCount === 3 ||
+        state.ruleSet.rulesFamily === "mcr"
           ? { replacementKind: "kan" as const }
           : {}),
       },
@@ -2540,15 +2789,17 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     let roundWind = state.roundWind;
     let honba = state.honba;
     const dealerKeeps =
-      (result.reason === "tsumo" || result.reason === "ron") &&
-      result.winner === state.dealer
-        ? true
-        : result.reason === "exhaustive_draw"
-          ? state.ruleSet.tenpaiRenchan &&
-            result.tenpai !== null &&
-            result.tenpai[state.dealer]
-          : // Abortive draws: dealer always keeps; honba advances.
-            result.reason === "abort";
+      state.ruleSet.rulesFamily === "mcr"
+        ? false
+        : (result.reason === "tsumo" || result.reason === "ron") &&
+            result.winner === state.dealer
+          ? true
+          : result.reason === "exhaustive_draw"
+            ? state.ruleSet.tenpaiRenchan &&
+              result.tenpai !== null &&
+              result.tenpai[state.dealer]
+            : // Abortive draws: dealer always keeps; honba advances.
+              result.reason === "abort";
     // Centralized end-of-match check. Covers tobi/agari-yame/
     // tenpai-yame/mangan-end (rule-flag driven) plus the
     // round-limit cutoff. See `matchEnd.ts` for the decision logic.
@@ -2592,7 +2843,17 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     // `honbaPayments: false` flag on the preset already prevents
     // any honba-derived score bonus.
     const isChombo = result.reason === "abort" && result.abortKind === null;
-    if (dealerKeeps && !isChombo) {
+    if (state.ruleSet.rulesFamily === "mcr") {
+      honba = 0;
+      dealer = ((state.dealer + 1) % state.ruleSet.playerCount) as Seat;
+      roundNumber += 1;
+      if (roundNumber > state.roundLimit) {
+        const currentWindIdx = WINDS.indexOf(state.roundWind);
+        roundWind = WINDS[currentWindIdx + 1];
+        roundNumber = 1;
+        dealer = 0;
+      }
+    } else if (dealerKeeps && !isChombo) {
       if (!state.ruleSet.buuMode) {
         honba += 1;
       }
@@ -2628,6 +2889,8 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     const dealt =
       action.deal ??
       dealMatch(handSeed, {
+        rulesFamily: state.ruleSet.rulesFamily,
+        dealer,
         playerCount: state.ruleSet.playerCount,
         sanmaType: state.ruleSet.sanmaType,
         duplicate: state.sanmaWall?.mode === "duplicate",
@@ -2659,6 +2922,9 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.hands = dealt.hands.map((h) => [...h]);
     next.discards = seatValues(state.ruleSet.playerCount, () => []);
     next.nukiTiles = seatValues(state.ruleSet.playerCount, () => []);
+    next.flowerTiles =
+      dealt.flowerTiles?.map((tiles) => [...tiles]) ??
+      seatValues(state.ruleSet.playerCount, () => []);
     next.liveWall = [...dealt.liveWall];
     next.deadWall = [...dealt.deadWall];
     if (state.ruleSet.playerCount === 3 && dealt.sanmaWall) {
@@ -2668,13 +2934,21 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     }
     next.doraIndicators = [...dealt.doraIndicators];
     next.uraDoraIndicators =
-      state.ruleSet.playerCount === 3
-        ? [openingPair!.ura]
-        : [dealt.deadWall[5]];
+      state.ruleSet.rulesFamily === "mcr"
+        ? []
+        : state.ruleSet.playerCount === 3
+          ? [openingPair!.ura]
+          : [dealt.deadWall[5]];
     next.pendingKanDora = [];
     next.pendingKanUraDora = [];
-    next.lastDrawn = seatValues(state.ruleSet.playerCount, () => null);
+    next.lastDrawn =
+      state.ruleSet.rulesFamily === "mcr"
+        ? seatValues<Tile | null>(state.ruleSet.playerCount, (seat) =>
+            seat === dealer ? (dealt.hands[dealer].at(-1) ?? null) : null
+          )
+        : seatValues(state.ruleSet.playerCount, () => null);
     next.lastDrawFromDeadWall = false;
+    next.lastDrawFromKong = false;
     next.lastDiscard = null;
     next.pendingRiichiSeat = null;
     next.dealer = dealer;
@@ -2687,9 +2961,13 @@ function stepInternal(state: MatchState, action: Action): StepResult {
     next.melds = seatValues(state.ruleSet.playerCount, () => []);
     next.pendingShouminkan = null;
     next.pendingNuki = null;
+    next.pendingFlower = null;
     next.pendingRyuukyoku = null;
     next.turn = dealer;
-    next.phase = "awaiting_draw";
+    next.phase =
+      state.ruleSet.rulesFamily === "mcr"
+        ? "awaiting_discard"
+        : "awaiting_draw";
     next.lastHandResult = null;
     next.furitenLocked = seatValues(state.ruleSet.playerCount, () => false);
     next.furitenTemp = seatValues(state.ruleSet.playerCount, () => false);

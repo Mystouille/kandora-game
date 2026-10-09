@@ -5,7 +5,7 @@ import { MatchKernel } from "./matchKernel";
 import type { TurnWorkflowPort } from "./workflowPorts";
 
 import { gameTiming } from "./timingPolicy";
-import { settleAutomaticNuki } from "./nukiFlow";
+import { settleAutomaticReplacements } from "./replacementFlow";
 
 export class TurnCoordinator {
   constructor(
@@ -15,7 +15,7 @@ export class TurnCoordinator {
   ) {}
 
   async resumeNuki(opening: boolean): Promise<void> {
-    await settleAutomaticNuki(
+    await settleAutomaticReplacements(
       this.kernel,
       (action) => this.port.applyEngineAction(action),
       opening
@@ -30,7 +30,7 @@ export class TurnCoordinator {
     ) {
       return;
     }
-    await settleAutomaticNuki(this.kernel, (action) =>
+    await settleAutomaticReplacements(this.kernel, (action) =>
       this.port.applyEngineAction(action)
     );
     if (this.kernel.currentState().phase === "awaiting_chankan") {
@@ -62,7 +62,7 @@ export class TurnCoordinator {
       await this.port.emitEngineEvent(e);
     }
     await this.port.emitFuritenChanges(drawRes.furitenChanges);
-    await settleAutomaticNuki(this.kernel, (action) =>
+    await settleAutomaticReplacements(this.kernel, (action) =>
       this.port.applyEngineAction(action)
     );
 
@@ -147,7 +147,7 @@ export class TurnCoordinator {
   }
 
   async continueDiscardTurn(): Promise<void> {
-    await settleAutomaticNuki(this.kernel, (action) =>
+    await settleAutomaticReplacements(this.kernel, (action) =>
       this.port.applyEngineAction(action)
     );
     if (
@@ -178,7 +178,10 @@ export class TurnCoordinator {
     }
 
     if (!this.kernel.hasForcedBotDiscard(seat)) {
-      if (this.kernel.currentState().ruleSet.playerCount === 3) {
+      if (
+        this.kernel.currentState().ruleSet.playerCount === 3 ||
+        this.kernel.currentState().ruleSet.rulesFamily === "mcr"
+      ) {
         if (this.kernel.canTsumo(seat)) {
           await this.port.waitForWinReaction("draw");
           await this.port.applyEngineAction({ type: "tsumo", seat });
@@ -239,7 +242,7 @@ export class TurnCoordinator {
   }
 
   async afterCall(): Promise<void> {
-    await settleAutomaticNuki(this.kernel, (action) =>
+    await settleAutomaticReplacements(this.kernel, (action) =>
       this.port.applyEngineAction(action)
     );
     if (

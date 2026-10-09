@@ -34,8 +34,12 @@ export interface GridAtlas {
   rows: number;
   /** Row index per suit letter, e.g. `{ m: 0, p: 1, s: 2, z: 3 }`. */
   suitRows: Record<string, number>;
+  /** Suits this supplemental atlas is expected to contain. */
+  supportedSuits?: readonly string[];
   /** Cell used for face-down / unknown tiles. */
   backCell: AtlasCell;
+  /** Added to the numeric tile rank when resolving its atlas column. */
+  numberColumnOffset?: number;
   /** Optional per-side texel inset to prevent neighbour bleed when
    * downscaling. Consumed by the texture store (Phase 3). */
   inset?: number;
@@ -182,6 +186,8 @@ export interface TileDesign {
   displayName: string;
   attribution?: string;
   atlases: Record<AtlasId, AtlasDescriptor>;
+  /** Optional supplemental atlas used for MCR flower faces. */
+  flowerAtlas?: AtlasId;
   categories: TileCategories;
   sheets: DesignSheets;
   spacing: DesignSpacing;
@@ -213,7 +219,9 @@ export function resolveTileFrame(
   }
   const suit = tile[tile.length - 1];
   const row = atlas.suitRows[suit];
-  const col = Number(tile.slice(0, -1));
+  const col =
+    Number(tile.slice(0, -1)) +
+    (atlas.kind === "grid" ? (atlas.numberColumnOffset ?? 0) : 0);
   if (
     row === undefined ||
     !Number.isInteger(col) ||
@@ -288,7 +296,7 @@ export function validateTileDesign(design: TileDesign): string[] {
       if (atlas.cols <= 0 || atlas.rows <= 0) {
         errors.push(`atlas "${id}" has non-positive grid dimensions`);
       }
-      for (const suit of SUITS) {
+      for (const suit of atlas.supportedSuits ?? SUITS) {
         const row = atlas.suitRows[suit];
         if (row === undefined || row < 0 || row >= atlas.rows) {
           errors.push(`atlas "${id}" has no valid row for suit "${suit}"`);

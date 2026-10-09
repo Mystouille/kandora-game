@@ -228,8 +228,15 @@ export class ActionControls {
         );
       } else {
         rendered.push(
-          drawActionButton(presentation, entry.action, (action) =>
-            this.onActionClick({ action, ...(intent ? { intent } : {}) })
+          drawActionButton(
+            presentation,
+            entry.action,
+            (action) =>
+              this.onActionClick({ action, ...(intent ? { intent } : {}) }),
+            view.rulesFamily === "mcr" &&
+              (entry.action.type === "ron" || entry.action.type === "tsumo")
+              ? "Hu"
+              : undefined
           )
         );
       }

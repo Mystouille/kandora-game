@@ -10,7 +10,7 @@ import {
   PlayingReadyCheckpointSchema,
   PlayingResultTransitionCheckpointSchema,
   PlayingNukiCheckpointSchema,
-  type PlayingNukiCheckpoint,
+  PlayingFlowerCheckpointSchema,
   WaitingRoomCheckpointSchema,
   type PlayingActionCheckpoint,
   type PlayingCallCheckpoint,
@@ -20,7 +20,6 @@ import {
   type WaitingRoomCheckpoint,
 } from "../checkpoint";
 import { gameTiming } from "../session/timingPolicy";
-
 import type { MatchKernel } from "../session/matchKernel";
 import type { RoomRoster } from "../session/roomRoster";
 import type { PlayerConnections } from "../session/playerConnections";
@@ -80,12 +79,18 @@ export interface CheckpointFactoryPort {
 export class CheckpointFactory {
   constructor(private readonly port: CheckpointFactoryPort) {}
 
-  createPlayingNukiCheckpoint(): PlayingNukiCheckpoint {
+  createPlayingReplacementCheckpoint(kind: "nuki" | "flower") {
     this.assertCommonPlayingCheckpointState();
-    return PlayingNukiCheckpointSchema.parse({
+    const input = {
       ...this.playingCheckpointBase(this.port.runtime.now()),
-      checkpointKind: "nuki_replacement",
-    });
+      checkpointKind:
+        kind === "nuki"
+          ? ("nuki_replacement" as const)
+          : ("flower_replacement" as const),
+    };
+    return kind === "nuki"
+      ? PlayingNukiCheckpointSchema.parse(input)
+      : PlayingFlowerCheckpointSchema.parse(input);
   }
   private checkpointPlayers(): WaitingRoomCheckpoint["seats"] {
     return mapSeatValues([...this.port.roster.players().values()], (player) =>

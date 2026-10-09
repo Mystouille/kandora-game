@@ -13,6 +13,7 @@ import type {
   WallTilePlan,
 } from "./wallRenderPlan";
 import { buildSanmaWallPlan } from "./sanmaWallPlan";
+import { buildMcrWallPlan } from "./mcrWallPlan";
 
 export interface NormalWallPlanInput {
   layout: TableLayout;
@@ -22,6 +23,8 @@ export interface NormalWallPlanInput {
   view: Pick<
     MatchView,
     | "dealer"
+    | "rulesFamily"
+    | "flowerTiles"
     | "dice"
     | "drawsTaken"
     | "liveDrawsTaken"
@@ -34,7 +37,7 @@ export interface NormalWallPlanInput {
     | "sanmaType"
     | "sanmaWall"
     | "tableProjection"
-  >;
+  > & { wallRemaining?: number };
 }
 
 type WallRole =
@@ -103,6 +106,9 @@ function stackLongOffsets(
 export function buildNormalWallPlan(
   input: NormalWallPlanInput
 ): WallRenderPlan {
+  if (input.view.rulesFamily === "mcr") {
+    return buildMcrWallPlan(input);
+  }
   if (input.view.playerCount === 3) {
     return buildSanmaWallPlan(input);
   }

@@ -1,4 +1,5 @@
 {
+  "rulesFamily": "riichi",
   "id": "tenhou-hanchan",
   "displayName": "Tenhou — Hanchan",
   "description": "Tenhou-default hanchan (East + South), 25k start, all common aborts, ippatsu/ura on. Reference baseline.",

@@ -35,6 +35,7 @@ import {
   type ActionIntentContext,
 } from "~/game/protocol/timing";
 import { SANMA_CAPABILITY } from "~/game/protocol/sanma";
+import { MCR_CAPABILITY } from "~/game/protocol/rulesFamily";
 
 export interface GameWSOptions {
   getConnectionDetails: () => Promise<GameWSConnectionDetails>;
@@ -460,6 +461,7 @@ export class GameWS {
         clientSessionId: this.clientSessionId,
         timingCapabilities: [TIMING_CAPABILITY],
         gameCapabilities: [SANMA_CAPABILITY],
+        mcrCapability: MCR_CAPABILITY,
         fixedPromptVersion: FIXED_PROMPT_VERSION,
         ...(takeoverRequested ? { takeover: true } : {}),
         debug: this.opts.debug,

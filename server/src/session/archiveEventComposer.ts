@@ -48,6 +48,9 @@ export class ArchiveEventComposer {
       };
     }
     if (event.type === "hand_end") {
+      if (event.reason !== "exhaustive_draw") {
+        return event;
+      }
       // Per-seat wait tiles at hand end. Computed against each
       // seat's concealed hand via the rules engine; mirrors the
       // same `waits()` predicate the engine uses for
@@ -56,10 +59,7 @@ export class ArchiveEventComposer {
       // `showWaits` overlay so the renderer doesn't have to
       // recompute (and can stay consistent with whatever waits
       // the platform recorded).
-      const declaredTenpai =
-        event.reason === "exhaustive_draw"
-          ? this.port.state().lastHandResult?.tenpai
-          : null;
+      const declaredTenpai = this.port.state().lastHandResult?.tenpai ?? null;
       const seatWaits: (Tile[] | null)[] = this.port
         .state()
         .hands.map((h, seat) => {

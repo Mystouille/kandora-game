@@ -14,7 +14,10 @@ export function renderNukiTiles(
   seat: Seat,
   discardPanels: SeatRects
 ): void {
-  const extracted = frame.view.nukiTiles?.[seat] ?? [];
+  const extracted =
+    frame.view.rulesFamily === "mcr"
+      ? (frame.view.flowerTiles?.[seat] ?? [])
+      : (frame.view.nukiTiles?.[seat] ?? []);
   const pending =
     frame.view.pendingNuki?.seat === seat &&
     frame.view.sanmaType !== "kansai" &&
@@ -30,7 +33,10 @@ export function renderNukiTiles(
   const rowWidth = tiles.length * width;
   const center = playerIdentityCenter(discardPanels, seat);
   const container = new Container();
-  container.label = `nuki-seat-${seat}`;
+  container.label =
+    frame.view.rulesFamily === "mcr"
+      ? `flowers-seat-${seat}`
+      : `nuki-seat-${seat}`;
   container.eventMode = "none";
   container.zIndex = 11;
   container.position.set(center.x, center.y);

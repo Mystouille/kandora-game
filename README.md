@@ -60,10 +60,20 @@ The ESLint `no-restricted-imports` rule scoped to `app/game/**` and
 `game-server/**` enforces these boundaries with severity `error`. Do not
 weaken the rule to land a feature — refactor through the adapter instead.
 
+## Game setup
+
+Web, mobile online, and local/Nearby lobbies start at **Riichi / Yonma
+(4 players) / M-League**. Choose **Riichi** or **MCR** first. Riichi then offers
+**Yonma (4 players)** or **Sanma (3 players)**, followed by the applicable game
+types: the lobby's Riichi presets for Yonma, or **Online / Kansai** for Sanma.
+MCR uses the fixed four-player EMA Green Book profile without Riichi selectors.
+**Duplicate** has its own section and seed field, independent of these choices.
+Resuming a saved table keeps that table's rules rather than using new-game defaults.
+
 ## Three-player mahjong (sanma)
 
-Game setup includes a **3-player** toggle and **Online / Kansai** selector.
-Four-player games remain the default. Sanma uses a fixed M-League-derived
+Choose **Riichi / Sanma (3 players)** in game setup to select **Online** or
+**Kansai**. Sanma uses a fixed M-League-derived
 profile, without head-bump ron, with three hands per wind and no chii.
 Both variants support Duplicate, native web/mobile play, local/Nearby hosting,
 spectating, recovery, and native replay/review.

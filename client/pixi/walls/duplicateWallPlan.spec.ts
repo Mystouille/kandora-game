@@ -39,6 +39,24 @@ function input(
 }
 
 describe("buildDuplicateWallPlan", () => {
+  it("renders MCR personal queues without a Riichi dead wall", () => {
+    const plan = buildDuplicateWallPlan(
+      input({
+        rulesFamily: "mcr",
+        doraIndicators: [],
+        duplicateWallState: {
+          initial: [23, 23, 22, 23],
+          remaining: [23, 23, 22, 23],
+          limitingSeat: 2,
+          estimatedDrawsRemaining: 88,
+        },
+      })
+    );
+
+    expect(plan.tiles).toHaveLength(91);
+    expect(plan.tiles.every((tile) => tile.kind === "live")).toBe(true);
+  });
+
   it("renders four personal walls and ten fixed dealer dead-wall tiles", () => {
     const plan = buildDuplicateWallPlan(input());
 
@@ -65,13 +83,16 @@ describe("buildDuplicateWallPlan", () => {
   it("draws from player-right, upper then lower, with a lower lone tile", () => {
     const plan = buildDuplicateWallPlan(input());
     const seatZeroFirst = plan.tiles.find(
-      (tile) => tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 0
+      (tile) =>
+        tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 0
     );
     const seatZeroSecond = plan.tiles.find(
-      (tile) => tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 1
+      (tile) =>
+        tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 1
     );
     const seatTwoLast = plan.tiles.find(
-      (tile) => tile.kind === "live" && tile.seat === 2 && tile.sourceIndex === 16
+      (tile) =>
+        tile.kind === "live" && tile.seat === 2 && tile.sourceIndex === 16
     );
 
     expect(seatZeroFirst).toMatchObject({ stackIndex: 8, row: 1 });
@@ -108,7 +129,8 @@ describe("buildDuplicateWallPlan", () => {
 
     expect(
       after.tiles.some(
-        (tile) => tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 0
+        (tile) =>
+          tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 0
       )
     ).toBe(false);
     for (const tile of after.tiles.filter(
@@ -143,9 +165,7 @@ describe("buildDuplicateWallPlan", () => {
     expect(Math.max(...dealerDeadSlots)).toBe(4);
     expect(Math.min(...dealerPersonalSlots)).toBe(6);
     expect(
-      plan.tiles.some(
-        (tile) => tile.seat === 2 && tile.groupSlotIndex === 5
-      )
+      plan.tiles.some((tile) => tile.seat === 2 && tile.groupSlotIndex === 5)
     ).toBe(false);
   });
 
@@ -162,7 +182,12 @@ describe("buildDuplicateWallPlan", () => {
     const plan = buildDuplicateWallPlan(
       input(
         {
-          duplicateDrawQueues: queues as [string[], string[], string[], string[]],
+          duplicateDrawQueues: queues as [
+            string[],
+            string[],
+            string[],
+            string[],
+          ],
           deadWall,
         },
         true
@@ -171,23 +196,18 @@ describe("buildDuplicateWallPlan", () => {
 
     expect(
       plan.tiles.find(
-        (tile) => tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 0
+        (tile) =>
+          tile.kind === "live" && tile.seat === 0 && tile.sourceIndex === 0
       )?.faceUpTile
     ).toBe("1m");
     expect(
-      plan.tiles.find(
-        (tile) => tile.kind === "dead" && tile.sourceIndex === 4
-      )
+      plan.tiles.find((tile) => tile.kind === "dead" && tile.sourceIndex === 4)
     ).toMatchObject({ faceUpTile: "4p", tone: "normal", row: 1 });
     expect(
-      plan.tiles.find(
-        (tile) => tile.kind === "dead" && tile.sourceIndex === 5
-      )
+      plan.tiles.find((tile) => tile.kind === "dead" && tile.sourceIndex === 5)
     ).toMatchObject({ faceUpTile: "2z", tone: "deemphasized", row: 0 });
     expect(
-      plan.tiles.some(
-        (tile) => tile.kind === "dead" && tile.sourceIndex < 4
-      )
+      plan.tiles.some((tile) => tile.kind === "dead" && tile.sourceIndex < 4)
     ).toBe(false);
   });
 
@@ -218,12 +238,8 @@ describe("buildDuplicateWallPlan", () => {
         const band = layout.wall[tile.seat];
         expect(tile.x).toBeGreaterThanOrEqual(band.x - 8);
         expect(tile.y).toBeGreaterThanOrEqual(band.y - 16);
-        expect(tile.x + tile.width).toBeLessThanOrEqual(
-          band.x + band.w + 8
-        );
-        expect(tile.y + tile.height).toBeLessThanOrEqual(
-          band.y + band.h + 16
-        );
+        expect(tile.x + tile.width).toBeLessThanOrEqual(band.x + band.w + 8);
+        expect(tile.y + tile.height).toBeLessThanOrEqual(band.y + band.h + 16);
       }
     }
   });

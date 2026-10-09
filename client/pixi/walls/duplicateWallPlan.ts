@@ -18,6 +18,7 @@ export interface DuplicateWallPlanInput {
   view: Pick<
     MatchView,
     | "dealer"
+    | "rulesFamily"
     | "doraIndicators"
     | "deadWall"
     | "duplicateDrawQueues"
@@ -53,9 +54,10 @@ export function buildDuplicateWallPlan(
     return { tiles: [] };
   }
   const tiles: WallTilePlan[] = [];
-  const deadStacks = view.playerCount === 3 ? 7 : DEAD_STACKS;
+  const deadStacks =
+    view.rulesFamily === "mcr" ? 0 : view.playerCount === 3 ? 7 : DEAD_STACKS;
   const personalStacks =
-    view.playerCount === 3
+    view.rulesFamily === "mcr" || view.playerCount === 3
       ? Math.ceil(Math.max(...state.initial) / 2)
       : PERSONAL_STACKS;
 
@@ -67,11 +69,13 @@ export function buildDuplicateWallPlan(
     const band = layout.wall[seat];
     const geometry = wallTileGeometry(metrics, seat);
     const isDealer = seat === view.dealer;
-    const groupSlots = isDealer
-      ? deadStacks + DEALER_GAP_SLOTS + personalStacks
-      : personalStacks;
+    const groupSlots =
+      isDealer && deadStacks > 0
+        ? deadStacks + DEALER_GAP_SLOTS + personalStacks
+        : personalStacks;
     const groupOffset = centeredWallRunOffset(band, seat, groupSlots, geometry);
-    const personalGroupOffset = isDealer ? deadStacks + DEALER_GAP_SLOTS : 0;
+    const personalGroupOffset =
+      isDealer && deadStacks > 0 ? deadStacks + DEALER_GAP_SLOTS : 0;
     const initialCount = state.initial[seat];
     const remainingCount = state.remaining[seat];
     const consumedCount = Math.max(

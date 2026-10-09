@@ -107,9 +107,63 @@ export function buildWinResultRows(
     });
   }
   if (result.reason === "tsumo") {
-    rows.push({ kind: "title", text: "Tsumo", size: 36 });
+    rows.push({
+      kind: "title",
+      text: win.scoringFamily === "mcr" ? "Self-draw" : "Tsumo",
+      size: 36,
+    });
   } else if (result.reason === "ron") {
-    rows.push({ kind: "title", text: "Ron", size: 36 });
+    rows.push({
+      kind: "title",
+      text: win.scoringFamily === "mcr" ? "Win" : "Ron",
+      size: 36,
+    });
+  }
+  if (win.scoringFamily === "mcr") {
+    for (const entry of win.fan ?? []) {
+      rows.push({
+        kind: "yaku",
+        name: entry.count > 1 ? `${entry.name} x${entry.count}` : entry.name,
+        value: `${entry.points} pt${entry.points === 1 ? "" : "s"}`,
+      });
+    }
+    const totalFan = win.totalFan ?? 0;
+    const nonFlowerFan = win.nonFlowerFan ?? totalFan;
+    const flowerFan = Math.max(0, totalFan - nonFlowerFan);
+    rows.push({
+      kind: "scoreRow",
+      han:
+        flowerFan > 0
+          ? `${nonFlowerFan} + ${flowerFan} flower = ${totalFan} points`
+          : `${totalFan} points`,
+      pts: typeof win.ten === "number" ? `${win.ten} net` : null,
+      ptsColor: 0xfde68a,
+    });
+    if (win.hand && win.hand.length > 0) {
+      const { concealed: rawConcealed, agari } = splitWinningHandForDisplay(
+        win.hand,
+        win.winTile
+      );
+      const concealed = sortHand(rawConcealed, false) as string[];
+      const melds = win.melds
+        ?.filter((meld) => meld.tiles.length > 0)
+        .map((meld) => ({
+          ...meld,
+          from:
+            meld.from === null
+              ? null
+              : (((meld.from - win.seat + 4) % 4) as 0 | 1 | 2 | 3),
+        }));
+      rows.push({ kind: "hand", concealed, winTile: agari, melds });
+    }
+    return {
+      rows,
+      revealedYakuCount: win.fan?.length ?? 0,
+      hasUraYaku: false,
+      uraIndicatorsRevealed: false,
+      scoreSummaryRevealed: true,
+      scoreDeltaRevealed: true,
+    };
   }
   const yakuNames = Object.keys(win.yaku ?? {});
   const hasRiichiYaku = yakuNames.some(

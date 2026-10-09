@@ -4,10 +4,10 @@ import { PlayCircleOutlined } from "@ant-design/icons";
 import { SpectatorDelaySelect } from "~/game/components/SpectatorDelaySelect";
 import {
   buildGameSetup,
+  DEFAULT_GAME_SETUP_PRESET_ID,
   GameSetupControls,
   gameVariantLabel,
   initialGameSetupSelection,
-  setupPresetId,
 } from "~/game/components/GameSetupControls";
 import type { GameSetup } from "~/game/rules/gameSetup";
 import {
@@ -38,6 +38,7 @@ export interface LobbyLoaderData {
   flag: { gameEnabled: boolean };
   presets: Array<{
     id: string;
+    rulesFamily?: GameSetup["rulesFamily"];
     displayName: string;
     description?: string;
   }>;
@@ -53,6 +54,7 @@ export interface LobbyLoaderData {
   gameLogs: Array<{
     gameId: string;
     ruleSet: string;
+    rulesFamily?: GameSetup["rulesFamily"];
     playerCount?: GameSetup["playerCount"];
     sanmaType?: GameSetup["sanmaType"];
     mode?: MatchModeConfig;
@@ -67,7 +69,6 @@ export interface LobbyLoaderData {
   }>;
 }
 
-const DEFAULT_LOBBY_PRESET_ID = "m-league";
 const PLACEHOLDER_HAND = "123456789m1234p";
 const PLACEHOLDER_DRAWS = "555z";
 const PLACEHOLDER_LEFT = "123z";
@@ -89,6 +90,7 @@ interface LiveRoom {
   matchId: string;
   status: "waiting" | "playing" | "finished";
   presetId?: string;
+  rulesFamily?: GameSetup["rulesFamily"];
   playerCount?: GameSetup["playerCount"];
   sanmaType?: GameSetup["sanmaType"];
   mode?: MatchModeConfig;
@@ -124,13 +126,12 @@ export default function LobbyRoute() {
     presets.map((preset) => [preset.id, preset.displayName])
   );
   const [starting, setStarting] = useState(false);
-  const [presetId, setPresetId] = useState(DEFAULT_LOBBY_PRESET_ID);
+  const [presetId, setPresetId] = useState(DEFAULT_GAME_SETUP_PRESET_ID);
   const [spectatorDelayMs, setSpectatorDelayMs] = useState<SpectatorDelayMs>(0);
   const [setupSelection, setSetupSelection] = useState(
     initialGameSetupSelection
   );
   const { duplicateEnabled } = setupSelection;
-  const selectedPreset = setupPresetId(presetId, setupSelection.playerCount);
   const [showDebug, setShowDebug] = useState(false);
   const [humanHand, setHumanHand] = useState("");
   const [humanDraws, setHumanDraws] = useState("");
@@ -300,11 +301,18 @@ export default function LobbyRoute() {
       }
       const data = (await res.json()) as {
         matchId?: string;
+        rulesFamily?: string;
         playerCount?: number;
         sanmaType?: string;
       };
       if (!data.matchId) {
         setError("Game server returned no matchId.");
+        return null;
+      }
+      if (setup.rulesFamily === "mcr" && data.rulesFamily !== "mcr") {
+        setError(
+          "The game server does not support MCR. Update the server before creating this table."
+        );
         return null;
       }
       if (
@@ -394,32 +402,21 @@ export default function LobbyRoute() {
         Let's play some mahjong!
       </p>
 
-      <label className="block mb-6">
-        <span className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-          Rules
-        </span>
-        <select
-          value={selectedPreset}
-          onChange={(event) => {
-            setPresetId(event.target.value);
+      <div className="mb-6">
+        <GameSetupControls
+          value={setupSelection}
+          onChange={(selection) => {
+            setSetupSelection(selection);
+            if (selection.duplicateEnabled) {
+              setShowDebug(false);
+            }
           }}
-          disabled={
-            starting ||
-            activeMatchId !== null ||
-            setupSelection.playerCount === 3
-          }
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 rounded-md focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-        >
-          {presets.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.displayName}
-            </option>
-          ))}
-        </select>
-        <span className="block mt-1 text-sm text-gray-500 dark:text-gray-400">
-          {presets.find((preset) => preset.id === selectedPreset)?.description}
-        </span>
-      </label>
+          presets={presets}
+          preset={presetId}
+          onPresetChange={setPresetId}
+          disabled={starting || activeMatchId !== null}
+        />
+      </div>
 
       <label className="block mb-6">
         <span className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
@@ -435,19 +432,6 @@ export default function LobbyRoute() {
           Minimum delay enforced for all spectators.
         </span>
       </label>
-
-      <div className="mb-6 border-y border-gray-200 py-4 dark:border-gray-700">
-        <GameSetupControls
-          value={setupSelection}
-          onChange={(selection) => {
-            setSetupSelection(selection);
-            if (selection.duplicateEnabled) {
-              setShowDebug(false);
-            }
-          }}
-          disabled={starting || activeMatchId !== null}
-        />
-      </div>
 
       <div className="flex flex-wrap gap-3 mb-6">
         <button
