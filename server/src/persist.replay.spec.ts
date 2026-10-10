@@ -101,4 +101,66 @@ describe("archiveReplayLog seat identity", () => {
       },
     ]);
   });
+
+  it("records missing discard waits before persisting an in-game replay", async () => {
+    const readyHand = [
+      "1z",
+      "2z",
+      "3z",
+      "4z",
+      "5z",
+      "6z",
+      "7z",
+      "1m",
+      "4m",
+      "7m",
+      "2p",
+      "5p",
+      "8p",
+    ] as const;
+    await archiveReplayLog({
+      matchId: "mcr-match",
+      startedAt: new Date(100),
+      endedAt: new Date(200),
+      ruleSet: "mcr-ema",
+      rulesFamily: "mcr",
+      events: [
+        {
+          type: "match_start",
+          rulesFamily: "mcr",
+          seats: [],
+          ruleSet: "mcr-ema",
+        },
+        {
+          type: "hand_start",
+          rulesFamily: "mcr",
+          round: 0,
+          dealer: 1,
+          startingHands: [[...readyHand], [], [], []],
+          flowerTiles: [[], [], [], []],
+          doraIndicators: [],
+        },
+        {
+          type: "draw",
+          seat: 0,
+          tile: "9s",
+          wallRemaining: 50,
+        },
+        {
+          type: "discard",
+          seat: 0,
+          tile: "9s",
+          tsumogiri: true,
+          discardSource: "draw",
+        },
+      ],
+      seats: [],
+    });
+
+    const update = mocks.updateReplayLog.mock.calls[0][1];
+    expect(update.$set.events.at(-1)).toMatchObject({
+      type: "discard",
+      waits: ["3s", "6s", "9s"],
+    });
+  });
 });

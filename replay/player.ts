@@ -1098,9 +1098,8 @@ export function replayViewToMatchView(
     mySeat?: Seat;
     matchId?: string | null;
     seatNames?: SeatValues<string> | null;
-    /** Per-seat wait tiles at this step. Pre-computed server-side
-     * by `annotateWaits` so the renderer doesn't run shanten on
-     * the client. `null` when no precompute is available. */
+    /** Per-seat wait tiles at this step, derived from waits recorded
+     * on replay events. `null` when no recorded data is available. */
     currentWaits?: Tile[][] | null;
     /** Live `room_state` from the spectator socket. Carries the
      * per-seat `connected` flag so the renderer can paint a

@@ -369,11 +369,10 @@ const DiscardEvent = z.object({
   discardSource: z.enum(["hand", "draw"]).optional(),
   /** True when this discard was the riichi declaration tile. */
   riichi: z.boolean().optional(),
-  /** Authoritative post-discard waits for the discarder, sourced from
-   * the platform replay log (Majsoul `RecordDiscardTile.tingpais`).
-   * Absent when the platform does not expose per-discard wait info
-   * (Tenhou, Riichi City) — callers fall back to a shanten compute.
-   * Empty array means the platform reported "not tenpai". */
+  /** Authoritative post-discard waits for the discarder, recorded during
+   * replay ingestion or sourced from the platform log (for example Majsoul
+   * `RecordDiscardTile.tingpais`). Absent legacy data is displayed without
+   * waits; empty means the recorder reported "not tenpai". */
   waits: z.array(TileSchema).optional(),
   duplicateWallState: DuplicateWallStateSchema.optional(),
 });

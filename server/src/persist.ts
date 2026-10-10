@@ -27,6 +27,7 @@ import mongoose, { Schema } from "mongoose";
 import { MatchModel } from "~/core/models/game/Match";
 import { ReplayLogModel } from "~/core/models/game/ReplayLog";
 import type { GameEvent } from "~/game/protocol/messages";
+import { recordMissingDiscardWaits } from "~/game/replay/recordWaits";
 import { REPLAY_LOG_SCHEMA_VERSION } from "~/game/replay/types";
 import {
   assertContiguousMatchEvents,
@@ -232,7 +233,7 @@ export async function archiveReplayLog(args: {
     startedAt: args.startedAt.getTime(),
     endedAt: args.endedAt.getTime(),
     seats,
-    events: args.events,
+    events: recordMissingDiscardWaits(args.events),
     schemaVersion: REPLAY_LOG_SCHEMA_VERSION,
     parsedAt: new Date(),
   };
