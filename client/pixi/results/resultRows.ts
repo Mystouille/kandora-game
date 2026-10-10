@@ -7,7 +7,10 @@ import {
   shouldRevealWinScoreSummary,
   uraDoraRevealAtMs,
 } from "../geometry/resultReveal";
-import { RESULT_YAKU_REVEAL_INTERVAL_MS } from "../geometry/renderConstants";
+import {
+  RESULT_MCR_FAN_REVEAL_INTERVAL_MS,
+  RESULT_YAKU_REVEAL_INTERVAL_MS,
+} from "../geometry/renderConstants";
 import { sortHand } from "../geometry/tileOrder";
 import { callLabel } from "../geometry/actionGeometry";
 import { splitWinningHandForDisplay } from "../winningHand";
@@ -115,24 +118,50 @@ export function buildWinResultRows(
     });
   }
   if (win.scoringFamily === "mcr") {
-    for (const entry of win.fan ?? []) {
+    const fanEntries = (win.fan ?? []).filter(
+      (entry) => entry.id !== "FLOWER_TILES"
+    );
+    const revealedFanCount = stageReveal
+      ? Math.max(
+          0,
+          Math.min(
+            fanEntries.length,
+            Math.floor(
+              revealElapsedMs / RESULT_MCR_FAN_REVEAL_INTERVAL_MS
+            )
+          )
+        )
+      : fanEntries.length;
+    fanEntries.forEach((entry, index) => {
       rows.push({
         kind: "yaku",
         name: entry.count > 1 ? `${entry.name} x${entry.count}` : entry.name,
         value: `${entry.points} pt${entry.points === 1 ? "" : "s"}`,
+        hidden: index >= revealedFanCount,
       });
-    }
+    });
     const totalFan = win.totalFan ?? 0;
     const nonFlowerFan = win.nonFlowerFan ?? totalFan;
     const flowerFan = Math.max(0, totalFan - nonFlowerFan);
+    const scoreSummaryRevealed =
+      !stageReveal || revealedFanCount >= fanEntries.length;
     rows.push({
       kind: "scoreRow",
-      han:
-        flowerFan > 0
-          ? `${nonFlowerFan} + ${flowerFan} flower = ${totalFan} points`
-          : `${totalFan} points`,
+      han: `${totalFan} points`,
+      ...(flowerFan > 0
+        ? {
+            scoreBreakdown: {
+              points: `${nonFlowerFan}`,
+              flowers: `+${flowerFan} ${
+                flowerFan === 1 ? "flower" : "flowers"
+              }`,
+              totalPoints: `= ${totalFan} points`,
+            },
+          }
+        : {}),
       pts: typeof win.ten === "number" ? `${win.ten} net` : null,
       ptsColor: 0xfde68a,
+      hidden: !scoreSummaryRevealed,
     });
     if (win.hand && win.hand.length > 0) {
       const { concealed: rawConcealed, agari } = splitWinningHandForDisplay(
@@ -159,11 +188,11 @@ export function buildWinResultRows(
     }
     return {
       rows,
-      revealedYakuCount: win.fan?.length ?? 0,
+      revealedYakuCount: revealedFanCount,
       hasUraYaku: false,
       uraIndicatorsRevealed: false,
-      scoreSummaryRevealed: true,
-      scoreDeltaRevealed: true,
+      scoreSummaryRevealed,
+      scoreDeltaRevealed: scoreSummaryRevealed,
     };
   }
   const yakuNames = Object.keys(win.yaku ?? {});

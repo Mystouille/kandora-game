@@ -80,12 +80,12 @@ export function renderResultCenterPanel(
       container.addChild(row.container);
     } else if (row.kind === "scoreRow") {
       const rowLeft = (panelW - row.w) / 2;
-      row.hanText.position.set(rowLeft, y);
-      container.addChild(row.hanText);
+      row.scoreContainer.position.set(rowLeft, y);
+      container.addChild(row.scoreContainer);
       if (row.ptsText) {
         row.ptsText.position.set(
-          rowLeft + row.hanText.width + RESULT_ROW_INNER_GAP,
-          y
+          rowLeft + row.scoreWidth + RESULT_ROW_INNER_GAP,
+          y + row.scoreHeight - row.ptsText.height
         );
         container.addChild(row.ptsText);
       }

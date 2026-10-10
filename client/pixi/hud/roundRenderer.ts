@@ -5,6 +5,7 @@ import { scoreCartridgeMetrics } from "../geometry/scoreGeometry";
 import {
   KANJI_FONT_FAMILY,
   ROUND_WIND_KANJI,
+  UI_FONT_FAMILY,
 } from "../geometry/renderConstants";
 import type { CenterLabels } from "./hudTypes";
 
@@ -23,7 +24,8 @@ export function renderRoundInfo(
         ? `${view.roundWind} - ${view.roundNumber}`
         : `${ROUND_WIND_KANJI[view.roundWind]} - ${view.roundNumber}`,
     style: new TextStyle({
-      fontFamily: KANJI_FONT_FAMILY,
+      fontFamily:
+        view.rulesFamily === "mcr" ? UI_FONT_FAMILY : KANJI_FONT_FAMILY,
       fontSize,
       fontWeight: "400",
       fill: 0xffffff,
@@ -63,7 +65,7 @@ export function renderRoundInfo(
   let lineY = lineSize / 2;
   for (const line of lines) {
     const style = new TextStyle({
-      fontFamily: "Inter, system-ui, sans-serif",
+      fontFamily: UI_FONT_FAMILY,
       fontSize: lineSize,
       fontWeight: "600",
       fill: line.color,

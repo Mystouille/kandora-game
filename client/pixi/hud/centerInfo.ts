@@ -11,6 +11,7 @@ import {
 import {
   KANJI_FONT_FAMILY,
   ROUND_WIND_KANJI,
+  UI_FONT_FAMILY,
 } from "../geometry/renderConstants";
 
 export function renderMobileCenterPanel(frame: RenderFrame): void {
@@ -32,30 +33,35 @@ export function renderMobileCenterInfo(
   const cx = center.x + center.w / 2;
   const slots = mobileDoraIndicatorSlots(view.doraIndicators);
   const dora = mobileDoraRowGeometry(center, slots.length);
-  slots.forEach((tile, index) => {
-    const sprite = resources.spriteFactory.create({
-      atlasId:
-        tile === null
-          ? resources.tileDesign.sheets.wallBack[0]
-          : resources.tileDesign.sheets.wallFace[0],
-      tile,
-      width: dora.tileW,
-      height: dora.tileH,
-      anchor: 0,
+  const showDoraIndicators =
+    frame.presentation === "mobile" || view.rulesFamily !== "mcr";
+  if (showDoraIndicators) {
+    slots.forEach((tile, index) => {
+      const sprite = resources.spriteFactory.create({
+        atlasId:
+          tile === null
+            ? resources.tileDesign.sheets.wallBack[0]
+            : resources.tileDesign.sheets.wallFace[0],
+        tile,
+        width: dora.tileW,
+        height: dora.tileH,
+        anchor: 0,
+      });
+      sprite.position.set(
+        dora.x + index * (dora.tileW + MOBILE_DORA_INDICATOR_GAP),
+        dora.y
+      );
+      root.addChild(sprite);
     });
-    sprite.position.set(
-      dora.x + index * (dora.tileW + MOBILE_DORA_INDICATOR_GAP),
-      dora.y
-    );
-    root.addChild(sprite);
-  });
+  }
   const heading = new Text({
     text:
       view.rulesFamily === "mcr"
         ? `${view.roundWind} ${view.roundNumber}`
         : `${ROUND_WIND_KANJI[view.roundWind]}${view.roundNumber}局`,
     style: new TextStyle({
-      fontFamily: KANJI_FONT_FAMILY,
+      fontFamily:
+        view.rulesFamily === "mcr" ? UI_FONT_FAMILY : KANJI_FONT_FAMILY,
       fontSize: Math.max(28, Math.round(center.h * 0.15)),
       fontWeight: "400",
       fill: 0xffffff,
@@ -105,7 +111,7 @@ export function renderMobileCenterInfo(
     const value = new Text({
       text: String(counter.value),
       style: new TextStyle({
-        fontFamily: "Inter, system-ui, sans-serif",
+        fontFamily: UI_FONT_FAMILY,
         fontSize: 16,
         fontWeight: "700",
         fill: counter.color,

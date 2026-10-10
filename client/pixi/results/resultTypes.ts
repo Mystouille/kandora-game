@@ -92,6 +92,11 @@ export type ResultRow =
       kind: "scoreRow";
       han: string;
       pts: string | null;
+      scoreBreakdown?: {
+        points: string;
+        flowers: string;
+        totalPoints: string;
+      };
       ptsColor?: number;
       hidden?: boolean;
     }

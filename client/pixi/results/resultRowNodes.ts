@@ -16,8 +16,10 @@ export type BuiltResultRow =
   | { kind: "single"; text: Text; h: number }
   | {
       kind: "scoreRow";
-      hanText: Text;
+      scoreContainer: Container;
       ptsText: Text | null;
+      scoreWidth: number;
+      scoreHeight: number;
       w: number;
       h: number;
     }
@@ -26,6 +28,27 @@ export type BuiltResultRow =
   | { kind: "divider"; h: number };
 
 export const RESULT_ROW_INNER_GAP = 24;
+const RESULT_SCORE_BREAKDOWN_GAP = 8;
+
+export function resultScoreBreakdownLayout(
+  pointsWidth: number,
+  flowersWidth: number,
+  totalPointsWidth: number
+): {
+  pointsX: number;
+  flowersX: number;
+  totalPointsX: number;
+  width: number;
+} {
+  const alignedColumnWidth = Math.max(pointsWidth, flowersWidth);
+  return {
+    pointsX: alignedColumnWidth - pointsWidth,
+    flowersX: alignedColumnWidth - flowersWidth,
+    totalPointsX: alignedColumnWidth + RESULT_SCORE_BREAKDOWN_GAP,
+    width:
+      alignedColumnWidth + RESULT_SCORE_BREAKDOWN_GAP + totalPointsWidth,
+  };
+}
 
 export interface ResultPanelNodes {
   readonly rows: readonly BuiltResultRow[];
@@ -153,38 +176,70 @@ export function buildResultRowNodes(
     } else if (row.kind === "divider") {
       built.push({ kind: "divider", h: 12 });
     } else if (row.kind === "scoreRow") {
-      const hanText = new Text({
-        text: row.han,
-        style: new TextStyle({
-          fontFamily: "Inter, system-ui, sans-serif",
-          fontSize: 30,
-          fontWeight: "700",
-          fill: 0xffffff,
-        }),
-      });
+      const makeScoreText = (text: string, fill: number): Text =>
+        new Text({
+          text,
+          style: new TextStyle({
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 30,
+            fontWeight: "700",
+            fill,
+          }),
+        });
+      const scoreContainer = new Container();
+      const primaryText = makeScoreText(
+        row.scoreBreakdown?.points ?? row.han,
+        0xffffff
+      );
+      scoreContainer.addChild(primaryText);
+      let scoreWidth = primaryText.width;
+      let scoreHeight = primaryText.height;
+      if (row.scoreBreakdown) {
+        const flowersText = makeScoreText(
+          row.scoreBreakdown.flowers,
+          0xffffff
+        );
+        const totalPointsText = makeScoreText(
+          row.scoreBreakdown.totalPoints,
+          0xffffff
+        );
+        const layout = resultScoreBreakdownLayout(
+          primaryText.width,
+          flowersText.width,
+          totalPointsText.width
+        );
+        const secondLineY = primaryText.height;
+        primaryText.position.set(layout.pointsX, 0);
+        flowersText.position.set(layout.flowersX, secondLineY);
+        totalPointsText.position.set(layout.totalPointsX, secondLineY);
+        scoreContainer.addChild(flowersText, totalPointsText);
+        scoreWidth = layout.width;
+        scoreHeight =
+          secondLineY + Math.max(flowersText.height, totalPointsText.height);
+      }
       const ptsText = row.pts
-        ? new Text({
-            text: row.pts,
-            style: new TextStyle({
-              fontFamily: "Inter, system-ui, sans-serif",
-              fontSize: 30,
-              fontWeight: "700",
-              fill: row.ptsColor ?? 0xfde68a,
-            }),
-          })
+        ? makeScoreText(row.pts, row.ptsColor ?? 0xfde68a)
         : null;
       const w = ptsText
-        ? hanText.width + RESULT_ROW_INNER_GAP + ptsText.width
-        : hanText.width;
-      const h = Math.max(hanText.height, ptsText?.height ?? 0) + 8;
+        ? scoreWidth + RESULT_ROW_INNER_GAP + ptsText.width
+        : scoreWidth;
+      const h = Math.max(scoreHeight, ptsText?.height ?? 0) + 8;
       maxSingle = Math.max(maxSingle, w);
       if (row.hidden) {
-        hanText.visible = false;
+        scoreContainer.visible = false;
         if (ptsText) {
           ptsText.visible = false;
         }
       }
-      built.push({ kind: "scoreRow", hanText, ptsText, w, h });
+      built.push({
+        kind: "scoreRow",
+        scoreContainer,
+        ptsText,
+        scoreWidth,
+        scoreHeight,
+        w,
+        h,
+      });
     } else {
       const text = new Text({
         text: row.text,

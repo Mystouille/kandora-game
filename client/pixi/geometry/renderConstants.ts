@@ -44,6 +44,8 @@ export const RESULT_SCORE_BOX_HEIGHT = 88;
 export const RESULT_SCORE_BOX_PAD_X = 18;
 export const RESULT_SCORE_BOX_NAME_GAP = 8;
 export const RESULT_YAKU_REVEAL_INTERVAL_MS = 750;
+export const RESULT_MCR_FAN_REVEAL_INTERVAL_MS =
+  RESULT_YAKU_REVEAL_INTERVAL_MS * 2;
 export const RESULT_URA_REVEAL_AFTER_LAST_YAKU_MS = 2000;
 export const RESULT_SCORE_REVEAL_WITHOUT_URA_MS = 750;
 export const CALL_EFFECT_GAP_FRACTION = 0.42;
@@ -56,5 +58,6 @@ export const ROUND_WIND_KANJI: Record<MatchView["roundWind"], string> = {
   W: "西",
   N: "北",
 };
+export const UI_FONT_FAMILY = "Inter, system-ui, sans-serif";
 export const KANJI_FONT_FAMILY =
   '"Yuji Syuku", "Yu Mincho", "Hiragino Mincho ProN", serif';

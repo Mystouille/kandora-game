@@ -13,6 +13,7 @@ import {
   Texture,
 } from "pixi.js";
 import type { RenderFrame } from "../scene/renderTypes";
+import { UI_FONT_FAMILY } from "../geometry/renderConstants";
 import { HudRenderer } from "./hudRenderer";
 import { DEFAULT_CENTER_LABELS } from "./hudTypes";
 
@@ -185,6 +186,50 @@ describe("HudRenderer ownership", () => {
         .mock.calls.map(([spec]) => spec.tile)
     ).toEqual(["1m", "2p", null, null, null]);
     expect(allText(frame.root).map((text) => text.text)).toContain("東1局");
+  });
+
+  it("omits compact MCR dora slots while retaining them on mobile", () => {
+    const owner = createOwner();
+    const view = {
+      rulesFamily: "mcr" as const,
+      doraIndicators: ["1m", "2p"],
+    };
+    const compact = createFrame(view);
+    const compactResources = createResources();
+    owner.render(
+      compact,
+      compactResources,
+      compact.layout.discards,
+      true
+    );
+    expect(compactResources.spriteFactory.create).not.toHaveBeenCalled();
+
+    const mobile = createFrame(view, "mobile");
+    const mobileResources = createResources();
+    owner.render(mobile, mobileResources, mobile.layout.discards, true);
+    expect(mobileResources.spriteFactory.create).toHaveBeenCalledTimes(5);
+  });
+
+  it("uses the UI font for MCR round headings in both center layouts", () => {
+    const owner = createOwner();
+    const view = {
+      rulesFamily: "mcr" as const,
+      roundWind: "S" as const,
+      roundNumber: 2,
+    };
+    const standard = createFrame(view);
+    render(owner, standard);
+    const standardHeading = allText(standard.root).find(
+      (text) => text.text === "S - 2"
+    );
+    expect(standardHeading?.style.fontFamily).toBe(UI_FONT_FAMILY);
+
+    const compact = createFrame(view);
+    render(owner, compact, true);
+    const compactHeading = allText(compact.root).find(
+      (text) => text.text === "S 2"
+    );
+    expect(compactHeading?.style.fontFamily).toBe(UI_FONT_FAMILY);
   });
 
   it("owns both layout and wall-zone debug overlays without requesting renders on setters", () => {
