@@ -11,6 +11,7 @@
  * differently from the current Tenhou sheets.
  */
 import type { Rect, Seat, Size } from "../tableGeometry";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 
 /** Design-local atlas identifier (e.g. "bottomSmall"). Kept as a
  * bare string so designs may name atlases however they like. */
@@ -186,6 +187,8 @@ export interface TileDesign {
   displayName: string;
   attribution?: string;
   atlases: Record<AtlasId, AtlasDescriptor>;
+  /** Atlas substitutions used only while rendering an MCR view. */
+  mcrAtlasOverrides?: Readonly<Record<AtlasId, AtlasId>>;
   /** Optional supplemental atlas used for MCR flower faces. */
   flowerAtlas?: AtlasId;
   categories: TileCategories;
@@ -199,6 +202,16 @@ export const smallScreen = (d: TileDesign): Size =>
   artScreen(d.categories.small);
 export const sideScreen = (d: TileDesign): Size => artScreen(d.categories.side);
 export const bigScreen = (d: TileDesign): Size => artScreen(d.categories.big);
+
+export function atlasForRulesFamily(
+  design: TileDesign,
+  atlasId: AtlasId,
+  rulesFamily: RulesFamily | undefined
+): AtlasId {
+  return rulesFamily === "mcr"
+    ? (design.mcrAtlasOverrides?.[atlasId] ?? atlasId)
+    : atlasId;
+}
 
 /**
  * Resolve the atlas cell for a tile string (e.g. `"1m"`, `"0p"`
@@ -306,6 +319,16 @@ export function validateTileDesign(design: TileDesign): string[] {
       if (row < 0 || row >= atlas.rows || col < 0 || col >= atlas.cols) {
         errors.push(`atlas "${id}" backCell is out of grid bounds`);
       }
+    }
+  }
+  for (const [source, target] of Object.entries(
+    design.mcrAtlasOverrides ?? {}
+  )) {
+    if (!atlasIds.has(source)) {
+      errors.push(`mcrAtlasOverrides references unknown source "${source}"`);
+    }
+    if (!atlasIds.has(target)) {
+      errors.push(`mcrAtlasOverrides references unknown target "${target}"`);
     }
   }
 

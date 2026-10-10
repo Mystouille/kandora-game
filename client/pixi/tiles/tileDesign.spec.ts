@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  atlasForRulesFamily,
   artScreen,
   atlasCellSize,
   bigScreen,
@@ -50,6 +51,32 @@ describe("tileDesign contract", () => {
     const s = tenhouTileDesign.sheets;
     it("uses the bottom-small back for a concealed focused hand", () => {
       expect(s.ownHandBack).toBe("bottomSmall");
+    });
+
+    describe("MCR atlas overrides", () => {
+      it("keeps Riichi on the original Tenhou sheets", () => {
+        expect(
+          atlasForRulesFamily(tenhouTileDesign, "bottomSmall", "riichi")
+        ).toBe("bottomSmall");
+      });
+
+      it("selects the engraved MCR face sheets", () => {
+        expect(
+          atlasForRulesFamily(tenhouTileDesign, "bottomSmall", "mcr")
+        ).toBe("mcrBottomSmall");
+        expect(atlasForRulesFamily(tenhouTileDesign, "sideHandL", "mcr")).toBe(
+          "sideHandL"
+        );
+      });
+
+      it("maps MCR flowers onto row five of every override sheet", () => {
+        expect(
+          resolveTileFrame(tenhouTileDesign.atlases.mcrOwnHand, "1f")
+        ).toEqual({ row: 4, col: 1 });
+        expect(
+          resolveTileFrame(tenhouTileDesign.atlases.mcrRightSmall, "8f")
+        ).toEqual({ row: 4, col: 8 });
+      });
     });
     it("uses each seat's pre-rotated discard sheet", () => {
       expect(s.discard).toEqual({
@@ -137,6 +164,17 @@ describe("tileDesign contract", () => {
       bad.sheets.ownHandBack = "does-not-exist";
       expect(validateTileDesign(bad)).toContain(
         'sheets.ownHandBack references unknown atlas "does-not-exist"'
+      );
+    });
+
+    it("flags an unknown MCR atlas override", () => {
+      const bad = clone(tenhouTileDesign);
+      bad.mcrAtlasOverrides = {
+        ...bad.mcrAtlasOverrides,
+        bottomSmall: "does-not-exist",
+      };
+      expect(validateTileDesign(bad)).toContain(
+        'mcrAtlasOverrides references unknown target "does-not-exist"'
       );
     });
 

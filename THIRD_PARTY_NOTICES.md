@@ -1,5 +1,18 @@
 # Third-party notices
 
+## samoheen/mahjong-tiles
+
+The engraved MCR tile-face atlases under `mcrSprites` are derived from the
+Hong Kong SVG set in:
+
+- `samoheen/mahjong-tiles`, commit
+  `37a2549fe91687db191014cc426f836df630b1b6`
+  (<https://github.com/samoheen/mahjong-tiles>).
+
+The upstream SVG sources and license are retained under
+`../../scripts/assets/samoheen-mahjong-tiles`. The upstream work is dedicated
+to the public domain under CC0 1.0.
+
 ## mcr-mahjong / mahjong-algorithm
 
 Files under `rules/scoring/mcr` contain a TypeScript port derived from:

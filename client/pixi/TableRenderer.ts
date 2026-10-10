@@ -434,6 +434,7 @@ export class TableRenderer {
     const layout = tableLayoutFromConfig(this.layoutConfig);
     const felt = resolveFelt(this.layoutConfig);
     const resources = this.assets.resources;
+    resources.textureStore.setRulesFamily(view.rulesFamily);
     const root = this.scene.beginFrame(layout, felt, resources);
     const frame: RenderFrame = {
       view,

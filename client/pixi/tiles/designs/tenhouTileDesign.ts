@@ -16,7 +16,11 @@ import uprightSmallUrl from "~/game/tenhouSprites/shadowTenhouUprightSmall.png";
 import shadowTopBottomUrl from "~/game/tenhouSprites/shadowTenhouTopBottom.png";
 import shadowLeftRightUrl from "~/game/tenhouSprites/shadowTenhouLeftRight.png";
 import shadowLongUrl from "~/game/tenhouSprites/shadowTenhouLong.png";
-import mcrFlowersUrl from "~/game/tenhouSprites/mcrFlowers.svg";
+import mcrOwnHandUrl from "~/game/mcrSprites/mcrEngravedOwnHand.png";
+import mcrBottomSmallUrl from "~/game/mcrSprites/mcrEngravedBottomSmall.png";
+import mcrTopSmallUrl from "~/game/mcrSprites/mcrEngravedTopSmall.png";
+import mcrLeftSmallUrl from "~/game/mcrSprites/mcrEngravedLeftSmall.png";
+import mcrRightSmallUrl from "~/game/mcrSprites/mcrEngravedRightSmall.png";
 import type { GridAtlas, TileDesign } from "../tileDesign";
 
 /** Small/side tiles render at half size, trimmed by 9.4% so the
@@ -30,7 +34,7 @@ const WALL_SIDE_ASPECT = 107 / 116;
 
 const SUIT_ROWS = { m: 0, p: 1, s: 2, z: 3 } as const;
 
-/** Shared shape for the five 10×4 grid sheets. */
+/** Shared shape for the five original Tenhou 10×4 grid sheets. */
 function grid(url: string): GridAtlas {
   return {
     kind: "grid",
@@ -43,21 +47,26 @@ function grid(url: string): GridAtlas {
   };
 }
 
+function mcrGrid(url: string): GridAtlas {
+  return {
+    ...grid(url),
+    rows: 5,
+    suitRows: { ...SUIT_ROWS, f: 4 },
+    supportedSuits: ["m", "p", "s", "z", "f"],
+  };
+}
+
 export const tenhouTileDesign: TileDesign = {
   id: "tenhou",
   displayName: "Tenhou",
+  attribution:
+    "MCR face artwork derived from samoheen/mahjong-tiles (Public Domain)",
   atlases: {
-    mcrFlowers: {
-      kind: "grid",
-      url: mcrFlowersUrl,
-      cols: 8,
-      rows: 1,
-      suitRows: { f: 0 },
-      supportedSuits: ["f"],
-      backCell: { row: 0, col: 0 },
-      numberColumnOffset: -1,
-      inset: 0.5,
-    },
+    mcrOwnHand: mcrGrid(mcrOwnHandUrl),
+    mcrBottomSmall: mcrGrid(mcrBottomSmallUrl),
+    mcrTopSmall: mcrGrid(mcrTopSmallUrl),
+    mcrLeftSmall: mcrGrid(mcrLeftSmallUrl),
+    mcrRightSmall: mcrGrid(mcrRightSmallUrl),
     ownHand: grid(ownHandUrl),
     bottomSmall: grid(bottomSmallUrl),
     topSmall: grid(topSmallUrl),
@@ -71,7 +80,13 @@ export const tenhouTileDesign: TileDesign = {
     shadowLeftRight: { kind: "single", url: shadowLeftRightUrl },
     shadowLong: { kind: "single", url: shadowLongUrl },
   },
-  flowerAtlas: "mcrFlowers",
+  mcrAtlasOverrides: {
+    ownHand: "mcrOwnHand",
+    bottomSmall: "mcrBottomSmall",
+    topSmall: "mcrTopSmall",
+    leftSmall: "mcrLeftSmall",
+    rightSmall: "mcrRightSmall",
+  },
   categories: {
     small: { source: { w: 86, h: 130 }, scale: SMALL_SIDE_SCALE },
     side: { source: { w: 116, h: 107 }, scale: SMALL_SIDE_SCALE },

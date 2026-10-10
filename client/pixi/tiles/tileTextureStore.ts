@@ -11,12 +11,14 @@
 import { Assets, Rectangle, Texture } from "pixi.js";
 import type { Size } from "../tableGeometry";
 import {
+  atlasForRulesFamily,
   atlasCellSize,
   frameRect,
   resolveTileFrame,
   type AtlasId,
   type TileDesign,
 } from "./tileDesign";
+import type { RulesFamily } from "~/game/protocol/rulesFamily";
 
 interface LoadedAtlas {
   texture: Texture;
@@ -28,6 +30,7 @@ export class TileTextureStore {
   private readonly atlases = new Map<AtlasId, LoadedAtlas>();
   private readonly frames = new Map<string, Texture>();
   private loaded = false;
+  private rulesFamily: RulesFamily = "riichi";
 
   constructor(design: TileDesign) {
     this.design = design;
@@ -35,6 +38,10 @@ export class TileTextureStore {
 
   get designId(): string {
     return this.design.id;
+  }
+
+  setRulesFamily(rulesFamily: RulesFamily | undefined): void {
+    this.rulesFamily = rulesFamily ?? "riichi";
   }
 
   /** Load every atlas the design declares. Idempotent. */
@@ -62,10 +69,15 @@ export class TileTextureStore {
    * sub-texture framed to the tile's cell.
    */
   getTexture(atlasId: AtlasId, tile: string | null): Texture {
+    const familyAtlasId = atlasForRulesFamily(
+      this.design,
+      atlasId,
+      this.rulesFamily
+    );
     const resolvedAtlasId =
       tile?.endsWith("f") && this.design.flowerAtlas
         ? this.design.flowerAtlas
-        : atlasId;
+        : familyAtlasId;
     const entry = this.atlases.get(resolvedAtlasId);
     if (!entry) {
       throw new Error(`TileTextureStore: atlas ${resolvedAtlasId} not loaded`);

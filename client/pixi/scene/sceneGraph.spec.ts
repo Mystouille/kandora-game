@@ -24,6 +24,7 @@ import { DiscardAnimator } from "../discardAnimator";
 import { mobileTableLayout } from "../layouts/mobileTableLayout";
 import { currentTableLayout } from "../layouts/currentTableLayout";
 import { resolveFelt, tableLayoutFromConfig } from "../tableLayout";
+import { TileTextureStore } from "../tiles/tileTextureStore";
 import { SceneGraph } from "./sceneGraph";
 import { SceneAnchors } from "./sceneAnchors";
 
@@ -154,6 +155,26 @@ describe("scene lifecycle and viewport owner", () => {
 });
 
 describe("public renderer composition", () => {
+  it("selects MCR texture overrides only for MCR views", async () => {
+    const setRulesFamily = vi.spyOn(
+      TileTextureStore.prototype,
+      "setRulesFamily"
+    );
+    const renderer = new TableRenderer();
+    await renderer.mount(new HTMLElement());
+    renderer.render({
+      ...useMatchStore.getInitialState(),
+      rulesFamily: "mcr",
+    });
+    expect(setRulesFamily).toHaveBeenLastCalledWith("mcr");
+    renderer.render({
+      ...useMatchStore.getInitialState(),
+      rulesFamily: "riichi",
+    });
+    expect(setRulesFamily).toHaveBeenLastCalledWith("riichi");
+    renderer.destroy();
+  });
+
   it("publishes the actual focused-discard frame on layout and viewport changes", async () => {
     const renderer = new TableRenderer();
     const listener = vi.fn();
